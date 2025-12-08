@@ -1,0 +1,17 @@
+{
+  "include": ["acn"],
+  "exclude": ["tests", "**/__pycache__"],
+  "venvPath": "/Users/guyue/agentplanet/acn",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportGeneralTypeIssues": false,
+  "reportArgumentType": false,
+  "reportCallIssue": false,
+  "reportAttributeAccessIssue": false,
+  "reportAssignmentType": false
+}
+
+

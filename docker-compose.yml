@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  acn:
+    build: .
+    container_name: acn-service
+    ports:
+      - "9000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - acn-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: acn-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - acn-network
+
+volumes:
+  redis-data:
+
+networks:
+  acn-network:
+    driver: bridge
+
+
+
+
+
