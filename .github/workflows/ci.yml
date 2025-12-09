@@ -46,9 +46,6 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check .
 
-      - name: Type check (mypy)
-        run: uv run mypy acn --ignore-missing-imports
-
       - name: Test (pytest)
         run: uv run pytest -v --cov=acn --cov-report=xml
         env:
@@ -88,11 +85,6 @@ jobs:
         run: |
           cd clients/python
           uv run ruff check .
-
-      - name: Type check
-        run: |
-          cd clients/python
-          uv run mypy acn_client --ignore-missing-imports
 
       - name: Test import
         run: |

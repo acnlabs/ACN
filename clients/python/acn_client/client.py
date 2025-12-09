@@ -108,7 +108,8 @@ class ACNClient:
         if response.status_code == 204:
             return {}
 
-        return response.json()
+        result: dict[str, Any] = response.json()
+        return result
 
     # ============================================
     # Health & Status
@@ -215,7 +216,8 @@ class ACNClient:
     async def get_agent_subnets(self, agent_id: str) -> list[str]:
         """Get agent's subnets"""
         data = await self._request("GET", f"/api/v1/agents/{agent_id}/subnets")
-        return data.get("subnets", [])
+        subnets: list[str] = data.get("subnets", [])
+        return subnets
 
     # ============================================
     # Communication
@@ -268,7 +270,8 @@ class ACNClient:
             f"/api/v1/communication/history/{agent_id}",
             params={"limit": limit, "offset": offset},
         )
-        return data.get("messages", [])
+        messages: list[dict[str, Any]] = data.get("messages", [])
+        return messages
 
     # ============================================
     # Payment Discovery
@@ -361,7 +364,8 @@ class ACNClient:
     async def get_agent_analytics(self) -> list[dict[str, Any]]:
         """Get agent analytics"""
         data = await self._request("GET", "/api/v1/analytics/agents")
-        return data.get("analytics", [])
+        analytics: list[dict[str, Any]] = data.get("analytics", [])
+        return analytics
 
     async def get_agent_activity(
         self,
@@ -402,7 +406,8 @@ class ACNClient:
                 "offset": offset,
             },
         )
-        return data.get("events", [])
+        events: list[dict[str, Any]] = data.get("events", [])
+        return events
 
     async def get_recent_audit_events(self, limit: int = 100) -> list[dict[str, Any]]:
         """Get recent audit events"""
@@ -411,5 +416,6 @@ class ACNClient:
             "/api/v1/audit/events/recent",
             params={"limit": limit},
         )
-        return data.get("events", [])
+        events: list[dict[str, Any]] = data.get("events", [])
+        return events
 
