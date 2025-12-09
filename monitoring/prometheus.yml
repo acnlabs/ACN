@@ -5,10 +5,16 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  # ACN metrics
-  - job_name: 'acn'
+  # ACN metrics (Docker environment)
+  - job_name: 'acn-docker'
     static_configs:
       - targets: ['acn:8000']
+    metrics_path: '/metrics'
+  
+  # ACN metrics (Local development - host machine)
+  - job_name: 'acn-local'
+    static_configs:
+      - targets: ['host.docker.internal:9000']
     metrics_path: '/metrics'
 
   # Prometheus self-monitoring
