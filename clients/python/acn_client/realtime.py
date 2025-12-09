@@ -18,7 +18,7 @@ try:
     WEBSOCKETS_AVAILABLE = True
 except ImportError:
     WEBSOCKETS_AVAILABLE = False
-    WebSocketClientProtocol = Any  # type: ignore[misc]
+    WebSocketClientProtocol = Any
 
 
 class WSState(str, Enum):
