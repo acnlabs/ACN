@@ -251,6 +251,92 @@ POST   /api/v1/federation/messages           # Cross-instance message
 | Cost | ✅ Free | ✅ Free | ❌ Gas fees |
 | Agent-specific | ✅ Yes | ❌ No | ❌ No |
 
+## Why Federation over Blockchain?
+
+### Detailed Comparison
+
+| Dimension | Federation | Blockchain |
+|-----------|-----------|------------|
+| **Latency** | ~10ms | ~3s - 15min |
+| **Throughput** | ~10,000 msg/s | ~10-1000 tx/s |
+| **Cost per message** | Free | $0.001 - $50 |
+| **Privacy** | ✅ Configurable | ❌ Public by default |
+| **Decentralization** | ⚠️ Medium | ✅ Maximum |
+| **Immutability** | ❌ No | ✅ Yes |
+| **Consensus finality** | ⚠️ Weak | ✅ Strong |
+
+### Why Blockchain Doesn't Fit Agent Communication
+
+```
+Agent A calls Agent B to execute a task:
+
+Blockchain approach:
+1. Agent A sends tx → Wait 3-15 seconds for confirmation
+2. Agent B receives → Executes task
+3. Agent B returns result tx → Wait another 3-15 seconds
+4. Total latency: 6-30 seconds, Cost: $0.1-$10
+
+Federation approach:
+1. Agent A → ACN-1 → ACN-2 → Agent B → Response
+2. Total latency: ~50ms, Cost: Free
+```
+
+### Where Blockchain Excels
+
+- **Payment settlement**: USDC/ETH transfers (supported via AP2)
+- **Reputation records**: Immutable historical ratings
+- **Identity anchoring**: Agent DID on-chain
+- **Dispute resolution**: Verifiable evidence
+
+## Hybrid Architecture (Recommended)
+
+The best approach combines both:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              Communication Layer (Federation)                │
+│                                                             │
+│   Agent A ◄──────── ACN Federation ────────► Agent B       │
+│              Low latency, High throughput, Free, Private    │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ Critical operations
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Settlement/Trust Layer (Blockchain)             │
+│                                                             │
+│   💰 Payment Settlement (AP2/USDC)                          │
+│   🪪 Identity Anchoring (DID)                               │
+│   ⭐ Reputation Storage                                      │
+│   📜 Dispute Resolution                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Use Case Mapping
+
+| Use Case | Recommended Layer |
+|----------|------------------|
+| Agent discovery | **Federation** |
+| Message routing | **Federation** |
+| Real-time collaboration | **Federation** |
+| Payment transfers | **Blockchain (AP2)** |
+| Reputation & identity | **Blockchain** |
+| Audit trails | **Both** (Federation for speed, Blockchain for finality) |
+
+### Integration Points
+
+1. **AP2 Integration** (Already implemented)
+   - Federation handles payment task coordination
+   - Blockchain handles actual fund transfer
+
+2. **DID Anchoring** (Future)
+   - Agent identity registered in ACN
+   - Cryptographic proof anchored on-chain
+
+3. **Reputation Bridge** (Future)
+   - Real-time scores in Federation
+   - Periodic snapshots to Blockchain
+
 ## Open Questions
 
 1. **Governance**: How are protocol changes decided?
