@@ -92,7 +92,7 @@ jobs:
       - name: Type check
         run: |
           cd clients/python
-          uv run basedpyright
+          uv run mypy acn_client --ignore-missing-imports
 
       - name: Test import
         run: |
