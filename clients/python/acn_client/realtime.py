@@ -86,7 +86,9 @@ class ACNRealtime:
             )
 
         # Convert http to ws
-        self.base_url = base_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
+        self.base_url = (
+            base_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
+        )
         self.options = options or ACNRealtimeOptions()
 
         self._ws: WebSocketClientProtocol | None = None
@@ -324,4 +326,3 @@ class ACNRealtime:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         await self.disconnect()
-
