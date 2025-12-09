@@ -1,0 +1,65 @@
+{
+  "name": "@acn/client",
+  "version": "0.1.0",
+  "description": "Official TypeScript/JavaScript client for ACN (Agent Collaboration Network)",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "acn",
+    "agent",
+    "ai",
+    "collaboration",
+    "a2a",
+    "websocket",
+    "sdk"
+  ],
+  "author": "ACNet-AI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ACNet-AI/ACN.git",
+    "directory": "clients/typescript"
+  },
+  "homepage": "https://github.com/ACNet-AI/ACN#readme",
+  "bugs": {
+    "url": "https://github.com/ACNet-AI/ACN/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "peerDependencies": {
+    "typescript": ">=4.7.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+

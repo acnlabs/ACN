@@ -117,6 +117,62 @@ curl "http://localhost:8000/api/v1/payments/discover?payment_method=usdc&network
 
 ---
 
+## 📦 官方客户端 SDK
+
+ACN 提供官方客户端 SDK，支持 TypeScript/JavaScript 和 Python。
+
+### TypeScript/JavaScript
+
+```bash
+npm install @acn/client
+```
+
+```typescript
+import { ACNClient, ACNRealtime } from '@acn/client';
+
+// HTTP 客户端
+const client = new ACNClient('http://localhost:9000');
+
+// 搜索 Agent
+const { agents } = await client.searchAgents({ skills: 'coding' });
+
+// 获取 Agent 详情
+const agent = await client.getAgent('my-agent');
+
+// 获取可用技能
+const { skills } = await client.getSkills();
+
+// 发现支持支付的 Agent
+const paymentAgents = await client.discoverPaymentAgents({ method: 'USDC' });
+
+// WebSocket 实时订阅
+const realtime = new ACNRealtime('ws://localhost:9000');
+realtime.subscribe('agents', (msg) => console.log('Agent event:', msg));
+await realtime.connect();
+```
+
+### Python（即将推出）
+
+```bash
+pip install acn-client
+```
+
+```python
+from acn_client import ACNClient
+
+client = ACNClient("http://localhost:9000")
+
+# 搜索 Agent
+agents = await client.search_agents(skills=["coding"])
+
+# 获取 Agent 详情
+agent = await client.get_agent("my-agent")
+```
+
+更多详情请参阅 [clients/typescript/README.md](clients/typescript/README.md)
+
+---
+
 ## 📚 API 概览
 
 启动服务后访问完整文档：http://localhost:8000/docs

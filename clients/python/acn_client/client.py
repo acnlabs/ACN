@@ -1,0 +1,416 @@
+"""
+ACN HTTP Client
+
+Official Python client for ACN REST API.
+"""
+
+from typing import Any
+
+import httpx
+
+from .models import (
+    AgentInfo,
+    AgentRegisterRequest,
+    AgentSearchOptions,
+    BroadcastRequest,
+    DashboardData,
+    PaymentCapability,
+    PaymentStats,
+    PaymentTask,
+    SendMessageRequest,
+    SubnetCreateRequest,
+    SubnetInfo,
+)
+
+
+class ACNError(Exception):
+    """ACN API Error"""
+
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(f"ACN Error {status_code}: {message}")
+
+
+class ACNClient:
+    """
+    ACN Client - HTTP API
+
+    Example:
+        >>> async with ACNClient("http://localhost:9000") as client:
+        ...     agents = await client.search_agents(skills=["coding"])
+        ...     agent = await client.get_agent("agent-123")
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:9000",
+        timeout: float = 30.0,
+        api_key: str | None = None,
+    ):
+        """
+        Initialize ACN Client
+
+        Args:
+            base_url: ACN server URL
+            timeout: Request timeout in seconds
+            api_key: Optional API key for authentication
+        """
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+        headers = {}
+        if api_key:
+            headers["X-API-Key"] = api_key
+
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=timeout,
+            headers=headers,
+        )
+
+    async def close(self) -> None:
+        """Close the HTTP client"""
+        await self._client.aclose()
+
+    async def __aenter__(self) -> "ACNClient":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.close()
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Make HTTP request"""
+        # Filter None values from params
+        if params:
+            params = {k: v for k, v in params.items() if v is not None}
+
+        response = await self._client.request(
+            method=method,
+            url=path,
+            params=params,
+            json=json,
+        )
+
+        if not response.is_success:
+            try:
+                error = response.json()
+                message = error.get("detail", error.get("message", response.text))
+            except Exception:
+                message = response.text
+            raise ACNError(response.status_code, message)
+
+        if response.status_code == 204:
+            return {}
+
+        return response.json()
+
+    # ============================================
+    # Health & Status
+    # ============================================
+
+    async def health(self) -> dict[str, str]:
+        """Check if ACN server is healthy"""
+        return await self._request("GET", "/health")
+
+    async def get_stats(self) -> dict[str, int]:
+        """Get server statistics"""
+        return await self._request("GET", "/api/v1/stats")
+
+    # ============================================
+    # Agent Management
+    # ============================================
+
+    async def register_agent(self, request: AgentRegisterRequest) -> dict[str, Any]:
+        """Register a new agent"""
+        return await self._request(
+            "POST",
+            "/api/v1/agents/register",
+            json=request.model_dump(by_alias=True, exclude_none=True),
+        )
+
+    async def get_agent(self, agent_id: str) -> AgentInfo:
+        """Get agent by ID"""
+        data = await self._request("GET", f"/api/v1/agents/{agent_id}")
+        return AgentInfo.model_validate(data)
+
+    async def search_agents(
+        self,
+        skills: list[str] | None = None,
+        status: str | None = "online",
+    ) -> list[AgentInfo]:
+        """Search agents"""
+        params = {
+            "skills": ",".join(skills) if skills else None,
+            "status": status,
+        }
+        data = await self._request("GET", "/api/v1/agents", params=params)
+        return [AgentInfo.model_validate(a) for a in data.get("agents", [])]
+
+    async def unregister_agent(self, agent_id: str) -> dict[str, Any]:
+        """Unregister an agent"""
+        return await self._request("DELETE", f"/api/v1/agents/{agent_id}")
+
+    async def heartbeat(self, agent_id: str) -> dict[str, Any]:
+        """Send agent heartbeat"""
+        return await self._request("POST", f"/api/v1/agents/{agent_id}/heartbeat")
+
+    async def get_agent_endpoint(self, agent_id: str) -> str | None:
+        """Get agent endpoint"""
+        data = await self._request("GET", f"/api/v1/agents/{agent_id}/endpoint")
+        return data.get("endpoint")
+
+    async def get_skills(self) -> dict[str, Any]:
+        """List all available skills"""
+        return await self._request("GET", "/api/v1/skills")
+
+    # ============================================
+    # Subnet Management
+    # ============================================
+
+    async def create_subnet(self, request: SubnetCreateRequest) -> dict[str, Any]:
+        """Create a new subnet"""
+        return await self._request(
+            "POST",
+            "/api/v1/subnets",
+            json=request.model_dump(exclude_none=True),
+        )
+
+    async def list_subnets(self) -> list[SubnetInfo]:
+        """List all subnets"""
+        data = await self._request("GET", "/api/v1/subnets")
+        return [SubnetInfo.model_validate(s) for s in data.get("subnets", [])]
+
+    async def get_subnet(self, subnet_id: str) -> SubnetInfo:
+        """Get subnet by ID"""
+        data = await self._request("GET", f"/api/v1/subnets/{subnet_id}")
+        return SubnetInfo.model_validate(data)
+
+    async def delete_subnet(self, subnet_id: str, force: bool = False) -> dict[str, Any]:
+        """Delete a subnet"""
+        return await self._request(
+            "DELETE",
+            f"/api/v1/subnets/{subnet_id}",
+            params={"force": force},
+        )
+
+    async def get_subnet_agents(self, subnet_id: str) -> list[AgentInfo]:
+        """Get agents in a subnet"""
+        data = await self._request("GET", f"/api/v1/subnets/{subnet_id}/agents")
+        return [AgentInfo.model_validate(a) for a in data.get("agents", [])]
+
+    async def join_subnet(self, agent_id: str, subnet_id: str) -> dict[str, Any]:
+        """Join agent to subnet"""
+        return await self._request("POST", f"/api/v1/agents/{agent_id}/subnets/{subnet_id}")
+
+    async def leave_subnet(self, agent_id: str, subnet_id: str) -> dict[str, Any]:
+        """Remove agent from subnet"""
+        return await self._request("DELETE", f"/api/v1/agents/{agent_id}/subnets/{subnet_id}")
+
+    async def get_agent_subnets(self, agent_id: str) -> list[str]:
+        """Get agent's subnets"""
+        data = await self._request("GET", f"/api/v1/agents/{agent_id}/subnets")
+        return data.get("subnets", [])
+
+    # ============================================
+    # Communication
+    # ============================================
+
+    async def send_message(self, request: SendMessageRequest) -> dict[str, Any]:
+        """Send message to an agent"""
+        return await self._request(
+            "POST",
+            "/api/v1/communication/send",
+            json=request.model_dump(exclude_none=True),
+        )
+
+    async def broadcast(self, request: BroadcastRequest) -> dict[str, Any]:
+        """Broadcast message to multiple agents"""
+        return await self._request(
+            "POST",
+            "/api/v1/communication/broadcast",
+            json=request.model_dump(exclude_none=True),
+        )
+
+    async def broadcast_by_skill(
+        self,
+        from_agent: str,
+        skill: str,
+        message_type: str,
+        content: Any,
+    ) -> dict[str, Any]:
+        """Broadcast message to agents with specific skill"""
+        return await self._request(
+            "POST",
+            "/api/v1/communication/broadcast-by-skill",
+            json={
+                "from_agent": from_agent,
+                "skill": skill,
+                "message_type": message_type,
+                "content": content,
+            },
+        )
+
+    async def get_message_history(
+        self,
+        agent_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Get message history for an agent"""
+        data = await self._request(
+            "GET",
+            f"/api/v1/communication/history/{agent_id}",
+            params={"limit": limit, "offset": offset},
+        )
+        return data.get("messages", [])
+
+    # ============================================
+    # Payment Discovery
+    # ============================================
+
+    async def set_payment_capability(
+        self,
+        agent_id: str,
+        capability: PaymentCapability,
+    ) -> dict[str, Any]:
+        """Set agent's payment capability"""
+        return await self._request(
+            "POST",
+            f"/api/v1/agents/{agent_id}/payment-capability",
+            json=capability.model_dump(exclude_none=True),
+        )
+
+    async def get_payment_capability(self, agent_id: str) -> PaymentCapability | None:
+        """Get agent's payment capability"""
+        try:
+            data = await self._request("GET", f"/api/v1/agents/{agent_id}/payment-capability")
+            return PaymentCapability.model_validate(data) if data else None
+        except ACNError as e:
+            if e.status_code == 404:
+                return None
+            raise
+
+    async def discover_payment_agents(
+        self,
+        method: str | None = None,
+        network: str | None = None,
+        min_amount: float | None = None,
+        max_amount: float | None = None,
+    ) -> list[AgentInfo]:
+        """Discover agents that accept payments"""
+        data = await self._request(
+            "GET",
+            "/api/v1/payments/discover",
+            params={
+                "method": method,
+                "network": network,
+                "min_amount": min_amount,
+                "max_amount": max_amount,
+            },
+        )
+        return [AgentInfo.model_validate(a) for a in data.get("agents", [])]
+
+    async def get_payment_task(self, task_id: str) -> PaymentTask:
+        """Get payment task by ID"""
+        data = await self._request("GET", f"/api/v1/payments/tasks/{task_id}")
+        return PaymentTask.model_validate(data)
+
+    async def get_agent_payment_tasks(
+        self,
+        agent_id: str,
+        role: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[PaymentTask]:
+        """Get agent's payment tasks"""
+        data = await self._request(
+            "GET",
+            f"/api/v1/payments/tasks/agent/{agent_id}",
+            params={"role": role, "status": status, "limit": limit},
+        )
+        return [PaymentTask.model_validate(t) for t in data.get("tasks", [])]
+
+    async def get_payment_stats(self, agent_id: str) -> PaymentStats:
+        """Get agent's payment statistics"""
+        data = await self._request("GET", f"/api/v1/payments/stats/{agent_id}")
+        return PaymentStats.model_validate(data)
+
+    # ============================================
+    # Monitoring & Analytics
+    # ============================================
+
+    async def get_dashboard(self) -> DashboardData:
+        """Get dashboard data"""
+        data = await self._request("GET", "/api/v1/monitoring/dashboard")
+        return DashboardData.model_validate(data)
+
+    async def get_metrics(self) -> dict[str, Any]:
+        """Get all metrics"""
+        return await self._request("GET", "/api/v1/monitoring/metrics")
+
+    async def get_system_health(self) -> dict[str, Any]:
+        """Get system health"""
+        return await self._request("GET", "/api/v1/monitoring/health")
+
+    async def get_agent_analytics(self) -> list[dict[str, Any]]:
+        """Get agent analytics"""
+        data = await self._request("GET", "/api/v1/analytics/agents")
+        return data.get("analytics", [])
+
+    async def get_agent_activity(
+        self,
+        agent_id: str,
+        start_time: str | None = None,
+        end_time: str | None = None,
+    ) -> dict[str, Any]:
+        """Get specific agent's activity"""
+        return await self._request(
+            "GET",
+            f"/api/v1/analytics/agents/{agent_id}",
+            params={"start_time": start_time, "end_time": end_time},
+        )
+
+    # ============================================
+    # Audit
+    # ============================================
+
+    async def get_audit_events(
+        self,
+        event_type: str | None = None,
+        actor_id: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Get audit events"""
+        data = await self._request(
+            "GET",
+            "/api/v1/audit/events",
+            params={
+                "event_type": event_type,
+                "actor_id": actor_id,
+                "start_time": start_time,
+                "end_time": end_time,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        return data.get("events", [])
+
+    async def get_recent_audit_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Get recent audit events"""
+        data = await self._request(
+            "GET",
+            "/api/v1/audit/events/recent",
+            params={"limit": limit},
+        )
+        return data.get("events", [])
+
