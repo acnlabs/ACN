@@ -1,26 +1,26 @@
-# ACN API 文档
+# ACN API Documentation
 
-完整的 ACN REST API 参考文档。
+Complete REST API reference for ACN (Agent Collaboration Network).
 
-> **交互式文档**: 启动服务后访问 http://localhost:8000/docs
+> **Interactive Docs**: Start the server and visit http://localhost:8000/docs
 
 ---
 
-## 目录
+## Table of Contents
 
-- [认证](#认证)
+- [Authentication](#authentication)
 - [Registry API](#registry-api)
 - [Subnet API](#subnet-api)
 - [Payment API](#payment-api)
 - [Communication API](#communication-api)
 - [Monitoring API](#monitoring-api)
-- [错误处理](#错误处理)
+- [Error Handling](#error-handling)
 
 ---
 
-## 认证
+## Authentication
 
-公网 API 无需认证。私有子网 API 需要 Bearer Token：
+Public network APIs require no authentication. Private subnet APIs require a Bearer Token:
 
 ```http
 Authorization: Bearer sk_subnet_xxxxx
@@ -30,7 +30,7 @@ Authorization: Bearer sk_subnet_xxxxx
 
 ## Registry API
 
-### 注册 Agent
+### Register Agent
 
 ```http
 POST /api/v1/agents/register
@@ -50,7 +50,7 @@ Content-Type: application/json
 }
 ```
 
-**响应**:
+**Response**:
 ```json
 {
     "status": "registered",
@@ -59,13 +59,13 @@ Content-Type: application/json
 }
 ```
 
-### 获取 Agent
+### Get Agent
 
 ```http
 GET /api/v1/agents/{agent_id}
 ```
 
-**响应**:
+**Response**:
 ```json
 {
     "agent_id": "my-agent",
@@ -80,15 +80,15 @@ GET /api/v1/agents/{agent_id}
 }
 ```
 
-### 获取 Agent Card
+### Get Agent Card
 
-返回 A2A 标准格式的 Agent Card。
+Returns A2A standard format Agent Card.
 
 ```http
 GET /api/v1/agents/{agent_id}/card
 ```
 
-**响应**:
+**Response**:
 ```json
 {
     "protocolVersion": "0.3.0",
@@ -106,22 +106,23 @@ GET /api/v1/agents/{agent_id}/card
 }
 ```
 
-### 搜索 Agents
+### Search Agents
 
 ```http
 GET /api/v1/agents?skills=coding,analysis&status=online&subnet_id=public&limit=20
 ```
 
-**查询参数**:
-| 参数 | 类型 | 说明 |
-|-----|------|------|
-| `skills` | string | 技能列表（逗号分隔） |
-| `status` | string | 状态过滤（online/offline/busy） |
-| `subnet_id` | string | 子网 ID |
-| `limit` | int | 返回数量限制 |
-| `offset` | int | 分页偏移 |
+**Query Parameters**:
 
-**响应**:
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `skills` | string | Skill list (comma-separated) |
+| `status` | string | Status filter (online/offline/busy) |
+| `subnet_id` | string | Subnet ID |
+| `limit` | int | Result limit |
+| `offset` | int | Pagination offset |
+
+**Response**:
 ```json
 {
     "agents": [...],
@@ -131,13 +132,13 @@ GET /api/v1/agents?skills=coding,analysis&status=online&subnet_id=public&limit=2
 }
 ```
 
-### 注销 Agent
+### Unregister Agent
 
 ```http
 DELETE /api/v1/agents/{agent_id}
 ```
 
-### 心跳更新
+### Heartbeat Update
 
 ```http
 POST /api/v1/agents/{agent_id}/heartbeat
@@ -152,7 +153,7 @@ Content-Type: application/json
 
 ## Subnet API
 
-### 创建子网
+### Create Subnet
 
 ```http
 POST /api/v1/subnets
@@ -171,7 +172,7 @@ Content-Type: application/json
 }
 ```
 
-**响应**:
+**Response**:
 ```json
 {
     "subnet_id": "enterprise-team-a",
@@ -181,25 +182,25 @@ Content-Type: application/json
 }
 ```
 
-### 列出子网
+### List Subnets
 
 ```http
 GET /api/v1/subnets
 ```
 
-### 加入子网
+### Join Subnet
 
 ```http
 POST /api/v1/agents/{agent_id}/subnets/{subnet_id}
 ```
 
-### 离开子网
+### Leave Subnet
 
 ```http
 DELETE /api/v1/agents/{agent_id}/subnets/{subnet_id}
 ```
 
-### 获取 Agent 的子网
+### Get Agent's Subnets
 
 ```http
 GET /api/v1/agents/{agent_id}/subnets
@@ -209,7 +210,7 @@ GET /api/v1/agents/{agent_id}/subnets
 
 ## Payment API
 
-### 设置支付能力
+### Set Payment Capability
 
 ```http
 POST /api/v1/agents/{agent_id}/payment-capability
@@ -229,31 +230,32 @@ Content-Type: application/json
 }
 ```
 
-**支持的支付方式**:
-- `usdc`, `usdt`, `dai` - 稳定币
-- `eth`, `btc` - 原生加密货币
-- `credit_card`, `debit_card` - 传统支付
-- `paypal`, `apple_pay`, `google_pay` - 数字钱包
-- `platform_credits` - 平台积分
+**Supported Payment Methods**:
+- `usdc`, `usdt`, `dai` - Stablecoins
+- `eth`, `btc` - Native cryptocurrencies
+- `credit_card`, `debit_card` - Traditional payments
+- `paypal`, `apple_pay`, `google_pay` - Digital wallets
+- `platform_credits` - Platform credits
 
-**支持的网络**:
-- `ethereum`, `base`, `arbitrum`, `optimism`, `polygon` - EVM 链
-- `solana`, `bitcoin` - 其他链
+**Supported Networks**:
+- `ethereum`, `base`, `arbitrum`, `optimism`, `polygon` - EVM chains
+- `solana`, `bitcoin` - Other chains
 
-### 发现支持支付的 Agent
+### Discover Payment-Capable Agents
 
 ```http
 GET /api/v1/payments/discover?payment_method=usdc&network=base&currency=USD
 ```
 
-**查询参数**:
-| 参数 | 类型 | 说明 |
-|-----|------|------|
-| `payment_method` | string | 支付方式 |
-| `network` | string | 区块链网络 |
-| `currency` | string | 货币类型 |
+**Query Parameters**:
 
-### 创建支付任务
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `payment_method` | string | Payment method |
+| `network` | string | Blockchain network |
+| `currency` | string | Currency type |
+
+### Create Payment Task
 
 ```http
 POST /api/v1/payments/tasks
@@ -270,7 +272,7 @@ Content-Type: application/json
 }
 ```
 
-**响应**:
+**Response**:
 ```json
 {
     "task_id": "pay_abc123",
@@ -284,13 +286,13 @@ Content-Type: application/json
 }
 ```
 
-### 获取支付任务
+### Get Payment Task
 
 ```http
 GET /api/v1/payments/tasks/{task_id}
 ```
 
-### 更新支付任务状态
+### Update Payment Task Status
 
 ```http
 PATCH /api/v1/payments/tasks/{task_id}/status
@@ -302,15 +304,15 @@ Content-Type: application/json
 }
 ```
 
-**任务状态流转**:
+**Task Status Flow**:
 ```
 created → payment_requested → payment_pending → payment_confirmed
          → task_in_progress → task_completed → payment_released
          
-特殊状态: disputed, cancelled, failed, refunded
+Special states: disputed, cancelled, failed, refunded
 ```
 
-### 获取支付统计
+### Get Payment Statistics
 
 ```http
 GET /api/v1/payments/stats/{agent_id}
@@ -320,13 +322,13 @@ GET /api/v1/payments/stats/{agent_id}
 
 ## Communication API
 
-### WebSocket 连接
+### WebSocket Connection
 
 ```
 ws://localhost:8000/ws/{agent_id}
 ```
 
-**消息格式**:
+**Message Format**:
 ```json
 {
     "type": "message",
@@ -340,7 +342,7 @@ ws://localhost:8000/ws/{agent_id}
 }
 ```
 
-### 发送消息
+### Send Message
 
 ```http
 POST /api/v1/messages/send
@@ -358,7 +360,7 @@ Content-Type: application/json
 }
 ```
 
-### 广播消息
+### Broadcast Message
 
 ```http
 POST /api/v1/messages/broadcast
@@ -375,30 +377,30 @@ Content-Type: application/json
 }
 ```
 
-**广播策略**:
-- `parallel` - 并行发送给所有目标
-- `sequential` - 顺序发送
-- `first_response` - 返回第一个响应
+**Broadcast Strategies**:
+- `parallel` - Send to all targets in parallel
+- `sequential` - Send sequentially
+- `first_response` - Return first response
 
 ---
 
 ## Monitoring API
 
-### Prometheus 指标
+### Prometheus Metrics
 
 ```http
 GET /metrics
 ```
 
-返回 Prometheus 格式的指标数据。
+Returns metrics in Prometheus format.
 
-### 仪表盘数据
+### Dashboard Data
 
 ```http
 GET /api/v1/monitoring/dashboard
 ```
 
-**响应**:
+**Response**:
 ```json
 {
     "agents": {
@@ -417,29 +419,30 @@ GET /api/v1/monitoring/dashboard
 }
 ```
 
-### 查询审计日志
+### Query Audit Logs
 
 ```http
 GET /api/v1/audit/events?event_type=agent.registered&agent_id=my-agent&limit=100
 ```
 
-**查询参数**:
-| 参数 | 类型 | 说明 |
-|-----|------|------|
-| `event_type` | string | 事件类型 |
-| `agent_id` | string | Agent ID |
-| `start_time` | datetime | 开始时间 |
-| `end_time` | datetime | 结束时间 |
-| `limit` | int | 返回数量 |
+**Query Parameters**:
 
-**事件类型**:
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `event_type` | string | Event type |
+| `agent_id` | string | Agent ID |
+| `start_time` | datetime | Start time |
+| `end_time` | datetime | End time |
+| `limit` | int | Result limit |
+
+**Event Types**:
 - `agent.registered`, `agent.unregistered`
 - `agent.heartbeat`, `agent.status_changed`
 - `message.sent`, `message.delivered`, `message.failed`
 - `payment.created`, `payment.confirmed`, `payment.completed`
 - `subnet.created`, `subnet.joined`, `subnet.left`
 
-### 导出审计日志
+### Export Audit Logs
 
 ```http
 GET /api/v1/audit/export?format=csv&start_time=2024-01-01&end_time=2024-01-31
@@ -447,9 +450,9 @@ GET /api/v1/audit/export?format=csv&start_time=2024-01-01&end_time=2024-01-31
 
 ---
 
-## 错误处理
+## Error Handling
 
-### 错误响应格式
+### Error Response Format
 
 ```json
 {
@@ -459,76 +462,76 @@ GET /api/v1/audit/export?format=csv&start_time=2024-01-01&end_time=2024-01-31
 }
 ```
 
-### HTTP 状态码
+### HTTP Status Codes
 
-| 状态码 | 说明 |
-|-------|------|
-| 200 | 成功 |
-| 201 | 创建成功 |
-| 400 | 请求参数错误 |
-| 401 | 未认证 |
-| 403 | 无权限 |
-| 404 | 资源不存在 |
-| 409 | 资源冲突 |
-| 500 | 服务器错误 |
+| Code | Description |
+|------|-------------|
+| 200 | Success |
+| 201 | Created |
+| 400 | Bad request |
+| 401 | Unauthorized |
+| 403 | Forbidden |
+| 404 | Not found |
+| 409 | Conflict |
+| 500 | Server error |
 
 ---
 
-## 速率限制
+## Rate Limiting
 
-默认无速率限制。生产环境建议配置：
+No rate limiting by default. For production, configure at the load balancer:
 
 ```yaml
-# nginx 配置示例
+# nginx example
 limit_req_zone $binary_remote_addr zone=acn:10m rate=100r/s;
 ```
 
 ---
 
-## SDK 示例
+## SDK Examples
 
 ### Python
 
 ```python
-import httpx
+from acn_client import ACNClient
 
-async def register_agent():
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/agents/register",
-            json={
-                "agent_id": "my-agent",
-                "name": "My Agent",
-                "endpoint": "http://localhost:8001",
-                "skills": ["coding"]
-            }
-        )
-        return response.json()
+async with ACNClient("http://localhost:8000") as client:
+    # Register agent
+    await client.register_agent(
+        agent_id="my-agent",
+        name="My Agent",
+        endpoint="http://localhost:8001",
+        skills=["coding"]
+    )
+    
+    # Search agents
+    agents = await client.search_agents(skills=["coding"])
 ```
 
-### JavaScript
+### TypeScript
 
-```javascript
-const response = await fetch('http://localhost:8000/api/v1/agents/register', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        agent_id: 'my-agent',
-        name: 'My Agent',
-        endpoint: 'http://localhost:8001',
-        skills: ['coding']
-    })
+```typescript
+import { ACNClient } from '@acn/client';
+
+const client = new ACNClient('http://localhost:8000');
+
+// Register agent
+await client.registerAgent({
+    agentId: 'my-agent',
+    name: 'My Agent',
+    endpoint: 'http://localhost:8001',
+    skills: ['coding']
 });
-const data = await response.json();
+
+// Search agents
+const { agents } = await client.searchAgents({ skills: 'coding' });
 ```
 
 ---
 
-## 更多资源
+## Additional Resources
 
-- [README](../README.md) - 项目概述
-- [架构文档](./architecture.md) - 系统架构
-- [A2A 协议](https://github.com/google/A2A) - 官方协议
-- [AP2 支付](https://github.com/google-agentic-commerce/AP2) - 支付协议
-
-
+- [README](../README.md) - Project overview
+- [Architecture](./architecture.md) - System architecture
+- [A2A Protocol](https://github.com/google/A2A) - Official protocol
+- [AP2 Payments](https://github.com/google-agentic-commerce/AP2) - Payment protocol

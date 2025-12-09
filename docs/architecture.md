@@ -1,70 +1,70 @@
-# ACN 架构文档
+# ACN Architecture Documentation
 
-ACN (Agent Collaboration Network) 的系统架构设计。
+System architecture design for ACN (Agent Collaboration Network).
 
 ---
 
-## 系统概览
+## System Overview
 
 ```
                             ┌──────────────────────────────────────┐
-                            │           External Clients            │
-                            │    (Agents, Applications, Admin)      │
+                            │           External Clients           │
+                            │    (Agents, Applications, Admin)     │
                             └──────────────────┬───────────────────┘
                                                │
                                                ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                              ACN Server                                       │
+│                              ACN Server                                      │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                          FastAPI Application                            │  │
-│  │                                                                         │  │
-│  │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │  │
-│  │   │  Registry   │  │Communication│  │  Payments   │  │ Monitoring  │   │  │
-│  │   │   Module    │  │   Module    │  │   Module    │  │   Module    │   │  │
-│  │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘   │  │
-│  │          │                │                │                │          │  │
-│  │   ┌──────┴────────────────┴────────────────┴────────────────┴──────┐   │  │
-│  │   │                     Subnet Manager                              │   │  │
-│  │   │         (Multi-Subnet Support, Gateway, Auth)                   │   │  │
-│  │   └─────────────────────────────┬───────────────────────────────────┘   │  │
-│  │                                 │                                       │  │
-│  └─────────────────────────────────┼───────────────────────────────────────┘  │
-│                                    │                                          │
-│  ┌─────────────────────────────────┴───────────────────────────────────────┐  │
-│  │                            Redis Storage                                 │  │
-│  │   • Agent Registry    • Message Queues    • Payment Tasks    • Metrics  │  │
-│  └──────────────────────────────────────────────────────────────────────────┘  │
+│  │                          FastAPI Application                           │  │
+│  │                                                                        │  │
+│  │   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │  │
+│  │   │  Registry   │  │Communication│  │  Payments   │  │ Monitoring  │  │  │
+│  │   │   Module    │  │   Module    │  │   Module    │  │   Module    │  │  │
+│  │   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  │  │
+│  │          │                │                │                │         │  │
+│  │   ┌──────┴────────────────┴────────────────┴────────────────┴──────┐  │  │
+│  │   │                     Subnet Manager                             │  │  │
+│  │   │         (Multi-Subnet Support, Gateway, Auth)                  │  │  │
+│  │   └────────────────────────────┬───────────────────────────────────┘  │  │
+│  │                                │                                      │  │
+│  └────────────────────────────────┼──────────────────────────────────────┘  │
+│                                   │                                         │
+│  ┌────────────────────────────────┴──────────────────────────────────────┐  │
+│  │                            Redis Storage                              │  │
+│  │   • Agent Registry    • Message Queues    • Payment Tasks    • Metrics│  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────────┘
                                                │
                                                ▼
                             ┌──────────────────────────────────────┐
-                            │        External Services              │
-                            │  • A2A Agents  • Payment Processors   │
-                            │  • Webhook Endpoints  • Prometheus    │
+                            │        External Services             │
+                            │  • A2A Agents  • Payment Processors  │
+                            │  • Webhook Endpoints  • Prometheus   │
                             └──────────────────────────────────────┘
 ```
 
 ---
 
-## 模块架构
+## Module Architecture
 
 ### 1. Registry Module (`acn/registry.py`)
 
-Agent 注册与发现核心模块。
+Core module for agent registration and discovery.
 
 ```
 ┌─────────────────────────────────────────┐
-│            AgentRegistry                 │
+│            AgentRegistry                │
 ├─────────────────────────────────────────┤
-│ + register_agent()                       │
-│ + unregister_agent()                     │
-│ + get_agent()                            │
-│ + search_agents()                        │
-│ + heartbeat()                            │
-│ + add_agent_to_subnet()                  │
-│ + remove_agent_from_subnet()             │
+│ + register_agent()                      │
+│ + unregister_agent()                    │
+│ + get_agent()                           │
+│ + search_agents()                       │
+│ + heartbeat()                           │
+│ + add_agent_to_subnet()                 │
+│ + remove_agent_from_subnet()            │
 ├─────────────────────────────────────────┤
-│ Redis Keys:                              │
+│ Redis Keys:                             │
 │  • acn:agents:{agent_id}     (Hash)     │
 │  • acn:agents:all            (Set)      │
 │  • acn:skills:{skill}        (Set)      │
@@ -72,79 +72,79 @@ Agent 注册与发现核心模块。
 └─────────────────────────────────────────┘
 ```
 
-**职责**:
-- Agent CRUD 操作
-- Agent Card 生成与托管
-- 技能索引与搜索
-- 多子网成员管理
+**Responsibilities**:
+- Agent CRUD operations
+- Agent Card generation and hosting
+- Skill indexing and search
+- Multi-subnet membership management
 
 ### 2. Communication Module (`acn/communication/`)
 
-A2A 协议通信层。
+A2A protocol communication layer.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Communication Module                          │
+│                    Communication Module                         │
 ├─────────────────┬─────────────────┬─────────────────────────────┤
-│  MessageRouter  │ BroadcastService│    WebSocketManager          │
+│  MessageRouter  │ BroadcastService│    WebSocketManager         │
 ├─────────────────┼─────────────────┼─────────────────────────────┤
-│ • route()       │ • broadcast()   │ • connect()                  │
-│ • route_by_skill│ • parallel      │ • disconnect()               │
-│ • send_message  │ • sequential    │ • subscribe()                │
-│                 │ • first_response│ • broadcast()                │
+│ • route()       │ • broadcast()   │ • connect()                 │
+│ • route_by_skill│ • parallel      │ • disconnect()              │
+│ • send_message  │ • sequential    │ • subscribe()               │
+│                 │ • first_response│ • broadcast()               │
 └─────────────────┴─────────────────┴─────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    SubnetManager (Gateway)                       │
+│                    SubnetManager (Gateway)                      │
 ├─────────────────────────────────────────────────────────────────┤
-│ • create_subnet()      • handle_gateway_connection()             │
-│ • delete_subnet()      • forward_request()                       │
-│ • validate_token()     • cross_subnet_routing()                  │
+│ • create_subnet()      • handle_gateway_connection()            │
+│ • delete_subnet()      • forward_request()                      │
+│ • validate_token()     • cross_subnet_routing()                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**组件说明**:
+**Component Details**:
 
-| 组件 | 职责 |
-|-----|------|
-| `MessageRouter` | A2A 消息路由，按 Agent ID 或技能路由 |
-| `BroadcastService` | 多目标消息广播，支持多种策略 |
-| `WebSocketManager` | WebSocket 连接管理，实时消息推送 |
-| `SubnetManager` | 子网生命周期，Gateway 跨网通信 |
+| Component | Responsibility |
+|-----------|---------------|
+| `MessageRouter` | A2A message routing by agent ID or skill |
+| `BroadcastService` | Multi-target message broadcast with strategies |
+| `WebSocketManager` | WebSocket connection management, real-time push |
+| `SubnetManager` | Subnet lifecycle, gateway cross-network communication |
 
 ### 3. Payments Module (`acn/payments/`)
 
-AP2 协议支付集成。
+AP2 protocol payment integration.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Payments Module                             │
+│                      Payments Module                            │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌───────────────────┐    ┌───────────────────┐                 │
-│  │ PaymentDiscovery  │    │ PaymentTaskManager│                 │
-│  │    Service        │    │                   │                 │
-│  ├───────────────────┤    ├───────────────────┤                 │
-│  │ • index_capability│    │ • create_task()   │                 │
-│  │ • find_by_method  │    │ • update_status() │                 │
-│  │ • find_by_network │    │ • get_task()      │                 │
-│  │ • get_capability  │    │ • get_stats()     │                 │
-│  └───────────────────┘    └─────────┬─────────┘                 │
-│                                     │                            │
-│                                     ▼                            │
-│                          ┌───────────────────┐                  │
-│                          │  WebhookService   │                  │
-│                          ├───────────────────┤                  │
-│                          │ • send_event()    │                  │
-│                          │ • retry_delivery()│                  │
-│                          │ • get_history()   │                  │
-│                          └───────────────────┘                  │
-│                                                                  │
+│                                                                 │
+│  ┌───────────────────┐    ┌───────────────────┐                │
+│  │ PaymentDiscovery  │    │ PaymentTaskManager│                │
+│  │    Service        │    │                   │                │
+│  ├───────────────────┤    ├───────────────────┤                │
+│  │ • index_capability│    │ • create_task()   │                │
+│  │ • find_by_method  │    │ • update_status() │                │
+│  │ • find_by_network │    │ • get_task()      │                │
+│  │ • get_capability  │    │ • get_stats()     │                │
+│  └───────────────────┘    └─────────┬─────────┘                │
+│                                     │                           │
+│                                     ▼                           │
+│                          ┌───────────────────┐                 │
+│                          │  WebhookService   │                 │
+│                          ├───────────────────┤                 │
+│                          │ • send_event()    │                 │
+│                          │ • retry_delivery()│                 │
+│                          │ • get_history()   │                 │
+│                          └───────────────────┘                 │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**支付任务状态机**:
+**Payment Task State Machine**:
 
 ```
             ┌─────────────────────────────────────────────────────┐
@@ -168,11 +168,11 @@ AP2 协议支付集成。
 
 ### 4. Monitoring Module (`acn/monitoring/`)
 
-可观测性与审计。
+Observability and audit.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Monitoring Module                            │
+│                     Monitoring Module                           │
 ├─────────────────┬─────────────────┬─────────────────────────────┤
 │ MetricsCollector│   AuditLogger   │      Analytics              │
 ├─────────────────┼─────────────────┼─────────────────────────────┤
@@ -183,20 +183,20 @@ AP2 协议支付集成。
 └─────────────────┴─────────────────┴─────────────────────────────┘
 ```
 
-**Prometheus 指标**:
+**Prometheus Metrics**:
 
-| 指标 | 类型 | 说明 |
-|-----|------|------|
-| `acn_agents_total` | Gauge | 注册 Agent 总数 |
-| `acn_agents_online` | Gauge | 在线 Agent 数 |
-| `acn_messages_total` | Counter | 消息总数 |
-| `acn_message_latency_seconds` | Histogram | 消息延迟 |
-| `acn_subnets_total` | Gauge | 子网数量 |
-| `acn_payment_tasks_total` | Counter | 支付任务数 |
+| Metric | Type | Description |
+|--------|------|-------------|
+| `acn_agents_total` | Gauge | Total registered agents |
+| `acn_agents_online` | Gauge | Online agents |
+| `acn_messages_total` | Counter | Total messages |
+| `acn_message_latency_seconds` | Histogram | Message latency |
+| `acn_subnets_total` | Gauge | Subnet count |
+| `acn_payment_tasks_total` | Counter | Payment tasks |
 
 ---
 
-## 数据模型
+## Data Models
 
 ### AgentInfo
 
@@ -252,12 +252,12 @@ class PaymentTask(BaseModel):
 
 ---
 
-## Redis 数据结构
+## Redis Data Structures
 
-### Agent 数据
+### Agent Data
 
 ```
-# Agent 详情 (Hash)
+# Agent details (Hash)
 acn:agents:{agent_id}
 ├── agent_id: "my-agent"
 ├── name: "My Agent"
@@ -269,62 +269,62 @@ acn:agents:{agent_id}
 ├── payment_capability: '{...}'  # JSON
 └── registered_at: "2024-01-15T10:30:00Z"
 
-# 全部 Agent (Set)
+# All agents (Set)
 acn:agents:all -> {"agent-1", "agent-2", ...}
 
-# 技能索引 (Set)
+# Skill index (Set)
 acn:skills:{skill} -> {"agent-1", "agent-3", ...}
 
-# 子网成员 (Set)
+# Subnet members (Set)
 acn:subnet:{subnet_id}:agents -> {"agent-1", "agent-2", ...}
 ```
 
-### 支付数据
+### Payment Data
 
 ```
-# 支付任务 (String - JSON)
+# Payment tasks (String - JSON)
 acn:payment_tasks:{task_id} -> '{...}'
 
-# Agent 支付能力索引 (Set)
+# Agent payment capability index (Set)
 acn:payments:by_method:{method} -> {"agent-1", "agent-2"}
 acn:payments:by_network:{network} -> {"agent-1", "agent-3"}
 
-# 支付统计 (Hash)
+# Payment statistics (Hash)
 acn:payments:stats:{agent_id}
 ├── total_as_buyer: "5"
 ├── total_as_seller: "10"
 └── amount_usd: "1500.00"
 ```
 
-### WebSocket 数据
+### WebSocket Data
 
 ```
-# 连接信息 (Hash)
+# Connection info (Hash)
 acn:ws:connections:{connection_id}
 ├── agent_id: "my-agent"
 ├── subnet_id: "public"
 └── connected_at: "2024-01-15T10:30:00Z"
 
-# Agent 订阅 (Set)
+# Agent subscriptions (Set)
 acn:ws:subscriptions:{agent_id} -> {"topic-1", "topic-2"}
 ```
 
 ---
 
-## 部署架构
+## Deployment Architecture
 
-### 单节点部署
+### Single Node Deployment
 
 ```
 ┌─────────────────────────────────────────┐
-│              Docker Host                 │
-│                                          │
-│  ┌────────────┐    ┌────────────────┐   │
-│  │   Redis    │◀───│   ACN Server   │   │
-│  │  :6379     │    │    :8000       │   │
-│  └────────────┘    └────────────────┘   │
-│                           │              │
-└───────────────────────────┼──────────────┘
+│              Docker Host                │
+│                                         │
+│  ┌────────────┐    ┌────────────────┐  │
+│  │   Redis    │◀───│   ACN Server   │  │
+│  │  :6379     │    │    :8000       │  │
+│  └────────────┘    └────────────────┘  │
+│                           │             │
+└───────────────────────────┼─────────────┘
                             │
                             ▼
                     External Clients
@@ -334,7 +334,7 @@ acn:ws:subscriptions:{agent_id} -> {"topic-1", "topic-2"}
 docker-compose up -d
 ```
 
-### 高可用部署
+### High Availability Deployment
 
 ```
                     ┌──────────────┐
@@ -357,7 +357,7 @@ docker-compose up -d
               └──────────────────┘
 ```
 
-### Kubernetes 部署
+### Kubernetes Deployment
 
 ```yaml
 # deployment.yaml
@@ -371,7 +371,7 @@ spec:
     spec:
       containers:
       - name: acn
-        image: acn:latest
+        image: ghcr.io/acnet-ai/acn:latest
         ports:
         - containerPort: 8000
         env:
@@ -380,50 +380,57 @@ spec:
             secretKeyRef:
               name: acn-secrets
               key: redis-url
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
 ```
 
 ---
 
-## 安全设计
+## Security Design
 
-### 子网认证
+### Subnet Authentication
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Authentication Flow                       │
+│                    Authentication Flow                      │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  1. 创建子网时生成 Token                                     │
-│     POST /subnets → {token: "sk_subnet_xxx"}                │
-│                                                              │
-│  2. 访问私有子网 API 需携带 Token                            │
-│     Authorization: Bearer sk_subnet_xxx                      │
-│                                                              │
-│  3. ACN 验证 Token 并授权访问                                │
-│                                                              │
+│                                                             │
+│  1. Token generated when creating subnet                    │
+│     POST /subnets → {token: "sk_subnet_xxx"}               │
+│                                                             │
+│  2. Private subnet API requires token                       │
+│     Authorization: Bearer sk_subnet_xxx                     │
+│                                                             │
+│  3. ACN validates token and authorizes access              │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Webhook 签名
+### Webhook Signing
 
 ```python
-# Webhook 请求签名
+# Webhook request signing
 signature = hmac.new(
     secret.encode(),
     payload_json.encode(),
     hashlib.sha256
 ).hexdigest()
 
-# 请求头
+# Request headers
 X-ACN-Signature: sha256={signature}
 X-ACN-Timestamp: 2024-01-15T10:30:00Z
 ```
 
 ---
 
-## 扩展点
+## Extension Points
 
-### 自定义存储后端
+### Custom Storage Backend
 
 ```python
 class StorageBackend(Protocol):
@@ -431,20 +438,20 @@ class StorageBackend(Protocol):
     async def set(self, key: str, value: Any) -> None: ...
     async def delete(self, key: str) -> None: ...
 
-# 可实现 PostgreSQL、MongoDB 等后端
+# Can implement PostgreSQL, MongoDB, etc.
 ```
 
-### 自定义认证
+### Custom Authentication
 
 ```python
 class AuthProvider(Protocol):
     async def validate_token(self, token: str) -> bool: ...
     async def get_permissions(self, token: str) -> list[str]: ...
 
-# 可集成 OAuth2、JWT、LDAP 等
+# Can integrate OAuth2, JWT, LDAP, etc.
 ```
 
-### 自定义支付处理器
+### Custom Payment Processor
 
 ```python
 class PaymentProcessor(Protocol):
@@ -452,16 +459,14 @@ class PaymentProcessor(Protocol):
     async def confirm_payment(self, payment_id: str) -> bool: ...
     async def refund_payment(self, payment_id: str) -> bool: ...
 
-# 可集成 Stripe、PayPal、链上支付等
+# Can integrate Stripe, PayPal, on-chain payments, etc.
 ```
 
 ---
 
-## 更多资源
+## Additional Resources
 
-- [API 文档](./api.md)
+- [API Documentation](./api.md)
 - [README](../README.md)
 - [A2A Protocol](https://github.com/google/A2A)
 - [AP2 Protocol](https://github.com/google-agentic-commerce/AP2)
-
-
