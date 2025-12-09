@@ -11,7 +11,6 @@ import httpx
 from .models import (
     AgentInfo,
     AgentRegisterRequest,
-    AgentSearchOptions,
     BroadcastRequest,
     DashboardData,
     PaymentCapability,

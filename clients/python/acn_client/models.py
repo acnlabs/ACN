@@ -142,6 +142,7 @@ class SubnetInfo(BaseModel):
 
     class Config:
         populate_by_name = True
+
     description: str | None = None
     created_at: datetime | None = None
     agent_count: int = 0

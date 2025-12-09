@@ -7,7 +7,7 @@ Real-time communication with ACN server.
 import asyncio
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -59,11 +59,11 @@ class ACNRealtime:
 
     Example:
         >>> realtime = ACNRealtime("ws://localhost:9000")
-        >>> 
+        >>>
         >>> @realtime.on("agents")
         ... def handle_agent_event(msg):
         ...     print(f"Agent event: {msg}")
-        >>> 
+        >>>
         >>> await realtime.connect()
     """
 
@@ -296,7 +296,11 @@ class ACNRealtime:
             except asyncio.CancelledError:
                 break
             except Exception:
-                if self.options.auto_reconnect and self._reconnect_attempts < self.options.max_reconnect_attempts:
+                should_reconnect = (
+                    self.options.auto_reconnect
+                    and self._reconnect_attempts < self.options.max_reconnect_attempts
+                )
+                if should_reconnect:
                     await self._reconnect(channel)
                 else:
                     self._set_state(WSState.DISCONNECTED)

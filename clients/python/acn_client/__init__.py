@@ -3,7 +3,7 @@ ACN Client - Official Python SDK for Agent Collaboration Network
 
 Example:
     >>> from acn_client import ACNClient
-    >>> 
+    >>>
     >>> async with ACNClient("http://localhost:9000") as client:
     ...     agents = await client.search_agents(skills=["coding"])
     ...     print(f"Found {len(agents)} agents")
