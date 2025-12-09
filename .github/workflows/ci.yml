@@ -46,8 +46,8 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check .
 
-      - name: Type check (basedpyright)
-        run: uv run basedpyright
+      - name: Type check (mypy)
+        run: uv run mypy acn --ignore-missing-imports
 
       - name: Test (pytest)
         run: uv run pytest -v --cov=acn --cov-report=xml
