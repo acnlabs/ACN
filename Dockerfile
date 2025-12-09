@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 LABEL maintainer="AgentPlanet Team <team@agentplanet.com>"
 LABEL description="ACN - Agent Collaboration Network"
