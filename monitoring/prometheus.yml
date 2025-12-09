@@ -1,0 +1,18 @@
+# Prometheus Configuration for ACN
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # ACN metrics
+  - job_name: 'acn'
+    static_configs:
+      - targets: ['acn:8000']
+    metrics_path: '/metrics'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+

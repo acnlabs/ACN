@@ -1,6 +1,15 @@
-version: '3.8'
+# ACN - Agent Collaboration Network
+# Docker Compose Configuration
+#
+# Usage:
+#   Basic:      docker compose up -d
+#   Monitoring: docker compose --profile monitoring up -d
 
 services:
+  # ===========================================
+  # Core Services
+  # ===========================================
+  
   acn:
     build: .
     container_name: acn-service
@@ -17,9 +26,10 @@ services:
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 5s
+      start_period: 10s
     networks:
       - acn-network
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -28,6 +38,7 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
+    command: redis-server --appendonly yes
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -35,16 +46,55 @@ services:
       retries: 3
     networks:
       - acn-network
+    restart: unless-stopped
+
+  # ===========================================
+  # Monitoring (Optional)
+  # ===========================================
+  
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: acn-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - acn-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: acn-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - acn-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
 
 volumes:
   redis-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   acn-network:
     driver: bridge
-
-
-
-
-
-
