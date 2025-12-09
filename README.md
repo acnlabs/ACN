@@ -380,6 +380,14 @@ uv run ruff format .
 
 ---
 
+## 📚 Documentation
+
+- **[API Reference](docs/api.md)** - Complete REST API documentation
+- **[Architecture](docs/architecture.md)** - System design and data models
+- **[Federation Design](docs/federation.md)** - Future roadmap for interconnected ACN instances
+
+---
+
 ## 🔗 Related Resources
 
 ### Protocol Standards
