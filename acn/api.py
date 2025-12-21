@@ -170,7 +170,7 @@ async def health():
 @app.post("/api/v1/agents/register", response_model=AgentRegisterResponse)
 async def register_agent(request: AgentRegisterRequest):
     """
-    Register an Agent
+    Register an Agent (Idempotent)
 
     Registers an Agent to ACN and stores its Agent Card.
 
@@ -178,6 +178,13 @@ async def register_agent(request: AgentRegisterRequest):
     - Auto-generates Agent Card if not provided (supports any framework)
     - Can join multiple subnets (default: ["public"])
     - Validates Agent Card format
+    - **Idempotent**: Multiple registrations with same owner + endpoint will update, not duplicate
+
+    Idempotency:
+    ACN automatically handles idempotent registration based on natural keys:
+    - If same owner + endpoint exists: Updates existing agent (ID unchanged)
+    - If new endpoint: Creates new agent with generated UUID
+    - For explicit control: Provide agent_id or external_id
 
     Agent Card Auto-Generation:
     If your agent doesn't have an A2A Agent Card, ACN will automatically
@@ -199,22 +206,22 @@ async def register_agent(request: AgentRegisterRequest):
             )
 
     try:
-        success = await registry.register_agent(
-            agent_id=request.agent_id,
+        # Register agent (idempotent based on owner + endpoint)
+        agent_id = await registry.register_agent(
+            owner=request.owner,
             name=request.name,
             endpoint=request.endpoint,
             skills=request.skills,
+            agent_id=request.agent_id,
+            external_id=request.external_id,
             agent_card=request.agent_card,
             subnet_ids=subnet_ids,
         )
 
-        if not success:
-            raise HTTPException(status_code=500, detail="Registration failed")
-
         return AgentRegisterResponse(
             status="registered",
-            agent_id=request.agent_id,
-            agent_card_url=f"/api/v1/agents/{request.agent_id}/.well-known/agent-card.json",
+            agent_id=agent_id,
+            agent_card_url=f"/api/v1/agents/{agent_id}/.well-known/agent-card.json",
         )
 
     except ValueError as e:
@@ -254,19 +261,31 @@ async def get_agent_card(agent_id: str):
 
 
 @app.get("/api/v1/agents", response_model=AgentSearchResponse)
-async def search_agents(skills: str = None, status: str = "online"):
+async def search_agents(
+    skills: str = None,
+    status: str = "online",
+    owner: str = None,
+    name: str = None,
+):
     """
     Search Agents
 
-    Search Agents by skills and status.
+    Search Agents by skills, status, owner, and name.
 
     Query Parameters:
     - skills: Comma-separated skill IDs (e.g., "task-planning,coding")
     - status: Agent status filter (default: "online")
+    - owner: Owner filter (e.g., "system", "user-123", "provider-x")
+    - name: Name filter (partial match, case-insensitive)
     """
     skill_list = skills.split(",") if skills else None
 
-    agents = await registry.search_agents(skills=skill_list, status=status)
+    agents = await registry.search_agents(
+        skills=skill_list,
+        status=status,
+        owner=owner,
+        name=name,
+    )
 
     return AgentSearchResponse(agents=agents, total=len(agents))
 

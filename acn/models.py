@@ -38,7 +38,8 @@ class AgentCard(BaseModel):
 class AgentInfo(BaseModel):
     """Agent Information (ACN internal model)"""
 
-    agent_id: str = Field(..., description="Unique agent identifier")
+    agent_id: str = Field(..., description="Unique agent identifier (UUID)")
+    owner: str = Field(..., description="Agent owner (system/user-{id}/provider-{id})")
     name: str = Field(..., description="Agent name")
     description: str | None = Field(None, description="Agent description")
     endpoint: str = Field(..., description="Agent A2A endpoint URL")
@@ -55,12 +56,8 @@ class AgentInfo(BaseModel):
     last_heartbeat: datetime | None = Field(None)
 
     # Payment capability (AP2 Protocol integration)
-    wallet_address: str | None = Field(
-        None, description="Wallet address for crypto payments (AP2)"
-    )
-    accepts_payment: bool = Field(
-        default=False, description="Whether this agent accepts payments"
-    )
+    wallet_address: str | None = Field(None, description="Wallet address for crypto payments (AP2)")
+    accepts_payment: bool = Field(default=False, description="Whether this agent accepts payments")
     payment_methods: list[str] = Field(
         default_factory=list,
         description="Accepted payment methods (e.g., 'usdc', 'eth', 'credit_card')",
@@ -75,10 +72,18 @@ class AgentInfo(BaseModel):
 class AgentRegisterRequest(BaseModel):
     """Request to register an agent"""
 
-    agent_id: str = Field(..., description="Unique agent identifier")
+    agent_id: str | None = Field(
+        None, description="Agent ID (optional, auto-generated if not provided)"
+    )
+    owner: str = Field(..., description="Agent owner (system/user-{id}/provider-{id})")
     name: str = Field(..., description="Agent name")
     endpoint: str = Field(..., description="Agent A2A endpoint URL")
     skills: list[str] = Field(default_factory=list, description="Agent skill IDs")
+    external_id: str | None = Field(
+        None,
+        description="External ID from caller's system (for idempotent registration). "
+        "ACN will generate deterministic UUID based on owner + external_id",
+    )
     agent_card: dict | None = Field(
         None, description="Optional Agent Card (auto-generated if not provided)"
     )
