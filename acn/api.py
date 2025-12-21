@@ -14,11 +14,12 @@ Based on A2A Protocol: https://github.com/a2aproject/A2A
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from .auth.middleware import get_subject, require_permission, verify_token
 from .communication import (
     BroadcastService,
     BroadcastStrategy,
@@ -168,9 +169,12 @@ async def health():
 
 
 @app.post("/api/v1/agents/register", response_model=AgentRegisterResponse)
-async def register_agent(request: AgentRegisterRequest):
+async def register_agent(
+    request: AgentRegisterRequest,
+    payload: dict = Depends(require_permission("acn:write")),
+):
     """
-    Register an Agent (Idempotent)
+    Register an Agent (Idempotent) - Requires Auth0 Token with acn:write permission
 
     Registers an Agent to ACN and stores its Agent Card.
 
@@ -194,6 +198,19 @@ async def register_agent(request: AgentRegisterRequest):
     An agent can belong to multiple subnets simultaneously.
     Use `subnet_ids: ["public", "team-a", "team-b"]` to join multiple networks.
     """
+    # Extract owner from Auth0 token
+    token_owner = await get_subject()
+    
+    # Validate owner: must match token owner or be explicitly allowed
+    if request.owner != token_owner:
+        # Check if token has admin permission to register for others
+        permissions = payload.get("permissions", []) or payload.get("scope", "").split()
+        if "acn:admin" not in permissions:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Cannot register agent for owner '{request.owner}'. Token owner is '{token_owner}'.",
+            )
+    
     # Get effective subnet IDs (supports both old and new format)
     subnet_ids = request.get_subnet_ids()
 
