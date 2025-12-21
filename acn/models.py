@@ -70,20 +70,18 @@ class AgentInfo(BaseModel):
 
 
 class AgentRegisterRequest(BaseModel):
-    """Request to register an agent"""
+    """
+    Request to register an agent
 
-    agent_id: str | None = Field(
-        None, description="Agent ID (optional, auto-generated if not provided)"
-    )
+    ACN automatically manages agent IDs:
+    - New registration: Generates UUID
+    - Re-registration (same owner + endpoint): Updates existing agent (ID unchanged)
+    """
+
     owner: str = Field(..., description="Agent owner (system/user-{id}/provider-{id})")
     name: str = Field(..., description="Agent name")
     endpoint: str = Field(..., description="Agent A2A endpoint URL")
     skills: list[str] = Field(default_factory=list, description="Agent skill IDs")
-    external_id: str | None = Field(
-        None,
-        description="External ID from caller's system (for idempotent registration). "
-        "ACN will generate deterministic UUID based on owner + external_id",
-    )
     agent_card: dict | None = Field(
         None, description="Optional Agent Card (auto-generated if not provided)"
     )

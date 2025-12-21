@@ -35,58 +35,48 @@ class AgentRegistry:
         name: str,
         endpoint: str,
         skills: list[str],
-        agent_id: str | None = None,
-        external_id: str | None = None,
         agent_card: dict | None = None,
         subnet_ids: list[str] | None = None,
         description: str = "",
         metadata: dict | None = None,
     ) -> str:
         """
-        Register an Agent (Idempotent)
+        Register an Agent (Idempotent) - ACN fully manages IDs
+
+        ACN automatically handles agent IDs:
+        - If owner + endpoint already exists: Updates existing agent (ID unchanged)
+        - If new agent: Generates new UUID
+        
+        This ensures:
+        - Callers never need to manage IDs
+        - Automatic idempotency (no duplicate agents)
+        - ACN has full control of identity
 
         Args:
             owner: Agent owner (system/user-{id}/provider-{id})
             name: Agent name
             endpoint: Agent A2A endpoint URL
             skills: List of skill IDs
-            agent_id: Agent ID (optional, for explicit control)
-            external_id: External ID from caller (optional, for idempotent registration)
             agent_card: Optional A2A Agent Card (auto-generated if not provided)
             subnet_ids: Subnets to join (default: ["public"]). Agent can belong to multiple subnets.
             description: Agent description
             metadata: Additional metadata
 
         Returns:
-            agent_id (UUID string)
-            
-        Idempotency Strategy:
-            1. If agent_id provided: Use it (explicit control)
-            2. If external_id provided: Generate deterministic UUID from owner + external_id
-            3. If endpoint matches existing agent from same owner: Reuse existing agent_id
-            4. Otherwise: Generate new random UUID
+            agent_id (UUID string) - Generated or reused by ACN
         """
-        # Idempotency Strategy:
-        # 1. If agent_id provided: Use it (explicit control, for platform integrated agents)
-        # 2. If external_id provided: Generate deterministic UUID
-        # 3. Check by endpoint (natural key): If same owner + endpoint exists, reuse its ID
-        # 4. Otherwise: Generate new random UUID
+        # ACN-managed ID strategy (Natural Key Idempotency):
+        # 1. Check by endpoint (natural key): If same owner + endpoint exists, reuse its ID
+        # 2. Otherwise: Generate new random UUID
         
-        if agent_id:
-            # Explicit agent_id provided (e.g., platform integrated agents)
-            pass
-        elif external_id:
-            # External ID provided: generate deterministic UUID
-            agent_id = str(uuid5(NAMESPACE_DNS, f"{owner}:{external_id}"))
+        # Try to find existing agent by owner + endpoint (natural key)
+        existing_id = await self._find_agent_by_endpoint(owner, endpoint)
+        if existing_id:
+            # Found existing agent: reuse its ID (UPDATE semantics)
+            agent_id = existing_id
         else:
-            # Try to find existing agent by owner + endpoint (natural key)
-            existing_id = await self._find_agent_by_endpoint(owner, endpoint)
-            if existing_id:
-                # Found existing agent: reuse its ID (UPDATE semantics)
-                agent_id = existing_id
-            else:
-                # New agent: generate random UUID (CREATE semantics)
-                agent_id = str(uuid4())
+            # New agent: generate random UUID (CREATE semantics)
+            agent_id = str(uuid4())
         
         # Check if agent already exists (for idempotency)
         existing_agent = await self.redis.hgetall(f"acn:agents:{agent_id}")

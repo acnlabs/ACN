@@ -179,16 +179,15 @@ async def register_agent(
     Registers an Agent to ACN and stores its Agent Card.
 
     Features:
-    - Auto-generates Agent Card if not provided (supports any framework)
-    - Can join multiple subnets (default: ["public"])
-    - Validates Agent Card format
-    - **Idempotent**: Multiple registrations with same owner + endpoint will update, not duplicate
+    - **ACN-managed IDs**: ACN automatically generates and manages agent IDs
+    - **Auto-idempotency**: Same owner + endpoint = update (no duplicates)
+    - **Auto-generates Agent Card** if not provided (supports any framework)
+    - **Multi-subnet support**: Can join multiple subnets (default: ["public"])
 
-    Idempotency:
-    ACN automatically handles idempotent registration based on natural keys:
-    - If same owner + endpoint exists: Updates existing agent (ID unchanged)
-    - If new endpoint: Creates new agent with generated UUID
-    - For explicit control: Provide agent_id or external_id
+    How it works:
+    - New agent (unique owner + endpoint) → ACN generates new UUID
+    - Re-registration (same owner + endpoint) → ACN updates existing agent (ID unchanged)
+    - Callers never need to manage IDs
 
     Agent Card Auto-Generation:
     If your agent doesn't have an A2A Agent Card, ACN will automatically
@@ -223,14 +222,12 @@ async def register_agent(
             )
 
     try:
-        # Register agent (idempotent based on owner + endpoint)
+        # Register agent (ACN automatically manages IDs, idempotent based on owner + endpoint)
         agent_id = await registry.register_agent(
             owner=request.owner,
             name=request.name,
             endpoint=request.endpoint,
             skills=request.skills,
-            agent_id=request.agent_id,
-            external_id=request.external_id,
             agent_card=request.agent_card,
             subnet_ids=subnet_ids,
         )
