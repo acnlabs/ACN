@@ -41,6 +41,11 @@ htmlcov/
 *.cover
 .hypothesis/
 
+# Type checking & linting
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
 # Environment
 .env
 .env.local
