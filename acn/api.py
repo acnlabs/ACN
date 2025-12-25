@@ -193,66 +193,83 @@ async def root():
 @app.get("/.well-known/agent-card.json")
 async def get_acn_agent_card():
     """
-    ACN Agent Card (A2A standard)
+    ACN Agent Card (Legacy endpoint - for backward compatibility)
 
     Returns ACN's own Agent Card describing its capabilities and authentication.
+    Note: The A2A-compliant endpoint is /a2a/.well-known/agent-card.json
     """
-    return {
-        "protocolVersion": "0.4.0",
-        "name": "ACN Infrastructure Agent",
-        "description": (
-            "Agent Collaboration Network provides infrastructure services: "
-            "broadcast, discovery, routing, and subnet gateway"
-        ),
-        "url": f"{settings.gateway_base_url}/a2a/jsonrpc",
-        "skills": [
-            {
-                "id": "acn:broadcast",
-                "name": "Multi-Agent Broadcasting",
-                "description": "Broadcast messages to multiple agents simultaneously",
+    try:
+        # Get base URL with fallback
+        base_url = getattr(settings, "gateway_base_url", None) or "http://localhost:8002"
+        auth0_domain = getattr(settings, "auth0_domain", None)
+
+        card = {
+            "protocolVersion": "0.4.0",
+            "name": "ACN Infrastructure Agent",
+            "description": (
+                "Agent Collaboration Network provides infrastructure services: "
+                "broadcast, discovery, routing, and subnet gateway"
+            ),
+            "url": f"{base_url}/a2a/jsonrpc",
+            "skills": [
+                {
+                    "id": "acn:broadcast",
+                    "name": "Multi-Agent Broadcasting",
+                    "description": "Broadcast messages to multiple agents simultaneously",
+                },
+                {
+                    "id": "acn:discovery",
+                    "name": "Agent Discovery",
+                    "description": "Find agents by skills and status",
+                },
+                {
+                    "id": "acn:routing",
+                    "name": "Point-to-Point Routing",
+                    "description": "Route messages with logging and retry",
+                },
+                {
+                    "id": "acn:subnet_routing",
+                    "name": "Subnet Gateway Routing",
+                    "description": "Route through subnets for NAT traversal",
+                },
+            ],
+            "metadata": {
+                "provider": "AgenticPlanet",
+                "homepage": "https://agenticplanet.space",
+                "documentation": "https://docs.agenticplanet.space/acn",
+                "support": "support@agenticplanet.space",
             },
-            {
-                "id": "acn:discovery",
-                "name": "Agent Discovery",
-                "description": "Find agents by skills and status",
-            },
-            {
-                "id": "acn:routing",
-                "name": "Point-to-Point Routing",
-                "description": "Route messages with logging and retry",
-            },
-            {
-                "id": "acn:subnet_routing",
-                "name": "Subnet Gateway Routing",
-                "description": "Route through subnets for NAT traversal",
-            },
-        ],
-        "authentication": {
-            "securitySchemes": {
-                "oauth2": {
-                    "type": "oauth2",
-                    "description": "Auth0 OAuth 2.0 authentication",
-                    "flows": {
-                        "clientCredentials": {
-                            "tokenUrl": f"{settings.auth0_domain}/oauth/token",
-                            "scopes": {
-                                "acn:read": "Read access to ACN Registry",
-                                "acn:write": "Write access to ACN Registry",
-                                "acn:admin": "Administrative access",
-                            },
-                        }
-                    },
-                }
-            },
-            "security": [{"oauth2": ["acn:read", "acn:write"]}],
-        },
-        "metadata": {
-            "provider": "AgenticPlanet",
-            "homepage": "https://agenticplanet.space",
-            "documentation": "https://docs.agenticplanet.space/acn",
-            "support": "support@agenticplanet.space",
-        },
-    }
+        }
+
+        # Only add authentication if Auth0 is configured
+        if auth0_domain:
+            card["authentication"] = {
+                "securitySchemes": {
+                    "oauth2": {
+                        "type": "oauth2",
+                        "description": "Auth0 OAuth 2.0 authentication",
+                        "flows": {
+                            "clientCredentials": {
+                                "tokenUrl": f"{auth0_domain}/oauth/token",
+                                "scopes": {
+                                    "acn:read": "Read access to ACN Registry",
+                                    "acn:write": "Write access to ACN Registry",
+                                    "acn:admin": "Administrative access",
+                                },
+                            }
+                        },
+                    }
+                },
+                "security": [{"oauth2": ["acn:read", "acn:write"]}],
+            }
+
+        return card
+
+    except Exception as e:
+        logger.error("agent_card_error", error=str(e))
+        raise HTTPException(
+            status_code=500, detail=f"Failed to generate agent card: {str(e)}"
+        )
 
 
 @app.get("/health")

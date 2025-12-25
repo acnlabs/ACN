@@ -485,10 +485,18 @@ class AgentRegistry:
         Returns:
             True if valid
         """
-        required_fields = ["protocolVersion", "name", "url"]
+        # Support both camelCase and snake_case for compatibility
+        required_fields = {
+            "protocolVersion": ["protocolVersion", "protocol_version"],
+            "name": ["name"],
+            "url": ["url", "endpoint"],
+        }
 
-        for field in required_fields:
-            if field not in agent_card:
-                raise ValueError(f"Agent Card missing required field: {field}")
+        for canonical_name, field_variants in required_fields.items():
+            if not any(variant in agent_card for variant in field_variants):
+                raise ValueError(
+                    f"Agent Card missing required field: {canonical_name} "
+                    f"(tried: {', '.join(field_variants)})"
+                )
 
         return True
