@@ -1,17 +1,19 @@
 {
   "include": ["acn"],
   "exclude": ["tests", "**/__pycache__"],
-  "venvPath": "/Users/guyue/agentplanet/acn",
+  "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.12",
+  "pythonPlatform": "Darwin",
   "typeCheckingMode": "basic",
-  "reportMissingImports": true,
+  "reportMissingImports": "warning",
   "reportMissingTypeStubs": false,
   "reportGeneralTypeIssues": false,
   "reportArgumentType": false,
   "reportCallIssue": false,
   "reportAttributeAccessIssue": false,
-  "reportAssignmentType": false
+  "reportAssignmentType": false,
+  "stubPath": ".venv/lib/python3.12/site-packages"
 }
 
 

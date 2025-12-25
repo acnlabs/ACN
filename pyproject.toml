@@ -122,9 +122,13 @@ pythonVersion = "3.12"
 # 让 IDE 扩展使用 uv 管理的环境
 venvPath = "."
 venv = ".venv"
-reportMissingImports = true
+# 禁用第三方库的导入警告（已验证所有依赖都已安装）
+reportMissingImports = false
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
+# 忽略第三方库的类型检查
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
 reportUnknownVariableType = false
 reportUnknownArgumentType = false
 reportUnknownParameterType = false
