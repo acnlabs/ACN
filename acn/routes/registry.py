@@ -1,25 +1,33 @@
 """Agent Registry API Routes"""
 
 from fastapi import APIRouter, Depends, HTTPException
+import structlog  # type: ignore[import-untyped]
 
 from ..auth.middleware import get_subject, require_permission
+from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from .dependencies import (  # type: ignore[import-untyped]
+    AgentServiceDep,
     RegistryDep,
     SubnetManagerDep,
 )
 
 router = APIRouter(prefix="/api/v1/agents", tags=["registry"])
+logger = structlog.get_logger()
 
 
 @router.post("/register", response_model=AgentRegisterResponse)
 async def register_agent(
     request: AgentRegisterRequest,
     payload: dict = Depends(require_permission("acn:write")),
-    registry: RegistryDep = None,
+    agent_service: AgentServiceDep = None,
     subnet_manager: SubnetManagerDep = None,
+    registry: RegistryDep = None,  # Keep for backward compatibility (agent_card generation)
 ):
-    """Register an Agent (Idempotent) - Requires Auth0 Token"""
+    """Register an Agent (Idempotent) - Requires Auth0 Token
+    
+    Uses Clean Architecture: Route → Service → Repository
+    """
     # Extract owner from Auth0 token
     token_owner = await get_subject()
 
@@ -44,20 +52,29 @@ async def register_agent(
             )
 
     try:
-        agent_id = await registry.register_agent(
+        # Use AgentService (Clean Architecture)
+        agent = await agent_service.register_agent(
             owner=request.owner,
             name=request.name,
             endpoint=request.endpoint,
             skills=request.skills,
-            agent_card=request.agent_card,
             subnet_ids=subnet_ids,
+            description=request.get("description", ""),
+            metadata=request.get("metadata", {}),
         )
+        
+        # Generate Agent Card URL
+        agent_card_url = f"{registry._get_base_url()}/.well-known/agent-card.json?agent_id={agent.agent_id}"
 
+        logger.info("agent_registered", agent_id=agent.agent_id, owner=agent.owner)
+        
         return AgentRegisterResponse(
-            agent_id=agent_id,
-            message="Agent registered successfully" if agent_id else "Agent updated",
+            status="registered",
+            agent_id=agent.agent_id,
+            agent_card_url=agent_card_url,
         )
     except Exception as e:
+        logger.error("agent_registration_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
