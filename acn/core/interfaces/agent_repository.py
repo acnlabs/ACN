@@ -77,9 +77,7 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_skills(
-        self, skills: list[str], status: str = "online"
-    ) -> list[Agent]:
+    async def find_by_skills(self, skills: list[str], status: str = "online") -> list[Agent]:
         """
         Find agents by skills
 
@@ -143,4 +141,3 @@ class IAgentRepository(ABC):
             Number of agents in the subnet
         """
         pass
-

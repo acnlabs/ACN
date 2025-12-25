@@ -85,4 +85,3 @@ class Subnet:
         if isinstance(data.get("member_agent_ids"), list):
             data["member_agent_ids"] = set(data["member_agent_ids"])
         return cls(**data)
-

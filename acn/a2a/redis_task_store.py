@@ -203,7 +203,7 @@ class RedisTaskStore(TaskStore):
 
         # Index by context + status
         context_status_index = (
-            f"{self.key_prefix}index:context:{task.context_id}:" f"status:{task.status.state.value}"
+            f"{self.key_prefix}index:context:{task.context_id}:status:{task.status.state.value}"
         )
         await self.redis.sadd(context_status_index, task.id)
         await self.redis.expire(context_status_index, 30 * 24 * 3600)
@@ -224,7 +224,7 @@ class RedisTaskStore(TaskStore):
 
         # Remove from context + status index
         context_status_index = (
-            f"{self.key_prefix}index:context:{task.context_id}:" f"status:{task.status.state.value}"
+            f"{self.key_prefix}index:context:{task.context_id}:status:{task.status.state.value}"
         )
         await self.redis.srem(context_status_index, task.id)
 

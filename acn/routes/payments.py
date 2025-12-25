@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from ..payments import (
+from ..protocols.ap2 import (
     PaymentCapability,
     PaymentTaskStatus,
     SupportedNetwork,
@@ -148,4 +148,3 @@ async def get_agent_payment_stats(
     """Get payment statistics for agent"""
     stats = await payment_tasks.get_agent_stats(agent_id)
     return stats
-

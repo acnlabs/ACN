@@ -28,13 +28,13 @@ from .infrastructure.messaging import (
 from .infrastructure.persistence.redis import RedisAgentRepository, RedisSubnetRepository
 from .infrastructure.persistence.redis.registry import AgentRegistry
 from .monitoring import Analytics, AuditLogger, MetricsCollector
-from .payments import (
+from .protocols.a2a.server import create_a2a_app
+from .protocols.ap2 import (
     PaymentDiscoveryService,
     PaymentTaskManager,
     WebhookService,
     create_webhook_config_from_settings,
 )
-from .protocols.a2a.server import create_a2a_app
 from .routes import (
     analytics,
     communication,

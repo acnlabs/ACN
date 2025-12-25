@@ -46,4 +46,3 @@ async def get_latency_analytics(
 async def get_subnet_analytics(analytics: AnalyticsDep = None):
     """Get subnet analytics"""
     return await analytics.get_subnet_analytics()
-

@@ -17,7 +17,7 @@ from ..infrastructure.messaging import (
 )
 from ..infrastructure.persistence.redis.registry import AgentRegistry
 from ..monitoring import Analytics, AuditLogger, MetricsCollector
-from ..payments import PaymentDiscoveryService, PaymentTaskManager, WebhookService
+from ..protocols.ap2 import PaymentDiscoveryService, PaymentTaskManager, WebhookService
 from ..services import AgentService, MessageService, SubnetService
 
 settings = get_settings()

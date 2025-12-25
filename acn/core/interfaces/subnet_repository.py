@@ -96,4 +96,3 @@ class ISubnetRepository(ABC):
             True if subnet exists
         """
         pass
-

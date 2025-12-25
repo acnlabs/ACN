@@ -202,4 +202,3 @@ class SubnetService:
             True if subnet exists
         """
         return await self.repository.exists(subnet_id)
-

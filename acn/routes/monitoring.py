@@ -36,4 +36,3 @@ async def get_dashboard_data(
         "metrics": await metrics.get_summary(),
         "analytics": await analytics.get_summary(),
     }
-

@@ -51,4 +51,3 @@ async def get_agent_websocket_status(agent_id: str, ws_manager: WsManagerDep = N
     """Check if agent has active WebSocket connection"""
     is_connected = await ws_manager.is_connected(agent_id)
     return {"agent_id": agent_id, "connected": is_connected}
-
