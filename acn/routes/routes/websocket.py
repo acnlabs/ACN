@@ -3,7 +3,7 @@
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..dependencies import WsManagerDep, get_ws_manager
+from ..dependencies import WsManagerDep, get_ws_manager  # type: ignore[import-untyped]
 
 router = APIRouter(tags=["websocket"])
 logger = structlog.get_logger()

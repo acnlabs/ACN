@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ...auth.middleware import get_subject, require_permission
 from ...models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
-from ..dependencies import RegistryDep, SubnetManagerDep
+from ..dependencies import RegistryDep, SubnetManagerDep  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/agents", tags=["registry"])
 

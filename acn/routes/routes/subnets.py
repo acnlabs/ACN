@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 
 from ...models import SubnetCreateRequest, SubnetCreateResponse
-from ..dependencies import RegistryDep, SubnetManagerDep
+from ..dependencies import RegistryDep, SubnetManagerDep  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/subnets", tags=["subnets"])
 

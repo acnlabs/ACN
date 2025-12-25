@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 
-from ..dependencies import AnalyticsDep, MetricsDep
+from ..dependencies import AnalyticsDep, MetricsDep  # type: ignore[import-untyped]
 
 router = APIRouter(tags=["monitoring"])
 

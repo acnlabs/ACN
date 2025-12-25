@@ -9,7 +9,7 @@ from ...payments import (
     SupportedNetwork,
     SupportedPaymentMethod,
 )
-from ..dependencies import PaymentDiscoveryDep, PaymentTasksDep, RegistryDep
+from ..dependencies import PaymentDiscoveryDep, PaymentTasksDep, RegistryDep  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/payments", tags=["payments"])
 

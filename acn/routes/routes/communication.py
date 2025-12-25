@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ...communication import BroadcastStrategy
-from ..dependencies import AuditDep, BroadcastDep, MetricsDep, RegistryDep, RouterDep
+from ..dependencies import AuditDep, BroadcastDep, MetricsDep, RegistryDep, RouterDep  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/communication", tags=["communication"])
 
