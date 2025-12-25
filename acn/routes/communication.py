@@ -3,12 +3,11 @@
 Clean Architecture implementation: Route → MessageService → MessageRouter
 """
 
-from fastapi import APIRouter, HTTPException, Query
 import structlog  # type: ignore[import-untyped]
-from pydantic import BaseModel
 from a2a.types import Message, TextPart  # type: ignore[import-untyped]
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
-from ..communication import BroadcastStrategy
 from ..core.exceptions import AgentNotFoundException
 from .dependencies import (  # type: ignore[import-untyped]
     AuditDep,
@@ -51,7 +50,7 @@ async def send_message(
     audit: AuditDep = None,
 ):
     """Send message to specific agent
-    
+
     Clean Architecture: Route → MessageService → Repository + MessageRouter
     """
     try:
@@ -61,7 +60,7 @@ async def send_message(
             role="user",
             parts=[TextPart(text=str(request.message))],
         )
-        
+
         # Use MessageService (Clean Architecture)
         result = await message_service.send_message(
             from_agent_id=request.from_agent,
@@ -103,7 +102,7 @@ async def send_message(
             success=False,
         )
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     except Exception as e:
         logger.error("message_send_failed", error=str(e))
         await metrics.record_message(
@@ -122,7 +121,7 @@ async def broadcast_message(
     metrics: MetricsDep = None,
 ):
     """Broadcast message to multiple agents
-    
+
     Clean Architecture: Route → MessageService → Repository + MessageRouter
     """
     try:
@@ -131,7 +130,7 @@ async def broadcast_message(
             role="user",
             parts=[TextPart(text=str(request.message))],
         )
-        
+
         # Use MessageService (Clean Architecture)
         responses = await message_service.broadcast_message(
             from_agent_id=request.from_agent,
@@ -167,7 +166,7 @@ async def broadcast_message(
     except AgentNotFoundException as e:
         logger.error("broadcast_failed", error=str(e))
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     except Exception as e:
         logger.error("broadcast_failed", error=str(e))
         await metrics.record_broadcast(
@@ -185,7 +184,7 @@ async def broadcast_by_skill(
     metrics: MetricsDep = None,
 ):
     """Broadcast to agents with specific skills
-    
+
     Clean Architecture: Route → MessageService → Repository
     """
     try:
@@ -194,7 +193,7 @@ async def broadcast_by_skill(
             role="user",
             parts=[TextPart(text=str(request.message))],
         )
-        
+
         # Use MessageService with skill filter
         responses = await message_service.broadcast_message(
             from_agent_id=request.from_agent,
@@ -205,7 +204,7 @@ async def broadcast_by_skill(
 
         # Apply limit if specified
         if request.limit:
-            responses = responses[:request.limit]
+            responses = responses[: request.limit]
 
         # Record metrics
         success_count = len([r for r in responses if r.get("status") == "success"])
@@ -234,7 +233,7 @@ async def broadcast_by_skill(
     except AgentNotFoundException as e:
         logger.error("skill_broadcast_failed", error=str(e))
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     except Exception as e:
         logger.error("skill_broadcast_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -247,7 +246,7 @@ async def get_message_history(
     message_service: MessageServiceDep = None,
 ):
     """Get message history for agent
-    
+
     Clean Architecture: Route → MessageService → MessageRouter
     """
     try:
@@ -256,9 +255,9 @@ async def get_message_history(
             agent_id=agent_id,
             limit=limit,
         )
-        
+
         logger.info("message_history_retrieved", agent_id=agent_id, count=len(history))
-        
+
         return {
             "agent_id": agent_id,
             "messages": history,
@@ -269,7 +268,7 @@ async def get_message_history(
     except AgentNotFoundException as e:
         logger.error("message_history_failed", error=str(e))
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     except Exception as e:
         logger.error("message_history_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -281,14 +280,14 @@ async def retry_dead_letter_queue(
     router: RouterDep = None,
 ):
     """Retry messages from dead letter queue
-    
+
     Note: Uses MessageRouter directly (infrastructure operation)
     """
     try:
         result = await router.retry_failed_messages(max_retries=max_retries)
-        
+
         logger.info("dlq_retry_completed", retried=result.get("retried", 0))
-        
+
         return result
 
     except Exception as e:
