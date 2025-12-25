@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import json
 
-import structlog
-from a2a.server.context import ServerCallContext
-from a2a.server.tasks import TaskStore
-from a2a.types import Task, TaskState
+import structlog  # type: ignore[import-untyped]
+from a2a.server.context import ServerCallContext  # type: ignore[import-untyped]
+from a2a.server.tasks import TaskStore  # type: ignore[import-untyped]
+from a2a.types import Task, TaskState  # type: ignore[import-untyped]
 from redis.asyncio import Redis
 
 logger = structlog.get_logger()
@@ -113,7 +113,7 @@ class RedisTaskStore(TaskStore):
 
         logger.debug("task_deleted", task_id=task_id)
 
-    async def list(
+    async def list_tasks(
         self,
         context_id: str | None = None,
         status: TaskState | None = None,
