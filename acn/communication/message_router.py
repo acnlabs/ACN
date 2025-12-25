@@ -11,16 +11,25 @@ Based on: https://github.com/a2aproject/A2A
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+import httpx
 import redis.asyncio as redis
 
 # Official A2A SDK
 from a2a.client import A2AClient  # type: ignore[import-untyped]
-from a2a.types import DataPart, Message, Part, Role, TextPart  # type: ignore[import-untyped]
+from a2a.types import (  # type: ignore[import-untyped]
+    DataPart,
+    Message,
+    MessageSendParams,
+    Part,
+    Role,
+    SendMessageRequest,
+    TextPart,
+)
 
 from ..registry import AgentRegistry
 
@@ -88,7 +97,12 @@ class MessageRouter:
             A2AClient instance
         """
         if endpoint not in self._clients:
-            self._clients[endpoint] = A2AClient.from_url(endpoint)
+            # Create A2A client with httpx AsyncClient
+            httpx_client = httpx.AsyncClient(timeout=30.0)
+            self._clients[endpoint] = A2AClient(
+                httpx_client=httpx_client,
+                url=endpoint,
+            )
             logger.debug(f"Created A2A client for {endpoint}")
 
         return self._clients[endpoint]
@@ -138,16 +152,16 @@ class MessageRouter:
         try:
             # 3. Get A2A client and send message
             client = await self._get_client(endpoint)
-            response = await client.send_message(message)
+
+            # Create SendMessageRequest
+            request = SendMessageRequest(
+                id=route_id,
+                params=MessageSendParams(message=message),
+            )
+            response = await client.send_message(request)
 
             # 4. Log response
-            await self._log_message(
-                route_id=route_id,
-                from_agent=to_agent,
-                to_agent=from_agent,
-                message=response,
-                direction="inbound",
-            )
+            logger.debug(f"[{route_id}] Received response: {type(response)}")
 
             logger.info(f"[{route_id}] Message delivered successfully")
             return response
@@ -219,7 +233,7 @@ class MessageRouter:
         from_agent: str,
         to_agent: str,
         message: Message,
-    ):
+    ) -> AsyncGenerator[Any, None]:
         """
         Route message with SSE streaming response
 
@@ -249,7 +263,7 @@ class MessageRouter:
         self,
         message_type: str,
         handler: Callable,
-    ):
+    ) -> None:
         """
         Register handler for incoming messages
 
@@ -267,7 +281,7 @@ class MessageRouter:
         self,
         from_agent: str,
         message: Message,
-    ):
+    ) -> None:
         """
         Handle incoming A2A message
 

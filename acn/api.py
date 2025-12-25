@@ -14,12 +14,14 @@ Based on A2A Protocol: https://github.com/a2aproject/A2A
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from .auth.middleware import get_subject, require_permission, verify_token
+from .a2a_integration import create_a2a_app
+from .auth.middleware import get_subject, require_permission
 from .communication import (
     BroadcastService,
     BroadcastStrategy,
@@ -54,6 +56,7 @@ from .registry import AgentRegistry
 
 # Settings
 settings = get_settings()
+logger = structlog.get_logger()
 
 # Global instances
 registry: AgentRegistry = None  # type: ignore
@@ -64,6 +67,9 @@ subnet_manager: SubnetManager = None  # type: ignore
 metrics: MetricsCollector = None  # type: ignore
 audit: AuditLogger = None  # type: ignore
 analytics: Analytics = None  # type: ignore
+
+# A2A Protocol (Infrastructure Agent)
+a2a_app: FastAPI = None  # type: ignore
 
 # Layer 4: Payments
 payment_discovery: PaymentDiscoveryService = None  # type: ignore
@@ -77,6 +83,7 @@ async def lifespan(app: FastAPI):
     global registry, router, broadcast, ws_manager, subnet_manager
     global metrics, audit, analytics
     global payment_discovery, payment_tasks, webhook_service
+    global a2a_app
 
     # Startup
     registry = AgentRegistry(settings.redis_url)
@@ -87,6 +94,24 @@ async def lifespan(app: FastAPI):
         registry=registry,
         redis_client=registry.redis,
         gateway_base_url=settings.gateway_base_url,
+    )
+
+    # A2A Protocol - Infrastructure Agent
+    # ACN exposes infrastructure services (broadcast, discovery, routing) via A2A
+    a2a_app = create_a2a_app(
+        registry=registry,
+        router=router,
+        broadcast=broadcast,
+        subnet_manager=subnet_manager,
+        redis=registry.redis,
+    )
+
+    # Mount A2A app
+    app.mount("/a2a", a2a_app)
+    logger.info(
+        "a2a_infrastructure_agent_mounted",
+        endpoints=["/a2a/jsonrpc", "/a2a/jsonrpc/stream"],
+        actions=["broadcast", "discover", "route", "subnet_route"],
     )
 
     # Layer 3: Monitoring
@@ -118,7 +143,8 @@ async def lifespan(app: FastAPI):
     print(f"   Redis: {settings.redis_url}")
     print(f"   Gateway: {settings.gateway_base_url}")
     print(f"   API Docs: http://{settings.host}:{settings.port}/docs")
-    print("   Layers: Registry ✓ | Communication ✓ | Gateway ✓ | Monitoring ✓ | Payments ✓")
+    print("   A2A Infrastructure Agent: /a2a/jsonrpc (broadcast, discover, route)")
+    print("   Layers: Registry ✓ | Communication ✓ | Gateway ✓ | Monitoring ✓ | Payments ✓ | A2A ✓")
 
     yield
 
@@ -159,6 +185,73 @@ async def root():
         "version": "0.1.0",
         "status": "running",
         "docs": "/docs",
+        "a2a": "/a2a/jsonrpc",
+        "agent_card": "/.well-known/agent-card.json",
+    }
+
+
+@app.get("/.well-known/agent-card.json")
+async def get_acn_agent_card():
+    """
+    ACN Agent Card (A2A standard)
+
+    Returns ACN's own Agent Card describing its capabilities and authentication.
+    """
+    return {
+        "protocolVersion": "0.4.0",
+        "name": "ACN Infrastructure Agent",
+        "description": (
+            "Agent Collaboration Network provides infrastructure services: "
+            "broadcast, discovery, routing, and subnet gateway"
+        ),
+        "url": f"{settings.gateway_base_url}/a2a/jsonrpc",
+        "skills": [
+            {
+                "id": "acn:broadcast",
+                "name": "Multi-Agent Broadcasting",
+                "description": "Broadcast messages to multiple agents simultaneously",
+            },
+            {
+                "id": "acn:discovery",
+                "name": "Agent Discovery",
+                "description": "Find agents by skills and status",
+            },
+            {
+                "id": "acn:routing",
+                "name": "Point-to-Point Routing",
+                "description": "Route messages with logging and retry",
+            },
+            {
+                "id": "acn:subnet_routing",
+                "name": "Subnet Gateway Routing",
+                "description": "Route through subnets for NAT traversal",
+            },
+        ],
+        "authentication": {
+            "securitySchemes": {
+                "oauth2": {
+                    "type": "oauth2",
+                    "description": "Auth0 OAuth 2.0 authentication",
+                    "flows": {
+                        "clientCredentials": {
+                            "tokenUrl": f"{settings.auth0_domain}/oauth/token",
+                            "scopes": {
+                                "acn:read": "Read access to ACN Registry",
+                                "acn:write": "Write access to ACN Registry",
+                                "acn:admin": "Administrative access",
+                            },
+                        }
+                    },
+                }
+            },
+            "security": [{"oauth2": ["acn:read", "acn:write"]}],
+        },
+        "metadata": {
+            "provider": "AgenticPlanet",
+            "homepage": "https://agenticplanet.space",
+            "documentation": "https://docs.agenticplanet.space/acn",
+            "support": "support@agenticplanet.space",
+        },
     }
 
 
@@ -199,7 +292,7 @@ async def register_agent(
     """
     # Extract owner from Auth0 token
     token_owner = await get_subject()
-    
+
     # Validate owner: must match token owner or be explicitly allowed
     if request.owner != token_owner:
         # Check if token has admin permission to register for others
@@ -209,7 +302,7 @@ async def register_agent(
                 status_code=403,
                 detail=f"Cannot register agent for owner '{request.owner}'. Token owner is '{token_owner}'.",
             )
-    
+
     # Get effective subnet IDs (supports both old and new format)
     subnet_ids = request.get_subnet_ids()
 

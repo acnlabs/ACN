@@ -23,33 +23,27 @@ dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.27.0",
     "python-multipart>=0.0.9",
-    
     # A2A Protocol - Official SDK
     # https://github.com/a2aproject/A2A
-    "a2a-sdk>=0.2.0",
-    
+    "a2a-sdk[http-server]>=0.2.0",
     # AP2 Protocol - Agent Payments Protocol (Google)
     # https://github.com/google-agentic-commerce/AP2
     "ap2 @ git+https://github.com/google-agentic-commerce/AP2.git@main",
-    
     # Storage
     "redis>=5.0.0",
     "asyncpg>=0.29.0",
     "sqlalchemy>=2.0.25",
-    
     # Data Validation
     "pydantic>=2.6.0",
     "pydantic-settings>=2.1.0",
-    
     # HTTP Client
     "httpx>=0.26.0",
-    
     # WebSocket & Real-time
     "python-socketio>=5.11.0",
     "websockets>=12.0",
-    
     # Monitoring (for future)
     "prometheus-client>=0.19.0",
+    "structlog>=25.5.0",
 ]
 
 [project.optional-dependencies]
