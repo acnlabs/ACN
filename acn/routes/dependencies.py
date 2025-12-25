@@ -8,16 +8,16 @@ from typing import Annotated
 from fastapi import Depends
 
 from ..auth.middleware import get_subject
-from ..communication import (
+from ..config import get_settings
+from ..infrastructure.messaging import (
     BroadcastService,
     MessageRouter,
     SubnetManager,
     WebSocketManager,
 )
-from ..config import get_settings
+from ..infrastructure.persistence.redis.registry import AgentRegistry
 from ..monitoring import Analytics, AuditLogger, MetricsCollector
 from ..payments import PaymentDiscoveryService, PaymentTaskManager, WebhookService
-from ..registry import AgentRegistry
 from ..services import AgentService, MessageService, SubnetService
 
 settings = get_settings()

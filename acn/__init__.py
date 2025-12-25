@@ -39,7 +39,7 @@ __version__ = "0.1.0"
 
 # Layer 1: Registry & Discovery
 # Layer 2: Communication
-from .communication import (
+from .infrastructure.messaging import (
     BroadcastResult,
     BroadcastService,
     BroadcastStrategy,
@@ -60,8 +60,8 @@ from .config import Settings, get_settings
 from .models import AgentCard, AgentInfo, AgentRegisterRequest, AgentRegisterResponse
 
 # Layer 3: Monitoring & Analytics
+from .infrastructure.persistence.redis.registry import AgentRegistry
 from .monitoring import Analytics, AuditLogger, MetricsCollector
-from .registry import AgentRegistry
 
 __all__ = [
     # Version

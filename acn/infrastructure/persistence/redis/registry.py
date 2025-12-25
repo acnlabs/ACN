@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import redis.asyncio as redis
 
-from .models import AgentCard, AgentInfo
+from ....models import AgentCard, AgentInfo
 
 
 class AgentRegistry:

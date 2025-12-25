@@ -18,15 +18,15 @@ import structlog  # type: ignore[import-untyped]
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from .a2a_integration import create_a2a_app
-from .communication import (
+from .config import get_settings
+from .infrastructure.messaging import (
     BroadcastService,
     MessageRouter,
     SubnetManager,
     WebSocketManager,
 )
-from .config import get_settings
 from .infrastructure.persistence.redis import RedisAgentRepository, RedisSubnetRepository
+from .infrastructure.persistence.redis.registry import AgentRegistry
 from .monitoring import Analytics, AuditLogger, MetricsCollector
 from .payments import (
     PaymentDiscoveryService,
@@ -34,7 +34,7 @@ from .payments import (
     WebhookService,
     create_webhook_config_from_settings,
 )
-from .registry import AgentRegistry
+from .protocols.a2a.server import create_a2a_app
 from .routes import (
     analytics,
     communication,

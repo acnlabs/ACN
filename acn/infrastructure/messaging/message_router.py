@@ -31,7 +31,7 @@ from a2a.types import (  # type: ignore[import-untyped]
     TextPart,
 )
 
-from ..registry import AgentRegistry
+from ..persistence.redis.registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
 

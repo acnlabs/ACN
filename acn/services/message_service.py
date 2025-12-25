@@ -9,8 +9,8 @@ from typing import Any
 import structlog  # type: ignore[import-untyped]
 from a2a.types import Message  # type: ignore[import-untyped]
 
-from ..communication import MessageRouter
 from ..core.exceptions import AgentNotFoundException
+from ..infrastructure.messaging import MessageRouter
 from ..core.interfaces import IAgentRepository
 
 logger = structlog.get_logger()

@@ -46,8 +46,8 @@ import redis.asyncio as redis
 from a2a.types import Message  # type: ignore[import-untyped]
 from fastapi import WebSocket, WebSocketDisconnect
 
-from ..models import AgentInfo, SubnetInfo
-from ..registry import AgentRegistry
+from ...models import AgentInfo, SubnetInfo
+from ..persistence.redis.registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
 

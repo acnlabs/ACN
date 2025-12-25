@@ -23,7 +23,7 @@ import redis.asyncio as redis
 # Official A2A SDK
 from a2a.types import Message  # type: ignore[import-untyped]
 
-from ..registry import AgentRegistry
+from ..persistence.redis.registry import AgentRegistry
 from .message_router import MessageRouter
 
 logger = logging.getLogger(__name__)

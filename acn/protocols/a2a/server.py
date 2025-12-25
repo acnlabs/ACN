@@ -40,15 +40,15 @@ from a2a.types import (  # type: ignore[import-untyped]
 from fastapi import FastAPI
 from redis.asyncio import Redis
 
-from .a2a import RedisTaskStore
-from .communication import (
+from ...a2a import RedisTaskStore
+from ...config import get_settings
+from ...infrastructure.messaging import (
     BroadcastService,
     BroadcastStrategy,
     MessageRouter,
     SubnetManager,
 )
-from .config import get_settings
-from .registry import AgentRegistry
+from ...infrastructure.persistence.redis.registry import AgentRegistry
 
 settings = get_settings()
 
