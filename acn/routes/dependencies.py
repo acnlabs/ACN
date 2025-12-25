@@ -18,13 +18,14 @@ from ..config import get_settings
 from ..monitoring import Analytics, AuditLogger, MetricsCollector
 from ..payments import PaymentDiscoveryService, PaymentTaskManager, WebhookService
 from ..registry import AgentRegistry
-from ..services import AgentService, SubnetService
+from ..services import AgentService, MessageService, SubnetService
 
 settings = get_settings()
 
 # Global service instances (initialized in lifespan)
 _registry: AgentRegistry | None = None
 _agent_service: AgentService | None = None
+_message_service: MessageService | None = None
 _subnet_service: SubnetService | None = None
 _router: MessageRouter | None = None
 _broadcast: BroadcastService | None = None
@@ -41,6 +42,7 @@ _webhook_service: WebhookService | None = None
 def init_services(
     registry: AgentRegistry,
     agent_service: AgentService,
+    message_service: MessageService,
     subnet_service: SubnetService,
     router: MessageRouter,
     broadcast: BroadcastService,
@@ -57,6 +59,7 @@ def init_services(
     global \
         _registry, \
         _agent_service, \
+        _message_service, \
         _subnet_service, \
         _router, \
         _broadcast, \
@@ -67,6 +70,7 @@ def init_services(
 
     _registry = registry
     _agent_service = agent_service
+    _message_service = message_service
     _subnet_service = subnet_service
     _router = router
     _broadcast = broadcast
@@ -93,6 +97,13 @@ def get_agent_service() -> AgentService:
     if _agent_service is None:
         raise RuntimeError("AgentService not initialized")
     return _agent_service
+
+
+def get_message_service() -> MessageService:
+    """Get MessageService instance"""
+    if _message_service is None:
+        raise RuntimeError("MessageService not initialized")
+    return _message_service
 
 
 def get_subnet_service() -> SubnetService:
@@ -175,6 +186,7 @@ def get_webhook_service() -> WebhookService:
 # Type aliases for cleaner dependency injection
 RegistryDep = Annotated[AgentRegistry, Depends(get_registry)]
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
+MessageServiceDep = Annotated[MessageService, Depends(get_message_service)]
 SubnetServiceDep = Annotated[SubnetService, Depends(get_subnet_service)]
 RouterDep = Annotated[MessageRouter, Depends(get_router)]
 BroadcastDep = Annotated[BroadcastService, Depends(get_broadcast)]

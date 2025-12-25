@@ -45,7 +45,7 @@ from .routes import (
     subnets,
     websocket,
 )
-from .services import AgentService, SubnetService
+from .services import AgentService, MessageService, SubnetService
 
 # Settings
 settings = get_settings()
@@ -68,6 +68,7 @@ async def lifespan(app: FastAPI):
     subnet_service_instance = SubnetService(subnet_repository)
 
     router_instance = MessageRouter(registry_instance, registry_instance.redis)
+    message_service_instance = MessageService(router_instance, agent_repository)
     broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
     ws_manager_instance = WebSocketManager(registry_instance.redis)
     subnet_manager_instance = SubnetManager(
@@ -95,6 +96,7 @@ async def lifespan(app: FastAPI):
     dependencies.init_services(
         registry=registry_instance,
         agent_service=agent_service_instance,
+        message_service=message_service_instance,
         subnet_service=subnet_service_instance,
         router=router_instance,
         broadcast=broadcast_instance,
