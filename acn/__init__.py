@@ -39,6 +39,7 @@ __version__ = "0.1.0"
 
 # Layer 1: Registry & Discovery
 # Layer 2: Communication
+from .config import Settings, get_settings
 from .infrastructure.messaging import (
     BroadcastResult,
     BroadcastService,
@@ -56,11 +57,10 @@ from .infrastructure.messaging import (
     create_notification_message,
     create_text_message,
 )
-from .config import Settings, get_settings
-from .models import AgentCard, AgentInfo, AgentRegisterRequest, AgentRegisterResponse
 
 # Layer 3: Monitoring & Analytics
 from .infrastructure.persistence.redis.registry import AgentRegistry
+from .models import AgentCard, AgentInfo, AgentRegisterRequest, AgentRegisterResponse
 from .monitoring import Analytics, AuditLogger, MetricsCollector
 
 __all__ = [

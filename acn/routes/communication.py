@@ -101,7 +101,7 @@ async def send_message(
             message_type="direct",
             success=False,
         )
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
         logger.error("message_send_failed", error=str(e))
@@ -111,7 +111,7 @@ async def send_message(
             message_type="direct",
             success=False,
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/broadcast")
@@ -165,7 +165,7 @@ async def broadcast_message(
 
     except AgentNotFoundException as e:
         logger.error("broadcast_failed", error=str(e))
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
         logger.error("broadcast_failed", error=str(e))
@@ -174,7 +174,7 @@ async def broadcast_message(
             target_count=0,
             success=False,
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/broadcast-by-skill")
@@ -232,11 +232,11 @@ async def broadcast_by_skill(
 
     except AgentNotFoundException as e:
         logger.error("skill_broadcast_failed", error=str(e))
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
         logger.error("skill_broadcast_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/history/{agent_id}")
@@ -267,11 +267,11 @@ async def get_message_history(
 
     except AgentNotFoundException as e:
         logger.error("message_history_failed", error=str(e))
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
         logger.error("message_history_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/retry-dlq")
@@ -292,4 +292,4 @@ async def retry_dead_letter_queue(
 
     except Exception as e:
         logger.error("dlq_retry_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

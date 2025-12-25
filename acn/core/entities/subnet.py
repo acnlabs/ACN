@@ -11,7 +11,7 @@ from datetime import datetime
 class Subnet:
     """
     Subnet Domain Entity
-    
+
     Represents a logical network segment for agent grouping.
     """
 
