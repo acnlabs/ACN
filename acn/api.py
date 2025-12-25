@@ -34,10 +34,10 @@ from .payments import (
     create_webhook_config_from_settings,
 )
 from .registry import AgentRegistry
-from .routes import dependencies
-from .routes.routes import (
+from .routes import (
     analytics,
     communication,
+    dependencies,
     monitoring,
     payments,
     registry,

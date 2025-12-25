@@ -3,13 +3,17 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from ...payments import (
+from ..payments import (
     PaymentCapability,
     PaymentTaskStatus,
     SupportedNetwork,
     SupportedPaymentMethod,
 )
-from ..dependencies import PaymentDiscoveryDep, PaymentTasksDep, RegistryDep  # type: ignore[import-untyped]
+from .dependencies import (  # type: ignore[import-untyped]
+    PaymentDiscoveryDep,
+    PaymentTasksDep,
+    RegistryDep,
+)
 
 router = APIRouter(prefix="/api/v1/payments", tags=["payments"])
 

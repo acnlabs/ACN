@@ -2,9 +2,12 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from ...auth.middleware import get_subject, require_permission
-from ...models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
-from ..dependencies import RegistryDep, SubnetManagerDep  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from ..auth.middleware import get_subject, require_permission
+from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
+from .dependencies import (  # type: ignore[import-untyped]
+    RegistryDep,
+    SubnetManagerDep,
+)
 
 router = APIRouter(prefix="/api/v1/agents", tags=["registry"])
 
@@ -116,4 +119,3 @@ async def get_agent_endpoint(agent_id: str, registry: RegistryDep = None):
         raise HTTPException(status_code=404, detail="Agent not found")
 
     return {"agent_id": agent_id, "endpoint": agent.endpoint}
-

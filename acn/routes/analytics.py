@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query
 
-from ..dependencies import AnalyticsDep  # type: ignore[import-untyped]
+from .dependencies import AnalyticsDep  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
