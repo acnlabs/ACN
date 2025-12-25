@@ -54,7 +54,14 @@ def init_services(
     webhook_service: WebhookService,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
-    global _registry, _agent_service, _subnet_service, _router, _broadcast, _ws_manager, _subnet_manager
+    global \
+        _registry, \
+        _agent_service, \
+        _subnet_service, \
+        _router, \
+        _broadcast, \
+        _ws_manager, \
+        _subnet_manager
     global _metrics, _audit, _analytics
     global _payment_discovery, _payment_tasks, _webhook_service
 

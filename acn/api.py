@@ -35,7 +35,6 @@ from .payments import (
     create_webhook_config_from_settings,
 )
 from .registry import AgentRegistry
-from .services import AgentService, SubnetService
 from .routes import (
     analytics,
     communication,
@@ -46,6 +45,7 @@ from .routes import (
     subnets,
     websocket,
 )
+from .services import AgentService, SubnetService
 
 # Settings
 settings = get_settings()
@@ -59,14 +59,14 @@ async def lifespan(app: FastAPI):
 
     # Initialize core services
     registry_instance = AgentRegistry(settings.redis_url)
-    
+
     # Initialize Clean Architecture services
     agent_repository = RedisAgentRepository(registry_instance.redis)
     agent_service_instance = AgentService(agent_repository)
-    
+
     subnet_repository = RedisSubnetRepository(registry_instance.redis)
     subnet_service_instance = SubnetService(subnet_repository)
-    
+
     router_instance = MessageRouter(registry_instance, registry_instance.redis)
     broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
     ws_manager_instance = WebSocketManager(registry_instance.redis)
