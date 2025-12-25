@@ -1,19 +1,44 @@
-"""Agent Registry API Routes"""
+"""Agent Registry API Routes
+
+Clean Architecture implementation: Route → Service → Repository
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 import structlog  # type: ignore[import-untyped]
 
 from ..auth.middleware import get_subject, require_permission
+from ..config import get_settings
 from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from .dependencies import (  # type: ignore[import-untyped]
     AgentServiceDep,
-    RegistryDep,
     SubnetManagerDep,
 )
 
 router = APIRouter(prefix="/api/v1/agents", tags=["registry"])
 logger = structlog.get_logger()
+settings = get_settings()
+
+
+def _agent_entity_to_info(agent) -> AgentInfo:
+    """Convert Agent entity to AgentInfo model"""
+    return AgentInfo(
+        agent_id=agent.agent_id,
+        owner=agent.owner,
+        name=agent.name,
+        description=agent.description,
+        endpoint=agent.endpoint,
+        skills=agent.skills,
+        status=agent.status.value,
+        subnet_ids=agent.subnet_ids,
+        agent_card=None,  # TODO: Generate from entity
+        metadata=agent.metadata,
+        registered_at=agent.registered_at,
+        last_heartbeat=agent.last_heartbeat,
+        wallet_address=agent.wallet_address,
+        accepts_payment=agent.accepts_payment,
+        payment_methods=agent.payment_methods,
+    )
 
 
 @router.post("/register", response_model=AgentRegisterResponse)
@@ -22,11 +47,10 @@ async def register_agent(
     payload: dict = Depends(require_permission("acn:write")),
     agent_service: AgentServiceDep = None,
     subnet_manager: SubnetManagerDep = None,
-    registry: RegistryDep = None,  # Keep for backward compatibility (agent_card generation)
 ):
     """Register an Agent (Idempotent) - Requires Auth0 Token
     
-    Uses Clean Architecture: Route → Service → Repository
+    Clean Architecture: Route → AgentService → Repository
     """
     # Extract owner from Auth0 token
     token_owner = await get_subject()
@@ -59,12 +83,13 @@ async def register_agent(
             endpoint=request.endpoint,
             skills=request.skills,
             subnet_ids=subnet_ids,
-            description=request.get("description", ""),
-            metadata=request.get("metadata", {}),
+            description=request.description if hasattr(request, 'description') else "",
+            metadata=request.metadata if hasattr(request, 'metadata') else {},
         )
         
         # Generate Agent Card URL
-        agent_card_url = f"{registry._get_base_url()}/.well-known/agent-card.json?agent_id={agent.agent_id}"
+        base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
+        agent_card_url = f"{base_url}/.well-known/agent-card.json?agent_id={agent.agent_id}"
 
         logger.info("agent_registered", agent_id=agent.agent_id, owner=agent.owner)
         
@@ -79,12 +104,16 @@ async def register_agent(
 
 
 @router.get("/{agent_id}", response_model=AgentInfo)
-async def get_agent(agent_id: str, registry: RegistryDep = None):
-    """Get agent information"""
-    agent = await registry.get_agent(agent_id)
-    if not agent:
+async def get_agent(agent_id: str, agent_service: AgentServiceDep = None):
+    """Get agent information
+    
+    Clean Architecture: Route → AgentService → Repository
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+        return _agent_entity_to_info(agent)
+    except AgentNotFoundException:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return agent
 
 
 @router.get("", response_model=AgentSearchResponse)
@@ -93,46 +122,107 @@ async def search_agents(
     status: str = "online",
     owner: str = None,
     name: str = None,
-    registry: RegistryDep = None,
+    agent_service: AgentServiceDep = None,
 ):
-    """Search agents"""
+    """Search agents
+    
+    Clean Architecture: Route → AgentService → Repository
+    """
     skill_list = skill.split(",") if skill else None
-    agents = await registry.search_agents(
+    
+    # Search using AgentService
+    agents = await agent_service.search_agents(
         skills=skill_list,
         status=status,
-        owner=owner,
-        name=name,
     )
-    return agents
+    
+    # Apply additional filters (owner, name)
+    if owner:
+        agents = [a for a in agents if a.owner == owner]
+    if name:
+        agents = [a for a in agents if name.lower() in a.name.lower()]
+    
+    # Convert to AgentInfo
+    agent_infos = [_agent_entity_to_info(a) for a in agents]
+    
+    return AgentSearchResponse(
+        agents=agent_infos,
+        total=len(agent_infos),
+    )
 
 
 @router.post("/{agent_id}/heartbeat")
-async def agent_heartbeat(agent_id: str, registry: RegistryDep = None):
-    """Update agent heartbeat"""
-    success = await registry.update_heartbeat(agent_id)
-    if not success:
+async def agent_heartbeat(agent_id: str, agent_service: AgentServiceDep = None):
+    """Update agent heartbeat
+    
+    Clean Architecture: Route → AgentService → Repository
+    """
+    try:
+        await agent_service.update_heartbeat(agent_id)
+        return {"status": "ok", "agent_id": agent_id}
+    except AgentNotFoundException:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return {"status": "ok", "agent_id": agent_id}
 
 
 @router.get("/{agent_id}/.well-known/agent-card.json")
-async def get_agent_card(agent_id: str, registry: RegistryDep = None):
-    """Get agent's A2A Agent Card"""
-    agent = await registry.get_agent(agent_id)
-    if not agent:
+async def get_agent_card(agent_id: str, agent_service: AgentServiceDep = None):
+    """Get agent's A2A Agent Card
+    
+    Clean Architecture: Route → AgentService → Repository
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+        
+        # Generate A2A-compliant Agent Card
+        agent_card = {
+            "protocolVersion": "0.3.0",
+            "name": agent.name,
+            "description": agent.description or "",
+            "url": agent.endpoint,
+            "skills": [{"id": skill, "name": skill} for skill in agent.skills],
+        }
+        
+        return agent_card
+    except AgentNotFoundException:
         raise HTTPException(status_code=404, detail="Agent not found")
-
-    if agent.agent_card:
-        return agent.agent_card
-
-    raise HTTPException(status_code=404, detail="Agent Card not available")
 
 
 @router.get("/{agent_id}/endpoint")
-async def get_agent_endpoint(agent_id: str, registry: RegistryDep = None):
-    """Get agent endpoint"""
-    agent = await registry.get_agent(agent_id)
-    if not agent:
+async def get_agent_endpoint(agent_id: str, agent_service: AgentServiceDep = None):
+    """Get agent endpoint
+    
+    Clean Architecture: Route → AgentService → Repository
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+        return {"agent_id": agent_id, "endpoint": agent.endpoint}
+    except AgentNotFoundException:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    return {"agent_id": agent_id, "endpoint": agent.endpoint}
+
+@router.delete("/{agent_id}")
+async def unregister_agent(
+    agent_id: str,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """Unregister an agent
+    
+    Clean Architecture: Route → AgentService → Repository
+    """
+    # Extract owner from Auth0 token
+    token_owner = await get_subject()
+    
+    try:
+        # AgentService handles authorization check
+        success = await agent_service.unregister_agent(agent_id, token_owner)
+        
+        if success:
+            logger.info("agent_unregistered", agent_id=agent_id)
+            return {"status": "unregistered", "agent_id": agent_id}
+        else:
+            raise HTTPException(status_code=404, detail="Agent not found")
+    except AgentNotFoundException:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))

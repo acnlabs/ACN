@@ -18,13 +18,14 @@ from ..config import get_settings
 from ..monitoring import Analytics, AuditLogger, MetricsCollector
 from ..payments import PaymentDiscoveryService, PaymentTaskManager, WebhookService
 from ..registry import AgentRegistry
-from ..services import AgentService
+from ..services import AgentService, SubnetService
 
 settings = get_settings()
 
 # Global service instances (initialized in lifespan)
 _registry: AgentRegistry | None = None
 _agent_service: AgentService | None = None
+_subnet_service: SubnetService | None = None
 _router: MessageRouter | None = None
 _broadcast: BroadcastService | None = None
 _ws_manager: WebSocketManager | None = None
@@ -40,6 +41,7 @@ _webhook_service: WebhookService | None = None
 def init_services(
     registry: AgentRegistry,
     agent_service: AgentService,
+    subnet_service: SubnetService,
     router: MessageRouter,
     broadcast: BroadcastService,
     ws_manager: WebSocketManager,
@@ -52,12 +54,13 @@ def init_services(
     webhook_service: WebhookService,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
-    global _registry, _agent_service, _router, _broadcast, _ws_manager, _subnet_manager
+    global _registry, _agent_service, _subnet_service, _router, _broadcast, _ws_manager, _subnet_manager
     global _metrics, _audit, _analytics
     global _payment_discovery, _payment_tasks, _webhook_service
 
     _registry = registry
     _agent_service = agent_service
+    _subnet_service = subnet_service
     _router = router
     _broadcast = broadcast
     _ws_manager = ws_manager
@@ -83,6 +86,13 @@ def get_agent_service() -> AgentService:
     if _agent_service is None:
         raise RuntimeError("AgentService not initialized")
     return _agent_service
+
+
+def get_subnet_service() -> SubnetService:
+    """Get SubnetService instance"""
+    if _subnet_service is None:
+        raise RuntimeError("SubnetService not initialized")
+    return _subnet_service
 
 
 def get_router() -> MessageRouter:
@@ -158,6 +168,7 @@ def get_webhook_service() -> WebhookService:
 # Type aliases for cleaner dependency injection
 RegistryDep = Annotated[AgentRegistry, Depends(get_registry)]
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
+SubnetServiceDep = Annotated[SubnetService, Depends(get_subnet_service)]
 RouterDep = Annotated[MessageRouter, Depends(get_router)]
 BroadcastDep = Annotated[BroadcastService, Depends(get_broadcast)]
 SubnetManagerDep = Annotated[SubnetManager, Depends(get_subnet_manager)]

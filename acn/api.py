@@ -26,7 +26,7 @@ from .communication import (
     WebSocketManager,
 )
 from .config import get_settings
-from .infrastructure.persistence.redis import RedisAgentRepository
+from .infrastructure.persistence.redis import RedisAgentRepository, RedisSubnetRepository
 from .monitoring import Analytics, AuditLogger, MetricsCollector
 from .payments import (
     PaymentDiscoveryService,
@@ -35,7 +35,7 @@ from .payments import (
     create_webhook_config_from_settings,
 )
 from .registry import AgentRegistry
-from .services import AgentService
+from .services import AgentService, SubnetService
 from .routes import (
     analytics,
     communication,
@@ -63,6 +63,9 @@ async def lifespan(app: FastAPI):
     # Initialize Clean Architecture services
     agent_repository = RedisAgentRepository(registry_instance.redis)
     agent_service_instance = AgentService(agent_repository)
+    
+    subnet_repository = RedisSubnetRepository(registry_instance.redis)
+    subnet_service_instance = SubnetService(subnet_repository)
     
     router_instance = MessageRouter(registry_instance, registry_instance.redis)
     broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
@@ -92,6 +95,7 @@ async def lifespan(app: FastAPI):
     dependencies.init_services(
         registry=registry_instance,
         agent_service=agent_service_instance,
+        subnet_service=subnet_service_instance,
         router=router_instance,
         broadcast=broadcast_instance,
         ws_manager=ws_manager_instance,
