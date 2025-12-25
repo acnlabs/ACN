@@ -14,10 +14,15 @@ import uuid
 from typing import Any
 
 import structlog  # type: ignore[import-untyped]
-from a2a.server.agent_execution import AgentExecutor, RequestContext  # type: ignore[import-untyped]
+from a2a.server.agent_execution import (  # type: ignore[import-untyped]
+    AgentExecutor,
+    RequestContext,
+)
 from a2a.server.apps import A2AFastAPIApplication  # type: ignore[import-untyped]
 from a2a.server.events import EventQueue  # type: ignore[import-untyped]
-from a2a.server.request_handlers import DefaultRequestHandler  # type: ignore[import-untyped]
+from a2a.server.request_handlers import (  # type: ignore[import-untyped]
+    DefaultRequestHandler,
+)
 from a2a.types import (  # type: ignore[import-untyped]
     AgentCapabilities,
     AgentCard,
@@ -36,7 +41,12 @@ from fastapi import FastAPI
 from redis.asyncio import Redis
 
 from .a2a import RedisTaskStore
-from .communication import BroadcastService, BroadcastStrategy, MessageRouter, SubnetManager
+from .communication import (
+    BroadcastService,
+    BroadcastStrategy,
+    MessageRouter,
+    SubnetManager,
+)
 from .config import get_settings
 from .registry import AgentRegistry
 
@@ -274,7 +284,9 @@ class ACNAgentExecutor(AgentExecutor):
         self, message: Message, context: RequestContext, event_queue: EventQueue
     ) -> None:
         """Handle broadcast action"""
-        await self._send_status(event_queue, context, TaskState.working, "Broadcasting message")
+        await self._send_status(
+            event_queue, context, TaskState.working, "Broadcasting message"
+        )
 
         # Extract broadcast parameters
         params = self._extract_data_from_message(message)
@@ -320,7 +332,9 @@ class ACNAgentExecutor(AgentExecutor):
                         data={
                             "status": "completed",
                             "results": result,
-                            "target_count": len(target_agents) if target_agents else len(result),
+                            "target_count": len(target_agents)
+                            if target_agents
+                            else len(result),
                         }
                     )
                 ],
@@ -328,20 +342,30 @@ class ACNAgentExecutor(AgentExecutor):
             await self._send_artifact(event_queue, context, artifact, last_chunk=True)
 
             await self._send_status(
-                event_queue, context, TaskState.completed, "Broadcast completed", final=True
+                event_queue,
+                context,
+                TaskState.completed,
+                "Broadcast completed",
+                final=True,
             )
 
         except Exception as e:
             logger.error("broadcast_failed", error=str(e))
             await self._send_status(
-                event_queue, context, TaskState.failed, f"Broadcast failed: {e}", final=True
+                event_queue,
+                context,
+                TaskState.failed,
+                f"Broadcast failed: {e}",
+                final=True,
             )
 
     async def _handle_discovery(
         self, message: Message, context: RequestContext, event_queue: EventQueue
     ) -> None:
         """Handle agent discovery action"""
-        await self._send_status(event_queue, context, TaskState.working, "Discovering agents")
+        await self._send_status(
+            event_queue, context, TaskState.working, "Discovering agents"
+        )
 
         params = self._extract_data_from_message(message)
         skills = params.get("skills", [])
@@ -379,20 +403,30 @@ class ACNAgentExecutor(AgentExecutor):
             await self._send_artifact(event_queue, context, artifact, last_chunk=True)
 
             await self._send_status(
-                event_queue, context, TaskState.completed, f"Found {len(agents)} agents", final=True
+                event_queue,
+                context,
+                TaskState.completed,
+                f"Found {len(agents)} agents",
+                final=True,
             )
 
         except Exception as e:
             logger.error("discovery_failed", error=str(e))
             await self._send_status(
-                event_queue, context, TaskState.failed, f"Discovery failed: {e}", final=True
+                event_queue,
+                context,
+                TaskState.failed,
+                f"Discovery failed: {e}",
+                final=True,
             )
 
     async def _handle_routing(
         self, message: Message, context: RequestContext, event_queue: EventQueue
     ) -> None:
         """Handle point-to-point routing action"""
-        await self._send_status(event_queue, context, TaskState.working, "Routing message")
+        await self._send_status(
+            event_queue, context, TaskState.working, "Routing message"
+        )
 
         params = self._extract_data_from_message(message)
         target_agent = params.get("target_agent")
@@ -400,7 +434,11 @@ class ACNAgentExecutor(AgentExecutor):
 
         if not target_agent:
             await self._send_status(
-                event_queue, context, TaskState.failed, "target_agent not specified", final=True
+                event_queue,
+                context,
+                TaskState.failed,
+                "target_agent not specified",
+                final=True,
             )
             return
 
@@ -443,14 +481,20 @@ class ACNAgentExecutor(AgentExecutor):
         except Exception as e:
             logger.error("routing_failed", error=str(e), target=target_agent)
             await self._send_status(
-                event_queue, context, TaskState.failed, f"Routing failed: {e}", final=True
+                event_queue,
+                context,
+                TaskState.failed,
+                f"Routing failed: {e}",
+                final=True,
             )
 
     async def _handle_subnet_routing(
         self, message: Message, context: RequestContext, event_queue: EventQueue
     ) -> None:
         """Handle subnet routing action"""
-        await self._send_status(event_queue, context, TaskState.working, "Routing through subnet")
+        await self._send_status(
+            event_queue, context, TaskState.working, "Routing through subnet"
+        )
 
         params = self._extract_data_from_message(message)
         subnet_id = params.get("subnet_id")
@@ -489,13 +533,21 @@ class ACNAgentExecutor(AgentExecutor):
             await self._send_artifact(event_queue, context, artifact, last_chunk=True)
 
             await self._send_status(
-                event_queue, context, TaskState.completed, "Subnet routing completed", final=True
+                event_queue,
+                context,
+                TaskState.completed,
+                "Subnet routing completed",
+                final=True,
             )
 
         except Exception as e:
             logger.error("subnet_routing_failed", error=str(e))
             await self._send_status(
-                event_queue, context, TaskState.failed, f"Subnet routing failed: {e}", final=True
+                event_queue,
+                context,
+                TaskState.failed,
+                f"Subnet routing failed: {e}",
+                final=True,
             )
 
     def _extract_data_from_message(self, message: Message) -> dict[str, Any]:
