@@ -97,9 +97,9 @@ class Analytics:
 
                 # Decode Redis data
                 agent = {
-                    k.decode() if isinstance(k, bytes) else k: v.decode()
-                    if isinstance(v, bytes)
-                    else v
+                    k.decode() if isinstance(k, bytes) else k: (
+                        v.decode() if isinstance(v, bytes) else v
+                    )
                     for k, v in agent_data.items()
                 }
 
@@ -337,9 +337,9 @@ class Analytics:
                     continue
 
                 subnet = {
-                    k.decode() if isinstance(k, bytes) else k: v.decode()
-                    if isinstance(v, bytes)
-                    else v
+                    k.decode() if isinstance(k, bytes) else k: (
+                        v.decode() if isinstance(v, bytes) else v
+                    )
                     for k, v in subnet_data.items()
                 }
 

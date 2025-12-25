@@ -610,9 +610,9 @@ class PaymentTaskManager:
                 "id": task.payment_id or task.task_id,
                 "methodData": [
                     {
-                        "supportedMethods": task.payment_method.value
-                        if task.payment_method
-                        else "usdc",
+                        "supportedMethods": (
+                            task.payment_method.value if task.payment_method else "usdc"
+                        ),
                         "data": {
                             "network": task.network.value if task.network else "base",
                             "recipient": task.recipient_wallet,

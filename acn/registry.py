@@ -6,7 +6,7 @@ Core registry service for Agent registration, discovery, and management
 
 import json
 from datetime import datetime
-from uuid import NAMESPACE_DNS, uuid4, uuid5
+from uuid import uuid4
 
 import redis.asyncio as redis
 
@@ -46,7 +46,7 @@ class AgentRegistry:
         ACN automatically handles agent IDs:
         - If owner + endpoint already exists: Updates existing agent (ID unchanged)
         - If new agent: Generates new UUID
-        
+
         This ensures:
         - Callers never need to manage IDs
         - Automatic idempotency (no duplicate agents)
@@ -68,7 +68,7 @@ class AgentRegistry:
         # ACN-managed ID strategy (Natural Key Idempotency):
         # 1. Check by endpoint (natural key): If same owner + endpoint exists, reuse its ID
         # 2. Otherwise: Generate new random UUID
-        
+
         # Try to find existing agent by owner + endpoint (natural key)
         existing_id = await self._find_agent_by_endpoint(owner, endpoint)
         if existing_id:
@@ -77,11 +77,11 @@ class AgentRegistry:
         else:
             # New agent: generate random UUID (CREATE semantics)
             agent_id = str(uuid4())
-        
+
         # Check if agent already exists (for idempotency)
         existing_agent = await self.redis.hgetall(f"acn:agents:{agent_id}")
         is_update = bool(existing_agent)
-        
+
         # Default to public subnet
         if not subnet_ids:
             subnet_ids = ["public"]
@@ -106,7 +106,7 @@ class AgentRegistry:
             "metadata": json.dumps(metadata or {}),
             "agent_card": json.dumps(agent_card),
         }
-        
+
         # Preserve registered_at for updates, set it for new registrations
         if is_update and existing_agent.get("registered_at"):
             agent_data["registered_at"] = existing_agent["registered_at"]
@@ -123,7 +123,7 @@ class AgentRegistry:
             for skill in old_skills:
                 if skill not in skills:
                     await self.redis.srem(f"acn:skills:{skill}", agent_id)
-            
+
             # Remove from old subnet indexes
             old_subnets = json.loads(existing_agent.get("subnet_ids", '["public"]'))
             for subnet_id in old_subnets:
@@ -288,17 +288,17 @@ class AgentRegistry:
         """
         # Build candidate set based on filters
         candidate_sets = []
-        
+
         if skills:
             # Get agents with all required skills (intersection)
             skill_agents = await self.redis.sinter(*[f"acn:skills:{skill}" for skill in skills])
             candidate_sets.append(skill_agents)
-        
+
         if owner:
             # Get agents by owner
             owner_agents = await self.redis.smembers(f"acn:owners:{owner}:agents")
             candidate_sets.append(owner_agents)
-        
+
         # If we have filters, intersect them; otherwise get all agents
         if candidate_sets:
             agent_ids = set.intersection(*[set(s) for s in candidate_sets])
@@ -311,15 +311,15 @@ class AgentRegistry:
             agent_info = await self.get_agent(agent_id)
             if not agent_info:
                 continue
-            
+
             # Status filter
             if agent_info.status != status:
                 continue
-            
+
             # Name filter (partial match, case-insensitive)
             if name and name.lower() not in agent_info.name.lower():
                 continue
-            
+
             results.append(agent_info)
 
         return results
@@ -415,25 +415,25 @@ class AgentRegistry:
     async def _find_agent_by_endpoint(self, owner: str, endpoint: str) -> str | None:
         """
         Find existing agent by owner + endpoint (natural key)
-        
+
         Args:
             owner: Agent owner
             endpoint: Agent endpoint URL
-            
+
         Returns:
             Agent ID if found, None otherwise
         """
         # Get all agents for this owner
         agent_ids = await self.redis.smembers(f"acn:owners:{owner}:agents")
-        
+
         # Check each agent's endpoint
         for agent_id in agent_ids:
             agent_data = await self.redis.hgetall(f"acn:agents:{agent_id}")
             if agent_data and agent_data.get("endpoint") == endpoint:
                 return agent_id
-        
+
         return None
-    
+
     def _generate_agent_card(
         self, name: str, endpoint: str, skills: list[str], description: str = ""
     ) -> dict:

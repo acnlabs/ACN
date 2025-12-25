@@ -496,38 +496,3 @@ class _Timer:
         elapsed = time.perf_counter() - self.start_time
         await self.metrics.observe_latency(self.operation, elapsed)
         return False
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

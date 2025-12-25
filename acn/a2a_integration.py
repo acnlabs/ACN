@@ -284,9 +284,7 @@ class ACNAgentExecutor(AgentExecutor):
         self, message: Message, context: RequestContext, event_queue: EventQueue
     ) -> None:
         """Handle broadcast action"""
-        await self._send_status(
-            event_queue, context, TaskState.working, "Broadcasting message"
-        )
+        await self._send_status(event_queue, context, TaskState.working, "Broadcasting message")
 
         # Extract broadcast parameters
         params = self._extract_data_from_message(message)
@@ -332,9 +330,7 @@ class ACNAgentExecutor(AgentExecutor):
                         data={
                             "status": "completed",
                             "results": result,
-                            "target_count": len(target_agents)
-                            if target_agents
-                            else len(result),
+                            "target_count": len(target_agents) if target_agents else len(result),
                         }
                     )
                 ],
@@ -363,9 +359,7 @@ class ACNAgentExecutor(AgentExecutor):
         self, message: Message, context: RequestContext, event_queue: EventQueue
     ) -> None:
         """Handle agent discovery action"""
-        await self._send_status(
-            event_queue, context, TaskState.working, "Discovering agents"
-        )
+        await self._send_status(event_queue, context, TaskState.working, "Discovering agents")
 
         params = self._extract_data_from_message(message)
         skills = params.get("skills", [])
@@ -424,9 +418,7 @@ class ACNAgentExecutor(AgentExecutor):
         self, message: Message, context: RequestContext, event_queue: EventQueue
     ) -> None:
         """Handle point-to-point routing action"""
-        await self._send_status(
-            event_queue, context, TaskState.working, "Routing message"
-        )
+        await self._send_status(event_queue, context, TaskState.working, "Routing message")
 
         params = self._extract_data_from_message(message)
         target_agent = params.get("target_agent")
@@ -492,9 +484,7 @@ class ACNAgentExecutor(AgentExecutor):
         self, message: Message, context: RequestContext, event_queue: EventQueue
     ) -> None:
         """Handle subnet routing action"""
-        await self._send_status(
-            event_queue, context, TaskState.working, "Routing through subnet"
-        )
+        await self._send_status(event_queue, context, TaskState.working, "Routing through subnet")
 
         params = self._extract_data_from_message(message)
         subnet_id = params.get("subnet_id")

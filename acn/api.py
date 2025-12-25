@@ -14,7 +14,7 @@ Based on A2A Protocol: https://github.com/a2aproject/A2A
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-import structlog
+import structlog  # type: ignore[import-untyped]
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
@@ -269,7 +269,7 @@ async def get_acn_agent_card():
         logger.error("agent_card_error", error=str(e))
         raise HTTPException(
             status_code=500, detail=f"Failed to generate agent card: {str(e)}"
-        )
+        ) from e
 
 
 @app.get("/health")

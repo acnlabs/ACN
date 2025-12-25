@@ -18,7 +18,7 @@ logger = structlog.get_logger()
 
 class RedisTaskStore(TaskStore):
     """Redis-based persistent task storage
-    
+
     Stores A2A tasks in Redis with:
     - Task persistence across restarts
     - Efficient lookup by task ID
@@ -28,7 +28,7 @@ class RedisTaskStore(TaskStore):
 
     def __init__(self, redis: Redis, key_prefix: str = "a2a:tasks:"):
         """Initialize Redis task store
-        
+
         Args:
             redis: Redis client
             key_prefix: Key prefix for task storage
@@ -36,15 +36,13 @@ class RedisTaskStore(TaskStore):
         self.redis = redis
         self.key_prefix = key_prefix
 
-    async def get(
-        self, task_id: str, context: ServerCallContext | None = None
-    ) -> Task | None:
+    async def get(self, task_id: str, context: ServerCallContext | None = None) -> Task | None:
         """Get task by ID
-        
+
         Args:
             task_id: Task ID
             context: Optional server call context (unused)
-            
+
         Returns:
             Task object or None if not found
         """
@@ -63,7 +61,7 @@ class RedisTaskStore(TaskStore):
 
     async def save(self, task: Task, context: ServerCallContext | None = None) -> None:
         """Save task to Redis
-        
+
         Args:
             task: Task to save
             context: Optional server call context (unused)
@@ -96,7 +94,7 @@ class RedisTaskStore(TaskStore):
 
     async def delete(self, task_id: str, context: ServerCallContext | None = None) -> None:
         """Delete task from Redis
-        
+
         Args:
             task_id: Task ID
             context: Optional server call context (unused)
@@ -123,13 +121,13 @@ class RedisTaskStore(TaskStore):
         offset: int = 0,
     ) -> list[Task]:
         """List tasks with optional filters
-        
+
         Args:
             context_id: Filter by context ID
             status: Filter by status
             limit: Maximum number of tasks to return
             offset: Offset for pagination
-            
+
         Returns:
             List of tasks
         """
@@ -151,11 +149,11 @@ class RedisTaskStore(TaskStore):
         self, context_id: str | None = None, status: TaskState | None = None
     ) -> list[str]:
         """Get task IDs based on filters
-        
+
         Args:
             context_id: Filter by context ID
             status: Filter by status
-            
+
         Returns:
             List of task IDs
         """
@@ -181,20 +179,15 @@ class RedisTaskStore(TaskStore):
                     task_keys.append(key_str)
 
             # Extract task IDs from keys
-            task_ids = [
-                key.replace(self.key_prefix, "") for key in task_keys
-            ]
+            task_ids = [key.replace(self.key_prefix, "") for key in task_keys]
             return task_ids
 
         # Convert bytes to str
-        return [
-            tid.decode() if isinstance(tid, bytes) else tid
-            for tid in task_ids
-        ]
+        return [tid.decode() if isinstance(tid, bytes) else tid for tid in task_ids]
 
     async def _update_indexes(self, task: Task) -> None:
         """Update Redis indexes for efficient querying
-        
+
         Args:
             task: Task to index
         """
@@ -210,15 +203,14 @@ class RedisTaskStore(TaskStore):
 
         # Index by context + status
         context_status_index = (
-            f"{self.key_prefix}index:context:{task.context_id}:"
-            f"status:{task.status.state.value}"
+            f"{self.key_prefix}index:context:{task.context_id}:" f"status:{task.status.state.value}"
         )
         await self.redis.sadd(context_status_index, task.id)
         await self.redis.expire(context_status_index, 30 * 24 * 3600)
 
     async def _remove_from_indexes(self, task: Task) -> None:
         """Remove task from indexes
-        
+
         Args:
             task: Task to remove from indexes
         """
@@ -232,20 +224,17 @@ class RedisTaskStore(TaskStore):
 
         # Remove from context + status index
         context_status_index = (
-            f"{self.key_prefix}index:context:{task.context_id}:"
-            f"status:{task.status.state.value}"
+            f"{self.key_prefix}index:context:{task.context_id}:" f"status:{task.status.state.value}"
         )
         await self.redis.srem(context_status_index, task.id)
 
-    async def count(
-        self, context_id: str | None = None, status: TaskState | None = None
-    ) -> int:
+    async def count(self, context_id: str | None = None, status: TaskState | None = None) -> int:
         """Count tasks
-        
+
         Args:
             context_id: Filter by context ID
             status: Filter by status
-            
+
         Returns:
             Number of tasks matching filters
         """
@@ -254,7 +243,7 @@ class RedisTaskStore(TaskStore):
 
     async def clear(self) -> None:
         """Clear all tasks (for testing)
-        
+
         Warning: This deletes all tasks!
         """
         # Get all task keys
@@ -270,4 +259,3 @@ class RedisTaskStore(TaskStore):
 
 
 __all__ = ["RedisTaskStore"]
-
