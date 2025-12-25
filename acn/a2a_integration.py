@@ -13,12 +13,12 @@ protocol for both peer-to-peer communication and infrastructure services.
 import uuid
 from typing import Any
 
-import structlog
-from a2a.server.agent_execution import AgentExecutor, RequestContext
-from a2a.server.apps import A2AFastAPIApplication
-from a2a.server.events import EventQueue
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.types import (
+import structlog  # type: ignore[import-untyped]
+from a2a.server.agent_execution import AgentExecutor, RequestContext  # type: ignore[import-untyped]
+from a2a.server.apps import A2AFastAPIApplication  # type: ignore[import-untyped]
+from a2a.server.events import EventQueue  # type: ignore[import-untyped]
+from a2a.server.request_handlers import DefaultRequestHandler  # type: ignore[import-untyped]
+from a2a.types import (  # type: ignore[import-untyped]
     AgentCapabilities,
     AgentCard,
     AgentSkill,
