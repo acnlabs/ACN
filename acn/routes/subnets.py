@@ -50,7 +50,8 @@ async def create_subnet(
     try:
         # Use SubnetService
         subnet = await subnet_service.create_subnet(
-            subnet_id=request.subnet_id or f"subnet-{owner}-{request.name.lower().replace(' ', '-')}",
+            subnet_id=request.subnet_id
+            or f"subnet-{owner}-{request.name.lower().replace(' ', '-')}",
             name=request.name,
             owner=owner,
             description=request.description,
@@ -138,6 +139,7 @@ async def get_subnet_agents(
 
         # Convert to AgentInfo
         from .registry import _agent_entity_to_info
+
         agent_infos = [_agent_entity_to_info(a) for a in agents]
 
         return {"subnet_id": subnet_id, "agents": agent_infos, "count": len(agent_infos)}

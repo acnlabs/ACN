@@ -83,8 +83,8 @@ async def register_agent(
             endpoint=request.endpoint,
             skills=request.skills,
             subnet_ids=subnet_ids,
-            description=request.description if hasattr(request, 'description') else "",
-            metadata=request.metadata if hasattr(request, 'metadata') else {},
+            description=request.description if hasattr(request, "description") else "",
+            metadata=request.metadata if hasattr(request, "metadata") else {},
         )
 
         # Generate Agent Card URL

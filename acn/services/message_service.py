@@ -207,11 +207,13 @@ class MessageService:
                     message=message,
                     **kwargs,
                 )
-                responses.append({
-                    "agent_id": agent.agent_id,
-                    "status": "success",
-                    "response": response,
-                })
+                responses.append(
+                    {
+                        "agent_id": agent.agent_id,
+                        "status": "success",
+                        "response": response,
+                    }
+                )
             except Exception as e:
                 logger.error(
                     "broadcast_failed",
@@ -220,11 +222,13 @@ class MessageService:
                 )
                 if strategy != "best_effort":
                     raise
-                responses.append({
-                    "agent_id": agent.agent_id,
-                    "status": "failed",
-                    "error": str(e),
-                })
+                responses.append(
+                    {
+                        "agent_id": agent.agent_id,
+                        "status": "failed",
+                        "error": str(e),
+                    }
+                )
 
         return responses
 
@@ -266,4 +270,3 @@ class MessageService:
         await self.router.register_handler(agent_id, handler)
 
         logger.info("message_handler_registered", agent_id=agent_id)
-
