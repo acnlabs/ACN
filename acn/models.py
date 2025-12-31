@@ -106,9 +106,12 @@ class AgentRegisterRequest(BaseModel):
 class AgentRegisterResponse(BaseModel):
     """Response after registering an agent"""
 
-    status: str = Field(..., description="Registration status")
     agent_id: str = Field(..., description="Agent ID")
-    agent_card_url: str = Field(..., description="Agent Card URL")
+    name: str = Field(..., description="Agent name")
+    status: str = Field(..., description="Registration status")
+    registered_at: datetime | str | None = Field(None, description="Registration timestamp")
+    agent_card_url: str | None = Field(None, description="Agent Card URL (optional)")
+    message: str | None = Field(None, description="Status message")
 
 
 class AgentSearchRequest(BaseModel):

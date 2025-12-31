@@ -34,14 +34,26 @@ class RedisAgentRepository(IAgentRepository):
 
         # Serialize agent to dict
         agent_dict = agent.to_dict()
+        
         # Convert lists/dicts to JSON strings for Redis
-        agent_dict["skills"] = json.dumps(agent_dict["skills"])
-        agent_dict["subnet_ids"] = json.dumps(agent_dict["subnet_ids"])
-        agent_dict["payment_methods"] = json.dumps(agent_dict["payment_methods"])
-        agent_dict["metadata"] = json.dumps(agent_dict["metadata"])
-
+        agent_dict["skills"] = json.dumps(agent_dict.get("skills", []))
+        agent_dict["subnet_ids"] = json.dumps(agent_dict.get("subnet_ids", ["public"]))
+        agent_dict["payment_methods"] = json.dumps(agent_dict.get("payment_methods", []))
+        agent_dict["metadata"] = json.dumps(agent_dict.get("metadata", {}))
+        
+        # Filter out None values (Redis doesn't accept None)
+        # Also convert booleans to strings for Redis compatibility
+        clean_dict = {}
+        for k, v in agent_dict.items():
+            if v is None:
+                continue  # Skip None values
+            elif isinstance(v, bool):
+                clean_dict[k] = "true" if v else "false"
+            else:
+                clean_dict[k] = v
+        
         # Save to Redis hash
-        await self.redis.hset(agent_key, mapping=agent_dict)  # type: ignore[arg-type]
+        await self.redis.hset(agent_key, mapping=clean_dict)  # type: ignore[arg-type]
 
         # Create index: owner + endpoint → agent_id
         endpoint_key = f"acn:agents:by_endpoint:{agent.owner}:{agent.endpoint}"
@@ -170,7 +182,7 @@ class RedisAgentRepository(IAgentRepository):
                 else None
             ),
             "wallet_address": agent_dict.get("wallet_address"),
-            "accepts_payment": agent_dict.get("accepts_payment") == "True",
+            "accepts_payment": agent_dict.get("accepts_payment", "false").lower() == "true",
             "payment_methods": json.loads(agent_dict.get("payment_methods", "[]")),
         }
 

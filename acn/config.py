@@ -43,6 +43,9 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+    
+    # Development mode (disables Auth0 requirement for some endpoints)
+    dev_mode: bool = True  # Set to False in production
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -20,6 +20,63 @@ logger = structlog.get_logger()
 settings = get_settings()
 
 
+# ============================================================================
+# 🔧 DEV MODE: Register without Auth (for local development only)
+# ============================================================================
+@router.post("/dev/register", response_model=AgentRegisterResponse)
+async def dev_register_agent(
+    request: AgentRegisterRequest,
+    agent_service: AgentServiceDep = None,
+    subnet_manager: SubnetManagerDep = None,
+):
+    """DEV MODE: Register an Agent without Auth0 (local development only)
+    
+    ⚠️ WARNING: This endpoint should be disabled in production!
+    """
+    if not settings.dev_mode:
+        raise HTTPException(
+            status_code=403,
+            detail="Dev mode registration is disabled. Use /register with Auth0 token.",
+        )
+    
+    logger.warning("DEV MODE: Registering agent without authentication", 
+                   owner=request.owner, name=request.name)
+    
+    # Get subnet IDs
+    subnet_ids = request.get_subnet_ids()
+    
+    # Validate subnets
+    for subnet_id in subnet_ids:
+        if subnet_id != "public" and not subnet_manager.subnet_exists(subnet_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Subnet not found: {subnet_id}",
+            )
+    
+    try:
+        # Use AgentService (Clean Architecture)
+        agent = await agent_service.register_agent(
+            owner=request.owner,
+            name=request.name,
+            endpoint=request.endpoint,
+            skills=request.skills,
+            subnet_ids=subnet_ids,
+        )
+        
+        # Return response
+        return AgentRegisterResponse(
+            agent_id=agent.agent_id,
+            name=agent.name,
+            status=agent.status.value,
+            registered_at=agent.registered_at,
+            message=f"DEV MODE: Agent registered successfully (owner: {request.owner})",
+        )
+        
+    except Exception as e:
+        logger.error("Dev registration failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 def _agent_entity_to_info(agent) -> AgentInfo:
     """Convert Agent entity to AgentInfo model"""
     return AgentInfo(
