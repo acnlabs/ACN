@@ -66,6 +66,7 @@ class ACNClient:
             base_url=self.base_url,
             timeout=timeout,
             headers=headers,
+            trust_env=False,  # Don't use system proxy settings
         )
 
     async def close(self) -> None:

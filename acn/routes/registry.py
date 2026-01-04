@@ -153,6 +153,7 @@ async def register_agent(
         return AgentRegisterResponse(
             status="registered",
             agent_id=agent.agent_id,
+            name=agent.name,
             agent_card_url=agent_card_url,
         )
     except Exception as e:

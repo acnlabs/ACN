@@ -106,13 +106,20 @@ class AgentInfo(BaseModel):
 
 
 class AgentRegisterRequest(BaseModel):
-    """Agent registration request"""
+    """Agent registration request - synced with ACN server model"""
 
-    id: str = Field(alias="agent_id")
-    name: str
+    owner: str = Field(..., description="Agent owner (e.g., user-{id} or provider-{id})")
+    name: str = Field(..., description="Agent name")
+    endpoint: str = Field(..., description="Agent A2A endpoint URL")
+    skills: list[str] = Field(default_factory=list, description="Agent skill IDs")
+    agent_card: dict[str, Any] | None = Field(
+        None, description="Optional Agent Card (auto-generated if not provided)"
+    )
+    subnet_ids: list[str] | None = Field(
+        None, description="Subnets to join (default: ['public'])"
+    )
+    # Backward compatibility fields (kept for migration)
     description: str | None = None
-    skills: list[str] = Field(default_factory=list)
-    endpoint: str | None = None
     metadata: dict[str, Any] | None = None
     wallet_address: str | None = None
     payment_capability: "PaymentCapability | None" = None
