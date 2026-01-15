@@ -145,12 +145,25 @@ class ACNClient:
         self,
         skills: list[str] | None = None,
         status: str | None = "online",
+        owner: str | None = None,
+        name: str | None = None,
     ) -> list[AgentInfo]:
-        """Search agents"""
+        """Search agents
+        
+        Args:
+            skills: Filter by agent skills
+            status: Filter by status (online, offline, all)
+            owner: Filter by owner user ID
+            name: Filter by name (partial match)
+        """
         params = {
             "skills": ",".join(skills) if skills else None,
             "status": status,
+            "owner": owner,
+            "name": name,
         }
+        # Remove None values
+        params = {k: v for k, v in params.items() if v is not None}
         data = await self._request("GET", "/api/v1/agents", params=params)
         return [AgentInfo.model_validate(a) for a in data.get("agents", [])]
 
