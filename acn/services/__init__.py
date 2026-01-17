@@ -4,7 +4,8 @@ Service classes orchestrate business operations using domain entities and reposi
 """
 
 from .agent_service import AgentService
+from .billing_service import BillingService
 from .message_service import MessageService
 from .subnet_service import SubnetService
 
-__all__ = ["AgentService", "MessageService", "SubnetService"]
+__all__ = ["AgentService", "BillingService", "MessageService", "SubnetService"]

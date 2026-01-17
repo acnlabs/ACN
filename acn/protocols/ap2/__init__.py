@@ -103,8 +103,12 @@ except ImportError:
 
 # ACN's unique payment services
 from .core import (
+    # Constants
+    CREDITS_PER_USD,
+    NETWORK_FEE_RATE,
     # Models
     PaymentCapability,
+    TokenPricing,
     # Services (ACN unique value)
     PaymentDiscoveryService,
     PaymentTask,
@@ -138,6 +142,9 @@ __all__ = [
     "PaymentDetailsInit",
     "Success",
     "Failure",
+    # Constants
+    "CREDITS_PER_USD",
+    "NETWORK_FEE_RATE",
     # ACN Services (unique value)
     "PaymentDiscoveryService",
     "PaymentTaskManager",
@@ -147,6 +154,7 @@ __all__ = [
     "PaymentTaskStatus",
     "SupportedPaymentMethod",
     "SupportedNetwork",
+    "TokenPricing",
     # Helpers
     "create_payment_capability",
     # Webhook (backend integration)

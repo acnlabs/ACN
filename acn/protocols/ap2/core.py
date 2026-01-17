@@ -40,6 +40,25 @@ except ImportError:
 # =============================================================================
 
 
+# =============================================================================
+# ACN Extension URIs
+# =============================================================================
+
+# Standard AP2 extension URI
+AP2_EXTENSION_URI = "https://github.com/google-agentic-commerce/ap2/tree/v0.1"
+
+# ACN Token Pricing extension URI (our custom extension)
+ACN_TOKEN_PRICING_EXTENSION_URI = "https://agentplanet.com/acn/token-pricing/v1"
+
+
+# =============================================================================
+# Network Fee Configuration
+# =============================================================================
+
+NETWORK_FEE_RATE = 0.15  # 15% network fee, deducted from agent income
+CREDITS_PER_USD = 10.0   # 1 USD = 10 platform credits
+
+
 class SupportedPaymentMethod(str, Enum):
     """Payment methods supported by ACN agents"""
 
@@ -100,6 +119,88 @@ class PaymentTaskStatus(str, Enum):
 
 
 # =============================================================================
+# Token Pricing Model (ACN Extension)
+# =============================================================================
+
+
+class TokenPricing(BaseModel):
+    """
+    Token-based pricing model for AI agents.
+    
+    Follows OpenAI-style pricing: charge per million tokens for input/output.
+    This is an ACN extension to AP2, not part of the standard protocol.
+    """
+    
+    input_price_per_million: float = Field(
+        ...,
+        description="Price in USD per million input tokens",
+        ge=0,
+    )
+    output_price_per_million: float = Field(
+        ...,
+        description="Price in USD per million output tokens",
+        ge=0,
+    )
+    currency: str = Field(
+        default="USD",
+        description="Currency for pricing (currently only USD supported)",
+    )
+    
+    def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        """
+        Calculate total cost in USD for given token usage.
+        
+        Args:
+            input_tokens: Number of input tokens used
+            output_tokens: Number of output tokens used
+            
+        Returns:
+            Total cost in USD
+        """
+        input_cost = (input_tokens / 1_000_000) * self.input_price_per_million
+        output_cost = (output_tokens / 1_000_000) * self.output_price_per_million
+        return input_cost + output_cost
+    
+    def calculate_cost_with_network_fee(
+        self, 
+        input_tokens: int, 
+        output_tokens: int
+    ) -> dict:
+        """
+        Calculate cost breakdown including network fee.
+        
+        Returns:
+            Dict with total_usd, network_fee_usd, agent_income_usd,
+            and their credits equivalents.
+        """
+        total_usd = self.calculate_cost(input_tokens, output_tokens)
+        network_fee_usd = total_usd * NETWORK_FEE_RATE
+        agent_income_usd = total_usd * (1 - NETWORK_FEE_RATE)
+        
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_usd": round(total_usd, 6),
+            "network_fee_usd": round(network_fee_usd, 6),
+            "agent_income_usd": round(agent_income_usd, 6),
+            "total_credits": round(total_usd * CREDITS_PER_USD, 2),
+            "network_fee_credits": round(network_fee_usd * CREDITS_PER_USD, 2),
+            "agent_income_credits": round(agent_income_usd * CREDITS_PER_USD, 2),
+        }
+    
+    def to_extension_params(self) -> dict:
+        """Convert to AP2 extension params format"""
+        return {
+            "token_pricing": {
+                "input_price_per_million": self.input_price_per_million,
+                "output_price_per_million": self.output_price_per_million,
+                "currency": self.currency,
+            },
+            "network_fee_rate": NETWORK_FEE_RATE,
+        }
+
+
+# =============================================================================
 # Payment Capability Models
 # =============================================================================
 
@@ -145,24 +246,87 @@ class PaymentCapability(BaseModel):
         description="Default currency for pricing",
     )
 
-    # Service pricing (skill -> price)
+    # Service pricing (skill -> price) - for fixed-price services
     pricing: dict[str, str] = Field(
         default_factory=dict,
         description="Pricing for specific skills (e.g., {'coding': '10.00'})",
     )
+    
+    # Token-based pricing - for usage-based services (ACN extension)
+    token_pricing: TokenPricing | None = Field(
+        default=None,
+        description="Token-based pricing (per million tokens, OpenAI-style)",
+    )
 
     def to_agent_card_extension(self) -> dict:
         """Convert to Agent Card extension format for A2A discovery"""
-        return {
-            "ap2": {
-                "accepts_payment": self.accepts_payment,
-                "payment_methods": [m.value for m in self.payment_methods],
-                "wallet_address": self.wallet_address,
-                "supported_networks": [n.value for n in self.supported_networks],
-                "default_currency": self.default_currency,
-                "pricing": self.pricing,
-            }
+        extensions = []
+        
+        # Standard AP2 extension
+        ap2_params = {
+            "accepts_payment": self.accepts_payment,
+            "payment_methods": [m.value for m in self.payment_methods],
+            "wallet_address": self.wallet_address,
+            "supported_networks": [n.value for n in self.supported_networks],
+            "default_currency": self.default_currency,
+            "pricing": self.pricing,
         }
+        extensions.append({
+            "uri": AP2_EXTENSION_URI,
+            "description": "Supports AP2 payment protocol",
+            "params": ap2_params,
+        })
+        
+        # ACN Token Pricing extension (if configured)
+        if self.token_pricing:
+            extensions.append({
+                "uri": ACN_TOKEN_PRICING_EXTENSION_URI,
+                "description": "Supports per-token pricing (OpenAI-style)",
+                "params": self.token_pricing.to_extension_params(),
+            })
+        
+        return {"extensions": extensions}
+    
+    def get_pricing_type(self) -> str:
+        """Get the primary pricing type for this agent"""
+        if self.token_pricing:
+            return "token_based"
+        elif self.pricing:
+            return "fixed_price"
+        return "none"
+    
+    def estimate_cost(
+        self, 
+        input_tokens: int = 0, 
+        output_tokens: int = 0,
+        skill: str | None = None,
+    ) -> dict | None:
+        """
+        Estimate cost for a service call.
+        
+        For token-based pricing: uses token counts.
+        For fixed pricing: uses skill name.
+        
+        Returns cost breakdown or None if pricing not available.
+        """
+        if self.token_pricing and (input_tokens > 0 or output_tokens > 0):
+            return self.token_pricing.calculate_cost_with_network_fee(
+                input_tokens, output_tokens
+            )
+        elif skill and skill in self.pricing:
+            price_usd = float(self.pricing[skill])
+            network_fee = price_usd * NETWORK_FEE_RATE
+            agent_income = price_usd * (1 - NETWORK_FEE_RATE)
+            return {
+                "skill": skill,
+                "total_usd": price_usd,
+                "network_fee_usd": round(network_fee, 6),
+                "agent_income_usd": round(agent_income, 6),
+                "total_credits": round(price_usd * CREDITS_PER_USD, 2),
+                "network_fee_credits": round(network_fee * CREDITS_PER_USD, 2),
+                "agent_income_credits": round(agent_income * CREDITS_PER_USD, 2),
+            }
+        return None
 
 
 # =============================================================================
@@ -728,20 +892,39 @@ def create_payment_capability(
     wallet_address: str | None = None,
     networks: list[str] | None = None,
     pricing: dict[str, str] | None = None,
+    token_pricing: dict | None = None,
 ) -> PaymentCapability:
     """
     Helper to create a PaymentCapability.
 
-    Example:
+    Example (fixed pricing):
         cap = create_payment_capability(
             payment_methods=["usdc", "eth"],
             wallet_address="0x1234...",
             networks=["base", "ethereum"],
             pricing={"coding": "50.00", "analysis": "25.00"},
         )
+    
+    Example (token-based pricing, OpenAI-style):
+        cap = create_payment_capability(
+            payment_methods=["platform_credits"],
+            token_pricing={
+                "input_price_per_million": 3.00,
+                "output_price_per_million": 15.00,
+            },
+        )
     """
     methods = [SupportedPaymentMethod(m) for m in payment_methods]
     nets = [SupportedNetwork(n) for n in (networks or [])]
+    
+    # Create TokenPricing if provided
+    tp = None
+    if token_pricing:
+        tp = TokenPricing(
+            input_price_per_million=token_pricing.get("input_price_per_million", 0),
+            output_price_per_million=token_pricing.get("output_price_per_million", 0),
+            currency=token_pricing.get("currency", "USD"),
+        )
 
     return PaymentCapability(
         accepts_payment=True,
@@ -749,4 +932,32 @@ def create_payment_capability(
         wallet_address=wallet_address,
         supported_networks=nets,
         pricing=pricing or {},
+        token_pricing=tp,
+    )
+
+
+def create_token_pricing(
+    input_price_per_million: float,
+    output_price_per_million: float,
+    currency: str = "USD",
+) -> TokenPricing:
+    """
+    Helper to create TokenPricing configuration.
+    
+    Example (GPT-4 style pricing):
+        pricing = create_token_pricing(
+            input_price_per_million=30.00,   # $30 per 1M input tokens
+            output_price_per_million=60.00,  # $60 per 1M output tokens
+        )
+        
+    Example (GPT-3.5 style pricing):
+        pricing = create_token_pricing(
+            input_price_per_million=0.50,   # $0.50 per 1M input tokens
+            output_price_per_million=1.50,  # $1.50 per 1M output tokens
+        )
+    """
+    return TokenPricing(
+        input_price_per_million=input_price_per_million,
+        output_price_per_million=output_price_per_million,
+        currency=currency,
     )

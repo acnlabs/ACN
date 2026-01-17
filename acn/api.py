@@ -45,7 +45,7 @@ from .routes import (
     subnets,
     websocket,
 )
-from .services import AgentService, MessageService, SubnetService
+from .services import AgentService, BillingService, MessageService, SubnetService
 
 # Settings
 settings = get_settings()
@@ -92,6 +92,13 @@ async def lifespan(app: FastAPI):
         webhook_service=webhook_service_instance,
     )
 
+    # Initialize billing service
+    billing_service_instance = BillingService(
+        redis=registry_instance.redis,
+        agent_service=agent_service_instance,
+        webhook_url=settings.billing_webhook_url if hasattr(settings, 'billing_webhook_url') else None,
+    )
+
     # Initialize dependencies
     dependencies.init_services(
         registry=registry_instance,
@@ -108,6 +115,7 @@ async def lifespan(app: FastAPI):
         payment_discovery=payment_discovery_instance,
         payment_tasks=payment_tasks_instance,
         webhook_service=webhook_service_instance,
+        billing_service=billing_service_instance,
     )
 
     # Mount A2A Protocol - Infrastructure Agent

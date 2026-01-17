@@ -42,6 +42,10 @@ class Agent:
     accepts_payment: bool = False
     payment_methods: list[str] = field(default_factory=list)
 
+    # Token-based pricing (OpenAI-style, per million tokens)
+    # Format: {"input_price_per_million": 3.0, "output_price_per_million": 15.0, "currency": "USD"}
+    token_pricing: dict | None = None
+
     def __post_init__(self):
         """Validate invariants"""
         if not self.agent_id:
@@ -122,7 +126,18 @@ class Agent:
             "wallet_address": self.wallet_address,
             "accepts_payment": self.accepts_payment,
             "payment_methods": self.payment_methods,
+            "token_pricing": self.token_pricing,
         }
+
+    def has_token_pricing(self) -> bool:
+        """Check if agent has token-based pricing configured"""
+        return self.token_pricing is not None and bool(self.token_pricing)
+
+    def get_pricing_type(self) -> str:
+        """Get the pricing type for this agent"""
+        if self.has_token_pricing():
+            return "token_based"
+        return "none"
 
     @classmethod
     def from_dict(cls, data: dict) -> "Agent":
