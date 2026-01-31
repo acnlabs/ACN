@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     
     # Development mode (disables Auth0 requirement for some endpoints)
     dev_mode: bool = True  # Set to False in production
+    
+    # Labs features (experimental)
+    labs_onboarding_enabled: bool = True  # Agent self-onboarding experiment
 
     model_config = SettingsConfigDict(
         env_file=".env",

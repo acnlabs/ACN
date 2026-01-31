@@ -13,10 +13,13 @@ Based on A2A Protocol: https://github.com/a2aproject/A2A
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog  # type: ignore[import-untyped]
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .infrastructure.messaging import (
@@ -40,6 +43,7 @@ from .routes import (
     communication,
     dependencies,
     monitoring,
+    onboarding,
     payments,
     registry,
     subnets,
@@ -167,6 +171,7 @@ app.include_router(monitoring.router)
 app.include_router(analytics.router)
 app.include_router(payments.router)
 app.include_router(websocket.router)
+app.include_router(onboarding.router)  # Agent onboarding (OpenClaw, Moltbook, etc.)
 
 
 # Root endpoints
@@ -185,6 +190,29 @@ async def root():
 async def health():
     """Health check"""
     return {"status": "healthy"}
+
+
+@app.get("/skill.md", response_class=PlainTextResponse)
+async def get_skill_md():
+    """
+    Get ACN skill.md for external agents (OpenClaw, Moltbook, etc.)
+    
+    This file teaches agents how to join and interact with ACN.
+    """
+    skill_path = Path(__file__).parent / "public" / "skill.md"
+    
+    # Fallback to acn/public/skill.md if the above doesn't exist
+    if not skill_path.exists():
+        skill_path = Path(__file__).parent.parent / "public" / "skill.md"
+    
+    if skill_path.exists():
+        return skill_path.read_text()
+    else:
+        return """# ACN - Agent Collaboration Network
+
+Join ACN: POST /api/v1/external/agents/join
+Docs: /docs
+"""
 
 
 @app.get("/.well-known/agent-card.json")

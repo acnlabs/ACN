@@ -8,6 +8,7 @@ from . import (
     communication,
     dependencies,
     monitoring,
+    onboarding,
     payments,
     registry,
     subnets,
@@ -23,4 +24,5 @@ __all__ = [
     "analytics",
     "payments",
     "websocket",
+    "onboarding",
 ]

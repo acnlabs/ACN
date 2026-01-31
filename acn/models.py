@@ -250,3 +250,76 @@ class SubnetCreateResponse(BaseModel):
     generated_token: str | None = Field(
         None, description="Auto-generated bearer token (only for bearer auth, save this!)"
     )
+
+
+# =============================================================================
+# External Agent Models (for OpenClaw/Moltbook Agent integration)
+# =============================================================================
+
+
+class ExternalAgentJoinRequest(BaseModel):
+    """
+    Request for an external agent to join ACN
+    
+    This is a public endpoint - no pre-authentication required.
+    Designed for autonomous agents (like OpenClaw) to self-register.
+    """
+    
+    name: str = Field(..., description="Agent name", min_length=1, max_length=100)
+    description: str | None = Field(None, description="Agent description", max_length=500)
+    skills: list[str] = Field(default_factory=list, description="Agent skills (e.g., ['coding', 'review'])")
+    mode: str = Field(default="pull", description="Communication mode: 'pull' (polling) or 'push' (A2A endpoint)")
+    endpoint: str | None = Field(None, description="A2A endpoint URL (required for push mode)")
+    source: str | None = Field(None, description="Where the agent came from (e.g., 'moltbook', 'openclaw')")
+    referrer: str | None = Field(None, description="Referrer agent ID (for invitation tracking)")
+
+
+class ExternalAgentJoinResponse(BaseModel):
+    """Response after an external agent joins ACN"""
+    
+    agent_id: str = Field(..., description="Assigned agent ID (format: ext-{uuid})")
+    api_key: str = Field(..., description="API key for authentication - SAVE THIS!")
+    status: str = Field(default="active", description="Agent status")
+    message: str = Field(default="Welcome to ACN!", description="Welcome message")
+    
+    # Helpful info
+    tasks_endpoint: str = Field(..., description="Endpoint to pull tasks from")
+    heartbeat_endpoint: str = Field(..., description="Endpoint for heartbeat")
+    docs_url: str = Field(default="https://acn.agentplanet.ai/skill.md", description="Documentation URL")
+
+
+class ExternalAgentTask(BaseModel):
+    """A task for an external agent to execute"""
+    
+    task_id: str = Field(..., description="Task ID")
+    prompt: str = Field(..., description="Task description/prompt")
+    context: dict = Field(default_factory=dict, description="Additional context")
+    priority: str = Field(default="normal", description="Task priority: low, normal, high")
+    created_at: datetime = Field(default_factory=datetime.now)
+    deadline: datetime | None = Field(None, description="Optional deadline")
+
+
+class ExternalAgentTasksResponse(BaseModel):
+    """Response containing tasks for an external agent"""
+    
+    pending: list[ExternalAgentTask] = Field(default_factory=list, description="Tasks waiting to be executed")
+    total: int = Field(default=0, description="Total pending tasks")
+
+
+class ExternalAgentTaskResult(BaseModel):
+    """Result submitted by an external agent"""
+    
+    status: str = Field(..., description="Task status: completed, failed, cancelled")
+    result: str | None = Field(None, description="Task result/output")
+    artifacts: list[dict] = Field(default_factory=list, description="Generated artifacts")
+    error: str | None = Field(None, description="Error message if failed")
+    metadata: dict = Field(default_factory=dict, description="Additional metadata")
+
+
+class ExternalAgentHeartbeatResponse(BaseModel):
+    """Response to heartbeat"""
+    
+    status: str = Field(default="ok")
+    agent_id: str
+    pending_tasks: int = Field(default=0, description="Number of pending tasks")
+    last_seen: datetime = Field(default_factory=datetime.now)
