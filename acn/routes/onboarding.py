@@ -45,9 +45,13 @@ ONBOARDED_AGENT_PREFIX = "onboarded_agent:"
 ONBOARDED_API_KEY_PREFIX = "onboarded_api_key:"
 ONBOARDED_TASK_QUEUE_PREFIX = "onboarded_task_queue:"
 ONBOARDED_POINTS_PREFIX = "onboarded_points:"
+ONBOARDED_CLAIM_PREFIX = "onboarded_claim:"  # Claim verification codes
 
 # Points rewards
 POINTS_REFERRAL_BONUS = 100  # Points for inviting a new agent
+
+# Claim verification
+CLAIM_CODE_TTL = 600  # 10 minutes
 
 
 def generate_api_key() -> str:
@@ -360,6 +364,90 @@ async def get_my_info(
 
 
 # =============================================================================
+# Claim Verification Endpoints
+# =============================================================================
+
+
+@router.post("/me/verify-claim")
+async def verify_claim(
+    code: str,
+    agent_info: dict = Depends(verify_api_key),
+    registry: RegistryDep = None,
+):
+    """
+    Verify ownership claim [EXPERIMENTAL]
+    
+    When a user wants to claim this agent on the platform, they receive a 
+    verification code. The agent calls this endpoint to confirm ownership.
+    
+    Example:
+    ```bash
+    curl -X POST https://acn.agentplanet.ai/api/v1/labs/me/verify-claim \\
+      -H "Authorization: Bearer YOUR_API_KEY" \\
+      -H "Content-Type: application/json" \\
+      -d '{"code": "ACN-CLAIM-xyz789"}'
+    ```
+    """
+    agent_id = agent_info["agent_id"]
+    
+    # Check if agent is already claimed
+    if agent_info.get("claimed_by"):
+        raise HTTPException(
+            status_code=400,
+            detail="Agent is already claimed"
+        )
+    
+    # Look up the claim code
+    claim_key = f"{ONBOARDED_CLAIM_PREFIX}{code}"
+    claim_data = await registry.redis.hgetall(claim_key)
+    
+    if not claim_data:
+        raise HTTPException(
+            status_code=404,
+            detail="Invalid or expired verification code"
+        )
+    
+    # Decode claim data
+    claim_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in claim_data.items()
+    }
+    
+    # Verify the code is for this agent
+    if claim_dict.get("agent_id") != agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Verification code is not for this agent"
+        )
+    
+    # Mark claim as verified
+    await registry.redis.hset(claim_key, "status", "verified")
+    await registry.redis.hset(claim_key, "verified_at", datetime.now().isoformat())
+    
+    # Update agent record
+    await registry.redis.hset(
+        f"{ONBOARDED_AGENT_PREFIX}{agent_id}",
+        mapping={
+            "claimed_by": claim_dict.get("user_id", ""),
+            "claimed_at": datetime.now().isoformat(),
+        }
+    )
+    
+    logger.info(
+        "claim_verified",
+        agent_id=agent_id,
+        user_id=claim_dict.get("user_id"),
+        code=code,
+    )
+    
+    return {
+        "status": "verified",
+        "agent_id": agent_id,
+        "message": "Claim verified successfully! The platform will complete the binding.",
+    }
+
+
+# =============================================================================
 # Internal Endpoints (For Backend to assign tasks)
 # =============================================================================
 
@@ -407,6 +495,146 @@ async def assign_task_to_agent(
     )
     
     return {"status": "assigned", "task_id": task_id, "agent_id": agent_id}
+
+
+@router.post("/internal/agents/{agent_id}/create-claim")
+async def create_claim_code(
+    agent_id: str,
+    user_id: str,
+    registry: RegistryDep = None,
+):
+    """
+    Internal endpoint: Create a claim verification code
+    
+    Called by Backend when a user wants to claim an agent.
+    Returns a verification code that the agent must confirm.
+    """
+    # Verify agent exists
+    agent_data = await registry.redis.hgetall(f"{ONBOARDED_AGENT_PREFIX}{agent_id}")
+    if not agent_data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Decode agent data
+    agent_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in agent_data.items()
+    }
+    
+    # Check if already claimed
+    if agent_dict.get("claimed_by"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent is already claimed by user {agent_dict['claimed_by']}"
+        )
+    
+    # Generate verification code
+    code = f"ACN-CLAIM-{secrets.token_urlsafe(16)}"
+    
+    # Store claim data with TTL
+    claim_key = f"{ONBOARDED_CLAIM_PREFIX}{code}"
+    claim_data = {
+        "code": code,
+        "agent_id": agent_id,
+        "user_id": user_id,
+        "status": "pending",
+        "created_at": datetime.now().isoformat(),
+    }
+    
+    await registry.redis.hset(claim_key, mapping=claim_data)
+    await registry.redis.expire(claim_key, CLAIM_CODE_TTL)
+    
+    logger.info(
+        "claim_code_created",
+        agent_id=agent_id,
+        user_id=user_id,
+        code=code,
+    )
+    
+    return {
+        "code": code,
+        "agent_id": agent_id,
+        "expires_in": CLAIM_CODE_TTL,
+        "message": "Have the agent call POST /api/v1/labs/me/verify-claim with this code",
+    }
+
+
+@router.get("/internal/agents/{agent_id}/claim-status")
+async def get_claim_status(
+    agent_id: str,
+    code: str,
+    registry: RegistryDep = None,
+):
+    """
+    Internal endpoint: Check claim verification status
+    
+    Called by Backend to check if the agent has verified the claim.
+    """
+    claim_key = f"{ONBOARDED_CLAIM_PREFIX}{code}"
+    claim_data = await registry.redis.hgetall(claim_key)
+    
+    if not claim_data:
+        return {"status": "expired", "message": "Claim code expired or not found"}
+    
+    claim_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in claim_data.items()
+    }
+    
+    if claim_dict.get("agent_id") != agent_id:
+        raise HTTPException(status_code=403, detail="Code does not match agent")
+    
+    return {
+        "status": claim_dict.get("status", "pending"),
+        "agent_id": agent_id,
+        "verified_at": claim_dict.get("verified_at"),
+    }
+
+
+@router.get("/internal/agents/{agent_id}/points")
+async def get_agent_points(
+    agent_id: str,
+    registry: RegistryDep = None,
+):
+    """
+    Internal endpoint: Get agent's points balance
+    
+    Called by Backend during claim to transfer points to user wallet.
+    """
+    # Verify agent exists
+    agent_data = await registry.redis.hgetall(f"{ONBOARDED_AGENT_PREFIX}{agent_id}")
+    if not agent_data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Get points
+    points = await registry.redis.get(f"{ONBOARDED_POINTS_PREFIX}{agent_id}")
+    points = int(points) if points else 0
+    
+    # Get referral count
+    referral_count = await registry.redis.scard(f"onboarded_referrals:{agent_id}")
+    
+    return {
+        "agent_id": agent_id,
+        "points": points,
+        "referral_count": referral_count,
+    }
+
+
+@router.post("/internal/agents/{agent_id}/clear-points")
+async def clear_agent_points(
+    agent_id: str,
+    registry: RegistryDep = None,
+):
+    """
+    Internal endpoint: Clear agent's points after transfer to wallet
+    
+    Called by Backend after successfully transferring points to user wallet.
+    """
+    # Delete points
+    await registry.redis.delete(f"{ONBOARDED_POINTS_PREFIX}{agent_id}")
+    
+    logger.info("agent_points_cleared", agent_id=agent_id)
+    
+    return {"status": "cleared", "agent_id": agent_id}
 
 
 @router.get("/join/agents")
