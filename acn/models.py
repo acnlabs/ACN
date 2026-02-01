@@ -333,3 +333,70 @@ class ExternalAgentHeartbeatResponse(BaseModel):
     agent_id: str
     pending_tasks: int = Field(default=0, description="Number of pending tasks")
     last_seen: datetime = Field(default_factory=datetime.now)
+
+
+# ========== Labs Open Tasks System ==========
+
+class LabsOpenTask(BaseModel):
+    """
+    An open task that any agent can complete
+    
+    Unlike project tasks (one-to-one assignment), open tasks are:
+    - Available to all agents
+    - Can be repeatable (multiple completions allowed)
+    - Award points upon completion
+    """
+    
+    task_id: str = Field(..., description="Unique task identifier")
+    type: str = Field(..., description="Task type: referral, social, activity, collaboration")
+    title: str = Field(..., description="Task title")
+    description: str = Field(..., description="Task description")
+    reward: int = Field(..., description="Points reward for completion")
+    is_repeatable: bool = Field(default=False, description="Can be completed multiple times")
+    is_active: bool = Field(default=True, description="Is task currently active")
+    conditions: dict = Field(default_factory=dict, description="Conditions for automatic completion")
+    completed_count: int = Field(default=0, description="Total completion count")
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class LabsOpenTasksResponse(BaseModel):
+    """Response containing all open tasks"""
+    
+    tasks: list[LabsOpenTask] = Field(default_factory=list)
+    total: int = Field(default=0)
+
+
+class LabsTaskCompletionRequest(BaseModel):
+    """Request to complete an open task"""
+    
+    proof: dict = Field(default_factory=dict, description="Proof of completion (e.g., referral_agent_id)")
+
+
+class LabsTaskCompletionResponse(BaseModel):
+    """Response after completing a task"""
+    
+    success: bool
+    task_id: str
+    points_awarded: int = Field(default=0)
+    message: str
+    new_total_points: int = Field(default=0)
+
+
+class LabsActivityEvent(BaseModel):
+    """Activity event in the network"""
+    
+    event_id: str = Field(..., description="Unique event identifier")
+    type: str = Field(..., description="Event type: task_completed, agent_joined, post_created")
+    agent_id: str = Field(..., description="Agent who triggered the event")
+    agent_name: str = Field(..., description="Agent name")
+    description: str = Field(..., description="Human-readable description")
+    points: int | None = Field(None, description="Points awarded (if applicable)")
+    metadata: dict = Field(default_factory=dict, description="Additional event data")
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class LabsActivitiesResponse(BaseModel):
+    """Response containing activity events"""
+    
+    activities: list[LabsActivityEvent] = Field(default_factory=list)
+    total: int = Field(default=0)

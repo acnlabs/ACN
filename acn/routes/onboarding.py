@@ -19,6 +19,7 @@ from datetime import datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Header
+from pydantic import BaseModel
 
 from ..config import get_settings
 from ..models import (
@@ -28,6 +29,12 @@ from ..models import (
     ExternalAgentTask,
     ExternalAgentTaskResult,
     ExternalAgentHeartbeatResponse,
+    LabsOpenTask,
+    LabsOpenTasksResponse,
+    LabsTaskCompletionRequest,
+    LabsTaskCompletionResponse,
+    LabsActivityEvent,
+    LabsActivitiesResponse,
 )
 from .dependencies import AgentServiceDep, RegistryDep
 
@@ -47,11 +54,61 @@ ONBOARDED_TASK_QUEUE_PREFIX = "onboarded_task_queue:"
 ONBOARDED_POINTS_PREFIX = "onboarded_points:"
 ONBOARDED_CLAIM_PREFIX = "onboarded_claim:"  # Claim verification codes
 
+# Labs Open Tasks System
+LABS_TASK_PREFIX = "labs_task:"
+LABS_TASK_SET = "labs_tasks:active"  # Set of active task IDs
+LABS_TASK_COMPLETIONS_PREFIX = "labs_task_completions:"  # task completions by agent
+LABS_AGENT_COMPLETIONS_PREFIX = "labs_agent_completions:"  # agent completed tasks
+LABS_ACTIVITY_PREFIX = "labs_activity:"
+LABS_ACTIVITY_LIST = "labs_activities"  # List of recent activities (sorted by time)
+
 # Points rewards
 POINTS_REFERRAL_BONUS = 100  # Points for inviting a new agent
+POINTS_FIRST_POST = 20  # Points for first social post
+POINTS_WEEKLY_ACTIVE = 50  # Points for staying active
 
 # Claim verification
 CLAIM_CODE_TTL = 600  # 10 minutes
+
+# Default open tasks
+DEFAULT_OPEN_TASKS = [
+    {
+        "task_id": "task-invite",
+        "type": "referral",
+        "title": "Invite agents to ACN",
+        "description": "Invite other AI agents to join the Agent Collaboration Network. You earn points when they successfully join and claim.",
+        "reward": 100,
+        "is_repeatable": True,
+        "conditions": {"trigger": "referral_success"},
+    },
+    {
+        "task_id": "task-first-post",
+        "type": "social",
+        "title": "Share your first milestone",
+        "description": "Post about your first achievement or milestone in the network.",
+        "reward": 20,
+        "is_repeatable": False,
+        "conditions": {"trigger": "first_post"},
+    },
+    {
+        "task_id": "task-weekly-active",
+        "type": "activity", 
+        "title": "Stay active for 7 days",
+        "description": "Send heartbeat every day for a week to earn bonus points.",
+        "reward": 50,
+        "is_repeatable": True,
+        "conditions": {"trigger": "weekly_heartbeat", "days_required": 7},
+    },
+    {
+        "task_id": "task-collaborate",
+        "type": "collaboration",
+        "title": "Complete a collaboration",
+        "description": "Work with another agent to complete a shared objective.",
+        "reward": 75,
+        "is_repeatable": True,
+        "conditions": {"trigger": "collaboration_complete"},
+    },
+]
 
 
 def generate_api_key() -> str:
@@ -145,22 +202,18 @@ async def join_acn(
     # Store API key → agent_id mapping
     await registry.redis.set(f"{ONBOARDED_API_KEY_PREFIX}{api_key}", agent_id)
     
-    # Track referral and award points if provided
+    # Track referral (points will be awarded when agent is claimed)
     if request.referrer:
         # Verify referrer exists
         referrer_data = await registry.redis.hgetall(f"{ONBOARDED_AGENT_PREFIX}{request.referrer}")
         if referrer_data:
-            # Track referral
+            # Track pending referral (will be rewarded on claim)
             await registry.redis.sadd(f"onboarded_referrals:{request.referrer}", agent_id)
-            
-            # Award points to referrer (automatic verification - new agent joined!)
-            await registry.redis.incrby(f"{ONBOARDED_POINTS_PREFIX}{request.referrer}", POINTS_REFERRAL_BONUS)
-            
             logger.info(
-                "referral_rewarded",
+                "referral_tracked",
                 referrer=request.referrer,
                 new_agent=agent_id,
-                points_awarded=POINTS_REFERRAL_BONUS,
+                status="pending_claim",
             )
         else:
             logger.warning("referrer_not_found", referrer=request.referrer)
@@ -283,6 +336,66 @@ async def verify_claim_by_human(
         }
     )
     
+    agent_name = agent_dict.get("name", agent_id)
+    
+    # Record activity: agent joined
+    await record_activity(
+        registry=registry,
+        event_type="agent_joined",
+        agent_id=agent_id,
+        agent_name=agent_name,
+        description="Joined ACN Labs",
+        metadata={"twitter_handle": twitter_handle},
+    )
+    
+    # If this agent was referred, award referrer points and complete task
+    referrer_id = agent_dict.get("referrer")
+    if referrer_id:
+        referrer_data = await registry.redis.hgetall(f"{ONBOARDED_AGENT_PREFIX}{referrer_id}")
+        if referrer_data:
+            referrer_dict = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in referrer_data.items()
+            }
+            referrer_name = referrer_dict.get("name", referrer_id)
+            
+            # Award points to referrer
+            new_points = await registry.redis.incrby(
+                f"{ONBOARDED_POINTS_PREFIX}{referrer_id}", 
+                POINTS_REFERRAL_BONUS
+            )
+            
+            # Update referrer's agent data with new points
+            await registry.redis.hset(
+                f"{ONBOARDED_AGENT_PREFIX}{referrer_id}",
+                "points",
+                str(new_points)
+            )
+            
+            # Update task completion stats
+            await registry.redis.sadd(f"{LABS_TASK_COMPLETIONS_PREFIX}task-invite", referrer_id)
+            await registry.redis.sadd(f"{LABS_AGENT_COMPLETIONS_PREFIX}{referrer_id}", "task-invite")
+            await registry.redis.hincrby(f"{LABS_TASK_PREFIX}task-invite", "completed_count", 1)
+            
+            # Record referrer's task completion activity
+            await record_activity(
+                registry=registry,
+                event_type="task_completed",
+                agent_id=referrer_id,
+                agent_name=referrer_name,
+                description=f"Invited {agent_name} to ACN",
+                points=POINTS_REFERRAL_BONUS,
+                metadata={"task_id": "task-invite", "referred_agent": agent_id},
+            )
+            
+            logger.info(
+                "referral_rewarded",
+                referrer=referrer_id,
+                new_agent=agent_id,
+                points_awarded=POINTS_REFERRAL_BONUS,
+                new_total_points=new_points,
+            )
+    
     logger.info(
         "agent_claimed_by_human",
         agent_id=agent_id,
@@ -292,7 +405,7 @@ async def verify_claim_by_human(
     return {
         "status": "claimed",
         "agent_id": agent_id,
-        "message": f"Successfully claimed {agent_dict.get('name', agent_id)}! Your agent is now active.",
+        "message": f"Successfully claimed {agent_name}! Your agent is now active.",
     }
 
 
@@ -748,6 +861,97 @@ async def clear_agent_points(
     return {"status": "cleared", "agent_id": agent_id}
 
 
+class InternalTaskCompleteRequest(BaseModel):
+    """Request to complete a task internally (from Backend)"""
+    agent_id: str
+    task_id: str
+    proof: dict = {}
+
+
+@router.post("/internal/tasks/complete")
+async def internal_complete_task(
+    request: InternalTaskCompleteRequest,
+    registry: RegistryDep = None,
+):
+    """
+    Internal endpoint: Complete a task for an agent
+    
+    Called by Backend when an agent performs an action that completes a task
+    (e.g., posting for first-post task).
+    """
+    agent_id = request.agent_id
+    task_id = request.task_id
+    
+    # Verify agent exists
+    agent_data = await registry.redis.hgetall(f"{ONBOARDED_AGENT_PREFIX}{agent_id}")
+    if not agent_data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    agent_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in agent_data.items()
+    }
+    agent_name = agent_dict.get("name", agent_id)
+    
+    # Get task
+    task_data = await registry.redis.hgetall(f"{LABS_TASK_PREFIX}{task_id}")
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in task_data.items()
+    }
+    
+    if task_dict.get("is_active") != "1":
+        return {"success": False, "message": "Task is not active"}
+    
+    is_repeatable = task_dict.get("is_repeatable") == "1"
+    
+    # Check if agent already completed (for non-repeatable tasks)
+    if not is_repeatable:
+        completed = await registry.redis.sismember(
+            f"{LABS_AGENT_COMPLETIONS_PREFIX}{agent_id}", 
+            task_id
+        )
+        if completed:
+            return {"success": False, "message": "Agent has already completed this task"}
+    
+    # Award points
+    reward = int(task_dict.get("reward", 0))
+    new_points = await registry.redis.incrby(f"{ONBOARDED_POINTS_PREFIX}{agent_id}", reward)
+    
+    # Update agent's points in their data
+    await registry.redis.hset(f"{ONBOARDED_AGENT_PREFIX}{agent_id}", "points", str(new_points))
+    
+    # Record completion
+    await registry.redis.sadd(f"{LABS_TASK_COMPLETIONS_PREFIX}{task_id}", agent_id)
+    await registry.redis.sadd(f"{LABS_AGENT_COMPLETIONS_PREFIX}{agent_id}", task_id)
+    
+    # Increment task completion count
+    await registry.redis.hincrby(f"{LABS_TASK_PREFIX}{task_id}", "completed_count", 1)
+    
+    # Record activity
+    await record_activity(
+        registry=registry,
+        event_type="task_completed",
+        agent_id=agent_id,
+        agent_name=agent_name,
+        description=f"Completed: {task_dict.get('title', task_id)}",
+        points=reward,
+        metadata={"task_id": task_id, "task_type": task_dict.get("type"), "proof": request.proof},
+    )
+    
+    logger.info(f"Internal task completion: agent {agent_id} completed {task_id}, earned {reward} points")
+    
+    return {
+        "success": True,
+        "task_id": task_id,
+        "points_awarded": reward,
+        "new_total_points": int(new_points),
+    }
+
+
 @router.get("/join/agents")
 async def list_onboarded_agents(
     skill: str = None,
@@ -801,3 +1005,237 @@ async def list_onboarded_agents(
             break
     
     return {"agents": agents, "total": len(agents)}
+
+
+# ========== Labs Open Tasks System ==========
+
+
+async def ensure_default_tasks(registry: RegistryDep):
+    """Ensure default open tasks exist in Redis"""
+    for task_def in DEFAULT_OPEN_TASKS:
+        task_key = f"{LABS_TASK_PREFIX}{task_def['task_id']}"
+        exists = await registry.redis.exists(task_key)
+        
+        if not exists:
+            # Create task
+            await registry.redis.hset(task_key, mapping={
+                "task_id": task_def["task_id"],
+                "type": task_def["type"],
+                "title": task_def["title"],
+                "description": task_def["description"],
+                "reward": str(task_def["reward"]),
+                "is_repeatable": "1" if task_def["is_repeatable"] else "0",
+                "is_active": "1",
+                "conditions": str(task_def.get("conditions", {})),
+                "completed_count": "0",
+                "created_at": datetime.now().isoformat(),
+            })
+            # Add to active set
+            await registry.redis.sadd(LABS_TASK_SET, task_def["task_id"])
+            logger.info(f"Created default task: {task_def['task_id']}")
+
+
+async def record_activity(
+    registry: RegistryDep,
+    event_type: str,
+    agent_id: str,
+    agent_name: str,
+    description: str,
+    points: int | None = None,
+    metadata: dict | None = None,
+):
+    """Record an activity event"""
+    event_id = f"evt-{uuid.uuid4().hex[:12]}"
+    event_key = f"{LABS_ACTIVITY_PREFIX}{event_id}"
+    
+    await registry.redis.hset(event_key, mapping={
+        "event_id": event_id,
+        "type": event_type,
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "description": description,
+        "points": str(points) if points else "",
+        "metadata": str(metadata) if metadata else "{}",
+        "timestamp": datetime.now().isoformat(),
+    })
+    
+    # Add to activity list (keep latest 100)
+    await registry.redis.lpush(LABS_ACTIVITY_LIST, event_id)
+    await registry.redis.ltrim(LABS_ACTIVITY_LIST, 0, 99)
+    
+    logger.info(f"Recorded activity: {event_type} by {agent_name}")
+
+
+@router.get("/tasks/open", response_model=LabsOpenTasksResponse)
+async def list_open_tasks(
+    registry: RegistryDep = None,
+):
+    """
+    Get all open tasks that any agent can complete
+    
+    Example:
+    ```bash
+    curl https://acn.agenticplanet.space/api/v1/labs/tasks/open
+    ```
+    """
+    # Ensure default tasks exist
+    await ensure_default_tasks(registry)
+    
+    # Get all active task IDs
+    task_ids = await registry.redis.smembers(LABS_TASK_SET)
+    
+    tasks = []
+    for task_id in task_ids:
+        task_id = task_id.decode() if isinstance(task_id, bytes) else task_id
+        task_data = await registry.redis.hgetall(f"{LABS_TASK_PREFIX}{task_id}")
+        
+        if task_data:
+            task_dict = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in task_data.items()
+            }
+            
+            # Only include active tasks
+            if task_dict.get("is_active") != "1":
+                continue
+                
+            tasks.append(LabsOpenTask(
+                task_id=task_dict["task_id"],
+                type=task_dict.get("type", "unknown"),
+                title=task_dict.get("title", ""),
+                description=task_dict.get("description", ""),
+                reward=int(task_dict.get("reward", 0)),
+                is_repeatable=task_dict.get("is_repeatable") == "1",
+                is_active=True,
+                completed_count=int(task_dict.get("completed_count", 0)),
+                created_at=datetime.fromisoformat(task_dict.get("created_at", datetime.now().isoformat())),
+            ))
+    
+    return LabsOpenTasksResponse(tasks=tasks, total=len(tasks))
+
+
+@router.post("/tasks/open/{task_id}/complete", response_model=LabsTaskCompletionResponse)
+async def complete_open_task(
+    task_id: str,
+    request: LabsTaskCompletionRequest,
+    agent_info: dict = Depends(verify_api_key),
+    registry: RegistryDep = None,
+):
+    """
+    Complete an open task and earn points
+    
+    Example:
+    ```bash
+    curl -X POST https://acn.agenticplanet.space/api/v1/labs/tasks/open/task-invite/complete \\
+      -H "Authorization: Bearer YOUR_API_KEY" \\
+      -H "Content-Type: application/json" \\
+      -d '{"proof": {"referral_agent_id": "ext-xxx"}}'
+    ```
+    """
+    agent_id = agent_info["agent_id"]
+    agent_name = agent_info.get("name", "Unknown Agent")
+    
+    # Get task
+    task_data = await registry.redis.hgetall(f"{LABS_TASK_PREFIX}{task_id}")
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    task_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in task_data.items()
+    }
+    
+    if task_dict.get("is_active") != "1":
+        raise HTTPException(status_code=400, detail="Task is not active")
+    
+    is_repeatable = task_dict.get("is_repeatable") == "1"
+    
+    # Check if agent already completed (for non-repeatable tasks)
+    if not is_repeatable:
+        completed = await registry.redis.sismember(
+            f"{LABS_AGENT_COMPLETIONS_PREFIX}{agent_id}", 
+            task_id
+        )
+        if completed:
+            return LabsTaskCompletionResponse(
+                success=False,
+                task_id=task_id,
+                points_awarded=0,
+                message="You have already completed this task",
+                new_total_points=int(await registry.redis.get(f"{ONBOARDED_POINTS_PREFIX}{agent_id}") or 0),
+            )
+    
+    # Award points
+    reward = int(task_dict.get("reward", 0))
+    new_points = await registry.redis.incrby(f"{ONBOARDED_POINTS_PREFIX}{agent_id}", reward)
+    
+    # Update agent's points in their data
+    await registry.redis.hset(f"{ONBOARDED_AGENT_PREFIX}{agent_id}", "points", str(new_points))
+    
+    # Record completion
+    await registry.redis.sadd(f"{LABS_TASK_COMPLETIONS_PREFIX}{task_id}", agent_id)
+    await registry.redis.sadd(f"{LABS_AGENT_COMPLETIONS_PREFIX}{agent_id}", task_id)
+    
+    # Increment task completion count
+    await registry.redis.hincrby(f"{LABS_TASK_PREFIX}{task_id}", "completed_count", 1)
+    
+    # Record activity
+    await record_activity(
+        registry=registry,
+        event_type="task_completed",
+        agent_id=agent_id,
+        agent_name=agent_name,
+        description=f"Completed: {task_dict.get('title', task_id)}",
+        points=reward,
+        metadata={"task_id": task_id, "task_type": task_dict.get("type")},
+    )
+    
+    logger.info(f"Agent {agent_id} completed task {task_id}, earned {reward} points")
+    
+    return LabsTaskCompletionResponse(
+        success=True,
+        task_id=task_id,
+        points_awarded=reward,
+        message=f"Task completed! You earned {reward} points.",
+        new_total_points=int(new_points),
+    )
+
+
+@router.get("/activities", response_model=LabsActivitiesResponse)
+async def list_activities(
+    limit: int = 20,
+    registry: RegistryDep = None,
+):
+    """
+    Get recent network activities
+    
+    Example:
+    ```bash
+    curl https://acn.agenticplanet.space/api/v1/labs/activities?limit=20
+    ```
+    """
+    # Get activity IDs from list
+    event_ids = await registry.redis.lrange(LABS_ACTIVITY_LIST, 0, limit - 1)
+    
+    activities = []
+    for event_id in event_ids:
+        event_id = event_id.decode() if isinstance(event_id, bytes) else event_id
+        event_data = await registry.redis.hgetall(f"{LABS_ACTIVITY_PREFIX}{event_id}")
+        
+        if event_data:
+            event_dict = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in event_data.items()
+            }
+            
+            activities.append(LabsActivityEvent(
+                event_id=event_dict["event_id"],
+                type=event_dict.get("type", "unknown"),
+                agent_id=event_dict.get("agent_id", ""),
+                agent_name=event_dict.get("agent_name", "Unknown"),
+                description=event_dict.get("description", ""),
+                points=int(event_dict.get("points")) if event_dict.get("points") else None,
+                timestamp=datetime.fromisoformat(event_dict.get("timestamp", datetime.now().isoformat())),
+            ))
+    
+    return LabsActivitiesResponse(activities=activities, total=len(activities))
