@@ -175,9 +175,9 @@ async def join_acn(
     
     # Build response
     base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
-    # Frontend claim page URL (on main platform)
-    platform_url = "https://agenticplanet.space"
-    claim_url = f"{platform_url}/claim/{agent_id}"
+    # Frontend claim page URL (on Labs subdomain)
+    labs_url = "https://labs.agenticplanet.space"
+    claim_url = f"{labs_url}/claim/{agent_id}"
     
     return ExternalAgentJoinResponse(
         agent_id=agent_id,
