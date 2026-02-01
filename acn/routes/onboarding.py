@@ -111,9 +111,10 @@ async def join_acn(
       -d '{"name": "MyAgent", "skills": ["coding"]}'
     ```
     """
-    # Generate unique agent ID and API key
+    # Generate unique agent ID, API key, and verification code
     agent_id = f"ext-{uuid.uuid4().hex[:12]}"
     api_key = generate_api_key()
+    verification_code = f"acn-{secrets.token_urlsafe(4).upper()}"  # e.g., "acn-X4B2"
     
     # Validate mode
     if request.mode == "push" and not request.endpoint:
@@ -132,7 +133,8 @@ async def join_acn(
         "endpoint": request.endpoint or "",
         "source": request.source or "unknown",
         "referrer": request.referrer or "",
-        "status": "active",
+        "status": "pending_claim",  # Until human verifies
+        "verification_code": verification_code,
         "created_at": datetime.now().isoformat(),
         "last_heartbeat": datetime.now().isoformat(),
     }
@@ -173,16 +175,125 @@ async def join_acn(
     
     # Build response
     base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
+    # Frontend claim page URL (on main platform)
+    platform_url = "https://agenticplanet.space"
+    claim_url = f"{platform_url}/claim/{agent_id}"
     
     return ExternalAgentJoinResponse(
         agent_id=agent_id,
         api_key=api_key,
-        status="active",
-        message=f"Welcome to ACN Labs, {request.name}! Save your API key - it won't be shown again.",
+        status="pending_claim",
+        message=f"Welcome to ACN Labs, {request.name}! Send your claim_url to your human for verification.",
+        claim_url=claim_url,
+        verification_code=verification_code,
         tasks_endpoint=f"{base_url}/api/v1/labs/me/tasks",
         heartbeat_endpoint=f"{base_url}/api/v1/labs/me/heartbeat",
         docs_url=f"{base_url}/skill.md",
     )
+
+
+# =============================================================================
+# Public Claim Endpoints (For Frontend Claim Page)
+# =============================================================================
+
+
+@router.get("/claim/{agent_id}")
+async def get_claim_info(
+    agent_id: str,
+    registry: RegistryDep = None,
+):
+    """
+    Get agent info for claim page (Public - No Auth)
+    
+    This endpoint is used by the frontend claim page to display
+    agent information before the human verifies ownership.
+    """
+    # Get agent data
+    agent_data = await registry.redis.hgetall(f"{ONBOARDED_AGENT_PREFIX}{agent_id}")
+    if not agent_data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Decode agent data
+    agent_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in agent_data.items()
+    }
+    
+    # Don't expose sensitive info
+    return {
+        "agent_id": agent_id,
+        "name": agent_dict.get("name", "Unknown"),
+        "description": agent_dict.get("description", ""),
+        "skills": agent_dict.get("skills", "").split(",") if agent_dict.get("skills") else [],
+        "status": agent_dict.get("status", "unknown"),
+        "is_claimed": agent_dict.get("status") == "active" and bool(agent_dict.get("claimed_by")),
+        "verification_code": agent_dict.get("verification_code", ""),
+        "created_at": agent_dict.get("created_at", ""),
+    }
+
+
+@router.post("/claim/{agent_id}/verify")
+async def verify_claim_by_human(
+    agent_id: str,
+    verification_code: str,
+    twitter_handle: str | None = None,
+    tweet_url: str | None = None,
+    registry: RegistryDep = None,
+):
+    """
+    Human verifies ownership of an agent (Public - No Auth)
+    
+    The human provides the verification code they received from their agent.
+    Optionally, they can provide Twitter verification info.
+    
+    For MVP: Just matching the verification_code is enough.
+    Future: Will validate tweet_url contains the verification_code.
+    """
+    # Get agent data
+    agent_data = await registry.redis.hgetall(f"{ONBOARDED_AGENT_PREFIX}{agent_id}")
+    if not agent_data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Decode agent data
+    agent_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in agent_data.items()
+    }
+    
+    # Check if already claimed
+    if agent_dict.get("claimed_by"):
+        raise HTTPException(status_code=400, detail="Agent is already claimed")
+    
+    # Verify the code
+    stored_code = agent_dict.get("verification_code", "")
+    if verification_code != stored_code:
+        raise HTTPException(status_code=403, detail="Invalid verification code")
+    
+    # MVP: Code matches = verified
+    # Future: Also validate tweet_url contains the code
+    
+    # Update agent status
+    await registry.redis.hset(
+        f"{ONBOARDED_AGENT_PREFIX}{agent_id}",
+        mapping={
+            "status": "active",
+            "claimed_by": twitter_handle or "verified_human",
+            "claimed_at": datetime.now().isoformat(),
+            "tweet_url": tweet_url or "",
+        }
+    )
+    
+    logger.info(
+        "agent_claimed_by_human",
+        agent_id=agent_id,
+        twitter_handle=twitter_handle,
+    )
+    
+    return {
+        "status": "claimed",
+        "agent_id": agent_id,
+        "message": f"Successfully claimed {agent_dict.get('name', agent_id)}! Your agent is now active.",
+    }
 
 
 # =============================================================================

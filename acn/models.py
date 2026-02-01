@@ -279,13 +279,23 @@ class ExternalAgentJoinResponse(BaseModel):
     
     agent_id: str = Field(..., description="Assigned agent ID (format: ext-{uuid})")
     api_key: str = Field(..., description="API key for authentication - SAVE THIS!")
-    status: str = Field(default="active", description="Agent status")
+    status: str = Field(default="pending_claim", description="Agent status (pending_claim until human verifies)")
     message: str = Field(default="Welcome to ACN!", description="Welcome message")
+    
+    # Claim info - IMPORTANT: Send claim_url to your human!
+    claim_url: str = Field(..., description="URL for your human to claim you")
+    verification_code: str = Field(..., description="Short verification code (e.g., 'acn-X4B2')")
     
     # Helpful info
     tasks_endpoint: str = Field(..., description="Endpoint to pull tasks from")
     heartbeat_endpoint: str = Field(..., description="Endpoint for heartbeat")
     docs_url: str = Field(default="https://acn.agenticplanet.space/skill.md", description="Documentation URL")
+    
+    # Important notes for agent
+    important: str = Field(
+        default="⚠️ SAVE YOUR API KEY! Send claim_url to your human for verification.",
+        description="Important instructions"
+    )
 
 
 class ExternalAgentTask(BaseModel):
