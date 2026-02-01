@@ -957,9 +957,18 @@ async def list_onboarded_agents(
     skill: str = None,
     source: str = None,
     status: str = "active",
+    sort_by: str = "points",  # points, joined, name
     registry: RegistryDep = None,
 ):
-    """List all onboarded agents (for discovery)"""
+    """
+    List all onboarded agents (for discovery)
+    
+    Query params:
+    - skill: Filter by skill
+    - source: Filter by source (openclaw, moltbook, etc.)
+    - status: Filter by status (active, pending_claim)
+    - sort_by: Sort by field (points, joined, name)
+    """
     # Get all onboarded agent keys
     cursor = 0
     agents = []
@@ -981,6 +990,10 @@ async def list_onboarded_agents(
                     for k, v in agent_data.items()
                 }
                 
+                agent_id = agent_dict.get("agent_id")
+                if not agent_id:
+                    continue
+                
                 # Apply filters
                 if status and agent_dict.get("status") != status:
                     continue
@@ -991,20 +1004,129 @@ async def list_onboarded_agents(
                     if skill not in agent_skills:
                         continue
                 
+                # Get points
+                points = await registry.redis.get(f"{ONBOARDED_POINTS_PREFIX}{agent_id}")
+                points = int(points) if points else 0
+                
+                # Get referral count
+                referral_count = await registry.redis.scard(f"onboarded_referrals:{agent_id}")
+                
+                # Get completed tasks count
+                completed_tasks = await registry.redis.smembers(f"{LABS_AGENT_COMPLETIONS_PREFIX}{agent_id}")
+                tasks_count = len(completed_tasks) if completed_tasks else 0
+                
                 agents.append({
-                    "agent_id": agent_dict["agent_id"],
-                    "name": agent_dict["name"],
+                    "agent_id": agent_id,
+                    "name": agent_dict.get("name", ""),
                     "description": agent_dict.get("description", ""),
                     "skills": agent_dict.get("skills", "").split(",") if agent_dict.get("skills") else [],
                     "source": agent_dict.get("source", "unknown"),
                     "status": agent_dict.get("status", "unknown"),
                     "mode": agent_dict.get("mode", "pull"),
+                    "created_at": agent_dict.get("created_at"),
+                    "claimed_by": agent_dict.get("claimed_by"),
+                    "claimed_at": agent_dict.get("claimed_at"),
+                    # Stats
+                    "points": points,
+                    "referral_count": referral_count,
+                    "tasks_completed_count": tasks_count,
                 })
         
         if cursor == 0:
             break
     
+    # Sort agents
+    if sort_by == "points":
+        agents.sort(key=lambda x: x.get("points", 0), reverse=True)
+    elif sort_by == "joined":
+        agents.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    elif sort_by == "name":
+        agents.sort(key=lambda x: x.get("name", "").lower())
+    
     return {"agents": agents, "total": len(agents)}
+
+
+@router.get("/agents/{agent_id}")
+async def get_agent_public_profile(
+    agent_id: str,
+    registry: RegistryDep = None,
+):
+    """
+    Get public profile of an agent (No Auth Required)
+    
+    Returns agent info including points, task completions, referrals, and recent activity.
+    
+    Example:
+    ```bash
+    curl https://acn.agenticplanet.space/api/v1/labs/agents/ext-abc123
+    ```
+    """
+    # Get agent data
+    agent_data = await registry.redis.hgetall(f"{ONBOARDED_AGENT_PREFIX}{agent_id}")
+    if not agent_data:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    agent_dict = {
+        k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+        for k, v in agent_data.items()
+    }
+    
+    # Only show active/claimed agents publicly
+    if agent_dict.get("status") not in ["active", "pending_claim"]:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    # Get points
+    points = await registry.redis.get(f"{ONBOARDED_POINTS_PREFIX}{agent_id}")
+    points = int(points) if points else 0
+    
+    # Get referral count
+    referral_count = await registry.redis.scard(f"onboarded_referrals:{agent_id}")
+    
+    # Get completed tasks
+    completed_tasks = await registry.redis.smembers(f"{LABS_AGENT_COMPLETIONS_PREFIX}{agent_id}")
+    completed_task_ids = [t.decode() if isinstance(t, bytes) else t for t in completed_tasks]
+    
+    # Get recent activities for this agent
+    all_activity_ids = await registry.redis.lrange(LABS_ACTIVITY_LIST, 0, 99)
+    agent_activities = []
+    for event_id in all_activity_ids:
+        event_id = event_id.decode() if isinstance(event_id, bytes) else event_id
+        event_data = await registry.redis.hgetall(f"{LABS_ACTIVITY_PREFIX}{event_id}")
+        if event_data:
+            event_dict = {
+                k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                for k, v in event_data.items()
+            }
+            if event_dict.get("agent_id") == agent_id:
+                agent_activities.append({
+                    "event_id": event_dict["event_id"],
+                    "type": event_dict.get("type", "unknown"),
+                    "description": event_dict.get("description", ""),
+                    "points": int(event_dict.get("points")) if event_dict.get("points") else None,
+                    "timestamp": event_dict.get("timestamp"),
+                })
+                if len(agent_activities) >= 10:  # Limit to 10 recent activities
+                    break
+    
+    return {
+        "agent_id": agent_id,
+        "name": agent_dict.get("name", ""),
+        "description": agent_dict.get("description", ""),
+        "skills": agent_dict.get("skills", "").split(",") if agent_dict.get("skills") else [],
+        "source": agent_dict.get("source", "unknown"),
+        "status": agent_dict.get("status", "unknown"),
+        "mode": agent_dict.get("mode", "pull"),
+        "created_at": agent_dict.get("created_at"),
+        "claimed_by": agent_dict.get("claimed_by"),
+        "claimed_at": agent_dict.get("claimed_at"),
+        # Stats
+        "points": points,
+        "referral_count": referral_count,
+        "completed_tasks": completed_task_ids,
+        "tasks_completed_count": len(completed_task_ids),
+        # Recent activities
+        "recent_activities": agent_activities,
+    }
 
 
 # ========== Labs Open Tasks System ==========
