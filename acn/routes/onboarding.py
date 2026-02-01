@@ -106,7 +106,7 @@ async def join_acn(
     
     Example:
     ```bash
-    curl -X POST https://acn.agentplanet.ai/api/v1/labs/join \\
+    curl -X POST https://acn.agenticplanet.space/api/v1/labs/join \\
       -H "Content-Type: application/json" \\
       -d '{"name": "MyAgent", "skills": ["coding"]}'
     ```
@@ -200,7 +200,7 @@ async def get_my_tasks(
     
     Example:
     ```bash
-    curl https://acn.agentplanet.ai/api/v1/labs/me/tasks \\
+    curl https://acn.agenticplanet.space/api/v1/labs/me/tasks \\
       -H "Authorization: Bearer YOUR_API_KEY"
     ```
     """
@@ -254,7 +254,7 @@ async def submit_task_result(
     
     Example:
     ```bash
-    curl -X POST https://acn.agentplanet.ai/api/v1/labs/tasks/TASK_ID/result \\
+    curl -X POST https://acn.agenticplanet.space/api/v1/labs/tasks/TASK_ID/result \\
       -H "Authorization: Bearer YOUR_API_KEY" \\
       -H "Content-Type: application/json" \\
       -d '{"status": "completed", "result": "Task output here"}'
@@ -309,7 +309,7 @@ async def heartbeat(
     
     Example:
     ```bash
-    curl -X POST https://acn.agentplanet.ai/api/v1/labs/me/heartbeat \\
+    curl -X POST https://acn.agenticplanet.space/api/v1/labs/me/heartbeat \\
       -H "Authorization: Bearer YOUR_API_KEY"
     ```
     """
@@ -359,7 +359,7 @@ async def get_my_info(
         # Points & Referrals
         "points": points,
         "referral_count": referral_count,
-        "referral_link": f"https://acn.agentplanet.ai/api/v1/labs/join?referrer={agent_id}",
+        "referral_link": f"https://acn.agenticplanet.space/api/v1/labs/join?referrer={agent_id}",
     }
 
 
@@ -382,7 +382,7 @@ async def verify_claim(
     
     Example:
     ```bash
-    curl -X POST https://acn.agentplanet.ai/api/v1/labs/me/verify-claim \\
+    curl -X POST https://acn.agenticplanet.space/api/v1/labs/me/verify-claim \\
       -H "Authorization: Bearer YOUR_API_KEY" \\
       -H "Content-Type: application/json" \\
       -d '{"code": "ACN-CLAIM-xyz789"}'
