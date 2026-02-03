@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Gateway
     gateway_base_url: str = "http://localhost:8000"
 
+    # Backend URL (for escrow and other integrations)
+    backend_url: str = "http://localhost:8000"
+
     # Webhooks (for backend integration)
     webhook_url: str | None = None  # e.g., "https://your-backend.com/api/acn/webhook"
     webhook_secret: str | None = None  # For HMAC signature verification
@@ -43,10 +46,10 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
-    
+
     # Development mode (disables Auth0 requirement for some endpoints)
     dev_mode: bool = True  # Set to False in production
-    
+
     # Labs features (experimental)
     labs_onboarding_enabled: bool = True  # Agent self-onboarding experiment
 

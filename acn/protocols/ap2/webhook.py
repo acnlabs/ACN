@@ -31,25 +31,52 @@ logger = logging.getLogger(__name__)
 
 
 class WebhookEventType(str, Enum):
-    """Payment webhook event types"""
+    """Webhook event types for payments and tasks"""
 
-    # Task lifecycle
-    TASK_CREATED = "payment_task.created"
-    TASK_UPDATED = "payment_task.updated"
-    TASK_CANCELLED = "payment_task.cancelled"
+    # ===== Payment Task Events (AP2) =====
+
+    # Payment task lifecycle
+    PAYMENT_TASK_CREATED = "payment_task.created"
+    PAYMENT_TASK_UPDATED = "payment_task.updated"
+    PAYMENT_TASK_CANCELLED = "payment_task.cancelled"
 
     # Payment lifecycle
     PAYMENT_PENDING = "payment_task.payment_pending"
     PAYMENT_CONFIRMED = "payment_task.payment_confirmed"
     PAYMENT_FAILED = "payment_task.payment_failed"
 
-    # Task completion
-    TASK_IN_PROGRESS = "payment_task.in_progress"
-    TASK_COMPLETED = "payment_task.completed"
+    # Payment task completion
+    PAYMENT_TASK_IN_PROGRESS = "payment_task.in_progress"
+    PAYMENT_TASK_COMPLETED = "payment_task.completed"
 
     # Disputes
     DISPUTED = "payment_task.disputed"
     REFUNDED = "payment_task.refunded"
+
+    # ===== Generic Task Events (Task Pool) =====
+
+    # Task lifecycle
+    TASK_CREATED = "task.created"
+    TASK_ACCEPTED = "task.accepted"
+    TASK_SUBMITTED = "task.submitted"
+    TASK_COMPLETED = "task.completed"
+    TASK_REJECTED = "task.rejected"
+    TASK_CANCELLED = "task.cancelled"
+
+    # Backward compatibility aliases
+    # These map old names to new values for existing code
+    @classmethod
+    def _missing_(cls, value):
+        """Handle old event names for backward compatibility"""
+        # Map old names to new
+        compat_map = {
+            "payment_task.created": cls.PAYMENT_TASK_CREATED,
+            "payment_task.updated": cls.PAYMENT_TASK_UPDATED,
+            "payment_task.cancelled": cls.PAYMENT_TASK_CANCELLED,
+            "payment_task.in_progress": cls.PAYMENT_TASK_IN_PROGRESS,
+            "payment_task.completed": cls.PAYMENT_TASK_COMPLETED,
+        }
+        return compat_map.get(value)
 
 
 class WebhookPayload(BaseModel):

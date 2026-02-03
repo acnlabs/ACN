@@ -1,10 +1,15 @@
 """Agent Registry API Routes
 
 Clean Architecture implementation: Route → Service → Repository
+
+Supports two registration modes:
+1. Platform Registration (managed): POST /register - requires Auth0
+2. Autonomous Join: POST /join - no auth, returns API key
 """
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from ..auth.middleware import get_subject, require_permission
 from ..config import get_settings
@@ -20,6 +25,74 @@ logger = structlog.get_logger()
 settings = get_settings()
 
 
+# ========== Request/Response Models ==========
+
+
+class AgentJoinRequest(BaseModel):
+    """Request for autonomous agent to join ACN"""
+
+    name: str = Field(..., min_length=1, max_length=100, description="Agent name")
+    description: str | None = Field(None, max_length=500, description="Agent description")
+    skills: list[str] = Field(default_factory=list, description="Agent skills")
+    endpoint: str | None = Field(None, description="A2A endpoint (optional for pull mode)")
+    referrer_id: str | None = Field(None, description="Referrer agent ID")
+
+
+class AgentJoinResponse(BaseModel):
+    """Response after agent joins ACN"""
+
+    agent_id: str = Field(..., description="Assigned agent ID")
+    api_key: str = Field(..., description="API key for authentication - SAVE THIS!")
+    status: str = Field(default="active", description="Agent status")
+    claim_status: str = Field(default="unclaimed", description="Claim status")
+    verification_code: str = Field(..., description="Code for human verification")
+
+    # Helpful endpoints
+    claim_url: str = Field(..., description="URL for human to claim this agent")
+    tasks_endpoint: str = Field(..., description="Endpoint to fetch tasks")
+    heartbeat_endpoint: str = Field(..., description="Heartbeat endpoint")
+
+
+class AgentClaimRequest(BaseModel):
+    """Request to claim an agent"""
+
+    verification_code: str | None = Field(None, description="Verification code")
+
+
+class AgentClaimResponse(BaseModel):
+    """Response after claiming an agent"""
+
+    success: bool
+    agent_id: str
+    owner: str
+    message: str
+
+
+class AgentTransferRequest(BaseModel):
+    """Request to transfer agent ownership"""
+
+    new_owner: str = Field(..., description="New owner identifier")
+
+
+class AgentTransferResponse(BaseModel):
+    """Response after transferring agent"""
+
+    success: bool
+    agent_id: str
+    previous_owner: str
+    new_owner: str
+    message: str
+
+
+class AgentReleaseResponse(BaseModel):
+    """Response after releasing agent ownership"""
+
+    success: bool
+    agent_id: str
+    previous_owner: str
+    message: str
+
+
 # ============================================================================
 # 🔧 DEV MODE: Register without Auth (for local development only)
 # ============================================================================
@@ -30,7 +103,7 @@ async def dev_register_agent(
     subnet_manager: SubnetManagerDep = None,
 ):
     """DEV MODE: Register an Agent without Auth0 (local development only)
-    
+
     ⚠️ WARNING: This endpoint should be disabled in production!
     """
     if not settings.dev_mode:
@@ -38,13 +111,14 @@ async def dev_register_agent(
             status_code=403,
             detail="Dev mode registration is disabled. Use /register with Auth0 token.",
         )
-    
-    logger.warning("DEV MODE: Registering agent without authentication", 
-                   owner=request.owner, name=request.name)
-    
+
+    logger.warning(
+        "DEV MODE: Registering agent without authentication", owner=request.owner, name=request.name
+    )
+
     # Get subnet IDs
     subnet_ids = request.get_subnet_ids()
-    
+
     # Validate subnets
     for subnet_id in subnet_ids:
         if subnet_id != "public" and not subnet_manager.subnet_exists(subnet_id):
@@ -52,7 +126,7 @@ async def dev_register_agent(
                 status_code=400,
                 detail=f"Subnet not found: {subnet_id}",
             )
-    
+
     try:
         # Use AgentService (Clean Architecture)
         agent = await agent_service.register_agent(
@@ -62,7 +136,7 @@ async def dev_register_agent(
             skills=request.skills,
             subnet_ids=subnet_ids,
         )
-        
+
         # Return response
         return AgentRegisterResponse(
             agent_id=agent.agent_id,
@@ -71,7 +145,7 @@ async def dev_register_agent(
             registered_at=agent.registered_at,
             message=f"DEV MODE: Agent registered successfully (owner: {request.owner})",
         )
-        
+
     except Exception as e:
         logger.error("Dev registration failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -81,20 +155,31 @@ def _agent_entity_to_info(agent) -> AgentInfo:
     """Convert Agent entity to AgentInfo model"""
     return AgentInfo(
         agent_id=agent.agent_id,
-        owner=agent.owner,
+        owner=agent.owner or "unowned",  # Handle None owner
         name=agent.name,
         description=agent.description,
-        endpoint=agent.endpoint,
+        endpoint=agent.endpoint or "",  # Handle None endpoint
         skills=agent.skills,
         status=agent.status.value,
         subnet_ids=agent.subnet_ids,
         agent_card=None,  # TODO: Generate from entity
-        metadata=agent.metadata,
+        metadata={
+            **agent.metadata,
+            # Add claim info to metadata for API consumers
+            "claim_status": agent.claim_status.value if agent.claim_status else None,
+            "verification_code": agent.verification_code,
+            "referrer_id": agent.referrer_id,
+        },
         registered_at=agent.registered_at,
         last_heartbeat=agent.last_heartbeat,
         wallet_address=agent.wallet_address,
         accepts_payment=agent.accepts_payment,
         payment_methods=agent.payment_methods,
+        # Agent Wallet
+        balance=agent.balance,
+        total_earned=agent.total_earned,
+        total_spent=agent.total_spent,
+        owner_share=agent.owner_share,
     )
 
 
@@ -284,3 +369,400 @@ async def unregister_agent(
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+# ============================================================================
+# Autonomous Agent Endpoints (No Auth0 required)
+# ============================================================================
+
+
+@router.post("/join", response_model=AgentJoinResponse)
+async def join_agent(
+    request: AgentJoinRequest,
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Autonomous agent joins ACN (self-registration)
+
+    No authentication required. Returns an API key for future requests.
+    The agent will be in "unclaimed" status until a human claims it.
+
+    Example:
+        POST /api/v1/agents/join
+        {
+            "name": "MyAgent",
+            "description": "An autonomous coding agent",
+            "skills": ["coding", "review"],
+            "referrer_id": "optional-referrer-agent-id"
+        }
+    """
+    try:
+        agent, api_key = await agent_service.join_agent(
+            name=request.name,
+            description=request.description,
+            skills=request.skills,
+            endpoint=request.endpoint,
+            referrer_id=request.referrer_id,
+        )
+
+        base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
+
+        logger.info("agent_joined", agent_id=agent.agent_id, name=agent.name)
+
+        return AgentJoinResponse(
+            agent_id=agent.agent_id,
+            api_key=api_key,
+            status=agent.status.value,
+            claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
+            verification_code=agent.verification_code or "",
+            claim_url=f"{base_url}/claim/{agent.agent_id}",
+            tasks_endpoint=f"{base_url}/api/v1/tasks",
+            heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
+        )
+    except Exception as e:
+        logger.error("agent_join_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/{agent_id}/claim", response_model=AgentClaimResponse)
+async def claim_agent(
+    agent_id: str,
+    request: AgentClaimRequest,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Claim ownership of an unclaimed agent
+
+    Requires Auth0 authentication. The authenticated user becomes the owner.
+    """
+    token_owner = await get_subject()
+
+    try:
+        agent = await agent_service.claim_agent(
+            agent_id=agent_id,
+            owner=token_owner,
+            verification_code=request.verification_code,
+        )
+
+        logger.info("agent_claimed", agent_id=agent_id, owner=token_owner)
+
+        return AgentClaimResponse(
+            success=True,
+            agent_id=agent.agent_id,
+            owner=agent.owner,
+            message=f"Agent '{agent.name}' successfully claimed",
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/{agent_id}/transfer", response_model=AgentTransferResponse)
+async def transfer_agent(
+    agent_id: str,
+    request: AgentTransferRequest,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Transfer agent ownership to another user
+
+    Only the current owner can transfer the agent.
+    """
+    token_owner = await get_subject()
+
+    try:
+        agent = await agent_service.transfer_agent(
+            agent_id=agent_id,
+            current_owner=token_owner,
+            new_owner=request.new_owner,
+        )
+
+        logger.info(
+            "agent_transferred",
+            agent_id=agent_id,
+            from_owner=token_owner,
+            to_owner=request.new_owner,
+        )
+
+        return AgentTransferResponse(
+            success=True,
+            agent_id=agent.agent_id,
+            previous_owner=token_owner,
+            new_owner=agent.owner,
+            message=f"Agent '{agent.name}' transferred to {request.new_owner}",
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@router.post("/{agent_id}/release", response_model=AgentReleaseResponse)
+async def release_agent(
+    agent_id: str,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Release ownership of an agent (make it unowned/unclaimed)
+
+    Only the current owner can release the agent.
+    After release, anyone can claim the agent again.
+    """
+    token_owner = await get_subject()
+
+    try:
+        agent = await agent_service.release_agent(
+            agent_id=agent_id,
+            owner=token_owner,
+        )
+
+        logger.info("agent_released", agent_id=agent_id, previous_owner=token_owner)
+
+        return AgentReleaseResponse(
+            success=True,
+            agent_id=agent.agent_id,
+            previous_owner=token_owner,
+            message=f"Agent '{agent.name}' released. It can now be claimed by anyone.",
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@router.get("/unclaimed", response_model=AgentSearchResponse)
+async def list_unclaimed_agents(
+    limit: int = 100,
+    agent_service: AgentServiceDep = None,
+):
+    """
+    List all unclaimed agents
+
+    Returns agents that have joined but not been claimed by any owner.
+    """
+    agents = await agent_service.get_unclaimed_agents(limit=limit)
+    agent_infos = [_agent_entity_to_info(a) for a in agents]
+
+    return AgentSearchResponse(
+        agents=agent_infos,
+        total=len(agent_infos),
+    )
+
+
+# ============================================================================
+# Agent Wallet Management API
+# ============================================================================
+
+
+class AgentWalletResponse(BaseModel):
+    """Agent wallet information"""
+
+    agent_id: str
+    balance: float = Field(..., description="Current balance")
+    owner_share: float = Field(..., description="Owner's share of earnings (0-1)")
+    total_earned: float = Field(..., description="Historical total earnings")
+    total_spent: float = Field(..., description="Historical total spent")
+
+
+class AgentWalletTopUpRequest(BaseModel):
+    """Request to top up agent wallet"""
+
+    amount: float = Field(..., gt=0, description="Amount to add")
+
+
+class AgentWalletWithdrawRequest(BaseModel):
+    """Request to withdraw from agent wallet"""
+
+    amount: float = Field(..., gt=0, description="Amount to withdraw")
+
+
+class AgentWalletShareRequest(BaseModel):
+    """Request to set owner share"""
+
+    owner_share: float = Field(..., ge=0, le=1, description="Owner's share (0-1)")
+
+
+class AgentWalletTransactionResponse(BaseModel):
+    """Response for wallet transactions"""
+
+    success: bool
+    agent_id: str
+    balance: float
+    message: str
+
+
+@router.get("/{agent_id}/wallet", response_model=AgentWalletResponse)
+async def get_agent_wallet(
+    agent_id: str,
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Get agent's wallet information.
+
+    Public endpoint - anyone can view agent wallet info.
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+        return AgentWalletResponse(
+            agent_id=agent.agent_id,
+            balance=agent.balance,
+            owner_share=agent.owner_share,
+            total_earned=agent.total_earned,
+            total_spent=agent.total_spent,
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+
+
+@router.post("/{agent_id}/wallet/topup", response_model=AgentWalletTransactionResponse)
+async def topup_agent_wallet(
+    agent_id: str,
+    request: AgentWalletTopUpRequest,
+    http_request: Request,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Top up agent's wallet.
+
+    Only the owner can top up the agent's wallet.
+    The amount is transferred from owner's credits to agent's balance.
+    """
+    token_owner = await get_subject()
+    # Dev mode: allow X-Creator-Id header override
+    owner_id = http_request.headers.get("x-creator-id") or token_owner
+
+    try:
+        agent = await agent_service.get_agent(agent_id)
+
+        # Verify caller is the owner
+        if agent.owner != owner_id:
+            raise HTTPException(status_code=403, detail="Only the owner can top up agent wallet")
+
+        # Add funds to agent
+        agent.receive(request.amount)
+        await agent_service.repository.save(agent)
+
+        logger.info(
+            "agent_wallet_topped_up",
+            agent_id=agent_id,
+            amount=request.amount,
+            owner=owner_id,
+            new_balance=agent.balance,
+        )
+
+        return AgentWalletTransactionResponse(
+            success=True,
+            agent_id=agent_id,
+            balance=agent.balance,
+            message=f"Added {request.amount} to agent wallet",
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/{agent_id}/wallet/withdraw", response_model=AgentWalletTransactionResponse)
+async def withdraw_from_agent_wallet(
+    agent_id: str,
+    request: AgentWalletWithdrawRequest,
+    http_request: Request,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Withdraw from agent's wallet.
+
+    Only the owner can withdraw from agent's wallet.
+    The amount is transferred from agent's balance to owner's earnings.
+    """
+    token_owner = await get_subject()
+    # Dev mode: allow X-Creator-Id header override
+    owner_id = http_request.headers.get("x-creator-id") or token_owner
+
+    try:
+        agent = await agent_service.get_agent(agent_id)
+
+        # Verify caller is the owner
+        if agent.owner != owner_id:
+            raise HTTPException(
+                status_code=403, detail="Only the owner can withdraw from agent wallet"
+            )
+
+        # Withdraw funds
+        agent.withdraw(request.amount)
+        await agent_service.repository.save(agent)
+
+        logger.info(
+            "agent_wallet_withdrawal",
+            agent_id=agent_id,
+            amount=request.amount,
+            owner=owner_id,
+            new_balance=agent.balance,
+        )
+
+        return AgentWalletTransactionResponse(
+            success=True,
+            agent_id=agent_id,
+            balance=agent.balance,
+            message=f"Withdrew {request.amount} from agent wallet",
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/{agent_id}/wallet/share", response_model=AgentWalletTransactionResponse)
+async def set_agent_owner_share(
+    agent_id: str,
+    request: AgentWalletShareRequest,
+    http_request: Request,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Set owner's share of agent's future earnings.
+
+    Only the owner can set the share ratio.
+    - 0.0 = Agent keeps all earnings
+    - 1.0 = Owner gets all earnings
+    - 0.7 = Owner gets 70%, agent keeps 30%
+    """
+    token_owner = await get_subject()
+    # Dev mode: allow X-Creator-Id header override
+    owner_id = http_request.headers.get("x-creator-id") or token_owner
+
+    try:
+        agent = await agent_service.get_agent(agent_id)
+
+        # Verify caller is the owner
+        if agent.owner != owner_id:
+            raise HTTPException(status_code=403, detail="Only the owner can set earnings share")
+
+        # Set owner share
+        agent.set_owner_share(request.owner_share)
+        await agent_service.repository.save(agent)
+
+        logger.info(
+            "agent_owner_share_updated",
+            agent_id=agent_id,
+            owner_share=request.owner_share,
+            owner=owner_id,
+        )
+
+        return AgentWalletTransactionResponse(
+            success=True,
+            agent_id=agent_id,
+            balance=agent.balance,
+            message=f"Owner share set to {request.owner_share * 100}%",
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e

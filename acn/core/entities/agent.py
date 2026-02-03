@@ -16,6 +16,13 @@ class AgentStatus(str, Enum):
     BUSY = "busy"
 
 
+class ClaimStatus(str, Enum):
+    """Agent claim status"""
+
+    UNCLAIMED = "unclaimed"  # No owner yet
+    CLAIMED = "claimed"  # Has owner
+
+
 @dataclass
 class Agent:
     """
@@ -23,12 +30,21 @@ class Agent:
 
     Represents a registered AI agent in the ACN network.
     Contains business logic and invariants.
+
+    Supports two registration modes:
+    1. Platform Registration (managed): owner required, no api_key
+    2. Autonomous Join: owner optional, api_key generated for auth
     """
 
     agent_id: str
-    owner: str
     name: str
-    endpoint: str
+
+    # Owner is optional and mutable (supports claim, transfer, release)
+    owner: str | None = None
+
+    # Endpoint is optional for pull-mode agents
+    endpoint: str | None = None
+
     status: AgentStatus = AgentStatus.ONLINE
     description: str | None = None
     skills: list[str] = field(default_factory=list)
@@ -36,6 +52,19 @@ class Agent:
     metadata: dict = field(default_factory=dict)
     registered_at: datetime = field(default_factory=datetime.now)
     last_heartbeat: datetime | None = None
+
+    # Authentication (for autonomous agents)
+    api_key: str | None = None
+
+    # Claim status (for autonomous agents)
+    claim_status: ClaimStatus | None = None
+    verification_code: str | None = None  # Short code for human verification
+
+    # Referral tracking
+    referrer_id: str | None = None  # Agent who referred this agent
+
+    # Owner change tracking
+    owner_changed_at: datetime | None = None
 
     # Payment capabilities
     wallet_address: str | None = None
@@ -46,16 +75,19 @@ class Agent:
     # Format: {"input_price_per_million": 3.0, "output_price_per_million": 15.0, "currency": "USD"}
     token_pricing: dict | None = None
 
+    # Agent Wallet (simplified: single balance, no credits/earnings distinction)
+    balance: float = 0.0  # Available balance (in points/APT)
+    owner_share: float = 0.0  # Owner's share of earnings (0-1), unclaimed agents default to 0
+    total_earned: float = 0.0  # Historical total earnings
+    total_spent: float = 0.0  # Historical total spent
+
     def __post_init__(self):
         """Validate invariants"""
         if not self.agent_id:
             raise ValueError("agent_id cannot be empty")
-        if not self.owner:
-            raise ValueError("owner cannot be empty")
         if not self.name:
             raise ValueError("name cannot be empty")
-        if not self.endpoint:
-            raise ValueError("endpoint cannot be empty")
+        # Note: owner and endpoint are now optional
         if not self.subnet_ids:
             self.subnet_ids = ["public"]
 
@@ -109,12 +141,148 @@ class Agent:
         """Check if agent can accept payments"""
         return self.accepts_payment and bool(self.wallet_address)
 
+    # ========== Ownership Methods ==========
+
+    def is_owned(self) -> bool:
+        """Check if agent has an owner"""
+        return self.owner is not None
+
+    def is_claimed(self) -> bool:
+        """Check if agent has been claimed"""
+        return self.claim_status == ClaimStatus.CLAIMED
+
+    def can_be_claimed(self) -> bool:
+        """Check if agent can be claimed"""
+        return self.claim_status == ClaimStatus.UNCLAIMED
+
+    def claim(self, owner: str) -> None:
+        """
+        Claim ownership of this agent
+
+        Args:
+            owner: New owner identifier
+
+        Raises:
+            ValueError: If agent is already claimed
+        """
+        if self.claim_status == ClaimStatus.CLAIMED:
+            raise ValueError("Agent is already claimed")
+
+        self.owner = owner
+        self.claim_status = ClaimStatus.CLAIMED
+        self.owner_changed_at = datetime.now()
+
+    def transfer(self, new_owner: str) -> None:
+        """
+        Transfer ownership to another user
+
+        Args:
+            new_owner: New owner identifier
+        """
+        self.owner = new_owner
+        self.owner_changed_at = datetime.now()
+
+    def release(self) -> None:
+        """Release ownership (make agent unowned)"""
+        self.owner = None
+        self.claim_status = ClaimStatus.UNCLAIMED
+        self.owner_changed_at = datetime.now()
+        # Reset owner_share when released
+        self.owner_share = 0.0
+
+    # ========== Wallet Methods ==========
+
+    def add_earnings(self, amount: float) -> tuple[float, float]:
+        """
+        Add earnings to agent, with owner share split.
+
+        Args:
+            amount: Total earnings amount
+
+        Returns:
+            tuple of (agent_amount, owner_amount)
+        """
+        if amount <= 0:
+            return 0.0, 0.0
+
+        owner_amount = amount * self.owner_share
+        agent_amount = amount - owner_amount
+
+        self.balance += agent_amount
+        self.total_earned += agent_amount
+
+        return agent_amount, owner_amount
+
+    def spend(self, amount: float) -> None:
+        """
+        Spend from agent balance.
+
+        Args:
+            amount: Amount to spend
+
+        Raises:
+            ValueError: If insufficient balance
+        """
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        if self.balance < amount:
+            raise ValueError(f"Insufficient balance. Have {self.balance}, need {amount}")
+
+        self.balance -= amount
+        self.total_spent += amount
+
+    def receive(self, amount: float) -> None:
+        """
+        Receive funds (e.g., from owner top-up).
+
+        Args:
+            amount: Amount to receive
+        """
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        self.balance += amount
+
+    def withdraw(self, amount: float) -> None:
+        """
+        Withdraw from agent balance (by owner).
+
+        Args:
+            amount: Amount to withdraw
+
+        Raises:
+            ValueError: If insufficient balance
+        """
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        if self.balance < amount:
+            raise ValueError(f"Insufficient balance. Have {self.balance}, need {amount}")
+
+        self.balance -= amount
+
+    def set_owner_share(self, share: float) -> None:
+        """
+        Set owner's share of future earnings.
+
+        Args:
+            share: Share ratio (0-1)
+
+        Raises:
+            ValueError: If share is out of range
+        """
+        if share < 0 or share > 1:
+            raise ValueError("Owner share must be between 0 and 1")
+        self.owner_share = share
+
+    def has_sufficient_balance(self, amount: float) -> bool:
+        """Check if agent has sufficient balance."""
+        return self.balance >= amount
+
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization"""
         return {
             "agent_id": self.agent_id,
-            "owner": self.owner,
             "name": self.name,
+            "owner": self.owner,
             "endpoint": self.endpoint,
             "status": self.status.value,
             "description": self.description,
@@ -123,10 +291,27 @@ class Agent:
             "metadata": self.metadata,
             "registered_at": self.registered_at.isoformat(),
             "last_heartbeat": self.last_heartbeat.isoformat() if self.last_heartbeat else None,
+            # Authentication
+            "api_key": self.api_key,
+            # Claim
+            "claim_status": self.claim_status.value if self.claim_status else None,
+            "verification_code": self.verification_code,
+            # Referral
+            "referrer_id": self.referrer_id,
+            # Owner tracking
+            "owner_changed_at": self.owner_changed_at.isoformat()
+            if self.owner_changed_at
+            else None,
+            # Payment
             "wallet_address": self.wallet_address,
             "accepts_payment": self.accepts_payment,
             "payment_methods": self.payment_methods,
             "token_pricing": self.token_pricing,
+            # Agent Wallet
+            "balance": self.balance,
+            "owner_share": self.owner_share,
+            "total_earned": self.total_earned,
+            "total_spent": self.total_spent,
         }
 
     def has_token_pricing(self) -> bool:
@@ -148,7 +333,12 @@ class Agent:
             data["registered_at"] = datetime.fromisoformat(data["registered_at"])
         if data.get("last_heartbeat") and isinstance(data["last_heartbeat"], str):
             data["last_heartbeat"] = datetime.fromisoformat(data["last_heartbeat"])
+        if data.get("owner_changed_at") and isinstance(data["owner_changed_at"], str):
+            data["owner_changed_at"] = datetime.fromisoformat(data["owner_changed_at"])
         # Parse status enum
         if isinstance(data.get("status"), str):
             data["status"] = AgentStatus(data["status"])
+        # Parse claim_status enum
+        if isinstance(data.get("claim_status"), str):
+            data["claim_status"] = ClaimStatus(data["claim_status"])
         return cls(**data)

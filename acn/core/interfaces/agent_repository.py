@@ -141,3 +141,29 @@ class IAgentRepository(ABC):
             Number of agents in the subnet
         """
         pass
+
+    @abstractmethod
+    async def find_by_api_key(self, api_key: str) -> Agent | None:
+        """
+        Find agent by API key (for autonomous agent authentication)
+
+        Args:
+            api_key: Agent API key
+
+        Returns:
+            Agent entity or None if not found
+        """
+        pass
+
+    @abstractmethod
+    async def find_unclaimed(self, limit: int = 100) -> list[Agent]:
+        """
+        Find all unclaimed agents
+
+        Args:
+            limit: Maximum number of agents to return
+
+        Returns:
+            List of unclaimed agents
+        """
+        pass

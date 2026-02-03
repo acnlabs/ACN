@@ -19,7 +19,6 @@ import structlog  # type: ignore[import-untyped]
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .infrastructure.messaging import (
@@ -30,6 +29,8 @@ from .infrastructure.messaging import (
 )
 from .infrastructure.persistence.redis import RedisAgentRepository, RedisSubnetRepository
 from .infrastructure.persistence.redis.registry import AgentRegistry
+from .infrastructure.persistence.redis.task_repository import RedisTaskRepository
+from .infrastructure.task_pool import TaskPool
 from .monitoring import Analytics, AuditLogger, MetricsCollector
 from .protocols.a2a.server import create_a2a_app
 from .protocols.ap2 import (
@@ -47,9 +48,12 @@ from .routes import (
     payments,
     registry,
     subnets,
+    tasks,
     websocket,
 )
-from .services import AgentService, BillingService, MessageService, SubnetService
+from .services import AgentService, BillingService, MessageService, SubnetService, TaskService
+from .services.activity_service import ActivityService
+from .services.escrow_client import EscrowClient
 
 # Settings
 settings = get_settings()
@@ -100,8 +104,36 @@ async def lifespan(app: FastAPI):
     billing_service_instance = BillingService(
         redis=registry_instance.redis,
         agent_service=agent_service_instance,
-        webhook_url=settings.billing_webhook_url if hasattr(settings, 'billing_webhook_url') else None,
+        webhook_url=settings.billing_webhook_url
+        if hasattr(settings, "billing_webhook_url")
+        else None,
     )
+
+    # Initialize Activity Service
+    activity_service_instance = ActivityService(redis=registry_instance.redis)
+
+    # Initialize Escrow Client (for Labs task budget management)
+    escrow_client_instance = EscrowClient(
+        backend_url=settings.backend_url
+        if hasattr(settings, "backend_url")
+        else "http://localhost:8000"
+    )
+
+    # Initialize Task Pool and Service
+    task_repository = RedisTaskRepository(registry_instance.redis)
+    task_pool_instance = TaskPool(task_repository)
+    task_service_instance = TaskService(
+        repository=task_repository,
+        task_pool=task_pool_instance,
+        payment_manager=payment_tasks_instance,
+        webhook_service=webhook_service_instance,
+        activity_service=activity_service_instance,
+        escrow_client=escrow_client_instance,
+        agent_repository=agent_repository,
+    )
+
+    # Set task service for routes
+    tasks.set_task_service(task_service_instance)
 
     # Initialize dependencies
     dependencies.init_services(
@@ -170,8 +202,11 @@ app.include_router(subnets.router)
 app.include_router(monitoring.router)
 app.include_router(analytics.router)
 app.include_router(payments.router)
+app.include_router(tasks.router)  # Task Pool API
 app.include_router(websocket.router)
-app.include_router(onboarding.router)  # Agent onboarding (OpenClaw, Moltbook, etc.)
+app.include_router(
+    onboarding.router
+)  # Agent onboarding (OpenClaw, Moltbook, etc.) - Legacy, to be removed
 
 
 # Root endpoints
@@ -196,15 +231,15 @@ async def health():
 async def get_skill_md():
     """
     Get ACN skill.md for external agents (OpenClaw, Moltbook, etc.)
-    
+
     This file teaches agents how to join and interact with ACN.
     """
     skill_path = Path(__file__).parent / "public" / "skill.md"
-    
+
     # Fallback to acn/public/skill.md if the above doesn't exist
     if not skill_path.exists():
         skill_path = Path(__file__).parent.parent / "public" / "skill.md"
-    
+
     if skill_path.exists():
         return skill_path.read_text()
     else:

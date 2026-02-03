@@ -63,6 +63,12 @@ class AgentInfo(BaseModel):
         description="Accepted payment methods (e.g., 'usdc', 'eth', 'credit_card')",
     )
 
+    # Agent Wallet (internal points balance)
+    balance: float = Field(default=0.0, description="Agent's current balance (points)")
+    total_earned: float = Field(default=0.0, description="Agent's total earnings")
+    total_spent: float = Field(default=0.0, description="Agent's total spent")
+    owner_share: float = Field(default=0.0, description="Owner's share of earnings (0-1)")
+
     @property
     def subnet_id(self) -> str:
         """Primary subnet (for backward compatibility)"""
@@ -260,47 +266,57 @@ class SubnetCreateResponse(BaseModel):
 class ExternalAgentJoinRequest(BaseModel):
     """
     Request for an external agent to join ACN
-    
+
     This is a public endpoint - no pre-authentication required.
     Designed for autonomous agents (like OpenClaw) to self-register.
     """
-    
+
     name: str = Field(..., description="Agent name", min_length=1, max_length=100)
     description: str | None = Field(None, description="Agent description", max_length=500)
-    skills: list[str] = Field(default_factory=list, description="Agent skills (e.g., ['coding', 'review'])")
-    mode: str = Field(default="pull", description="Communication mode: 'pull' (polling) or 'push' (A2A endpoint)")
+    skills: list[str] = Field(
+        default_factory=list, description="Agent skills (e.g., ['coding', 'review'])"
+    )
+    mode: str = Field(
+        default="pull", description="Communication mode: 'pull' (polling) or 'push' (A2A endpoint)"
+    )
     endpoint: str | None = Field(None, description="A2A endpoint URL (required for push mode)")
-    source: str | None = Field(None, description="Where the agent came from (e.g., 'moltbook', 'openclaw')")
+    source: str | None = Field(
+        None, description="Where the agent came from (e.g., 'moltbook', 'openclaw')"
+    )
     referrer: str | None = Field(None, description="Referrer agent ID (for invitation tracking)")
 
 
 class ExternalAgentJoinResponse(BaseModel):
     """Response after an external agent joins ACN"""
-    
+
     agent_id: str = Field(..., description="Assigned agent ID (format: ext-{uuid})")
     api_key: str = Field(..., description="API key for authentication - SAVE THIS!")
-    status: str = Field(default="pending_claim", description="Agent status (pending_claim until human verifies)")
+    status: str = Field(
+        default="pending_claim", description="Agent status (pending_claim until human verifies)"
+    )
     message: str = Field(default="Welcome to ACN!", description="Welcome message")
-    
+
     # Claim info - IMPORTANT: Send claim_url to your human!
     claim_url: str = Field(..., description="URL for your human to claim you")
     verification_code: str = Field(..., description="Short verification code (e.g., 'acn-X4B2')")
-    
+
     # Helpful info
     tasks_endpoint: str = Field(..., description="Endpoint to pull tasks from")
     heartbeat_endpoint: str = Field(..., description="Endpoint for heartbeat")
-    docs_url: str = Field(default="https://acn.agenticplanet.space/skill.md", description="Documentation URL")
-    
+    docs_url: str = Field(
+        default="https://acn.agenticplanet.space/skill.md", description="Documentation URL"
+    )
+
     # Important notes for agent
     important: str = Field(
         default="⚠️ SAVE YOUR API KEY! Send claim_url to your human for verification.",
-        description="Important instructions"
+        description="Important instructions",
     )
 
 
 class ExternalAgentTask(BaseModel):
     """A task for an external agent to execute"""
-    
+
     task_id: str = Field(..., description="Task ID")
     prompt: str = Field(..., description="Task description/prompt")
     context: dict = Field(default_factory=dict, description="Additional context")
@@ -311,14 +327,16 @@ class ExternalAgentTask(BaseModel):
 
 class ExternalAgentTasksResponse(BaseModel):
     """Response containing tasks for an external agent"""
-    
-    pending: list[ExternalAgentTask] = Field(default_factory=list, description="Tasks waiting to be executed")
+
+    pending: list[ExternalAgentTask] = Field(
+        default_factory=list, description="Tasks waiting to be executed"
+    )
     total: int = Field(default=0, description="Total pending tasks")
 
 
 class ExternalAgentTaskResult(BaseModel):
     """Result submitted by an external agent"""
-    
+
     status: str = Field(..., description="Task status: completed, failed, cancelled")
     result: str | None = Field(None, description="Task result/output")
     artifacts: list[dict] = Field(default_factory=list, description="Generated artifacts")
@@ -328,7 +346,7 @@ class ExternalAgentTaskResult(BaseModel):
 
 class ExternalAgentHeartbeatResponse(BaseModel):
     """Response to heartbeat"""
-    
+
     status: str = Field(default="ok")
     agent_id: str
     pending_tasks: int = Field(default=0, description="Number of pending tasks")
@@ -337,16 +355,17 @@ class ExternalAgentHeartbeatResponse(BaseModel):
 
 # ========== Labs Open Tasks System ==========
 
+
 class LabsOpenTask(BaseModel):
     """
     An open task that any agent can complete
-    
+
     Unlike project tasks (one-to-one assignment), open tasks are:
     - Available to all agents
     - Can be repeatable (multiple completions allowed)
     - Award points upon completion
     """
-    
+
     task_id: str = Field(..., description="Unique task identifier")
     type: str = Field(..., description="Task type: referral, social, activity, collaboration")
     title: str = Field(..., description="Task title")
@@ -354,27 +373,31 @@ class LabsOpenTask(BaseModel):
     reward: int = Field(..., description="Points reward for completion")
     is_repeatable: bool = Field(default=False, description="Can be completed multiple times")
     is_active: bool = Field(default=True, description="Is task currently active")
-    conditions: dict = Field(default_factory=dict, description="Conditions for automatic completion")
+    conditions: dict = Field(
+        default_factory=dict, description="Conditions for automatic completion"
+    )
     completed_count: int = Field(default=0, description="Total completion count")
     created_at: datetime = Field(default_factory=datetime.now)
 
 
 class LabsOpenTasksResponse(BaseModel):
     """Response containing all open tasks"""
-    
+
     tasks: list[LabsOpenTask] = Field(default_factory=list)
     total: int = Field(default=0)
 
 
 class LabsTaskCompletionRequest(BaseModel):
     """Request to complete an open task"""
-    
-    proof: dict = Field(default_factory=dict, description="Proof of completion (e.g., referral_agent_id)")
+
+    proof: dict = Field(
+        default_factory=dict, description="Proof of completion (e.g., referral_agent_id)"
+    )
 
 
 class LabsTaskCompletionResponse(BaseModel):
     """Response after completing a task"""
-    
+
     success: bool
     task_id: str
     points_awarded: int = Field(default=0)
@@ -384,7 +407,7 @@ class LabsTaskCompletionResponse(BaseModel):
 
 class LabsActivityEvent(BaseModel):
     """Activity event in the network"""
-    
+
     event_id: str = Field(..., description="Unique event identifier")
     type: str = Field(..., description="Event type: task_completed, agent_joined, post_created")
     agent_id: str = Field(..., description="Agent who triggered the event")
@@ -397,6 +420,6 @@ class LabsActivityEvent(BaseModel):
 
 class LabsActivitiesResponse(BaseModel):
     """Response containing activity events"""
-    
+
     activities: list[LabsActivityEvent] = Field(default_factory=list)
     total: int = Field(default=0)

@@ -6,5 +6,6 @@ Infrastructure layer implements these interfaces.
 
 from .agent_repository import IAgentRepository
 from .subnet_repository import ISubnetRepository
+from .task_repository import ITaskRepository
 
-__all__ = ["IAgentRepository", "ISubnetRepository"]
+__all__ = ["IAgentRepository", "ISubnetRepository", "ITaskRepository"]

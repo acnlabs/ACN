@@ -3,15 +3,26 @@
 Business logic for agent registration, discovery, and management.
 """
 
+import secrets
 from uuid import uuid4
 
 import structlog  # type: ignore[import-untyped]
 
-from ..core.entities import Agent
+from ..core.entities import Agent, ClaimStatus
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
 
 logger = structlog.get_logger()
+
+
+def generate_api_key() -> str:
+    """Generate a secure API key"""
+    return f"acn_{secrets.token_urlsafe(32)}"
+
+
+def generate_verification_code() -> str:
+    """Generate a short verification code for human claim"""
+    return f"acn-{secrets.token_hex(2).upper()}"
 
 
 class AgentService:
@@ -249,3 +260,178 @@ class AgentService:
         await self.repository.save(agent)
         logger.info("agent_left_subnet", agent_id=agent_id, subnet_id=subnet_id)
         return agent
+
+    # ========== Autonomous Agent Methods ==========
+
+    async def join_agent(
+        self,
+        name: str,
+        description: str | None = None,
+        skills: list[str] | None = None,
+        endpoint: str | None = None,
+        referrer_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> tuple[Agent, str]:
+        """
+        Autonomous agent joins ACN (self-registration)
+
+        Unlike register_agent (platform-managed), this allows agents
+        to self-register without an owner. Returns an API key for auth.
+
+        Args:
+            name: Agent name
+            description: Agent description
+            skills: List of skill IDs
+            endpoint: A2A endpoint URL (optional for pull mode)
+            referrer_id: ID of agent who referred this one
+            metadata: Additional metadata
+
+        Returns:
+            Tuple of (Agent entity, API key)
+        """
+        agent_id = str(uuid4())
+        api_key = generate_api_key()
+        verification_code = generate_verification_code()
+
+        agent = Agent(
+            agent_id=agent_id,
+            name=name,
+            owner=None,  # No owner initially
+            endpoint=endpoint,
+            description=description,
+            skills=skills or [],
+            subnet_ids=["public"],
+            metadata=metadata or {},
+            api_key=api_key,
+            claim_status=ClaimStatus.UNCLAIMED,
+            verification_code=verification_code,
+            referrer_id=referrer_id,
+        )
+
+        logger.info("agent_joined", agent_id=agent_id, name=name, referrer_id=referrer_id)
+        await self.repository.save(agent)
+        return agent, api_key
+
+    async def get_agent_by_api_key(self, api_key: str) -> Agent | None:
+        """
+        Find agent by API key (for authentication)
+
+        Args:
+            api_key: Agent API key
+
+        Returns:
+            Agent entity or None
+        """
+        return await self.repository.find_by_api_key(api_key)
+
+    async def claim_agent(
+        self,
+        agent_id: str,
+        owner: str,
+        verification_code: str | None = None,
+    ) -> Agent:
+        """
+        Claim ownership of an unclaimed agent
+
+        Args:
+            agent_id: Agent identifier
+            owner: New owner identifier
+            verification_code: Optional verification code
+
+        Returns:
+            Claimed agent entity
+
+        Raises:
+            AgentNotFoundException: If agent not found
+            ValueError: If agent is already claimed or code doesn't match
+        """
+        agent = await self.get_agent(agent_id)
+
+        if agent.claim_status == ClaimStatus.CLAIMED:
+            raise ValueError(f"Agent {agent_id} is already claimed")
+
+        # Verify code if agent has one
+        if agent.verification_code and verification_code:
+            if agent.verification_code != verification_code:
+                raise ValueError("Invalid verification code")
+
+        agent.claim(owner)
+        await self.repository.save(agent)
+
+        logger.info("agent_claimed", agent_id=agent_id, owner=owner)
+        return agent
+
+    async def transfer_agent(
+        self,
+        agent_id: str,
+        current_owner: str,
+        new_owner: str,
+    ) -> Agent:
+        """
+        Transfer agent ownership to another user
+
+        Args:
+            agent_id: Agent identifier
+            current_owner: Current owner (for authorization)
+            new_owner: New owner identifier
+
+        Returns:
+            Updated agent entity
+
+        Raises:
+            AgentNotFoundException: If agent not found
+            PermissionError: If current_owner doesn't match
+        """
+        agent = await self.get_agent(agent_id)
+
+        if agent.owner != current_owner:
+            raise PermissionError("Only owner can transfer agent")
+
+        agent.transfer(new_owner)
+        await self.repository.save(agent)
+
+        logger.info(
+            "agent_transferred",
+            agent_id=agent_id,
+            from_owner=current_owner,
+            to_owner=new_owner,
+        )
+        return agent
+
+    async def release_agent(self, agent_id: str, owner: str) -> Agent:
+        """
+        Release ownership of an agent (make it unowned)
+
+        Args:
+            agent_id: Agent identifier
+            owner: Current owner (for authorization)
+
+        Returns:
+            Updated agent entity
+
+        Raises:
+            AgentNotFoundException: If agent not found
+            PermissionError: If owner doesn't match
+        """
+        agent = await self.get_agent(agent_id)
+
+        if agent.owner != owner:
+            raise PermissionError("Only owner can release agent")
+
+        agent.release()
+        await self.repository.save(agent)
+
+        logger.info("agent_released", agent_id=agent_id, previous_owner=owner)
+        return agent
+
+    async def get_unclaimed_agents(self, limit: int = 100) -> list[Agent]:
+        """
+        Get all unclaimed agents
+
+        Args:
+            limit: Maximum number of agents to return
+
+        Returns:
+            List of unclaimed agents
+        """
+        return await self.repository.find_unclaimed(limit)
