@@ -17,6 +17,7 @@ ACTIVITY_PREFIX = "labs_activity:"
 ACTIVITY_LIST = "labs_activities"
 ACTIVITY_BY_USER = "labs_activities:user:"
 ACTIVITY_BY_TASK = "labs_activities:task:"
+ACTIVITY_BY_AGENT = "labs_activities:agent:"
 
 # Activity types
 ACTIVITY_TYPES = [
@@ -111,6 +112,12 @@ class ActivityService:
         user_key = f"{ACTIVITY_BY_USER}{actor_id}"
         await self.redis.lpush(user_key, event_id)
         await self.redis.ltrim(user_key, 0, self.max_activities - 1)
+        
+        # Add to agent index if actor is an agent
+        if actor_type == "agent":
+            agent_key = f"{ACTIVITY_BY_AGENT}{actor_id}"
+            await self.redis.lpush(agent_key, event_id)
+            await self.redis.ltrim(agent_key, 0, self.max_activities - 1)
         
         # Add to task index if task_id provided
         if task_id:

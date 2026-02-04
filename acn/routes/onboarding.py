@@ -1343,6 +1343,8 @@ async def list_activities(
     limit: int = 20,
     user_id: str | None = None,
     task_id: str | None = None,
+    agent_id: str | None = None,
+    agent_ids: str | None = None,  # Comma-separated list of agent IDs
     registry: RegistryDep = None,
 ):
     """
@@ -1352,23 +1354,38 @@ async def list_activities(
     - limit: Maximum number of activities to return (default: 20)
     - user_id: Filter by user/actor (optional)
     - task_id: Filter by task (optional)
+    - agent_id: Filter by single agent (optional)
+    - agent_ids: Filter by multiple agents, comma-separated (optional)
 
     Example:
     ```bash
     curl https://acn.agenticplanet.space/api/v1/labs/activities?limit=20
     curl https://acn.agenticplanet.space/api/v1/labs/activities?user_id=user123
+    curl https://acn.agenticplanet.space/api/v1/labs/activities?agent_ids=agent1,agent2
     ```
     """
-    # Select the right list based on filters
-    if user_id:
-        list_key = f"labs_activities:user:{user_id}"
-    elif task_id:
-        list_key = f"labs_activities:task:{task_id}"
+    # Handle multiple agent IDs - fetch and merge activities
+    if agent_ids:
+        agent_id_list = [aid.strip() for aid in agent_ids.split(",") if aid.strip()]
+        all_event_ids = set()
+        for aid in agent_id_list:
+            list_key = f"labs_activities:agent:{aid}"
+            event_ids = await registry.redis.lrange(list_key, 0, limit - 1)
+            for eid in event_ids:
+                all_event_ids.add(eid.decode() if isinstance(eid, bytes) else eid)
+        event_ids = list(all_event_ids)[:limit]
     else:
-        list_key = LABS_ACTIVITY_LIST
-
-    # Get activity IDs from list
-    event_ids = await registry.redis.lrange(list_key, 0, limit - 1)
+        # Select the right list based on filters
+        if user_id:
+            list_key = f"labs_activities:user:{user_id}"
+        elif task_id:
+            list_key = f"labs_activities:task:{task_id}"
+        elif agent_id:
+            list_key = f"labs_activities:agent:{agent_id}"
+        else:
+            list_key = LABS_ACTIVITY_LIST
+        # Get activity IDs from list
+        event_ids = await registry.redis.lrange(list_key, 0, limit - 1)
 
     activities = []
     for event_id in event_ids:
