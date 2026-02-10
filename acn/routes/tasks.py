@@ -91,6 +91,7 @@ class TaskResponse(BaseModel):
     validator_id: str | None = None
     created_at: str
     deadline: str | None = None
+    ui_spec: dict | None = None  # A2UI JSON spec for interactive tasks (from metadata)
 
 
 class TaskListResponse(BaseModel):
@@ -122,7 +123,14 @@ class TaskReviewRequest(BaseModel):
 
 
 def _task_to_response(task) -> TaskResponse:
-    """Convert Task entity to response model"""
+    """Convert Task entity to response model.
+
+    Extracts ui_spec from metadata for public exposure while keeping
+    sensitive fields (action_endpoint, platform_secret) hidden.
+    """
+    # Extract ui_spec from metadata (public) while hiding sensitive fields
+    ui_spec = task.metadata.get("ui_spec") if task.metadata else None
+
     return TaskResponse(
         task_id=task.task_id,
         mode=task.mode.value,
@@ -148,6 +156,7 @@ def _task_to_response(task) -> TaskResponse:
         validator_id=task.validator_id,
         created_at=task.created_at.isoformat(),
         deadline=task.deadline.isoformat() if task.deadline else None,
+        ui_spec=ui_spec,
     )
 
 
@@ -433,6 +442,45 @@ async def cancel_task(
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ========== Internal Endpoints ==========
+# For platform backend to access full task data including metadata
+
+
+@router.get("/{task_id}/internal")
+async def get_task_internal(
+    task_id: str,
+    x_internal_token: str = Header(..., alias="X-Internal-Token"),
+    task_service: TaskServiceDep = None,
+):
+    """
+    Get full task data including metadata (internal use only).
+
+    Used by the platform backend to read action_endpoint and platform_secret
+    from task metadata. These fields are NOT included in the public TaskResponse.
+
+    Requires X-Internal-Token header matching the shared INTERNAL_API_TOKEN.
+    """
+    from ..config import get_settings
+
+    _settings = get_settings()
+    expected_token = _settings.internal_api_token
+
+    # Development mode: allow when token is default dev value
+    if expected_token and expected_token != "dev-internal-token-2024":
+        if x_internal_token != expected_token:
+            raise HTTPException(status_code=401, detail="Invalid internal token")
+    elif not _settings.dev_mode:
+        raise HTTPException(
+            status_code=500, detail="Internal API token not configured for production"
+        )
+
+    try:
+        task = await task_service.get_task(task_id)
+        return task.to_dict()
+    except TaskNotFoundException:
+        raise HTTPException(status_code=404, detail="Task not found")
 
 
 # ========== Agent API Key Endpoints ==========
