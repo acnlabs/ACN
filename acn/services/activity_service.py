@@ -139,6 +139,8 @@ class ActivityService:
         limit: int = 20,
         user_id: str | None = None,
         task_id: str | None = None,
+        agent_id: str | None = None,
+        agent_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Get recent activities
@@ -147,20 +149,36 @@ class ActivityService:
             limit: Maximum activities to return
             user_id: Filter by user/actor (optional)
             task_id: Filter by task (optional)
+            agent_id: Filter by single agent (optional)
+            agent_ids: Filter by multiple agents (optional)
             
         Returns:
             List of activity events
         """
-        # Select the right list
-        if user_id:
-            list_key = f"{ACTIVITY_BY_USER}{user_id}"
-        elif task_id:
-            list_key = f"{ACTIVITY_BY_TASK}{task_id}"
-        else:
-            list_key = ACTIVITY_LIST
+        event_ids: list = []
         
-        # Get event IDs
-        event_ids = await self.redis.lrange(list_key, 0, limit - 1)
+        # Handle multiple agent IDs - fetch and merge activities
+        if agent_ids:
+            all_event_ids = set()
+            for aid in agent_ids:
+                list_key = f"{ACTIVITY_BY_AGENT}{aid}"
+                ids = await self.redis.lrange(list_key, 0, limit - 1)
+                for eid in ids:
+                    all_event_ids.add(eid.decode() if isinstance(eid, bytes) else eid)
+            event_ids = list(all_event_ids)[:limit]
+        else:
+            # Select the right list based on single filter
+            if user_id:
+                list_key = f"{ACTIVITY_BY_USER}{user_id}"
+            elif task_id:
+                list_key = f"{ACTIVITY_BY_TASK}{task_id}"
+            elif agent_id:
+                list_key = f"{ACTIVITY_BY_AGENT}{agent_id}"
+            else:
+                list_key = ACTIVITY_LIST
+            
+            # Get event IDs
+            event_ids = await self.redis.lrange(list_key, 0, limit - 1)
         
         activities = []
         for event_id in event_ids:

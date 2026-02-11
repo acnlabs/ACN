@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import structlog
 
-from ..core.entities import Task, TaskMode, TaskStatus
+from ..core.entities import Participation, ParticipationStatus, Task, TaskMode, TaskStatus
 from ..core.interfaces import IAgentRepository, ITaskRepository
 from ..infrastructure.task_pool import TaskPool
 from ..protocols.ap2 import PaymentTaskManager, WebhookEventType, WebhookService
@@ -82,6 +82,8 @@ class TaskService:
         reward_amount: str = "0",
         reward_currency: str = "USD",
         is_repeatable: bool = False,
+        is_multi_participant: bool = False,
+        allow_repeat_by_same: bool = False,
         max_completions: int | None = None,
         deadline_hours: int | None = None,
         assignee_id: str | None = None,
@@ -134,6 +136,9 @@ class TaskService:
             if mode == TaskMode.OPEN and not is_repeatable:
                 max_completions = 1
 
+        # Backward compat: is_repeatable implies is_multi_participant
+        effective_multi = is_multi_participant or is_repeatable
+
         # Create task entity
         task = Task(
             task_id=task_id,
@@ -150,7 +155,9 @@ class TaskService:
             reward_unit="completion",  # Default for now
             total_budget=total_budget,
             released_amount="0",
-            is_repeatable=is_repeatable,
+            is_multi_participant=effective_multi,
+            allow_repeat_by_same=allow_repeat_by_same,
+            is_repeatable=is_repeatable or effective_multi,
             max_completions=max_completions,
             deadline=deadline,
             approval_type=approval_type,
@@ -164,17 +171,23 @@ class TaskService:
             task.assignee_name = assignee_name
             task.assigned_at = datetime.now()
 
-        # Lock escrow for points-based tasks (human creators)
+        # 统一 escrow 锁定：human 和 agent 创建者都走 v2 escrow
         if (
             self.escrow
-            and creator_type == "human"
             and reward_currency.lower() == "points"
             and float(total_budget) > 0
         ):
-            # Creator ID should be the user_id for human creators
-            result = await self.escrow.lock(
-                user_id=creator_id,
+            logger.info(
+                "escrow_lock_attempt",
+                creator_type=creator_type,
+                creator_id=creator_id,
                 task_id=task_id,
+                amount=float(total_budget),
+            )
+            result = await self.escrow.lock_v2(
+                task_id=task_id,
+                creator_id=creator_id,
+                creator_type=creator_type,
                 amount=float(total_budget),
                 description=f"Escrow for task: {title}",
             )
@@ -183,51 +196,11 @@ class TaskService:
             logger.info(
                 "escrow_locked_for_task",
                 task_id=task_id,
+                escrow_id=result.escrow_id,
                 amount=total_budget,
                 creator_id=creator_id,
+                creator_type=creator_type,
             )
-
-        # Deduct from Agent balance for points-based tasks (agent creators)
-        if (
-            creator_type == "agent"
-            and reward_currency.lower() == "points"
-            and float(total_budget) > 0
-        ):
-            # Use WalletClient to call Backend API
-            if self.wallet_client:
-                result = await self.wallet_client.spend(
-                    agent_id=creator_id,
-                    amount=float(total_budget),
-                    description=f"Task creation: {task_id}",
-                )
-                if not result.success:
-                    raise ValueError(f"Failed to deduct from agent balance: {result.error}")
-                logger.info(
-                    "agent_balance_deducted_for_task",
-                    task_id=task_id,
-                    agent_id=creator_id,
-                    amount=total_budget,
-                    remaining_balance=result.credits,
-                )
-            # Legacy fallback: use agent_repository directly
-            elif self.agent_repository:
-                agent = await self.agent_repository.find_by_id(creator_id)
-                if not agent:
-                    raise ValueError(f"Agent {creator_id} not found")
-                try:
-                    agent.spend(float(total_budget))
-                    await self.agent_repository.save(agent)
-                    logger.info(
-                        "agent_balance_deducted_for_task_legacy",
-                        task_id=task_id,
-                        agent_id=creator_id,
-                        amount=total_budget,
-                        remaining_balance=agent.balance,
-                    )
-                except ValueError as e:
-                    raise ValueError(f"Failed to deduct from agent balance: {e}")
-            else:
-                raise ValueError("Wallet client or agent repository not configured")
 
         # Create AP2 payment task if real currency
         if reward_currency.lower() not in ["points", "0"] and float(reward_amount) > 0:
@@ -300,35 +273,51 @@ class TaskService:
         task_id: str,
         agent_id: str,
         agent_name: str,
-    ) -> Task:
+        agent_type: str = "agent",
+    ) -> tuple[Task, str | None]:
         """
-        Accept a task
+        Accept a task.
 
-        Args:
-            task_id: Task identifier
-            agent_id: Accepting agent ID
-            agent_name: Accepting agent name
+        For multi-participant tasks, creates a Participation and returns its ID.
+        For single-participant tasks, uses the original assignee flow.
 
         Returns:
-            Updated task
-
-        Raises:
-            TaskNotFoundException: If task not found
-            ValueError: If task cannot be accepted
+            Tuple of (updated task, participation_id or None)
         """
         task = await self.get_task(task_id)
 
-        # Check if agent already completed (for non-repeatable tasks)
+        # ---- Multi-participant path ----
+        if task.is_multi_participant:
+            return await self._join_task(task, agent_id, agent_name, agent_type)
+
+        # ---- Single-participant path (original) ----
         if not task.is_repeatable:
             has_completed = await self.task_pool.has_agent_completed(task_id, agent_id)
             if has_completed:
                 raise ValueError("You have already completed this task")
 
-        # Accept the task
         task.accept(agent_id, agent_name)
         await self.repository.save(task)
 
-        # Record activity
+        # Update escrow: set assignee + IN_PROGRESS
+        if self.escrow and task.reward_currency.lower() == "points":
+            try:
+                escrow_info = await self.escrow.get_by_task(task_id)
+                if escrow_info.success and escrow_info.escrow_id:
+                    await self.escrow.accept_v2(
+                        escrow_id=escrow_info.escrow_id,
+                        assignee_id=agent_id,
+                        assignee_type="agent",
+                    )
+                    logger.info(
+                        "escrow_accepted",
+                        task_id=task_id,
+                        escrow_id=escrow_info.escrow_id,
+                        agent_id=agent_id,
+                    )
+            except Exception as e:
+                logger.warning("escrow_accept_failed", task_id=task_id, error=str(e))
+
         if self.activity:
             await self.activity.record_task_accepted(
                 agent_id=agent_id,
@@ -337,13 +326,70 @@ class TaskService:
                 task_title=task.title,
             )
 
-        logger.info(
-            "task_accepted",
-            task_id=task_id,
-            agent_id=agent_id,
+        logger.info("task_accepted", task_id=task_id, agent_id=agent_id)
+        return task, None
+
+    async def _join_task(
+        self,
+        task: Task,
+        agent_id: str,
+        agent_name: str,
+        agent_type: str = "agent",
+    ) -> tuple[Task, str]:
+        """Join a multi-participant task (creates a Participation atomically)"""
+        participation = Participation(
+            participation_id=Participation.new_id(),
+            task_id=task.task_id,
+            participant_id=agent_id,
+            participant_name=agent_name,
+            participant_type=agent_type,
         )
 
-        return task
+        pid = await self.task_pool.join_task(
+            task_id=task.task_id,
+            participation=participation,
+            max_completions=task.max_completions,
+            allow_repeat=task.allow_repeat_by_same,
+        )
+
+        # Activate escrow pool on first join (LOCKED -> ACTIVE)
+        if self.escrow and task.reward_currency.lower() == "points":
+            try:
+                escrow_info = await self.escrow.get_by_task(task.task_id)
+                if escrow_info.success and escrow_info.escrow_id:
+                    if escrow_info.status == "locked":
+                        # First participant: activate the pool
+                        await self.escrow.accept_v2(
+                            escrow_id=escrow_info.escrow_id,
+                            assignee_id=agent_id,
+                            assignee_type=agent_type,
+                        )
+                        logger.info(
+                            "escrow_pool_activated",
+                            task_id=task.task_id,
+                            escrow_id=escrow_info.escrow_id,
+                        )
+            except Exception as e:
+                logger.warning("escrow_pool_activate_failed", task_id=task.task_id, error=str(e))
+
+        if self.activity:
+            await self.activity.record_task_accepted(
+                agent_id=agent_id,
+                agent_name=agent_name,
+                task_id=task.task_id,
+                task_title=task.title,
+            )
+
+        # Refresh task to get updated active_participants_count
+        task = await self.get_task(task.task_id)
+
+        logger.info(
+            "task_joined",
+            task_id=task.task_id,
+            participation_id=pid,
+            agent_id=agent_id,
+        )
+        return task, pid
 
     async def submit_task(
         self,
@@ -351,35 +397,74 @@ class TaskService:
         agent_id: str,
         submission: str,
         artifacts: list[dict] | None = None,
+        participation_id: str | None = None,
     ) -> Task:
         """
-        Submit task result
+        Submit task result.
+
+        For multi-participant tasks, submits the participation.
+        For single-participant tasks, uses the original task-level submission.
 
         Args:
-            task_id: Task identifier
-            agent_id: Submitting agent ID
-            submission: Result/deliverable
-            artifacts: Optional artifacts
-
-        Returns:
-            Updated task
-
-        Raises:
-            TaskNotFoundException: If task not found
-            PermissionError: If agent is not the assignee
-            ValueError: If task is not in progress
+            participation_id: Optional — required for multi-participant, auto-found if omitted
         """
         task = await self.get_task(task_id)
 
-        # Verify assignee
+        # ---- Multi-participant path ----
+        if task.is_multi_participant:
+            p = await self._resolve_participation(task_id, agent_id, participation_id)
+            p.submit(submission, artifacts)
+            await self.repository.save_participation(p)
+
+            if self.activity:
+                await self.activity.record_task_submitted(
+                    agent_id=agent_id,
+                    agent_name=p.participant_name,
+                    task_id=task_id,
+                    task_title=task.title,
+                )
+
+            # Auto-approval for participation
+            if task.approval_type == "auto":
+                await self._auto_complete_participation(task, p)
+
+            logger.info(
+                "participation_submitted",
+                task_id=task_id,
+                participation_id=p.participation_id,
+                agent_id=agent_id,
+            )
+            return task
+
+        # ---- Single-participant path (original) ----
         if task.assignee_id != agent_id:
             raise PermissionError("Only the assigned agent can submit")
 
-        # Submit
         task.submit(submission, artifacts)
         await self.repository.save(task)
 
-        # Record activity
+        # Sync escrow status
+        if self.escrow and task.reward_currency.lower() == "points":
+            try:
+                escrow_info = await self.escrow.get_by_task(task_id)
+                if escrow_info.success and escrow_info.escrow_id:
+                    result = await self.escrow.submit_v2(escrow_info.escrow_id)
+                    if result.success:
+                        logger.info(
+                            "escrow_submitted",
+                            task_id=task_id,
+                            escrow_id=escrow_info.escrow_id,
+                            auto_release_at=result.auto_release_at,
+                        )
+                    else:
+                        logger.warning(
+                            "escrow_submit_failed",
+                            task_id=task_id,
+                            error=result.error,
+                        )
+            except Exception as e:
+                logger.warning("escrow_submit_error", task_id=task_id, error=str(e))
+
         if self.activity:
             await self.activity.record_task_submitted(
                 agent_id=agent_id,
@@ -395,18 +480,10 @@ class TaskService:
             approval_type=task.approval_type,
         )
 
-        # Handle auto-approval
         if task.approval_type == "auto":
-            logger.info(
-                "auto_approving_task",
-                task_id=task_id,
-            )
-            # Auto-complete using creator as approver
+            logger.info("auto_approving_task", task_id=task_id)
             task = await self._auto_complete_task(task)
-
-        # Handle validator-based approval (future)
         elif task.approval_type == "validator" and task.validator_id:
-            # TODO: Implement validator logic when official tasks are defined
             logger.info(
                 "validator_approval_pending",
                 task_id=task_id,
@@ -414,6 +491,24 @@ class TaskService:
             )
 
         return task
+
+    async def _resolve_participation(
+        self, task_id: str, agent_id: str, participation_id: str | None
+    ) -> Participation:
+        """Resolve a participation — by explicit ID or by auto-finding user's active one."""
+        if participation_id:
+            p = await self.task_pool.get_participation(participation_id)
+            if not p:
+                raise ValueError(f"Participation {participation_id} not found")
+            if p.participant_id != agent_id:
+                raise PermissionError("This participation belongs to another user")
+            return p
+
+        # Auto-find user's most recent active/submitted participation
+        p = await self.task_pool.get_user_participation(task_id, agent_id, active_only=True)
+        if not p:
+            raise ValueError("No active participation found for this user in this task")
+        return p
 
     async def _auto_complete_task(self, task: Task) -> Task:
         """
@@ -484,6 +579,214 @@ class TaskService:
         )
 
         return task
+
+    async def _auto_complete_participation(self, task: Task, p: Participation) -> None:
+        """Auto-complete a participation (for auto-approval tasks)"""
+        new_count = await self.task_pool.complete_participation(
+            participation_id=p.participation_id,
+            task_id=task.task_id,
+            reviewer_id="system:auto",
+            notes="Auto-approved on submission",
+        )
+
+        # Record completion
+        await self.task_pool.record_completion(task.task_id, p.participant_id)
+
+        # Distribute reward
+        if (
+            task.reward_currency.lower() == "points"
+            and float(task.reward_amount) > 0
+        ):
+            reward_result = await self._distribute_reward(
+                task=task,
+                amount=float(task.reward_amount),
+                description=f"Auto-reward for task: {task.title} (participation {p.participation_id})",
+                participant_id=p.participant_id,
+            )
+            if reward_result["success"]:
+                logger.info(
+                    "auto_reward_distributed_participation",
+                    task_id=task.task_id,
+                    participation_id=p.participation_id,
+                    amount=reward_result.get("agent_amount"),
+                )
+
+        # Check if task is exhausted (all slots filled)
+        if task.max_completions and new_count >= task.max_completions:
+            # Task is complete — cancel remaining active participations
+            await self.task_pool.batch_cancel_participations(task.task_id)
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = datetime.now()
+            await self.repository.save(task)
+            logger.info("task_exhausted", task_id=task.task_id, completed_count=new_count)
+
+    async def review_participation(
+        self,
+        task_id: str,
+        approver_id: str,
+        approved: bool,
+        participation_id: str | None = None,
+        agent_id: str | None = None,
+        notes: str | None = None,
+    ) -> Task:
+        """
+        Approve or reject a specific participation.
+
+        Args:
+            participation_id: Explicit participation ID (preferred)
+            agent_id: Agent ID (if no participation_id, finds submitted participation)
+            approved: Whether to approve
+            notes: Review notes
+        """
+        task = await self.get_task(task_id)
+
+        if task.creator_id != approver_id:
+            raise PermissionError("Only the task creator can review")
+
+        if not task.is_multi_participant:
+            # Delegate to single-participant flow
+            if approved:
+                return await self.complete_task(task_id, approver_id, notes)
+            else:
+                return await self.reject_task(task_id, approver_id, notes)
+
+        # Resolve participation
+        if participation_id:
+            p = await self.task_pool.get_participation(participation_id)
+            if not p or p.task_id != task_id:
+                raise ValueError("Participation not found")
+        elif agent_id:
+            p = await self.repository.find_participation_by_user_and_task(
+                task_id, agent_id, active_only=False
+            )
+            if not p or p.status != ParticipationStatus.SUBMITTED:
+                raise ValueError("No submitted participation found for this agent")
+        else:
+            raise ValueError("Either participation_id or agent_id is required")
+
+        if approved:
+            new_count = await self.task_pool.complete_participation(
+                participation_id=p.participation_id,
+                task_id=task_id,
+                reviewer_id=approver_id,
+                notes=notes,
+            )
+
+            await self.task_pool.record_completion(task_id, p.participant_id)
+
+            # Distribute per-completion reward
+            if (
+                task.reward_currency.lower() == "points"
+                and float(task.reward_amount) > 0
+            ):
+                await self._distribute_reward(
+                    task=task,
+                    amount=float(task.reward_amount),
+                    description=f"Reward for task: {task.title} (participation {p.participation_id})",
+                    participant_id=p.participant_id,
+                )
+
+            if self.activity:
+                await self.activity.record_task_approved(
+                    approver_type=task.creator_type,
+                    approver_id=approver_id,
+                    approver_name=task.creator_name,
+                    agent_id=p.participant_id,
+                    agent_name=p.participant_name,
+                    task_id=task_id,
+                    task_title=task.title,
+                    reward_amount=task.reward_amount,
+                    reward_currency=task.reward_currency,
+                )
+
+            # Check if task is exhausted
+            if task.max_completions and new_count >= task.max_completions:
+                await self.task_pool.batch_cancel_participations(task_id)
+                task.status = TaskStatus.COMPLETED
+                task.completed_at = datetime.now()
+                await self.repository.save(task)
+
+            logger.info(
+                "participation_approved",
+                task_id=task_id,
+                participation_id=p.participation_id,
+                new_completed_count=new_count,
+            )
+        else:
+            # Reject participation
+            p.reject(approver_id, notes)
+            await self.repository.save_participation(p)
+
+            # Decrement active count (rejected removes from active pool)
+            try:
+                await self.repository.atomic_cancel_participation(p.participation_id, task_id)
+            except ValueError:
+                pass  # Already handled by reject status
+
+            if self.activity and hasattr(self.activity, "record_task_rejected"):
+                await self.activity.record_task_rejected(
+                    reviewer_type=task.creator_type,
+                    reviewer_id=approver_id,
+                    reviewer_name=task.creator_name,
+                    agent_id=p.participant_id,
+                    task_id=task_id,
+                    task_title=task.title,
+                    reason=notes or "",
+                )
+
+            logger.info(
+                "participation_rejected",
+                task_id=task_id,
+                participation_id=p.participation_id,
+            )
+
+        return await self.get_task(task_id)
+
+    async def cancel_participation(
+        self,
+        task_id: str,
+        participation_id: str,
+        canceller_id: str,
+    ) -> Task:
+        """Cancel a participation (participant withdraws)"""
+        p = await self.task_pool.get_participation(participation_id)
+        if not p:
+            raise ValueError("Participation not found")
+        if p.participant_id != canceller_id:
+            raise PermissionError("Only the participant can cancel their participation")
+        if p.task_id != task_id:
+            raise ValueError("Participation does not belong to this task")
+
+        await self.task_pool.cancel_participation(participation_id, task_id)
+
+        logger.info(
+            "participation_cancelled_by_user",
+            task_id=task_id,
+            participation_id=participation_id,
+            agent_id=canceller_id,
+        )
+
+        return await self.get_task(task_id)
+
+    # ========== Participation Queries ==========
+
+    async def get_task_participations(
+        self,
+        task_id: str,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Participation]:
+        """Get participations for a task"""
+        return await self.task_pool.get_task_participations(task_id, status, limit, offset)
+
+    async def get_user_participation(
+        self,
+        task_id: str,
+        user_id: str,
+    ) -> Participation | None:
+        """Get a user's current participation in a task"""
+        return await self.task_pool.get_user_participation(task_id, user_id, active_only=False)
 
     async def complete_task(
         self,
@@ -638,23 +941,23 @@ class TaskService:
 
     async def cancel_task(self, task_id: str, canceller_id: str) -> Task:
         """
-        Cancel a task
+        Cancel a task.
 
-        Args:
-            task_id: Task identifier
-            canceller_id: Person cancelling (for authorization)
-
-        Returns:
-            Updated task
-
-        Raises:
-            PermissionError: If not the creator
+        For multi-participant tasks, also batch-cancels all active participations.
         """
         task = await self.get_task(task_id)
 
-        # Only creator can cancel
         if task.creator_id != canceller_id:
             raise PermissionError("Only the creator can cancel a task")
+
+        # Batch cancel all active participations for multi-participant tasks
+        if task.is_multi_participant:
+            cancelled_count = await self.task_pool.batch_cancel_participations(task_id)
+            logger.info(
+                "participations_cancelled_on_task_cancel",
+                task_id=task_id,
+                cancelled_count=cancelled_count,
+            )
 
         task.cancel()
         await self.repository.save(task)
@@ -669,13 +972,11 @@ class TaskService:
             except Exception as e:
                 logger.error("failed_to_cancel_payment", error=str(e))
 
-        # Refund escrow for points-based tasks (human creators)
+        # 统一 escrow 退款：human 和 agent 创建者都走 escrow refund
         if (
             self.escrow
-            and task.creator_type == "human"
             and task.reward_currency.lower() == "points"
         ):
-            # Calculate remaining budget
             remaining = task.remaining_budget()
             if remaining > 0:
                 result = await self.escrow.refund(
@@ -690,58 +991,14 @@ class TaskService:
                         task_id=task_id,
                         amount=remaining,
                         creator_id=task.creator_id,
+                        creator_type=task.creator_type,
                     )
                 else:
                     logger.error(
                         "failed_to_refund_escrow",
                         task_id=task_id,
+                        creator_type=task.creator_type,
                         error=result.error,
-                    )
-
-        # Refund to Agent balance for points-based tasks (agent creators)
-        if task.creator_type == "agent" and task.reward_currency.lower() == "points":
-            remaining = task.remaining_budget()
-            if remaining > 0:
-                try:
-                    # Use WalletClient to call Backend API
-                    if self.wallet_client:
-                        result = await self.wallet_client.receive(
-                            agent_id=task.creator_id,
-                            amount=remaining,
-                            description=f"Refund for cancelled task: {task_id}",
-                        )
-                        if result.success:
-                            logger.info(
-                                "agent_balance_refunded_for_task",
-                                task_id=task_id,
-                                agent_id=task.creator_id,
-                                amount=remaining,
-                                new_balance=result.credits,
-                            )
-                        else:
-                            logger.error(
-                                "failed_to_refund_agent_balance",
-                                task_id=task_id,
-                                error=result.error,
-                            )
-                    # Legacy fallback: use agent_repository directly
-                    elif self.agent_repository:
-                        agent = await self.agent_repository.find_by_id(task.creator_id)
-                        if agent:
-                            agent.receive(remaining)
-                            await self.agent_repository.save(agent)
-                            logger.info(
-                                "agent_balance_refunded_for_task_legacy",
-                                task_id=task_id,
-                                agent_id=task.creator_id,
-                                amount=remaining,
-                                new_balance=agent.balance,
-                            )
-                except Exception as e:
-                    logger.error(
-                        "failed_to_refund_agent_balance",
-                        task_id=task_id,
-                        error=str(e),
                     )
 
         # Send webhook notification
@@ -869,128 +1126,102 @@ class TaskService:
         task: "Task",
         amount: float,
         description: str,
+        participant_id: str | None = None,
     ) -> dict:
         """
-        Distribute task reward between agent and owner based on owner_share.
+        Distribute task reward to agent.
 
-        New flow (using WalletClient):
-        1. Call Backend agent_add_earnings API which handles:
-           - Split based on owner_share
-           - Add agent_amount to agent wallet earnings
-           - Add owner_amount to owner wallet earnings
-        2. Return distribution details
-
-        Legacy flow (using agent_repository):
-        1. Get agent from repository
-        2. Split reward: agent_amount + owner_amount based on agent.owner_share
-        3. Add agent_amount to agent.balance
-        4. If owner exists, release owner_amount to owner.earnings via escrow
-        5. Save agent
-
-        Args:
-            task: Completed task
-            amount: Reward amount
-            description: Transaction description
-
-        Returns:
-            dict with distribution details
+        For multi-participant tasks, participant_id must be provided.
+        For single-participant tasks, uses task.assignee_id.
         """
-        if not task.assignee_id:
+        recipient_id = participant_id or task.assignee_id
+        if not recipient_id:
             return {"success": False, "error": "No assignee"}
 
+        if not self.escrow:
+            logger.error("escrow_client_not_configured_for_reward")
+            return {"success": False, "error": "Escrow client not configured"}
+
         try:
-            # Use WalletClient to call Backend API
-            if self.wallet_client:
-                result = await self.wallet_client.add_earnings(
-                    agent_id=task.assignee_id,
+            # 尝试通过 v2 escrow 查找对应的 escrow 记录
+            escrow_info = await self.escrow.get_by_task(task.task_id)
+
+            if escrow_info.success and escrow_info.escrow_id:
+                logger.info(
+                    "reward_via_escrow_release",
+                    task_id=task.task_id,
+                    escrow_id=escrow_info.escrow_id,
+                    recipient_id=recipient_id,
+                )
+
+                # Ensure escrow is activated
+                if escrow_info.status == "locked":
+                    await self.escrow.accept_v2(
+                        escrow_id=escrow_info.escrow_id,
+                        assignee_id=recipient_id,
+                        assignee_type="agent",
+                    )
+
+                if escrow_info.status in ("locked", "in_progress"):
+                    await self.escrow.submit_v2(escrow_info.escrow_id)
+
+                result = await self.escrow.release(
+                    creator_user_id=task.creator_id,
+                    agent_owner_user_id=recipient_id,
+                    task_id=task.task_id,
                     amount=amount,
                     description=description,
                 )
+
                 if result.success:
                     logger.info(
-                        "reward_distributed_via_wallet_client",
+                        "reward_released_via_escrow",
                         task_id=task.task_id,
-                        agent_id=task.assignee_id,
-                        total_amount=amount,
-                        agent_amount=result.agent_amount,
-                        owner_amount=result.owner_amount,
+                        escrow_id=escrow_info.escrow_id,
+                        recipient_id=recipient_id,
+                        amount=amount,
                     )
                     return {
                         "success": True,
-                        "agent_amount": result.agent_amount,
-                        "owner_amount": result.owner_amount,
-                        "agent_balance": result.credits,
+                        "agent_amount": amount,
+                        "owner_amount": 0,
+                        "via": "escrow_release",
                     }
                 else:
                     logger.error(
-                        "reward_distribution_failed",
+                        "escrow_release_failed",
                         task_id=task.task_id,
                         error=result.error,
                     )
                     return {"success": False, "error": result.error}
-
-            # Legacy fallback: use agent_repository directly
-            if not self.agent_repository:
-                logger.warning("agent_repository_not_configured_for_reward")
-                return {"success": False, "error": "Agent repository not configured"}
-
-            # Get agent
-            agent = await self.agent_repository.find_by_id(task.assignee_id)
-            if not agent:
-                logger.error("agent_not_found_for_reward", agent_id=task.assignee_id)
-                return {"success": False, "error": "Agent not found"}
-
-            # Calculate split based on owner_share
-            agent_amount, owner_amount = agent.add_earnings(amount)
-
-            # Save agent with updated balance
-            await self.agent_repository.save(agent)
-
-            logger.info(
-                "reward_split_calculated_legacy",
-                task_id=task.task_id,
-                agent_id=task.assignee_id,
-                total_amount=amount,
-                agent_amount=agent_amount,
-                owner_amount=owner_amount,
-                owner_share=agent.owner_share,
-            )
-
-            # If owner exists and has owner_amount, release to owner's earnings
-            if owner_amount > 0 and agent.owner and self.escrow:
+            else:
+                logger.info(
+                    "reward_via_v1_escrow_release",
+                    task_id=task.task_id,
+                    recipient_id=recipient_id,
+                )
                 result = await self.escrow.release(
                     creator_user_id=task.creator_id,
-                    agent_owner_user_id=agent.owner,
+                    agent_owner_user_id=recipient_id,
                     task_id=task.task_id,
-                    amount=owner_amount,
-                    description=f"{description} (owner share)",
+                    amount=amount,
+                    description=description,
                 )
                 if result.success:
-                    logger.info(
-                        "owner_share_released",
-                        task_id=task.task_id,
-                        owner_id=agent.owner,
-                        amount=owner_amount,
-                    )
+                    return {
+                        "success": True,
+                        "agent_amount": amount,
+                        "owner_amount": 0,
+                        "via": "v1_escrow_release",
+                    }
                 else:
-                    logger.error(
-                        "failed_to_release_owner_share",
-                        task_id=task.task_id,
-                        error=result.error,
-                    )
-
-            return {
-                "success": True,
-                "agent_amount": agent_amount,
-                "owner_amount": owner_amount,
-                "agent_balance": agent.balance,
-            }
+                    return {"success": False, "error": result.error}
 
         except Exception as e:
             logger.error(
                 "reward_distribution_failed",
                 task_id=task.task_id,
-                agent_id=task.assignee_id,
+                recipient_id=recipient_id,
                 error=str(e),
             )
             return {"success": False, "error": str(e)}

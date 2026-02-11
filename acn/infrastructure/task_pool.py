@@ -6,7 +6,7 @@ Provides simplified interface for agents to discover and work on tasks.
 
 import structlog
 
-from ..core.entities import Task, TaskMode
+from ..core.entities import Participation, Task, TaskMode
 from ..core.interfaces import ITaskRepository
 
 logger = structlog.get_logger()
@@ -170,6 +170,112 @@ class TaskPool:
             task_id=task_id,
             agent_id=agent_id,
         )
+
+    # ========== Participation Operations ==========
+
+    async def join_task(
+        self,
+        task_id: str,
+        participation: Participation,
+        max_completions: int | None,
+        allow_repeat: bool,
+    ) -> str:
+        """
+        Atomically join a multi-participant task.
+
+        Returns:
+            participation_id
+        """
+        pid = await self.repository.atomic_join_task(
+            task_id=task_id,
+            participation=participation,
+            max_completions=max_completions,
+            allow_repeat=allow_repeat,
+        )
+        logger.info(
+            "participant_joined_task",
+            task_id=task_id,
+            participation_id=pid,
+            participant_id=participation.participant_id,
+        )
+        return pid
+
+    async def cancel_participation(self, participation_id: str, task_id: str) -> None:
+        """Cancel a participation"""
+        await self.repository.atomic_cancel_participation(participation_id, task_id)
+        logger.info(
+            "participation_cancelled",
+            task_id=task_id,
+            participation_id=participation_id,
+        )
+
+    async def complete_participation(
+        self,
+        participation_id: str,
+        task_id: str,
+        reviewer_id: str | None = None,
+        notes: str | None = None,
+    ) -> int:
+        """Complete a participation and return new completed_count"""
+        new_count = await self.repository.atomic_complete_participation(
+            participation_id=participation_id,
+            task_id=task_id,
+            reviewer_id=reviewer_id,
+            notes=notes,
+        )
+        logger.info(
+            "participation_completed",
+            task_id=task_id,
+            participation_id=participation_id,
+            new_completed_count=new_count,
+        )
+        return new_count
+
+    async def get_participation(self, participation_id: str) -> Participation | None:
+        """Get participation by ID"""
+        return await self.repository.find_participation_by_id(participation_id)
+
+    async def get_user_participation(
+        self,
+        task_id: str,
+        participant_id: str,
+        active_only: bool = True,
+    ) -> Participation | None:
+        """Get a user's participation in a task"""
+        return await self.repository.find_participation_by_user_and_task(
+            task_id=task_id,
+            participant_id=participant_id,
+            active_only=active_only,
+        )
+
+    async def get_task_participations(
+        self,
+        task_id: str,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Participation]:
+        """Get participations for a task"""
+        return await self.repository.find_participations_by_task(
+            task_id=task_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def batch_cancel_participations(self, task_id: str) -> int:
+        """Cancel all active participations for a task"""
+        count = await self.repository.batch_cancel_participations(task_id)
+        logger.info(
+            "participations_batch_cancelled",
+            task_id=task_id,
+            cancelled_count=count,
+        )
+        return count
+
+    async def count_active_participations(self, task_id: str) -> int:
+        """Count active participations"""
+        return await self.repository.count_active_participations(task_id)
 
     async def get_stats(self) -> dict:
         """

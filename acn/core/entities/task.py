@@ -1,11 +1,12 @@
 """Task Domain Entity
 
-Pure business logic for Task, independent of infrastructure.
+Pure business logic for Task and Participation, independent of infrastructure.
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from uuid import uuid4
 
 
 class TaskMode(str, Enum):
@@ -34,6 +35,164 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"  # Approved and done
     REJECTED = "rejected"  # Submission rejected
     CANCELLED = "cancelled"  # Cancelled by creator
+
+
+class ParticipationStatus(str, Enum):
+    """Participation lifecycle status"""
+
+    ACTIVE = "active"  # Participant is working on the task
+    SUBMITTED = "submitted"  # Participant submitted, pending review
+    COMPLETED = "completed"  # Approved and reward released
+    REJECTED = "rejected"  # Submission rejected by creator
+    CANCELLED = "cancelled"  # Participant withdrew or timed out
+
+
+@dataclass
+class Participation:
+    """
+    Participation — tracks one participant's lifecycle within a multi-participant task.
+
+    Each participant independently goes through:
+        active → submitted → completed / rejected → (cancelled)
+    The parent Task stays OPEN while participations are active.
+    """
+
+    participation_id: str
+    task_id: str
+
+    # Participant info
+    participant_id: str
+    participant_name: str
+    participant_type: str = "agent"  # "human" or "agent"
+
+    # Lifecycle
+    status: ParticipationStatus = ParticipationStatus.ACTIVE
+    joined_at: datetime = field(default_factory=datetime.now)
+
+    # Submission
+    submission: str | None = None
+    submission_artifacts: list[dict] = field(default_factory=list)
+    submitted_at: datetime | None = None
+
+    # Review / Rejection (fields moved down from Escrow for per-participation tracking)
+    rejection_reason: str | None = None
+    rejected_at: datetime | None = None
+    reject_response_deadline: datetime | None = None
+    review_request_id: str | None = None
+    review_notes: str | None = None
+    reviewed_by: str | None = None
+
+    # Completion
+    completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+
+    def submit(self, submission: str, artifacts: list[dict] | None = None) -> None:
+        """Submit work for this participation"""
+        if self.status != ParticipationStatus.ACTIVE:
+            raise ValueError(f"Cannot submit in status: {self.status}")
+        self.submission = submission
+        self.submission_artifacts = artifacts or []
+        self.submitted_at = datetime.now()
+        self.status = ParticipationStatus.SUBMITTED
+
+    def complete(self, reviewer_id: str | None = None, notes: str | None = None) -> None:
+        """Mark participation as completed (approved)"""
+        if self.status != ParticipationStatus.SUBMITTED:
+            raise ValueError(f"Cannot complete in status: {self.status}")
+        self.reviewed_by = reviewer_id
+        self.review_notes = notes
+        self.completed_at = datetime.now()
+        self.status = ParticipationStatus.COMPLETED
+
+    def reject(self, reviewer_id: str | None = None, reason: str | None = None) -> None:
+        """Reject this participation's submission"""
+        if self.status != ParticipationStatus.SUBMITTED:
+            raise ValueError(f"Cannot reject in status: {self.status}")
+        self.reviewed_by = reviewer_id
+        self.rejection_reason = reason
+        self.rejected_at = datetime.now()
+        self.status = ParticipationStatus.REJECTED
+
+    def cancel(self) -> None:
+        """Cancel this participation (withdraw)"""
+        if self.status in (ParticipationStatus.COMPLETED, ParticipationStatus.CANCELLED):
+            raise ValueError(f"Cannot cancel in status: {self.status}")
+        self.cancelled_at = datetime.now()
+        self.status = ParticipationStatus.CANCELLED
+
+    def resubmit(self, submission: str, artifacts: list[dict] | None = None) -> None:
+        """Resubmit after rejection"""
+        if self.status != ParticipationStatus.REJECTED:
+            raise ValueError(f"Cannot resubmit in status: {self.status}")
+        self.submission = submission
+        self.submission_artifacts = artifacts or []
+        self.submitted_at = datetime.now()
+        self.rejection_reason = None
+        self.rejected_at = None
+        self.reject_response_deadline = None
+        self.review_request_id = None
+        self.review_notes = None
+        self.reviewed_by = None
+        self.status = ParticipationStatus.SUBMITTED
+
+    # ========== Serialization ==========
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for serialization"""
+        return {
+            "participation_id": self.participation_id,
+            "task_id": self.task_id,
+            "participant_id": self.participant_id,
+            "participant_name": self.participant_name,
+            "participant_type": self.participant_type,
+            "status": self.status.value,
+            "joined_at": self.joined_at.isoformat(),
+            "submission": self.submission,
+            "submission_artifacts": self.submission_artifacts,
+            "submitted_at": self.submitted_at.isoformat() if self.submitted_at else None,
+            "rejection_reason": self.rejection_reason,
+            "rejected_at": self.rejected_at.isoformat() if self.rejected_at else None,
+            "reject_response_deadline": (
+                self.reject_response_deadline.isoformat() if self.reject_response_deadline else None
+            ),
+            "review_request_id": self.review_request_id,
+            "review_notes": self.review_notes,
+            "reviewed_by": self.reviewed_by,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Participation":
+        """Create Participation from dictionary"""
+        data = data.copy()
+
+        # Parse enum
+        if isinstance(data.get("status"), str):
+            data["status"] = ParticipationStatus(data["status"])
+
+        # Parse datetime fields
+        datetime_fields = [
+            "joined_at", "submitted_at", "rejected_at",
+            "reject_response_deadline", "completed_at", "cancelled_at",
+        ]
+        for field_name in datetime_fields:
+            if data.get(field_name) and isinstance(data[field_name], str):
+                data[field_name] = datetime.fromisoformat(data[field_name])
+            elif not data.get(field_name):
+                data.pop(field_name, None)
+
+        # Parse list fields
+        if isinstance(data.get("submission_artifacts"), str):
+            import json
+            data["submission_artifacts"] = json.loads(data["submission_artifacts"])
+
+        return cls(**data)
+
+    @staticmethod
+    def new_id() -> str:
+        """Generate a new participation ID"""
+        return str(uuid4())
 
 
 @dataclass
@@ -90,10 +249,15 @@ class Task:
     total_budget: str = "0"  # Total escrowed amount = reward_amount × max_units
     released_amount: str = "0"  # Amount released to agents so far
 
-    # Open task specific
-    is_repeatable: bool = False  # Can be completed multiple times
+    # Multi-participant support
+    is_multi_participant: bool = False  # Multiple agents can work in parallel
+    allow_repeat_by_same: bool = False  # Same agent can complete again after finishing
+
+    # Open task specific (backward compat: is_repeatable maps to is_multi_participant)
+    is_repeatable: bool = False  # DEPRECATED — use is_multi_participant instead
     completed_count: int = 0  # Number of completions
     max_completions: int | None = None  # Max completions (None = unlimited, not recommended)
+    active_participants_count: int = 0  # Number of currently active participations
 
     # Timestamps
     created_at: datetime = field(default_factory=datetime.now)
@@ -108,7 +272,7 @@ class Task:
     metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        """Validate invariants"""
+        """Validate invariants and sync backward-compat flags"""
         if not self.task_id:
             raise ValueError("task_id cannot be empty")
         if not self.title:
@@ -116,18 +280,37 @@ class Task:
         if not self.creator_id:
             raise ValueError("creator_id cannot be empty")
 
+        # Backward compat: is_repeatable=True implies is_multi_participant=True
+        if self.is_repeatable and not self.is_multi_participant:
+            self.is_multi_participant = True
+        # Forward sync: is_multi_participant=True keeps is_repeatable=True for old consumers
+        if self.is_multi_participant:
+            self.is_repeatable = True
+
     # ========== Status Transitions ==========
 
     def can_be_accepted(self) -> bool:
-        """Check if task can be accepted"""
+        """Check if task can be accepted (single-participant mode)"""
+        if self.is_multi_participant:
+            # Multi-participant tasks use can_join() instead
+            return self.can_join()
         if self.mode == TaskMode.OPEN:
-            # Open tasks can always be accepted (if repeatable or not yet completed)
-            if self.is_repeatable:
-                return self.status == TaskStatus.OPEN
             return self.status == TaskStatus.OPEN and self.completed_count == 0
         else:
             # Assigned tasks can only be accepted when in OPEN status
             return self.status == TaskStatus.OPEN
+
+    def can_join(self) -> bool:
+        """Check if a new participant can join (multi-participant mode)"""
+        if not self.is_multi_participant:
+            return False
+        if self.status != TaskStatus.OPEN:
+            return False
+        # Check capacity: completed + active < max (if max is set)
+        if self.max_completions is not None:
+            if (self.completed_count + self.active_participants_count) >= self.max_completions:
+                return False
+        return True
 
     def accept(self, agent_id: str, agent_name: str) -> None:
         """
@@ -331,9 +514,12 @@ class Task:
             "reward_unit": self.reward_unit,
             "total_budget": self.total_budget,
             "released_amount": self.released_amount,
-            "is_repeatable": self.is_repeatable,
+            "is_multi_participant": self.is_multi_participant,
+            "allow_repeat_by_same": self.allow_repeat_by_same,
+            "is_repeatable": self.is_repeatable,  # backward compat
             "completed_count": self.completed_count,
             "max_completions": self.max_completions,
+            "active_participants_count": self.active_participants_count,
             "created_at": self.created_at.isoformat(),
             "deadline": self.deadline.isoformat() if self.deadline else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,

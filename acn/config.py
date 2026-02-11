@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Backend URL (for escrow and other integrations)
     backend_url: str = "http://localhost:8000"
 
+    # Internal API Token (与 Backend 共享，用于服务间认证)
+    internal_api_token: str = "dev-internal-token-2024"  # 开发环境默认值，生产必须通过环境变量覆盖
+
     # Webhooks (for backend integration)
     webhook_url: str | None = None  # e.g., "https://your-backend.com/api/acn/webhook"
     webhook_secret: str | None = None  # For HMAC signature verification

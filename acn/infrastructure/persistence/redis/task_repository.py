@@ -8,8 +8,137 @@ from datetime import datetime
 
 import redis.asyncio as redis  # type: ignore[import-untyped]
 
-from ....core.entities import Task, TaskMode, TaskStatus
+from ....core.entities import Participation, ParticipationStatus, Task, TaskMode, TaskStatus
 from ....core.interfaces import ITaskRepository
+
+# ============================================================================
+# Lua Scripts for Atomic Operations
+# ============================================================================
+
+# Atomic join: check capacity + duplicate + create participation
+LUA_JOIN_TASK = """
+local task_key = KEYS[1]
+local active_count_key = KEYS[2]
+local participations_key = KEYS[3]
+local user_task_key = KEYS[4]
+local participation_key = KEYS[5]
+
+local max_completions = tonumber(ARGV[1])  -- -1 means unlimited
+local allow_repeat = ARGV[2] == "true"
+local participation_id = ARGV[3]
+local participant_id = ARGV[4]
+local joined_at_score = tonumber(ARGV[5])
+local participation_data = ARGV[6]  -- JSON string
+
+-- Check task status
+local task_status = redis.call('HGET', task_key, 'status')
+if task_status ~= 'open' then
+    return redis.error_reply('TASK_NOT_OPEN')
+end
+
+-- Check capacity
+local completed = tonumber(redis.call('HGET', task_key, 'completed_count') or '0')
+local active = tonumber(redis.call('GET', active_count_key) or '0')
+if max_completions >= 0 and (completed + active) >= max_completions then
+    return redis.error_reply('TASK_FULL')
+end
+
+-- Check duplicate: does this user already have an active participation?
+if not allow_repeat then
+    local user_participations = redis.call('SMEMBERS', user_task_key)
+    for _, pid in ipairs(user_participations) do
+        local pstatus = redis.call('HGET', 'acn:participation:' .. pid, 'status')
+        if pstatus == 'active' or pstatus == 'submitted' then
+            return redis.error_reply('ALREADY_JOINED')
+        end
+    end
+end
+
+-- Create participation
+local data = cjson.decode(participation_data)
+for k, v in pairs(data) do
+    redis.call('HSET', participation_key, k, tostring(v))
+end
+
+-- Update indices
+redis.call('INCR', active_count_key)
+redis.call('ZADD', participations_key, joined_at_score, participation_id)
+redis.call('SADD', user_task_key, participation_id)
+
+-- Sync active_participants_count on task hash
+local new_active = tonumber(redis.call('GET', active_count_key) or '0')
+redis.call('HSET', task_key, 'active_participants_count', tostring(new_active))
+
+return participation_id
+"""
+
+# Atomic cancel: set cancelled + decrement active count
+LUA_CANCEL_PARTICIPATION = """
+local participation_key = KEYS[1]
+local active_count_key = KEYS[2]
+local task_key = KEYS[3]
+
+local current_status = redis.call('HGET', participation_key, 'status')
+if not current_status then
+    return redis.error_reply('NOT_FOUND')
+end
+if current_status == 'completed' or current_status == 'cancelled' then
+    return redis.error_reply('CANNOT_CANCEL')
+end
+
+local was_active = (current_status == 'active' or current_status == 'submitted')
+
+redis.call('HSET', participation_key, 'status', 'cancelled')
+redis.call('HSET', participation_key, 'cancelled_at', ARGV[1])
+
+if was_active then
+    redis.call('DECR', active_count_key)
+    -- Ensure non-negative
+    local cnt = tonumber(redis.call('GET', active_count_key) or '0')
+    if cnt < 0 then redis.call('SET', active_count_key, '0') end
+end
+
+-- Sync to task hash
+local new_active = tonumber(redis.call('GET', active_count_key) or '0')
+redis.call('HSET', task_key, 'active_participants_count', tostring(new_active))
+
+return 'OK'
+"""
+
+# Atomic complete: set completed + increment completed_count + decrement active
+LUA_COMPLETE_PARTICIPATION = """
+local participation_key = KEYS[1]
+local active_count_key = KEYS[2]
+local task_key = KEYS[3]
+
+local current_status = redis.call('HGET', participation_key, 'status')
+if current_status ~= 'submitted' then
+    return redis.error_reply('NOT_SUBMITTED')
+end
+
+-- Update participation
+redis.call('HSET', participation_key, 'status', 'completed')
+redis.call('HSET', participation_key, 'completed_at', ARGV[1])
+if ARGV[2] ~= '' then
+    redis.call('HSET', participation_key, 'reviewed_by', ARGV[2])
+end
+if ARGV[3] ~= '' then
+    redis.call('HSET', participation_key, 'review_notes', ARGV[3])
+end
+
+-- Decrement active, increment completed
+redis.call('DECR', active_count_key)
+local cnt = tonumber(redis.call('GET', active_count_key) or '0')
+if cnt < 0 then redis.call('SET', active_count_key, '0') end
+
+local new_completed = redis.call('HINCRBY', task_key, 'completed_count', 1)
+
+-- Sync active to task hash
+local new_active = tonumber(redis.call('GET', active_count_key) or '0')
+redis.call('HSET', task_key, 'active_participants_count', tostring(new_active))
+
+return new_completed
+"""
 
 
 class RedisTaskRepository(ITaskRepository):
@@ -18,7 +147,7 @@ class RedisTaskRepository(ITaskRepository):
 
     Implements ITaskRepository using Redis as storage backend.
 
-    Key Structure:
+    Key Structure — Tasks:
     - acn:task:{task_id} → Hash (task data)
     - acn:tasks:open → SortedSet (task_ids by created_at timestamp)
     - acn:tasks:by_mode:{mode} → Set (task_ids)
@@ -27,6 +156,12 @@ class RedisTaskRepository(ITaskRepository):
     - acn:tasks:by_creator:{creator_id} → Set (task_ids)
     - acn:tasks:by_assignee:{assignee_id} → Set (task_ids)
     - acn:task:completions:{task_id} → Set (agent_ids who completed)
+    - acn:task:{task_id}:active_count → Counter (active participations)
+
+    Key Structure — Participations:
+    - acn:participation:{participation_id} → Hash (participation data)
+    - acn:task:{task_id}:participations → SortedSet (participation_ids by joined_at)
+    - acn:user:{user_id}:task:{task_id}:participations → Set (participation_ids for this user+task)
     """
 
     def __init__(self, redis_client: redis.Redis):
@@ -37,6 +172,26 @@ class RedisTaskRepository(ITaskRepository):
             redis_client: Redis async client instance
         """
         self.redis = redis_client
+
+        # Register Lua scripts (will be loaded on first use)
+        self._join_script: redis.client.Script | None = None
+        self._cancel_script: redis.client.Script | None = None
+        self._complete_script: redis.client.Script | None = None
+
+    def _get_join_script(self) -> redis.client.Script:
+        if self._join_script is None:
+            self._join_script = self.redis.register_script(LUA_JOIN_TASK)
+        return self._join_script
+
+    def _get_cancel_script(self) -> redis.client.Script:
+        if self._cancel_script is None:
+            self._cancel_script = self.redis.register_script(LUA_CANCEL_PARTICIPATION)
+        return self._cancel_script
+
+    def _get_complete_script(self) -> redis.client.Script:
+        if self._complete_script is None:
+            self._complete_script = self.redis.register_script(LUA_COMPLETE_PARTICIPATION)
+        return self._complete_script
 
     async def save(self, task: Task) -> None:
         """Save or update a task in Redis"""
@@ -229,6 +384,230 @@ class RedisTaskRepository(ITaskRepository):
         """Check if agent has already completed this task"""
         return await self.redis.sismember(f"acn:task:completions:{task_id}", agent_id)
 
+    # ========== Participation CRUD ==========
+
+    async def save_participation(self, participation: Participation) -> None:
+        """Save or update a participation in Redis"""
+        key = f"acn:participation:{participation.participation_id}"
+        p_dict = participation.to_dict()
+
+        # Convert lists to JSON strings
+        p_dict["submission_artifacts"] = json.dumps(p_dict.get("submission_artifacts", []))
+
+        # Filter None values and convert booleans
+        clean = {}
+        for k, v in p_dict.items():
+            if v is None:
+                continue
+            elif isinstance(v, bool):
+                clean[k] = "true" if v else "false"
+            else:
+                clean[k] = v
+
+        await self.redis.hset(key, mapping=clean)  # type: ignore[arg-type]
+
+    async def find_participation_by_id(self, participation_id: str) -> Participation | None:
+        """Find participation by ID"""
+        key = f"acn:participation:{participation_id}"
+        data = await self.redis.hgetall(key)
+        if not data:
+            return None
+        return self._dict_to_participation(data)
+
+    async def find_participations_by_task(
+        self,
+        task_id: str,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Participation]:
+        """Find participations for a task"""
+        key = f"acn:task:{task_id}:participations"
+        pids = await self.redis.zrevrange(key, offset, offset + limit - 1)
+
+        results = []
+        for pid in pids:
+            pid_str = pid.decode() if isinstance(pid, bytes) else pid
+            p = await self.find_participation_by_id(pid_str)
+            if p and (status is None or p.status.value == status):
+                results.append(p)
+
+        return results
+
+    async def find_participation_by_user_and_task(
+        self,
+        task_id: str,
+        participant_id: str,
+        active_only: bool = True,
+    ) -> Participation | None:
+        """Find a user's most recent participation in a task"""
+        user_task_key = f"acn:user:{participant_id}:task:{task_id}:participations"
+        pids = await self.redis.smembers(user_task_key)
+
+        latest: Participation | None = None
+        for pid in pids:
+            pid_str = pid.decode() if isinstance(pid, bytes) else pid
+            p = await self.find_participation_by_id(pid_str)
+            if not p:
+                continue
+            if active_only and p.status not in (
+                ParticipationStatus.ACTIVE,
+                ParticipationStatus.SUBMITTED,
+            ):
+                continue
+            if latest is None or p.joined_at > latest.joined_at:
+                latest = p
+
+        return latest
+
+    async def find_participations_by_user(
+        self,
+        participant_id: str,
+        limit: int = 50,
+    ) -> list[Participation]:
+        """Find all participations for a user (across all tasks)"""
+        # We need to scan user:*:task:*:participations keys — this is expensive.
+        # For now, use a simpler approach: maintain a global user index.
+        # TODO: Add acn:user:{user_id}:all_participations index for efficiency.
+        # For now we return empty — the per-task lookup is the primary path.
+        return []
+
+    async def atomic_join_task(
+        self,
+        task_id: str,
+        participation: Participation,
+        max_completions: int | None,
+        allow_repeat: bool,
+    ) -> str:
+        """Atomically join a multi-participant task using Lua script"""
+        script = self._get_join_script()
+
+        task_key = f"acn:task:{task_id}"
+        active_count_key = f"acn:task:{task_id}:active_count"
+        participations_key = f"acn:task:{task_id}:participations"
+        user_task_key = f"acn:user:{participation.participant_id}:task:{task_id}:participations"
+        participation_key = f"acn:participation:{participation.participation_id}"
+
+        # Serialize participation data for Lua
+        p_dict = participation.to_dict()
+        p_dict["submission_artifacts"] = json.dumps(p_dict.get("submission_artifacts", []))
+        # Remove None values
+        clean = {k: str(v) for k, v in p_dict.items() if v is not None}
+
+        try:
+            result = await script(
+                keys=[task_key, active_count_key, participations_key, user_task_key, participation_key],
+                args=[
+                    max_completions if max_completions is not None else -1,
+                    "true" if allow_repeat else "false",
+                    participation.participation_id,
+                    participation.participant_id,
+                    str(participation.joined_at.timestamp()),
+                    json.dumps(clean),
+                ],
+            )
+            pid = result.decode() if isinstance(result, bytes) else result
+            return pid
+        except redis.ResponseError as e:
+            err = str(e)
+            if "TASK_NOT_OPEN" in err:
+                raise ValueError("Task is not open for joining")
+            elif "TASK_FULL" in err:
+                raise ValueError("Task has reached maximum participants")
+            elif "ALREADY_JOINED" in err:
+                raise ValueError("You already have an active participation in this task")
+            raise
+
+    async def atomic_cancel_participation(
+        self,
+        participation_id: str,
+        task_id: str,
+    ) -> None:
+        """Atomically cancel participation and decrement active count"""
+        script = self._get_cancel_script()
+
+        participation_key = f"acn:participation:{participation_id}"
+        active_count_key = f"acn:task:{task_id}:active_count"
+        task_key = f"acn:task:{task_id}"
+
+        try:
+            await script(
+                keys=[participation_key, active_count_key, task_key],
+                args=[datetime.now().isoformat()],
+            )
+        except redis.ResponseError as e:
+            err = str(e)
+            if "NOT_FOUND" in err:
+                raise ValueError("Participation not found")
+            elif "CANNOT_CANCEL" in err:
+                raise ValueError("Participation cannot be cancelled (already completed or cancelled)")
+            raise
+
+    async def atomic_complete_participation(
+        self,
+        participation_id: str,
+        task_id: str,
+        reviewer_id: str | None = None,
+        notes: str | None = None,
+    ) -> int:
+        """Atomically complete participation, increment completed_count, decrement active"""
+        script = self._get_complete_script()
+
+        participation_key = f"acn:participation:{participation_id}"
+        active_count_key = f"acn:task:{task_id}:active_count"
+        task_key = f"acn:task:{task_id}"
+
+        try:
+            result = await script(
+                keys=[participation_key, active_count_key, task_key],
+                args=[
+                    datetime.now().isoformat(),
+                    reviewer_id or "",
+                    notes or "",
+                ],
+            )
+            return int(result)
+        except redis.ResponseError as e:
+            if "NOT_SUBMITTED" in str(e):
+                raise ValueError("Participation is not in submitted status")
+            raise
+
+    async def count_active_participations(self, task_id: str) -> int:
+        """Count active participations for a task"""
+        key = f"acn:task:{task_id}:active_count"
+        count = await self.redis.get(key)
+        return int(count) if count else 0
+
+    async def batch_cancel_participations(self, task_id: str) -> int:
+        """Cancel all active/submitted participations for a task"""
+        participations_key = f"acn:task:{task_id}:participations"
+        pids = await self.redis.zrange(participations_key, 0, -1)
+
+        cancelled = 0
+        for pid in pids:
+            pid_str = pid.decode() if isinstance(pid, bytes) else pid
+            p = await self.find_participation_by_id(pid_str)
+            if p and p.status in (ParticipationStatus.ACTIVE, ParticipationStatus.SUBMITTED):
+                try:
+                    await self.atomic_cancel_participation(pid_str, task_id)
+                    cancelled += 1
+                except ValueError:
+                    pass  # Already cancelled/completed — skip
+
+        return cancelled
+
+    # ========== Helpers ==========
+
+    def _dict_to_participation(self, data: dict) -> Participation:
+        """Convert Redis hash dict to Participation entity"""
+        decoded = {}
+        for k, v in data.items():
+            key = k.decode() if isinstance(k, bytes) else k
+            val = v.decode() if isinstance(v, bytes) else v
+            decoded[key] = val
+
+        return Participation.from_dict(decoded)
+
     def _dict_to_task(self, task_dict: dict) -> Task:
         """Convert Redis dict to Task entity"""
         # Decode bytes
@@ -249,9 +628,12 @@ class RedisTaskRepository(ITaskRepository):
 
         # Parse booleans
         data["is_repeatable"] = data.get("is_repeatable", "false").lower() == "true"
+        data["is_multi_participant"] = data.get("is_multi_participant", "false").lower() == "true"
+        data["allow_repeat_by_same"] = data.get("allow_repeat_by_same", "false").lower() == "true"
 
         # Parse integers
         data["completed_count"] = int(data.get("completed_count", 0))
+        data["active_participants_count"] = int(data.get("active_participants_count", 0))
         if data.get("max_completions"):
             data["max_completions"] = int(data["max_completions"])
         else:

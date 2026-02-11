@@ -63,11 +63,8 @@ class AgentInfo(BaseModel):
         description="Accepted payment methods (e.g., 'usdc', 'eth', 'credit_card')",
     )
 
-    # Agent Wallet (internal points balance)
-    balance: float = Field(default=0.0, description="Agent's current balance (points)")
-    total_earned: float = Field(default=0.0, description="Agent's total earnings")
-    total_spent: float = Field(default=0.0, description="Agent's total spent")
-    owner_share: float = Field(default=0.0, description="Owner's share of earnings (0-1)")
+    # [REMOVED] Agent Wallet fields (balance, total_earned, total_spent, owner_share)
+    # 钱包数据由 Backend Wallet API 管理
 
     @property
     def subnet_id(self) -> str:

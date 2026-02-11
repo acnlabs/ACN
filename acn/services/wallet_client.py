@@ -16,8 +16,6 @@ class WalletResult(BaseModel):
 
     success: bool
     message: str
-    credits: float | None = None
-    earnings: float | None = None
     balance: float | None = None
     error: str | None = None
 
@@ -29,8 +27,7 @@ class EarningsResult(BaseModel):
     message: str
     agent_amount: float = 0.0
     owner_amount: float = 0.0
-    credits: float | None = None
-    earnings: float | None = None
+    balance: float | None = None
     error: str | None = None
 
 
@@ -71,7 +68,7 @@ class WalletClient:
             headers["X-Internal-Token"] = self.internal_token
         return headers
 
-    async def get_balance(self, agent_id: str) -> tuple[bool, float, float]:
+    async def get_balance(self, agent_id: str) -> tuple[bool, float]:
         """
         Get agent wallet balance
 
@@ -79,10 +76,10 @@ class WalletClient:
             agent_id: Agent ID
 
         Returns:
-            (exists, credits, earnings)
+            (exists, balance)
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.get(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}",
                     headers=self._get_headers(),
@@ -90,16 +87,16 @@ class WalletClient:
 
                 if response.status_code == 200:
                     data = response.json()
-                    return True, data.get("credits", 0), data.get("earnings", 0)
+                    return True, data.get("balance", 0)
                 elif response.status_code == 404:
-                    return False, 0, 0
+                    return False, 0
                 else:
                     logger.warning(
                         "wallet_get_balance_failed",
                         agent_id=agent_id,
                         status=response.status_code,
                     )
-                    return False, 0, 0
+                    return False, 0
 
         except httpx.RequestError as e:
             logger.error(
@@ -107,7 +104,7 @@ class WalletClient:
                 agent_id=agent_id,
                 error=str(e),
             )
-            return False, 0, 0
+            return False, 0
 
     async def create_wallet(
         self,
@@ -127,7 +124,7 @@ class WalletClient:
             WalletResult
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}",
                     headers=self._get_headers(),
@@ -147,8 +144,6 @@ class WalletClient:
                     return WalletResult(
                         success=True,
                         message="Wallet created",
-                        credits=data.get("credits"),
-                        earnings=data.get("earnings"),
                         balance=data.get("balance"),
                     )
                 else:
@@ -195,7 +190,7 @@ class WalletClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}/spend",
                     headers=self._get_headers(),
@@ -211,13 +206,11 @@ class WalletClient:
                         "wallet_spend",
                         agent_id=agent_id,
                         amount=amount,
-                        credits_after=data.get("credits"),
+                        balance_after=data.get("balance"),
                     )
                     return WalletResult(
                         success=True,
                         message="Spent successfully",
-                        credits=data.get("credits"),
-                        earnings=data.get("earnings"),
                         balance=data.get("balance"),
                     )
                 else:
@@ -270,7 +263,7 @@ class WalletClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}/receive",
                     headers=self._get_headers(),
@@ -286,13 +279,11 @@ class WalletClient:
                         "wallet_receive",
                         agent_id=agent_id,
                         amount=amount,
-                        credits_after=data.get("credits"),
+                        balance_after=data.get("balance"),
                     )
                     return WalletResult(
                         success=True,
                         message="Received successfully",
-                        credits=data.get("credits"),
-                        earnings=data.get("earnings"),
                         balance=data.get("balance"),
                     )
                 else:
@@ -345,7 +336,7 @@ class WalletClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}/earnings",
                     headers=self._get_headers(),
@@ -370,8 +361,7 @@ class WalletClient:
                         message="Earnings added",
                         agent_amount=data.get("agent_amount", 0),
                         owner_amount=data.get("owner_amount", 0),
-                        credits=agent_wallet.get("credits"),
-                        earnings=agent_wallet.get("earnings"),
+                        balance=agent_wallet.get("balance"),
                     )
                 else:
                     error = response.json().get("detail", response.text)
@@ -425,7 +415,7 @@ class WalletClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}/topup",
                     headers=self._get_headers(),
@@ -447,8 +437,6 @@ class WalletClient:
                     return WalletResult(
                         success=True,
                         message="Topped up successfully",
-                        credits=data.get("credits"),
-                        earnings=data.get("earnings"),
                         balance=data.get("balance"),
                     )
                 else:
@@ -502,7 +490,7 @@ class WalletClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}/withdraw",
                     headers=self._get_headers(),
@@ -524,8 +512,6 @@ class WalletClient:
                     return WalletResult(
                         success=True,
                         message="Withdrawn successfully",
-                        credits=data.get("credits"),
-                        earnings=data.get("earnings"),
                         balance=data.get("balance"),
                     )
                 else:
@@ -578,7 +564,7 @@ class WalletClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.put(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}/share",
                     headers=self._get_headers(),
@@ -598,8 +584,6 @@ class WalletClient:
                     return WalletResult(
                         success=True,
                         message="Owner share set successfully",
-                        credits=data.get("credits"),
-                        earnings=data.get("earnings"),
                         balance=data.get("balance"),
                     )
                 else:
@@ -640,10 +624,10 @@ class WalletClient:
             amount: Required amount
 
         Returns:
-            (is_sufficient, current_credits)
+            (is_sufficient, current_balance)
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}/check",
                     headers=self._get_headers(),
@@ -652,7 +636,7 @@ class WalletClient:
 
                 if response.status_code == 200:
                     data = response.json()
-                    return data.get("sufficient", False), data.get("current_credits", 0)
+                    return data.get("sufficient", False), data.get("current_balance", 0)
                 else:
                     return False, 0
 

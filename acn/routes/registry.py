@@ -5,16 +5,18 @@ Clean Architecture implementation: Route → Service → Repository
 Supports two registration modes:
 1. Platform Registration (managed): POST /register - requires Auth0
 2. Autonomous Join: POST /join - no auth, returns API key
+3. Self-service: GET /me - agent gets own info via API key
 """
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from ..auth.middleware import get_subject, require_permission
 from ..config import get_settings
 from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
+from ..services.rewards_client import RewardsClient
 from .dependencies import (  # type: ignore[import-untyped]
     AgentServiceDep,
     SubnetManagerDep,
@@ -91,6 +93,24 @@ class AgentReleaseResponse(BaseModel):
     agent_id: str
     previous_owner: str
     message: str
+
+
+class AgentMeResponse(BaseModel):
+    """Response for /me endpoint - agent's own information"""
+
+    agent_id: str
+    name: str
+    description: str | None = None
+    skills: list[str] = []
+    status: str
+    claim_status: str
+    owner: str | None = None
+    # [REMOVED] balance, total_earned, owner_share - 由 Backend Wallet API 管理
+    registered_at: str | None = None
+    last_heartbeat: str | None = None
+    # Helpful endpoints
+    tasks_endpoint: str
+    heartbeat_endpoint: str
 
 
 # ============================================================================
@@ -175,11 +195,7 @@ def _agent_entity_to_info(agent) -> AgentInfo:
         wallet_address=agent.wallet_address,
         accepts_payment=agent.accepts_payment,
         payment_methods=agent.payment_methods,
-        # Agent Wallet
-        balance=agent.balance,
-        total_earned=agent.total_earned,
-        total_spent=agent.total_spent,
-        owner_share=agent.owner_share,
+        # [REMOVED] Agent Wallet fields - 由 Backend 管理
     )
 
 
@@ -376,9 +392,41 @@ async def unregister_agent(
 # ============================================================================
 
 
+async def _grant_referral_reward(referrer_id: str, new_agent_id: str) -> None:
+    """Background task to grant referral reward"""
+    try:
+        rewards_client = RewardsClient(backend_url=settings.backend_url)
+        result = await rewards_client.grant_referral_bonus(
+            referrer_id=referrer_id,
+            new_agent_id=new_agent_id,
+        )
+        if result.success:
+            logger.info(
+                "referral_reward_granted",
+                referrer_id=referrer_id,
+                new_agent_id=new_agent_id,
+                amount=result.amount,
+            )
+        else:
+            logger.warning(
+                "referral_reward_failed",
+                referrer_id=referrer_id,
+                new_agent_id=new_agent_id,
+                error=result.error,
+            )
+    except Exception as e:
+        logger.error(
+            "referral_reward_error",
+            referrer_id=referrer_id,
+            new_agent_id=new_agent_id,
+            error=str(e),
+        )
+
+
 @router.post("/join", response_model=AgentJoinResponse)
 async def join_agent(
     request: AgentJoinRequest,
+    background_tasks: BackgroundTasks,
     agent_service: AgentServiceDep = None,
 ):
     """
@@ -386,6 +434,9 @@ async def join_agent(
 
     No authentication required. Returns an API key for future requests.
     The agent will be in "unclaimed" status until a human claims it.
+
+    If a referrer_id is provided and valid, the referrer will receive
+    a referral bonus (managed by Backend's Rewards API).
 
     Example:
         POST /api/v1/agents/join
@@ -409,6 +460,14 @@ async def join_agent(
 
         logger.info("agent_joined", agent_id=agent.agent_id, name=agent.name)
 
+        # Grant referral reward in background (if referrer provided)
+        if request.referrer_id:
+            background_tasks.add_task(
+                _grant_referral_reward,
+                referrer_id=request.referrer_id,
+                new_agent_id=agent.agent_id,
+            )
+
         return AgentJoinResponse(
             agent_id=agent.agent_id,
             api_key=api_key,
@@ -422,6 +481,49 @@ async def join_agent(
     except Exception as e:
         logger.error("agent_join_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/me", response_model=AgentMeResponse)
+async def get_my_agent(
+    authorization: str = Header(..., description="Bearer API_KEY"),
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Get current agent's own information via API key
+
+    This endpoint allows agents to retrieve their own information
+    without knowing their agent_id. Useful for self-service operations.
+
+    Example:
+        GET /api/v1/agents/me
+        Authorization: Bearer acn_xxxxx
+    """
+    # Parse API key from Authorization header
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+
+    api_key = authorization[7:]  # Remove "Bearer " prefix
+
+    # Find agent by API key
+    agent = await agent_service.get_agent_by_api_key(api_key)
+    if not agent:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
+
+    return AgentMeResponse(
+        agent_id=agent.agent_id,
+        name=agent.name,
+        description=agent.description,
+        skills=agent.skills or [],
+        status=agent.status.value,
+        claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
+        owner=agent.owner,
+        registered_at=agent.registered_at.isoformat() if agent.registered_at else None,
+        last_heartbeat=agent.last_heartbeat.isoformat() if agent.last_heartbeat else None,
+        tasks_endpoint=f"{base_url}/api/v1/tasks",
+        heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
+    )
 
 
 @router.post("/{agent_id}/claim", response_model=AgentClaimResponse)
@@ -558,211 +660,10 @@ async def list_unclaimed_agents(
 # ============================================================================
 
 
-class AgentWalletResponse(BaseModel):
-    """Agent wallet information"""
-
-    agent_id: str
-    balance: float = Field(..., description="Current balance")
-    owner_share: float = Field(..., description="Owner's share of earnings (0-1)")
-    total_earned: float = Field(..., description="Historical total earnings")
-    total_spent: float = Field(..., description="Historical total spent")
+# [REMOVED] Agent Wallet endpoints - 前端直接调 Backend API:
+#   GET  /api/agent-wallets/{agent_id}           获取钱包
+#   POST /api/agent-wallets/{agent_id}/topup     充值
+#   POST /api/agent-wallets/{agent_id}/withdraw  提取
 
 
-class AgentWalletTopUpRequest(BaseModel):
-    """Request to top up agent wallet"""
-
-    amount: float = Field(..., gt=0, description="Amount to add")
-
-
-class AgentWalletWithdrawRequest(BaseModel):
-    """Request to withdraw from agent wallet"""
-
-    amount: float = Field(..., gt=0, description="Amount to withdraw")
-
-
-class AgentWalletShareRequest(BaseModel):
-    """Request to set owner share"""
-
-    owner_share: float = Field(..., ge=0, le=1, description="Owner's share (0-1)")
-
-
-class AgentWalletTransactionResponse(BaseModel):
-    """Response for wallet transactions"""
-
-    success: bool
-    agent_id: str
-    balance: float
-    message: str
-
-
-@router.get("/{agent_id}/wallet", response_model=AgentWalletResponse)
-async def get_agent_wallet(
-    agent_id: str,
-    agent_service: AgentServiceDep = None,
-):
-    """
-    Get agent's wallet information.
-
-    Public endpoint - anyone can view agent wallet info.
-    """
-    try:
-        agent = await agent_service.get_agent(agent_id)
-        return AgentWalletResponse(
-            agent_id=agent.agent_id,
-            balance=agent.balance,
-            owner_share=agent.owner_share,
-            total_earned=agent.total_earned,
-            total_spent=agent.total_spent,
-        )
-    except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
-
-
-@router.post("/{agent_id}/wallet/topup", response_model=AgentWalletTransactionResponse)
-async def topup_agent_wallet(
-    agent_id: str,
-    request: AgentWalletTopUpRequest,
-    http_request: Request,
-    payload: dict = Depends(require_permission("acn:write")),
-    agent_service: AgentServiceDep = None,
-):
-    """
-    Top up agent's wallet.
-
-    Only the owner can top up the agent's wallet.
-    The amount is transferred from owner's credits to agent's balance.
-    """
-    token_owner = await get_subject()
-    # Dev mode: allow X-Creator-Id header override
-    owner_id = http_request.headers.get("x-creator-id") or token_owner
-
-    try:
-        agent = await agent_service.get_agent(agent_id)
-
-        # Verify caller is the owner
-        if agent.owner != owner_id:
-            raise HTTPException(status_code=403, detail="Only the owner can top up agent wallet")
-
-        # Add funds to agent
-        agent.receive(request.amount)
-        await agent_service.repository.save(agent)
-
-        logger.info(
-            "agent_wallet_topped_up",
-            agent_id=agent_id,
-            amount=request.amount,
-            owner=owner_id,
-            new_balance=agent.balance,
-        )
-
-        return AgentWalletTransactionResponse(
-            success=True,
-            agent_id=agent_id,
-            balance=agent.balance,
-            message=f"Added {request.amount} to agent wallet",
-        )
-    except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-
-@router.post("/{agent_id}/wallet/withdraw", response_model=AgentWalletTransactionResponse)
-async def withdraw_from_agent_wallet(
-    agent_id: str,
-    request: AgentWalletWithdrawRequest,
-    http_request: Request,
-    payload: dict = Depends(require_permission("acn:write")),
-    agent_service: AgentServiceDep = None,
-):
-    """
-    Withdraw from agent's wallet.
-
-    Only the owner can withdraw from agent's wallet.
-    The amount is transferred from agent's balance to owner's earnings.
-    """
-    token_owner = await get_subject()
-    # Dev mode: allow X-Creator-Id header override
-    owner_id = http_request.headers.get("x-creator-id") or token_owner
-
-    try:
-        agent = await agent_service.get_agent(agent_id)
-
-        # Verify caller is the owner
-        if agent.owner != owner_id:
-            raise HTTPException(
-                status_code=403, detail="Only the owner can withdraw from agent wallet"
-            )
-
-        # Withdraw funds
-        agent.withdraw(request.amount)
-        await agent_service.repository.save(agent)
-
-        logger.info(
-            "agent_wallet_withdrawal",
-            agent_id=agent_id,
-            amount=request.amount,
-            owner=owner_id,
-            new_balance=agent.balance,
-        )
-
-        return AgentWalletTransactionResponse(
-            success=True,
-            agent_id=agent_id,
-            balance=agent.balance,
-            message=f"Withdrew {request.amount} from agent wallet",
-        )
-    except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-
-@router.post("/{agent_id}/wallet/share", response_model=AgentWalletTransactionResponse)
-async def set_agent_owner_share(
-    agent_id: str,
-    request: AgentWalletShareRequest,
-    http_request: Request,
-    payload: dict = Depends(require_permission("acn:write")),
-    agent_service: AgentServiceDep = None,
-):
-    """
-    Set owner's share of agent's future earnings.
-
-    Only the owner can set the share ratio.
-    - 0.0 = Agent keeps all earnings
-    - 1.0 = Owner gets all earnings
-    - 0.7 = Owner gets 70%, agent keeps 30%
-    """
-    token_owner = await get_subject()
-    # Dev mode: allow X-Creator-Id header override
-    owner_id = http_request.headers.get("x-creator-id") or token_owner
-
-    try:
-        agent = await agent_service.get_agent(agent_id)
-
-        # Verify caller is the owner
-        if agent.owner != owner_id:
-            raise HTTPException(status_code=403, detail="Only the owner can set earnings share")
-
-        # Set owner share
-        agent.set_owner_share(request.owner_share)
-        await agent_service.repository.save(agent)
-
-        logger.info(
-            "agent_owner_share_updated",
-            agent_id=agent_id,
-            owner_share=request.owner_share,
-            owner=owner_id,
-        )
-
-        return AgentWalletTransactionResponse(
-            success=True,
-            agent_id=agent_id,
-            balance=agent.balance,
-            message=f"Owner share set to {request.owner_share * 100}%",
-        )
-    except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+# [DELETED] set_agent_owner_share endpoint - 不再支持 owner_share 分成机制

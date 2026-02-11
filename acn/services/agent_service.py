@@ -11,6 +11,7 @@ import structlog  # type: ignore[import-untyped]
 from ..core.entities import Agent, ClaimStatus
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
+from .auth0_client import Auth0CredentialClient
 
 logger = structlog.get_logger()
 
@@ -33,14 +34,20 @@ class AgentService:
     Uses Repository pattern for persistence.
     """
 
-    def __init__(self, agent_repository: IAgentRepository):
+    def __init__(
+        self,
+        agent_repository: IAgentRepository,
+        auth0_client: Auth0CredentialClient | None = None,
+    ):
         """
         Initialize Agent Service
 
         Args:
             agent_repository: Agent repository implementation
+            auth0_client: Auth0 credential client for creating Agent M2M credentials
         """
         self.repository = agent_repository
+        self.auth0_client = auth0_client
 
     async def register_agent(
         self,
@@ -122,6 +129,37 @@ class AgentService:
 
         logger.info("register_new_agent", agent_id=agent_id, name=name)
         await self.repository.save(agent)
+
+        # 创建 Auth0 M2M 凭证（异步，不阻塞注册）
+        if self.auth0_client:
+            try:
+                cred_result = await self.auth0_client.create_credentials(
+                    agent_id=agent_id,
+                    agent_name=name,
+                )
+                if cred_result.success:
+                    agent.auth0_client_id = cred_result.client_id
+                    agent.auth0_client_secret = cred_result.client_secret
+                    agent.auth0_token_endpoint = cred_result.token_endpoint
+                    await self.repository.save(agent)
+                    logger.info(
+                        "agent_auth0_credentials_assigned",
+                        agent_id=agent_id,
+                        client_id=cred_result.client_id,
+                    )
+                else:
+                    logger.warning(
+                        "agent_auth0_credentials_failed",
+                        agent_id=agent_id,
+                        error=cred_result.error,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "agent_auth0_credentials_error",
+                    agent_id=agent_id,
+                    error=str(e),
+                )
+
         return agent
 
     async def get_agent(self, agent_id: str) -> Agent:

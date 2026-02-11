@@ -44,7 +44,6 @@ from .routes import (
     communication,
     dependencies,
     monitoring,
-    onboarding,
     payments,
     registry,
     subnets,
@@ -53,6 +52,7 @@ from .routes import (
 )
 from .services import AgentService, BillingService, MessageService, SubnetService, TaskService
 from .services.activity_service import ActivityService
+from .services.auth0_client import Auth0CredentialClient
 from .services.escrow_client import EscrowClient
 
 # Settings
@@ -68,9 +68,20 @@ async def lifespan(app: FastAPI):
     # Initialize core services
     registry_instance = AgentRegistry(settings.redis_url)
 
+    # Initialize Auth0 Credential Client (for Agent M2M credentials)
+    auth0_credential_client = Auth0CredentialClient(
+        backend_url=settings.backend_url
+        if hasattr(settings, "backend_url")
+        else "http://localhost:8000",
+        internal_token=getattr(settings, "internal_api_token", None),
+    )
+
     # Initialize Clean Architecture services
     agent_repository = RedisAgentRepository(registry_instance.redis)
-    agent_service_instance = AgentService(agent_repository)
+    agent_service_instance = AgentService(
+        agent_repository,
+        auth0_client=auth0_credential_client,
+    )
 
     subnet_repository = RedisSubnetRepository(registry_instance.redis)
     subnet_service_instance = SubnetService(subnet_repository)
@@ -116,7 +127,8 @@ async def lifespan(app: FastAPI):
     escrow_client_instance = EscrowClient(
         backend_url=settings.backend_url
         if hasattr(settings, "backend_url")
-        else "http://localhost:8000"
+        else "http://localhost:8000",
+        internal_token=getattr(settings, "internal_api_token", None),
     )
 
     # Initialize Task Pool and Service
@@ -204,9 +216,12 @@ app.include_router(analytics.router)
 app.include_router(payments.router)
 app.include_router(tasks.router)  # Task Pool API
 app.include_router(websocket.router)
-app.include_router(
-    onboarding.router
-)  # Agent onboarding (OpenClaw, Moltbook, etc.) - Legacy, to be removed
+
+# Note: onboarding.py removed - functionality migrated to:
+# - /api/v1/agents/join (registry.py)
+# - /api/v1/agents/me (registry.py)
+# - /api/v1/analytics/activities (analytics.py)
+# - Rewards handled by Backend /api/rewards/*
 
 
 # Root endpoints

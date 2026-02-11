@@ -286,11 +286,10 @@ class RedisAgentRepository(IAgentRepository):
             "token_pricing": (
                 json.loads(agent_dict["token_pricing"]) if agent_dict.get("token_pricing") else None
             ),
-            # Agent Wallet
-            "balance": float(agent_dict.get("balance", 0)),
-            "owner_share": float(agent_dict.get("owner_share", 0)),
-            "total_earned": float(agent_dict.get("total_earned", 0)),
-            "total_spent": float(agent_dict.get("total_spent", 0)),
+            # Auth0 M2M 凭证（client_secret 不持久化）
+            "auth0_client_id": agent_dict.get("auth0_client_id"),
+            "auth0_token_endpoint": agent_dict.get("auth0_token_endpoint"),
+            # [REMOVED] Agent Wallet fields - 由 Backend 管理
         }
 
         return Agent(**data)

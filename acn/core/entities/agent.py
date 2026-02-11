@@ -56,6 +56,11 @@ class Agent:
     # Authentication (for autonomous agents)
     api_key: str | None = None
 
+    # Auth0 M2M 凭证（Agent 自主身份认证）
+    auth0_client_id: str | None = None
+    auth0_client_secret: str | None = None  # 仅在内存中使用，不持久化到 Redis
+    auth0_token_endpoint: str | None = None
+
     # Claim status (for autonomous agents)
     claim_status: ClaimStatus | None = None
     verification_code: str | None = None  # Short code for human verification
@@ -75,11 +80,8 @@ class Agent:
     # Format: {"input_price_per_million": 3.0, "output_price_per_million": 15.0, "currency": "USD"}
     token_pricing: dict | None = None
 
-    # Agent Wallet (simplified: single balance, no credits/earnings distinction)
-    balance: float = 0.0  # Available balance (in points/APT)
-    owner_share: float = 0.0  # Owner's share of earnings (0-1), unclaimed agents default to 0
-    total_earned: float = 0.0  # Historical total earnings
-    total_spent: float = 0.0  # Historical total spent
+    # Agent Wallet - 钱包数据由 Backend 管理，不在 ACN 存储
+    # [REMOVED] balance, total_earned, total_spent, owner_share - 全部迁移到 Backend Wallet
 
     def __post_init__(self):
         """Validate invariants"""
@@ -187,91 +189,13 @@ class Agent:
         self.owner = None
         self.claim_status = ClaimStatus.UNCLAIMED
         self.owner_changed_at = datetime.now()
-        # Reset owner_share when released
-        self.owner_share = 0.0
 
-    # ========== Wallet Methods ==========
+    # [REMOVED] Wallet Methods (add_earnings, spend, receive)
+    # 钱包操作全部通过 Backend Wallet API (wallet_client) 进行
 
-    def add_earnings(self, amount: float) -> tuple[float, float]:
-        """
-        Add earnings to agent, with owner share split.
+    # [DELETED] withdraw() - 使用 spend() 或 transfer_balance 代替
 
-        Args:
-            amount: Total earnings amount
-
-        Returns:
-            tuple of (agent_amount, owner_amount)
-        """
-        if amount <= 0:
-            return 0.0, 0.0
-
-        owner_amount = amount * self.owner_share
-        agent_amount = amount - owner_amount
-
-        self.balance += agent_amount
-        self.total_earned += agent_amount
-
-        return agent_amount, owner_amount
-
-    def spend(self, amount: float) -> None:
-        """
-        Spend from agent balance.
-
-        Args:
-            amount: Amount to spend
-
-        Raises:
-            ValueError: If insufficient balance
-        """
-        if amount <= 0:
-            raise ValueError("Amount must be positive")
-        if self.balance < amount:
-            raise ValueError(f"Insufficient balance. Have {self.balance}, need {amount}")
-
-        self.balance -= amount
-        self.total_spent += amount
-
-    def receive(self, amount: float) -> None:
-        """
-        Receive funds (e.g., from owner top-up).
-
-        Args:
-            amount: Amount to receive
-        """
-        if amount <= 0:
-            raise ValueError("Amount must be positive")
-        self.balance += amount
-
-    def withdraw(self, amount: float) -> None:
-        """
-        Withdraw from agent balance (by owner).
-
-        Args:
-            amount: Amount to withdraw
-
-        Raises:
-            ValueError: If insufficient balance
-        """
-        if amount <= 0:
-            raise ValueError("Amount must be positive")
-        if self.balance < amount:
-            raise ValueError(f"Insufficient balance. Have {self.balance}, need {amount}")
-
-        self.balance -= amount
-
-    def set_owner_share(self, share: float) -> None:
-        """
-        Set owner's share of future earnings.
-
-        Args:
-            share: Share ratio (0-1)
-
-        Raises:
-            ValueError: If share is out of range
-        """
-        if share < 0 or share > 1:
-            raise ValueError("Owner share must be between 0 and 1")
-        self.owner_share = share
+    # [DELETED] set_owner_share() - 不再支持自动分成
 
     def has_sufficient_balance(self, amount: float) -> bool:
         """Check if agent has sufficient balance."""
@@ -307,11 +231,10 @@ class Agent:
             "accepts_payment": self.accepts_payment,
             "payment_methods": self.payment_methods,
             "token_pricing": self.token_pricing,
-            # Agent Wallet
-            "balance": self.balance,
-            "owner_share": self.owner_share,
-            "total_earned": self.total_earned,
-            "total_spent": self.total_spent,
+            # Auth0 M2M 凭证（client_secret 不序列化）
+            "auth0_client_id": self.auth0_client_id,
+            "auth0_token_endpoint": self.auth0_token_endpoint,
+            # [REMOVED] Agent Wallet fields - 由 Backend 管理
         }
 
     def has_token_pricing(self) -> bool:

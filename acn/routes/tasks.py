@@ -52,8 +52,10 @@ class TaskCreateRequest(BaseModel):
     required_skills: list[str] = Field(default_factory=list)
     reward_amount: str = Field(default="0", description="Reward amount")
     reward_currency: str = Field(default="points", description="Currency: USD, USDC, points")
-    is_repeatable: bool = Field(default=False, description="Can be completed multiple times")
-    max_completions: int | None = Field(None, description="Max completions (open mode)")
+    is_repeatable: bool = Field(default=False, description="DEPRECATED: use is_multi_participant")
+    is_multi_participant: bool = Field(default=False, description="Multiple agents can work in parallel")
+    allow_repeat_by_same: bool = Field(default=False, description="Same agent can rejoin after completing")
+    max_completions: int | None = Field(None, description="Max completions (open/multi mode)")
     deadline_hours: int | None = Field(None, ge=1, le=720, description="Deadline in hours")
     assignee_id: str | None = Field(None, description="Pre-assigned agent (assigned mode)")
     assignee_name: str | None = Field(None)
@@ -85,13 +87,43 @@ class TaskResponse(BaseModel):
     total_budget: str = "0"
     released_amount: str = "0"
     is_repeatable: bool
+    is_multi_participant: bool = False
+    allow_repeat_by_same: bool = False
+    active_participants_count: int = 0
     completed_count: int
     max_completions: int | None = None
     approval_type: str = "manual"
     validator_id: str | None = None
     created_at: str
     deadline: str | None = None
-    ui_spec: dict | None = None  # A2UI JSON spec for interactive tasks (from metadata)
+    ui_spec: dict | None = None
+
+
+class ParticipationResponse(BaseModel):
+    """Participation response model"""
+
+    participation_id: str
+    task_id: str
+    participant_id: str
+    participant_name: str
+    participant_type: str = "agent"
+    status: str
+    joined_at: str
+    submission: str | None = None
+    submitted_at: str | None = None
+    rejection_reason: str | None = None
+    rejected_at: str | None = None
+    review_notes: str | None = None
+    reviewed_by: str | None = None
+    completed_at: str | None = None
+    cancelled_at: str | None = None
+
+
+class ParticipationListResponse(BaseModel):
+    """List of participations"""
+
+    participations: list[ParticipationResponse]
+    total: int
 
 
 class TaskListResponse(BaseModel):
@@ -103,9 +135,16 @@ class TaskListResponse(BaseModel):
 
 
 class TaskAcceptRequest(BaseModel):
-    """Request to accept a task"""
+    """Request to accept/join a task"""
 
     message: str = Field(default="", description="Optional message to creator")
+
+
+class TaskAcceptResponse(BaseModel):
+    """Response for accept/join — includes participation_id for multi-participant tasks"""
+
+    task: TaskResponse
+    participation_id: str | None = None
 
 
 class TaskSubmitRequest(BaseModel):
@@ -113,6 +152,7 @@ class TaskSubmitRequest(BaseModel):
 
     submission: str = Field(..., min_length=5, description="Task result/deliverable")
     artifacts: list[dict] = Field(default_factory=list, description="Optional artifacts")
+    participation_id: str | None = Field(None, description="Participation ID (for multi-participant tasks)")
 
 
 class TaskReviewRequest(BaseModel):
@@ -120,15 +160,12 @@ class TaskReviewRequest(BaseModel):
 
     approved: bool = Field(..., description="Whether to approve")
     notes: str = Field(default="", description="Review notes")
+    participation_id: str | None = Field(None, description="Participation ID (for multi-participant tasks)")
+    agent_id: str | None = Field(None, description="Agent ID (alternative to participation_id)")
 
 
 def _task_to_response(task) -> TaskResponse:
-    """Convert Task entity to response model.
-
-    Extracts ui_spec from metadata for public exposure while keeping
-    sensitive fields (action_endpoint, platform_secret) hidden.
-    """
-    # Extract ui_spec from metadata (public) while hiding sensitive fields
+    """Convert Task entity to response model."""
     ui_spec = task.metadata.get("ui_spec") if task.metadata else None
 
     return TaskResponse(
@@ -150,6 +187,9 @@ def _task_to_response(task) -> TaskResponse:
         total_budget=task.total_budget,
         released_amount=task.released_amount,
         is_repeatable=task.is_repeatable,
+        is_multi_participant=task.is_multi_participant,
+        allow_repeat_by_same=task.allow_repeat_by_same,
+        active_participants_count=task.active_participants_count,
         completed_count=task.completed_count,
         max_completions=task.max_completions,
         approval_type=task.approval_type,
@@ -157,6 +197,27 @@ def _task_to_response(task) -> TaskResponse:
         created_at=task.created_at.isoformat(),
         deadline=task.deadline.isoformat() if task.deadline else None,
         ui_spec=ui_spec,
+    )
+
+
+def _participation_to_response(p) -> ParticipationResponse:
+    """Convert Participation entity to response model."""
+    return ParticipationResponse(
+        participation_id=p.participation_id,
+        task_id=p.task_id,
+        participant_id=p.participant_id,
+        participant_name=p.participant_name,
+        participant_type=p.participant_type,
+        status=p.status.value,
+        joined_at=p.joined_at.isoformat(),
+        submission=p.submission,
+        submitted_at=p.submitted_at.isoformat() if p.submitted_at else None,
+        rejection_reason=p.rejection_reason,
+        rejected_at=p.rejected_at.isoformat() if p.rejected_at else None,
+        review_notes=p.review_notes,
+        reviewed_by=p.reviewed_by,
+        completed_at=p.completed_at.isoformat() if p.completed_at else None,
+        cancelled_at=p.cancelled_at.isoformat() if p.cancelled_at else None,
     )
 
 
@@ -301,6 +362,8 @@ async def create_task(
             reward_amount=request.reward_amount,
             reward_currency=request.reward_currency,
             is_repeatable=request.is_repeatable,
+            is_multi_participant=request.is_multi_participant,
+            allow_repeat_by_same=request.allow_repeat_by_same,
             max_completions=request.max_completions,
             deadline_hours=request.deadline_hours,
             assignee_id=request.assignee_id,
@@ -323,7 +386,7 @@ async def create_task(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/{task_id}/accept", response_model=TaskResponse)
+@router.post("/{task_id}/accept", response_model=TaskAcceptResponse)
 async def accept_task(
     task_id: str,
     http_request: Request,
@@ -331,20 +394,24 @@ async def accept_task(
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
-    """Accept a task"""
+    """Accept/join a task. Returns participation_id for multi-participant tasks."""
     token_owner = await get_subject()
 
-    # Dev mode: allow X-Creator-Id header override for agent
     agent_id = http_request.headers.get("x-creator-id") or token_owner
     agent_name = http_request.headers.get("x-creator-name") or agent_id
+    agent_type = http_request.headers.get("x-creator-type", "agent")
 
     try:
-        task = await task_service.accept_task(
+        task, participation_id = await task_service.accept_task(
             task_id=task_id,
             agent_id=agent_id,
             agent_name=agent_name,
+            agent_type=agent_type,
         )
-        return _task_to_response(task)
+        return TaskAcceptResponse(
+            task=_task_to_response(task),
+            participation_id=participation_id,
+        )
 
     except TaskNotFoundException:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -372,6 +439,7 @@ async def submit_task(
             agent_id=agent_id,
             submission=request.submission,
             artifacts=request.artifacts,
+            participation_id=request.participation_id,
         )
         return _task_to_response(task)
 
@@ -391,14 +459,22 @@ async def review_task(
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
-    """Approve or reject task submission"""
+    """Approve or reject task/participation submission"""
     token_owner = await get_subject()
-
-    # Dev mode: allow X-Creator-Id header override
     reviewer_id = http_request.headers.get("x-creator-id") or token_owner
 
     try:
-        if request.approved:
+        # Multi-participant review (participation_id or agent_id provided)
+        if request.participation_id or request.agent_id:
+            task = await task_service.review_participation(
+                task_id=task_id,
+                approver_id=reviewer_id,
+                approved=request.approved,
+                participation_id=request.participation_id,
+                agent_id=request.agent_id,
+                notes=request.notes,
+            )
+        elif request.approved:
             task = await task_service.complete_task(
                 task_id=task_id,
                 approver_id=reviewer_id,
@@ -436,6 +512,77 @@ async def cancel_task(
         )
         return _task_to_response(task)
 
+    except TaskNotFoundException:
+        raise HTTPException(status_code=404, detail="Task not found")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ========== Participation Endpoints ==========
+
+
+@router.get("/{task_id}/participations", response_model=ParticipationListResponse)
+async def list_participations(
+    task_id: str,
+    status: str | None = Query(None, description="Filter by status: active, submitted, completed, rejected, cancelled"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    task_service: TaskServiceDep = None,
+):
+    """List participations for a task (public)"""
+    try:
+        participations = await task_service.get_task_participations(
+            task_id=task_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+        return ParticipationListResponse(
+            participations=[_participation_to_response(p) for p in participations],
+            total=len(participations),
+        )
+    except TaskNotFoundException:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+
+@router.get("/{task_id}/participations/me", response_model=ParticipationResponse | None)
+async def get_my_participation(
+    task_id: str,
+    http_request: Request,
+    payload: dict = Depends(require_permission("acn:read")),
+    task_service: TaskServiceDep = None,
+):
+    """Get the current user's participation in a task"""
+    token_owner = await get_subject()
+    agent_id = http_request.headers.get("x-creator-id") or token_owner
+
+    p = await task_service.get_user_participation(task_id, agent_id)
+    if not p:
+        return None
+    return _participation_to_response(p)
+
+
+@router.post("/{task_id}/participations/{participation_id}/cancel", response_model=TaskResponse)
+async def cancel_participation(
+    task_id: str,
+    participation_id: str,
+    http_request: Request,
+    payload: dict = Depends(require_permission("acn:write")),
+    task_service: TaskServiceDep = None,
+):
+    """Cancel a participation (participant withdraws)"""
+    token_owner = await get_subject()
+    agent_id = http_request.headers.get("x-creator-id") or token_owner
+
+    try:
+        task = await task_service.cancel_participation(
+            task_id=task_id,
+            participation_id=participation_id,
+            canceller_id=agent_id,
+        )
+        return _task_to_response(task)
     except TaskNotFoundException:
         raise HTTPException(status_code=404, detail="Task not found")
     except PermissionError as e:
