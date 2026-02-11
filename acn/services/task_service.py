@@ -127,13 +127,13 @@ class TaskService:
         # For non-repeatable: budget = reward_amount × 1
         # For repeatable: budget = reward_amount × max_completions
         reward_float = float(reward_amount) if reward_amount else 0
-        if is_repeatable and max_completions:
+        if (is_repeatable or is_multi_participant) and max_completions:
             total_budget = str(reward_float * max_completions)
         else:
             # Single completion tasks (including assigned mode)
             total_budget = str(reward_float)
-            # For non-repeatable open tasks, enforce max_completions = 1
-            if mode == TaskMode.OPEN and not is_repeatable:
+            # For single-participant open tasks, enforce max_completions = 1
+            if mode == TaskMode.OPEN and not is_repeatable and not is_multi_participant:
                 max_completions = 1
 
         # Backward compat: is_repeatable implies is_multi_participant
@@ -713,15 +713,23 @@ class TaskService:
                 new_completed_count=new_count,
             )
         else:
-            # Reject participation
+            # Reject participation — set status to REJECTED and decrement active count
+            was_active = p.status in (ParticipationStatus.ACTIVE, ParticipationStatus.SUBMITTED)
             p.reject(approver_id, notes)
             await self.repository.save_participation(p)
 
-            # Decrement active count (rejected removes from active pool)
-            try:
-                await self.repository.atomic_cancel_participation(p.participation_id, task_id)
-            except ValueError:
-                pass  # Already handled by reject status
+            # Manually decrement active count (don't use atomic_cancel which overwrites to 'cancelled')
+            if was_active:
+                active_key = f"acn:task:{task_id}:active_participants"
+                task_key = f"acn:task:{task_id}"
+                try:
+                    new_count = await self.repository.redis.decr(active_key)
+                    if new_count < 0:
+                        await self.repository.redis.set(active_key, 0)
+                        new_count = 0
+                    await self.repository.redis.hset(task_key, "active_participants_count", str(new_count))
+                except Exception:
+                    pass  # Best-effort count sync
 
             if self.activity and hasattr(self.activity, "record_task_rejected"):
                 await self.activity.record_task_rejected(

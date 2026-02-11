@@ -5,6 +5,7 @@ Concrete implementation using Redis for task persistence.
 
 import json
 from datetime import datetime
+from typing import Any
 
 import redis.asyncio as redis  # type: ignore[import-untyped]
 
@@ -174,21 +175,21 @@ class RedisTaskRepository(ITaskRepository):
         self.redis = redis_client
 
         # Register Lua scripts (will be loaded on first use)
-        self._join_script: redis.client.Script | None = None
-        self._cancel_script: redis.client.Script | None = None
-        self._complete_script: redis.client.Script | None = None
+        self._join_script: Any | None = None
+        self._cancel_script: Any | None = None
+        self._complete_script: Any | None = None
 
-    def _get_join_script(self) -> redis.client.Script:
+    def _get_join_script(self) -> Any:
         if self._join_script is None:
             self._join_script = self.redis.register_script(LUA_JOIN_TASK)
         return self._join_script
 
-    def _get_cancel_script(self) -> redis.client.Script:
+    def _get_cancel_script(self) -> Any:
         if self._cancel_script is None:
             self._cancel_script = self.redis.register_script(LUA_CANCEL_PARTICIPATION)
         return self._cancel_script
 
-    def _get_complete_script(self) -> redis.client.Script:
+    def _get_complete_script(self) -> Any:
         if self._complete_script is None:
             self._complete_script = self.redis.register_script(LUA_COMPLETE_PARTICIPATION)
         return self._complete_script
