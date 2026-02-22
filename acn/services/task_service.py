@@ -3,7 +3,7 @@
 Business logic for task management, including AP2 payment integration.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import structlog
@@ -121,7 +121,7 @@ class TaskService:
         # Calculate deadline
         deadline = None
         if deadline_hours:
-            deadline = datetime.now() + timedelta(hours=deadline_hours)
+            deadline = datetime.now(UTC) + timedelta(hours=deadline_hours)
 
         # Calculate total budget
         # - Multi-participant with max: budget = reward_amount × max_completions
@@ -170,7 +170,7 @@ class TaskService:
         if mode == TaskMode.ASSIGNED and assignee_id:
             task.assignee_id = assignee_id
             task.assignee_name = assignee_name
-            task.assigned_at = datetime.now()
+            task.assigned_at = datetime.now(UTC)
 
         # 统一 escrow 锁定：human 和 agent 创建者都走 v2 escrow
         if (
@@ -603,7 +603,7 @@ class TaskService:
         task.completed_count = new_count
         task.active_participants_count = 0
         task.status = TaskStatus.COMPLETED
-        task.completed_at = datetime.now()
+        task.completed_at = datetime.now(UTC)
         await self.repository.save(task)
         logger.info("task_exhausted", task_id=task.task_id, completed_count=new_count)
         return True

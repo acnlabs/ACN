@@ -4,7 +4,7 @@ Records and retrieves task lifecycle activities for the Labs activity feed.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -79,7 +79,7 @@ class ActivityService:
         """
         event_id = f"evt-{uuid.uuid4().hex[:12]}"
         event_key = f"{ACTIVITY_PREFIX}{event_id}"
-        timestamp = datetime.now().isoformat()
+        timestamp = datetime.now(UTC).isoformat()
         
         event_data = {
             "event_id": event_id,

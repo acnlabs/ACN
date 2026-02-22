@@ -4,7 +4,7 @@ Pure business logic for Agent, independent of infrastructure.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 
@@ -124,7 +124,7 @@ class Agent:
 
     def update_heartbeat(self) -> None:
         """Update last heartbeat timestamp"""
-        self.last_heartbeat = datetime.now()
+        self.last_heartbeat = datetime.now(UTC)
 
     def mark_offline(self) -> None:
         """Mark agent as offline"""
@@ -175,7 +175,7 @@ class Agent:
 
         self.owner = owner
         self.claim_status = ClaimStatus.CLAIMED
-        self.owner_changed_at = datetime.now()
+        self.owner_changed_at = datetime.now(UTC)
 
     def transfer(self, new_owner: str) -> None:
         """
@@ -185,13 +185,13 @@ class Agent:
             new_owner: New owner identifier
         """
         self.owner = new_owner
-        self.owner_changed_at = datetime.now()
+        self.owner_changed_at = datetime.now(UTC)
 
     def release(self) -> None:
         """Release ownership (make agent unowned)"""
         self.owner = None
         self.claim_status = ClaimStatus.UNCLAIMED
-        self.owner_changed_at = datetime.now()
+        self.owner_changed_at = datetime.now(UTC)
 
     # [REMOVED] Wallet Methods (add_earnings, spend, receive)
     # 钱包操作全部通过 Backend Wallet API (wallet_client) 进行

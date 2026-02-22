@@ -5,7 +5,7 @@ Core registry service for Agent registration, discovery, and management
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import redis.asyncio as redis
@@ -117,7 +117,7 @@ class AgentRegistry:
         if is_update and existing_agent.get("registered_at"):
             agent_data["registered_at"] = existing_agent["registered_at"]
         else:
-            agent_data["registered_at"] = datetime.now().isoformat()
+            agent_data["registered_at"] = datetime.now(UTC).isoformat()
 
         # Store in Redis (overwrites if exists - idempotent)
         await self.redis.hset(f"acn:agents:{agent_id}", mapping=agent_data)
@@ -392,7 +392,7 @@ class AgentRegistry:
         await self.redis.hset(
             f"acn:agents:{agent_id}",
             mapping={
-                "last_heartbeat": datetime.now().isoformat(),
+                "last_heartbeat": datetime.now(UTC).isoformat(),
                 "status": "online",
             },
         )

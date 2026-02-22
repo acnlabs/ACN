@@ -1,6 +1,6 @@
 """Analytics API Routes"""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -45,7 +45,7 @@ async def get_agent_activity(
     analytics: AnalyticsDep = None,
 ):
     """Get specific agent activity"""
-    start_time = datetime.now() - timedelta(days=days)
+    start_time = datetime.now(UTC) - timedelta(days=days)
     return await analytics.get_agent_activity(agent_id, start_time=start_time)
 
 
@@ -61,7 +61,7 @@ async def get_latency_analytics(
     analytics: AnalyticsDep = None,
 ):
     """Get latency analytics"""
-    start_time = datetime.now() - timedelta(hours=hours)
+    start_time = datetime.now(UTC) - timedelta(hours=hours)
     return await analytics.get_latency_analytics(start_time=start_time)
 
 
@@ -143,10 +143,10 @@ async def list_activities(
     activities = []
     for event_dict in raw_activities:
         try:
-            timestamp_str = event_dict.get("timestamp", datetime.now().isoformat())
+            timestamp_str = event_dict.get("timestamp", datetime.now(UTC).isoformat())
             timestamp = datetime.fromisoformat(timestamp_str)
         except (ValueError, TypeError):
-            timestamp = datetime.now()
+            timestamp = datetime.now(UTC)
             
         activities.append(
             ActivityEvent(

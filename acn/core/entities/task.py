@@ -4,7 +4,7 @@ Pure business logic for Task and Participation, independent of infrastructure.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from uuid import uuid4
 
@@ -92,7 +92,7 @@ class Participation:
             raise ValueError(f"Cannot submit in status: {self.status}")
         self.submission = submission
         self.submission_artifacts = artifacts or []
-        self.submitted_at = datetime.now()
+        self.submitted_at = datetime.now(UTC)
         self.status = ParticipationStatus.SUBMITTED
 
     def complete(self, reviewer_id: str | None = None, notes: str | None = None) -> None:
@@ -101,7 +101,7 @@ class Participation:
             raise ValueError(f"Cannot complete in status: {self.status}")
         self.reviewed_by = reviewer_id
         self.review_notes = notes
-        self.completed_at = datetime.now()
+        self.completed_at = datetime.now(UTC)
         self.status = ParticipationStatus.COMPLETED
 
     def reject(self, reviewer_id: str | None = None, reason: str | None = None) -> None:
@@ -110,14 +110,14 @@ class Participation:
             raise ValueError(f"Cannot reject in status: {self.status}")
         self.reviewed_by = reviewer_id
         self.rejection_reason = reason
-        self.rejected_at = datetime.now()
+        self.rejected_at = datetime.now(UTC)
         self.status = ParticipationStatus.REJECTED
 
     def cancel(self) -> None:
         """Cancel this participation (withdraw)"""
         if self.status in (ParticipationStatus.COMPLETED, ParticipationStatus.CANCELLED):
             raise ValueError(f"Cannot cancel in status: {self.status}")
-        self.cancelled_at = datetime.now()
+        self.cancelled_at = datetime.now(UTC)
         self.status = ParticipationStatus.CANCELLED
 
     def resubmit(self, submission: str, artifacts: list[dict] | None = None) -> None:
@@ -126,7 +126,7 @@ class Participation:
             raise ValueError(f"Cannot resubmit in status: {self.status}")
         self.submission = submission
         self.submission_artifacts = artifacts or []
-        self.submitted_at = datetime.now()
+        self.submitted_at = datetime.now(UTC)
         self.rejection_reason = None
         self.rejected_at = None
         self.reject_response_deadline = None
@@ -349,7 +349,7 @@ class Task:
 
         self.assignee_id = agent_id
         self.assignee_name = agent_name
-        self.assigned_at = datetime.now()
+        self.assigned_at = datetime.now(UTC)
         self.status = TaskStatus.IN_PROGRESS
 
     def submit(self, submission: str, artifacts: list[dict] | None = None) -> None:
@@ -368,7 +368,7 @@ class Task:
 
         self.submission = submission
         self.submission_artifacts = artifacts or []
-        self.submitted_at = datetime.now()
+        self.submitted_at = datetime.now(UTC)
         self.status = TaskStatus.SUBMITTED
 
     def complete(self, reviewer_id: str | None = None, notes: str | None = None) -> None:
@@ -391,7 +391,7 @@ class Task:
 
         self.reviewed_by = reviewer_id
         self.review_notes = notes
-        self.completed_at = datetime.now()
+        self.completed_at = datetime.now(UTC)
         self.completed_count += 1
 
         # Release reward from budget
@@ -499,7 +499,7 @@ class Task:
         """Check if task is past deadline"""
         if not self.deadline:
             return False
-        return datetime.now() > self.deadline
+        return datetime.now(UTC) > self.deadline
 
     def matches_skills(self, agent_skills: list[str]) -> bool:
         """Check if agent has required skills"""
