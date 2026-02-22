@@ -16,7 +16,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -57,8 +57,8 @@ class Connection:
     websocket: WebSocket
     user_id: str | None = None
     subscriptions: set[str] = field(default_factory=set)
-    connected_at: datetime = field(default_factory=datetime.utcnow)
-    last_activity: datetime = field(default_factory=datetime.utcnow)
+    connected_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -101,6 +101,7 @@ class WebSocketManager:
         self,
         redis_client: redis.Redis,
         heartbeat_interval: float = 30.0,
+        max_connections: int = 10_000,
     ):
         """
         Initialize WebSocket Manager
@@ -108,9 +109,11 @@ class WebSocketManager:
         Args:
             redis_client: Redis for Pub/Sub
             heartbeat_interval: Heartbeat interval in seconds
+            max_connections: Maximum concurrent WebSocket connections (0 = unlimited)
         """
         self.redis = redis_client
         self.heartbeat_interval = heartbeat_interval
+        self.max_connections = max_connections
 
         # Active connections
         self._connections: dict[str, Connection] = {}
@@ -168,6 +171,14 @@ class WebSocketManager:
         Returns:
             Connection ID
         """
+        if self.max_connections > 0 and len(self._connections) >= self.max_connections:
+            await websocket.accept()
+            await websocket.close(code=4429, reason="Too many connections")
+            logger.warning(
+                f"WebSocket connection rejected: max_connections={self.max_connections} reached"
+            )
+            return ""
+
         await websocket.accept()
 
         connection_id = uuid4().hex[:16]
@@ -370,7 +381,7 @@ class WebSocketManager:
             return
 
         connection = self._connections[connection_id]
-        connection.last_activity = datetime.utcnow()
+        connection.last_activity = datetime.now(UTC)
 
         message_type = data.get("type", "")
 
@@ -380,7 +391,7 @@ class WebSocketManager:
                 connection,
                 {
                     "type": MessageType.PONG.value,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                 },
             )
             return

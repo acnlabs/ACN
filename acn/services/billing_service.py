@@ -193,29 +193,29 @@ class BillingService:
         Returns:
             CostBreakdown with all fee details
         """
-        # Calculate raw cost in USD
-        input_cost = (input_tokens / 1_000_000) * pricing.input_price_per_million
-        output_cost = (output_tokens / 1_000_000) * pricing.output_price_per_million
-        total_usd = input_cost + output_cost
-        
-        # Calculate fee distribution
-        network_fee_usd = total_usd * BillingConfig.NETWORK_FEE_RATE
-        agent_income_usd = total_usd * (1 - BillingConfig.NETWORK_FEE_RATE)
-        
-        # Convert to credits
-        total_credits = total_usd * BillingConfig.CREDITS_PER_USD
-        network_fee_credits = network_fee_usd * BillingConfig.CREDITS_PER_USD
-        agent_income_credits = agent_income_usd * BillingConfig.CREDITS_PER_USD
-        
+        # Calculate raw cost in USD using Decimal to avoid float rounding drift
+        d_input = Decimal(str(input_tokens)) / Decimal("1000000") * Decimal(str(pricing.input_price_per_million))
+        d_output = Decimal(str(output_tokens)) / Decimal("1000000") * Decimal(str(pricing.output_price_per_million))
+        d_total_usd = d_input + d_output
+
+        # Derive fee and income from total to guarantee fee + income == total (no rounding gap)
+        d_network_fee_usd = (d_total_usd * Decimal(str(BillingConfig.NETWORK_FEE_RATE))).quantize(Decimal("0.000001"))
+        d_agent_income_usd = d_total_usd - d_network_fee_usd
+
+        d_credits_per_usd = Decimal(str(BillingConfig.CREDITS_PER_USD))
+        d_total_credits = (d_total_usd * d_credits_per_usd).quantize(Decimal("0.0001"))
+        d_network_fee_credits = (d_network_fee_usd * d_credits_per_usd).quantize(Decimal("0.0001"))
+        d_agent_income_credits = d_total_credits - d_network_fee_credits
+
         return CostBreakdown(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            total_usd=round(total_usd, 6),
-            network_fee_usd=round(network_fee_usd, 6),
-            agent_income_usd=round(agent_income_usd, 6),
-            total_credits=round(total_credits, 4),
-            network_fee_credits=round(network_fee_credits, 4),
-            agent_income_credits=round(agent_income_credits, 4),
+            total_usd=float(d_total_usd.quantize(Decimal("0.000001"))),
+            network_fee_usd=float(d_network_fee_usd),
+            agent_income_usd=float(d_agent_income_usd.quantize(Decimal("0.000001"))),
+            total_credits=float(d_total_credits),
+            network_fee_credits=float(d_network_fee_credits),
+            agent_income_credits=float(d_agent_income_credits),
             input_price_per_million=pricing.input_price_per_million,
             output_price_per_million=pricing.output_price_per_million,
             currency=pricing.currency,

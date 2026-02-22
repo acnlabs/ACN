@@ -173,19 +173,23 @@ class TokenPricing(BaseModel):
             Dict with total_usd, network_fee_usd, agent_income_usd,
             and their credits equivalents.
         """
-        total_usd = self.calculate_cost(input_tokens, output_tokens)
-        network_fee_usd = total_usd * NETWORK_FEE_RATE
-        agent_income_usd = total_usd * (1 - NETWORK_FEE_RATE)
-        
+        d_total = Decimal(str(self.calculate_cost(input_tokens, output_tokens)))
+        d_fee = (d_total * Decimal(str(NETWORK_FEE_RATE))).quantize(Decimal("0.000001"))
+        d_income = d_total - d_fee
+        d_cpu = Decimal(str(CREDITS_PER_USD))
+        d_total_cr = (d_total * d_cpu).quantize(Decimal("0.01"))
+        d_fee_cr = (d_fee * d_cpu).quantize(Decimal("0.01"))
+        d_income_cr = d_total_cr - d_fee_cr
+
         return {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "total_usd": round(total_usd, 6),
-            "network_fee_usd": round(network_fee_usd, 6),
-            "agent_income_usd": round(agent_income_usd, 6),
-            "total_credits": round(total_usd * CREDITS_PER_USD, 2),
-            "network_fee_credits": round(network_fee_usd * CREDITS_PER_USD, 2),
-            "agent_income_credits": round(agent_income_usd * CREDITS_PER_USD, 2),
+            "total_usd": float(d_total.quantize(Decimal("0.000001"))),
+            "network_fee_usd": float(d_fee),
+            "agent_income_usd": float(d_income.quantize(Decimal("0.000001"))),
+            "total_credits": float(d_total_cr),
+            "network_fee_credits": float(d_fee_cr),
+            "agent_income_credits": float(d_income_cr),
         }
     
     def to_extension_params(self) -> dict:

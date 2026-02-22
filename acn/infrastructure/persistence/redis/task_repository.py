@@ -4,7 +4,7 @@ Concrete implementation using Redis for task persistence.
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis  # type: ignore[import-untyped]
@@ -466,12 +466,21 @@ class RedisTaskRepository(ITaskRepository):
         participant_id: str,
         limit: int = 50,
     ) -> list[Participation]:
-        """Find all participations for a user (across all tasks)"""
-        # We need to scan user:*:task:*:participations keys — this is expensive.
-        # For now, use a simpler approach: maintain a global user index.
-        # TODO: Add acn:user:{user_id}:all_participations index for efficiency.
-        # For now we return empty — the per-task lookup is the primary path.
-        return []
+        """Find all participations for a user (across all tasks).
+
+        Uses a per-user participation index maintained by atomic_join_task.
+        Falls back to an empty list if the index key does not exist.
+        """
+        index_key = f"acn:user:{participant_id}:all_participations"
+        participation_ids = await self.redis.lrange(index_key, 0, limit - 1)
+
+        results: list[Participation] = []
+        for pid_raw in participation_ids:
+            pid = pid_raw.decode() if isinstance(pid_raw, bytes) else pid_raw
+            p = await self.find_participation_by_id(pid)
+            if p is not None:
+                results.append(p)
+        return results
 
     async def atomic_join_task(
         self,
@@ -508,6 +517,9 @@ class RedisTaskRepository(ITaskRepository):
                 ],
             )
             pid = result.decode() if isinstance(result, bytes) else result
+            # Maintain global user participation index for find_participations_by_user
+            user_index_key = f"acn:user:{participation.participant_id}:all_participations"
+            await self.redis.lpush(user_index_key, pid)
             return pid
         except redis.ResponseError as e:
             err = str(e)
@@ -534,7 +546,7 @@ class RedisTaskRepository(ITaskRepository):
         try:
             await script(
                 keys=[participation_key, active_count_key, task_key],
-                args=[datetime.now().isoformat()],
+                args=[datetime.now(UTC).isoformat()],
             )
         except redis.ResponseError as e:
             err = str(e)
@@ -562,7 +574,7 @@ class RedisTaskRepository(ITaskRepository):
             result = await script(
                 keys=[participation_key, active_count_key, task_key],
                 args=[
-                    datetime.now().isoformat(),
+                    datetime.now(UTC).isoformat(),
                     reviewer_id or "",
                     notes or "",
                 ],
@@ -572,6 +584,17 @@ class RedisTaskRepository(ITaskRepository):
             if "NOT_SUBMITTED" in str(e):
                 raise ValueError("Participation is not in submitted status")
             raise
+
+    async def decrement_active_count(self, task_id: str) -> int:
+        """Decrement active participant count for a task; floors at 0. Returns new count."""
+        active_key = f"acn:task:{task_id}:active_count"
+        task_key = f"acn:task:{task_id}"
+        new_count = await self.redis.decr(active_key)
+        if new_count < 0:
+            await self.redis.set(active_key, 0)
+            new_count = 0
+        await self.redis.hset(task_key, "active_participants_count", str(new_count))
+        return new_count
 
     async def count_active_participations(self, task_id: str) -> int:
         """Count active participations for a task"""
@@ -618,10 +641,21 @@ class RedisTaskRepository(ITaskRepository):
             val = v.decode() if isinstance(v, bytes) else v
             data[key] = val
 
-        # Parse JSON fields
-        data["required_skills"] = json.loads(data.get("required_skills", "[]"))
-        data["submission_artifacts"] = json.loads(data.get("submission_artifacts", "[]"))
-        data["metadata"] = json.loads(data.get("metadata", "{}"))
+        # Parse JSON fields — guard against corrupted Redis values
+        def _safe_loads(raw: str, default: Any) -> Any:
+            try:
+                return json.loads(raw) if raw else default
+            except (json.JSONDecodeError, TypeError):
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "task_repository: corrupted JSON field, using default",
+                    extra={"raw": raw[:200] if raw else None},
+                )
+                return default
+
+        data["required_skills"] = _safe_loads(data.get("required_skills", ""), [])
+        data["submission_artifacts"] = _safe_loads(data.get("submission_artifacts", ""), [])
+        data["metadata"] = _safe_loads(data.get("metadata", ""), {})
 
         # Parse enums
         data["mode"] = TaskMode(data["mode"])

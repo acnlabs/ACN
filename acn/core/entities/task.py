@@ -253,8 +253,10 @@ class Task:
     is_multi_participant: bool = False  # Multiple agents can work in parallel
     allow_repeat_by_same: bool = False  # Same agent can complete again after finishing
 
-    # Open task specific (backward compat: is_repeatable maps to is_multi_participant)
-    is_repeatable: bool = False  # DEPRECATED — use is_multi_participant instead
+    # DEPRECATED — kept for API backward compatibility only.
+    # Internal logic should use is_multi_participant exclusively.
+    # __post_init__ ensures is_multi_participant=True → is_repeatable=True for serialization.
+    is_repeatable: bool = False
     completed_count: int = 0  # Number of completions
     max_completions: int | None = None  # Max completions (None = unlimited, not recommended)
     active_participants_count: int = 0  # Number of currently active participations
@@ -280,36 +282,55 @@ class Task:
         if not self.creator_id:
             raise ValueError("creator_id cannot be empty")
 
-        # Backward compat: is_repeatable=True implies is_multi_participant=True
+        # Backward compat: is_repeatable=True from old API consumers → enable is_multi_participant
         if self.is_repeatable and not self.is_multi_participant:
             self.is_multi_participant = True
-        # Forward sync: is_multi_participant=True keeps is_repeatable=True for old consumers
+        # Forward sync: keep is_repeatable=True for serialization when is_multi_participant is set
+        # (old API consumers expect this field; internal logic uses is_multi_participant only)
         if self.is_multi_participant:
             self.is_repeatable = True
 
     # ========== Status Transitions ==========
 
     def can_be_accepted(self) -> bool:
-        """Check if task can be accepted (single-participant mode)"""
+        """
+        Check if task can be accepted.
+
+        For multi-participant tasks, delegates to can_join().
+        For single-participant tasks, checks status and completion state.
+
+        NOTE: This is a fast-fail pre-filter for better error messages.
+        The Lua scripts in TaskRepository are the atomic source of truth
+        for capacity checks under concurrent access.
+        """
+        if self.status != TaskStatus.OPEN:
+            return False
         if self.is_multi_participant:
-            # Multi-participant tasks use can_join() instead
-            return self.can_join()
+            return self._has_capacity()
+        # Single-participant: open tasks need no prior completion
         if self.mode == TaskMode.OPEN:
-            return self.status == TaskStatus.OPEN and self.completed_count == 0
-        else:
-            # Assigned tasks can only be accepted when in OPEN status
-            return self.status == TaskStatus.OPEN
+            return self.completed_count == 0
+        # Assigned tasks: just need OPEN status (checked above)
+        return True
 
     def can_join(self) -> bool:
-        """Check if a new participant can join (multi-participant mode)"""
+        """
+        Check if a new participant can join (multi-participant mode).
+
+        NOTE: This is a fast-fail pre-filter for better error messages.
+        The Lua scripts in TaskRepository perform the same checks atomically
+        and are the single source of truth under concurrent access.
+        """
         if not self.is_multi_participant:
             return False
         if self.status != TaskStatus.OPEN:
             return False
-        # Check capacity: completed + active < max (if max is set)
+        return self._has_capacity()
+
+    def _has_capacity(self) -> bool:
+        """Check capacity: completed + active < max (if max is set)"""
         if self.max_completions is not None:
-            if (self.completed_count + self.active_participants_count) >= self.max_completions:
-                return False
+            return (self.completed_count + self.active_participants_count) < self.max_completions
         return True
 
     def accept(self, agent_id: str, agent_name: str) -> None:
@@ -379,8 +400,9 @@ class Task:
 
         self.status = TaskStatus.COMPLETED
 
-        # For repeatable tasks, reset to open after completion
-        if self.is_repeatable and self.mode == TaskMode.OPEN:
+        # For multi-participant tasks, reset to open after completion
+        # (single-participant repeatable tasks go through this same path via is_multi_participant)
+        if self.is_multi_participant and self.mode == TaskMode.OPEN:
             # Check max completions
             if self.max_completions is None or self.completed_count < self.max_completions:
                 self._reset_for_next_completion()

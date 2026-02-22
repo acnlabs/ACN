@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from ..auth.middleware import get_subject, require_permission
 from ..core.entities import TaskMode, TaskStatus
 from ..services import TaskNotFoundException, TaskService
+from .dependencies import AgentApiKeyDep, InternalTokenDep  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 logger = structlog.get_logger()
@@ -598,7 +599,7 @@ async def cancel_participation(
 @router.get("/{task_id}/internal")
 async def get_task_internal(
     task_id: str,
-    x_internal_token: str = Header(..., alias="X-Internal-Token"),
+    _: InternalTokenDep,
     task_service: TaskServiceDep = None,
 ):
     """
@@ -609,20 +610,6 @@ async def get_task_internal(
 
     Requires X-Internal-Token header matching the shared INTERNAL_API_TOKEN.
     """
-    from ..config import get_settings
-
-    _settings = get_settings()
-    expected_token = _settings.internal_api_token
-
-    # Development mode: allow when token is default dev value
-    if expected_token and expected_token != "dev-internal-token-2024":
-        if x_internal_token != expected_token:
-            raise HTTPException(status_code=401, detail="Invalid internal token")
-    elif not _settings.dev_mode:
-        raise HTTPException(
-            status_code=500, detail="Internal API token not configured for production"
-        )
-
     try:
         task = await task_service.get_task(task_id)
         return task.to_dict()
@@ -634,29 +621,10 @@ async def get_task_internal(
 # For autonomous agents using API key authentication
 
 
-async def verify_agent_api_key(
-    authorization: str = Header(..., description="Bearer API_KEY"),
-    task_service: TaskServiceDep = None,
-) -> dict:
-    """Verify agent API key and return agent info"""
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization format")
-
-    api_key = authorization[7:]
-
-    # Get agent by API key via AgentService
-    # Note: This requires AgentService to be available
-    # For now, we'll just extract agent_id from the key or use a simple lookup
-    # In production, this should validate against the repository
-
-    # Placeholder - in real implementation, look up agent by API key
-    return {"api_key": api_key, "agent_id": "unknown"}
-
-
 @router.post("/agent/create", response_model=TaskResponse)
 async def agent_create_task(
     request: TaskCreateRequest,
-    authorization: str = Header(..., description="Bearer API_KEY"),
+    agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
     """
@@ -664,7 +632,6 @@ async def agent_create_task(
 
     For autonomous agents to create tasks using their API key.
     """
-    agent_info = await verify_agent_api_key(authorization)
 
     try:
         mode = TaskMode(request.mode)
@@ -693,11 +660,10 @@ async def agent_create_task(
 @router.post("/agent/{task_id}/accept", response_model=TaskResponse)
 async def agent_accept_task(
     task_id: str,
-    authorization: str = Header(..., description="Bearer API_KEY"),
+    agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
     """Accept a task (Agent API Key auth)"""
-    agent_info = await verify_agent_api_key(authorization)
 
     try:
         task = await task_service.accept_task(
@@ -717,11 +683,10 @@ async def agent_accept_task(
 async def agent_submit_task(
     task_id: str,
     request: TaskSubmitRequest,
-    authorization: str = Header(..., description="Bearer API_KEY"),
+    agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
     """Submit task result (Agent API Key auth)"""
-    agent_info = await verify_agent_api_key(authorization)
 
     try:
         task = await task_service.submit_task(

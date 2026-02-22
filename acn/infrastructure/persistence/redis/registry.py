@@ -10,7 +10,13 @@ from uuid import uuid4
 
 import redis.asyncio as redis
 
-from ....models import AgentCard, AgentInfo
+from a2a.types import (  # type: ignore[import-untyped]
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+)
+
+from ....models import AgentInfo
 
 
 class AgentRegistry:
@@ -210,11 +216,13 @@ class AgentRegistry:
         if not data:
             return None
 
-        # Parse Agent Card
+        # Parse Agent Card (stored as model_dump dict, parse back to SDK type)
         agent_card = None
         if data.get("agent_card"):
-            agent_card_dict = json.loads(data["agent_card"])
-            agent_card = AgentCard(**agent_card_dict)
+            try:
+                agent_card = AgentCard(**json.loads(data["agent_card"]))
+            except Exception:
+                agent_card = None
 
         # Parse metadata
         metadata = {}
@@ -264,8 +272,10 @@ class AgentRegistry:
         if not data or not data.get("agent_card"):
             return None
 
-        agent_card_dict = json.loads(data["agent_card"])
-        return AgentCard(**agent_card_dict)
+        try:
+            return AgentCard(**json.loads(data["agent_card"]))
+        except Exception:
+            return None
 
     async def search_agents(
         self,
@@ -437,66 +447,28 @@ class AgentRegistry:
     def _generate_agent_card(
         self, name: str, endpoint: str, skills: list[str], description: str = ""
     ) -> dict:
-        """
-        Generate a standard Agent Card (A2A compliant)
-
-        This is called automatically when an agent registers without
-        providing their own Agent Card. Supports agents from different
-        frameworks (LangChain, AutoGPT, custom, etc.)
-
-        Args:
-            name: Agent name
-            endpoint: Agent endpoint URL
-            skills: List of skill IDs
-            description: Agent description
-
-        Returns:
-            Agent Card dictionary (A2A 0.3.0 format)
-        """
-        return {
-            "protocolVersion": "0.3.0",
-            "name": name,
-            "description": description or f"{name} - Registered via ACN",
-            "url": endpoint,
-            "skills": [
-                {
-                    "id": skill,
-                    "name": skill.replace("-", " ").replace("_", " ").title(),
-                    "description": f"Capability: {skill}",
-                }
+        """Generate an A2A v0.3.0 compliant Agent Card"""
+        card = AgentCard(
+            name=name,
+            version="0.1.0",
+            description=description or f"{name} - Registered via ACN",
+            url=endpoint,
+            capabilities=AgentCapabilities(streaming=False),
+            default_input_modes=["text", "application/json"],
+            default_output_modes=["text", "application/json"],
+            skills=[
+                AgentSkill(
+                    id=skill,
+                    name=skill.replace("-", " ").replace("_", " ").title(),
+                    description=f"Capability: {skill}",
+                    tags=[skill],
+                )
                 for skill in skills
             ],
-            "authentication": {
-                "type": "bearer",
-                "description": "OAuth 2.0 Bearer Token",
-            },
-        }
+        )
+        return card.model_dump(exclude_none=True)
 
     def _validate_agent_card(self, agent_card: dict) -> bool:
-        """
-        Validate Agent Card format
-
-        Args:
-            agent_card: Agent Card dictionary
-
-        Raises:
-            ValueError: If Agent Card is invalid
-
-        Returns:
-            True if valid
-        """
-        # Support both camelCase and snake_case for compatibility
-        required_fields = {
-            "protocolVersion": ["protocolVersion", "protocol_version"],
-            "name": ["name"],
-            "url": ["url", "endpoint"],
-        }
-
-        for canonical_name, field_variants in required_fields.items():
-            if not any(variant in agent_card for variant in field_variants):
-                raise ValueError(
-                    f"Agent Card missing required field: {canonical_name} "
-                    f"(tried: {', '.join(field_variants)})"
-                )
-
+        """Validate Agent Card by parsing with SDK type (raises on invalid)"""
+        AgentCard(**agent_card)
         return True

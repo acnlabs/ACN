@@ -15,10 +15,20 @@ Based on A2A Protocol: https://github.com/a2aproject/A2A
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import redis.asyncio as aioredis
 import structlog  # type: ignore[import-untyped]
+from slowapi import _rate_limit_exceeded_handler  # type: ignore[import-untyped]
+from slowapi.errors import RateLimitExceeded  # type: ignore[import-untyped]
+from a2a.types import (  # type: ignore[import-untyped]
+    AgentCapabilities,
+    AgentCard as A2AAgentCard,
+    AgentProvider,
+    AgentSkill,
+    SecurityScheme as A2ASecurityScheme,
+)
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from .config import get_settings
 from .infrastructure.messaging import (
@@ -50,6 +60,7 @@ from .routes import (
     tasks,
     websocket,
 )
+from .routes.dependencies import limiter
 from .services import AgentService, BillingService, MessageService, SubnetService, TaskService
 from .services.activity_service import ActivityService
 from .services.auth0_client import Auth0CredentialClient
@@ -70,10 +81,8 @@ async def lifespan(app: FastAPI):
 
     # Initialize Auth0 Credential Client (for Agent M2M credentials)
     auth0_credential_client = Auth0CredentialClient(
-        backend_url=settings.backend_url
-        if hasattr(settings, "backend_url")
-        else "http://localhost:8000",
-        internal_token=getattr(settings, "internal_api_token", None),
+        backend_url=settings.backend_url,
+        internal_token=settings.internal_api_token,
     )
 
     # Initialize Clean Architecture services
@@ -89,7 +98,10 @@ async def lifespan(app: FastAPI):
     router_instance = MessageRouter(registry_instance, registry_instance.redis)
     message_service_instance = MessageService(router_instance, agent_repository)
     broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
-    ws_manager_instance = WebSocketManager(registry_instance.redis)
+    ws_manager_instance = WebSocketManager(
+        registry_instance.redis,
+        max_connections=settings.max_websocket_connections,
+    )
     subnet_manager_instance = SubnetManager(
         registry=registry_instance,
         redis_client=registry_instance.redis,
@@ -115,9 +127,7 @@ async def lifespan(app: FastAPI):
     billing_service_instance = BillingService(
         redis=registry_instance.redis,
         agent_service=agent_service_instance,
-        webhook_url=settings.billing_webhook_url
-        if hasattr(settings, "billing_webhook_url")
-        else None,
+        webhook_url=settings.billing_webhook_url,
     )
 
     # Initialize Activity Service
@@ -125,10 +135,8 @@ async def lifespan(app: FastAPI):
 
     # Initialize Escrow Client (for Labs task budget management)
     escrow_client_instance = EscrowClient(
-        backend_url=settings.backend_url
-        if hasattr(settings, "backend_url")
-        else "http://localhost:8000",
-        internal_token=getattr(settings, "internal_api_token", None),
+        backend_url=settings.backend_url,
+        internal_token=settings.internal_api_token,
     )
 
     # Initialize Task Pool and Service
@@ -168,7 +176,7 @@ async def lifespan(app: FastAPI):
 
     # Mount A2A Protocol - Infrastructure Agent
     try:
-        a2a_app = await create_a2a_app(
+        a2a_app = create_a2a_app(
             registry=registry_instance,
             router=router_instance,
             broadcast=broadcast_instance,
@@ -186,6 +194,7 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     logger.info("acn_stopping")
+    await router_instance.close()
     await registry_instance.redis.close()
     logger.info("acn_stopped")
 
@@ -196,15 +205,23 @@ app = FastAPI(
     description="Infrastructure for AI agent coordination and communication",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if settings.enable_docs else None,
+    redoc_url="/redoc" if settings.enable_docs else None,
+    openapi_url="/openapi.json" if settings.enable_docs else None,
 )
+
+# Rate limiter state and error handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Internal-Token"],
+    allow_private_network=False,
 )
 
 # Include routers
@@ -228,18 +245,41 @@ app.include_router(websocket.router)
 @app.get("/")
 async def root():
     """API root"""
-    return {
+    response = {
         "name": "ACN - Agent Collaboration Network",
         "version": "0.1.0",
-        "docs": "/docs",
         "agent_card": "/.well-known/agent-card.json",
     }
+    if settings.enable_docs:
+        response["docs"] = "/docs"
+    return response
 
 
 @app.get("/health")
 async def health():
-    """Health check"""
-    return {"status": "healthy"}
+    """Health check — verifies liveness and key dependency connectivity."""
+    redis_status = "unknown"
+    try:
+        r = aioredis.from_url(settings.redis_url, socket_connect_timeout=2)
+        await r.ping()
+        await r.aclose()
+        redis_status = "ok"
+    except Exception:
+        redis_status = "error"
+
+    overall = "healthy" if redis_status == "ok" else "degraded"
+    status_code = 200 if overall == "healthy" else 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": overall,
+            "version": settings.service_version,
+            "dependencies": {
+                "redis": redis_status,
+            },
+        },
+    )
 
 
 @app.get("/skill.md", response_class=PlainTextResponse)
@@ -267,61 +307,80 @@ Docs: /docs
 
 @app.get("/.well-known/agent-card.json")
 async def get_acn_agent_card():
-    """ACN Agent Card (A2A Protocol)"""
+    """ACN infrastructure Agent Card (A2A Protocol compliant).
+
+    For per-agent cards use: GET /api/v1/agents/{agent_id}/.well-known/agent-card.json
+    """
     try:
-        # Base card structure
-        card = {
-            "name": "ACN",
-            "description": "Agent Collaboration Network - Infrastructure for AI agent coordination",
-            "protocolVersion": "0.4.0",
-            "url": settings.gateway_base_url,
-            "capabilities": {
-                "streaming": False,
-                "batchProcessing": False,
-            },
-            "defaultInputModes": ["text/plain", "application/json"],
-            "defaultOutputModes": ["text/plain", "application/json"],
-            "version": "0.1.0",
-            "skills": [
-                {
-                    "name": "agent_discovery",
-                    "description": "Discover and search for agents by skill, status, owner, or name",
-                    "tags": ["discovery", "search", "registry"],
-                },
-                {
-                    "name": "message_broadcast",
-                    "description": "Broadcast messages to multiple agents using various strategies",
-                    "tags": ["broadcast", "communication", "messaging"],
-                },
-                {
-                    "name": "message_routing",
-                    "description": "Route messages to specific agents with priority support",
-                    "tags": ["routing", "messaging", "direct"],
-                },
-                {
-                    "name": "subnet_management",
-                    "description": "Create and manage agent subnets for organized collaboration",
-                    "tags": ["subnets", "organization", "groups"],
-                },
-            ],
-        }
+        security_schemes = None
+        security = None
 
-        # Add auth if configured
-        if hasattr(settings, "auth0_domain") and settings.auth0_domain:
-            card["auth"] = {
-                "type": "oauth2",
-                "oauth2": {
-                    "authorizationUrl": f"{settings.auth0_domain}/authorize",
-                    "tokenUrl": f"{settings.auth0_domain}/oauth/token",
-                    "scopes": {
-                        "acn:read": "Read agent information and search agents",
-                        "acn:write": "Register and update agents",
-                        "acn:admin": "Full administrative access",
-                    },
-                },
+        if settings.auth0_domain:
+            security_schemes = {
+                "oauth2": A2ASecurityScheme(
+                    type="openIdConnect",
+                    openIdConnectUrl=f"{settings.auth0_domain}/.well-known/openid-configuration",
+                ),
             }
+            security = [{"oauth2": []}]
 
-        return card
+        card = A2AAgentCard(
+            protocol_version=settings.a2a_protocol_version,
+            name="ACN",
+            version=settings.service_version,
+            description="Agent Collaboration Network - Infrastructure for AI agent coordination",
+            url=settings.gateway_base_url,
+            provider=AgentProvider(
+                organization="AgentPlanet",
+                url="https://agenticplanet.space",
+            ),
+            documentation_url=f"{settings.gateway_base_url}/skill.md",
+            capabilities=AgentCapabilities(
+                streaming=False,
+                push_notifications=False,
+                state_transition_history=False,
+            ),
+            default_input_modes=["text", "application/json"],
+            default_output_modes=["text", "application/json"],
+            security_schemes=security_schemes,
+            security=security,
+            skills=[
+                AgentSkill(
+                    id="acn:discovery",
+                    name="Agent Discovery",
+                    description="Discover and search for agents by skill, status, owner, or name",
+                    tags=["discovery", "search", "registry"],
+                    input_modes=["application/json"],
+                    output_modes=["application/json"],
+                ),
+                AgentSkill(
+                    id="acn:broadcast",
+                    name="Message Broadcasting",
+                    description="Broadcast messages to multiple agents using various strategies",
+                    tags=["broadcast", "communication", "messaging"],
+                    input_modes=["application/json"],
+                    output_modes=["application/json"],
+                ),
+                AgentSkill(
+                    id="acn:routing",
+                    name="Message Routing",
+                    description="Route messages to specific agents with priority support",
+                    tags=["routing", "messaging", "direct"],
+                    input_modes=["text", "application/json"],
+                    output_modes=["text", "application/json"],
+                ),
+                AgentSkill(
+                    id="acn:subnet",
+                    name="Subnet Management",
+                    description="Create and manage agent subnets for organized collaboration",
+                    tags=["subnets", "organization", "groups"],
+                    input_modes=["application/json"],
+                    output_modes=["application/json"],
+                ),
+            ],
+        )
+
+        return card.model_dump(exclude_none=True)
 
     except Exception as e:
         logger.error("agent_card_error", error=str(e))

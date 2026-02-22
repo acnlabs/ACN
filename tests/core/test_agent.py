@@ -39,15 +39,22 @@ class TestAgentEntity:
                 endpoint="https://agent.example.com",
             )
 
-    def test_agent_validation_empty_owner(self):
-        """Test agent requires non-empty owner"""
-        with pytest.raises(ValueError, match="owner cannot be empty"):
-            Agent(
-                agent_id="agent-123",
-                owner="",
-                name="Test Agent",
-                endpoint="https://agent.example.com",
-            )
+    def test_agent_owner_is_optional(self):
+        """Test agent allows empty or None owner (autonomous agents)"""
+        agent = Agent(
+            agent_id="agent-123",
+            owner="",
+            name="Test Agent",
+            endpoint="https://agent.example.com",
+        )
+        assert agent.owner == ""
+
+        agent_no_owner = Agent(
+            agent_id="agent-456",
+            name="Test Agent 2",
+            endpoint="https://agent.example.com",
+        )
+        assert agent_no_owner.owner is None
 
     def test_is_online(self):
         """Test is_online check"""

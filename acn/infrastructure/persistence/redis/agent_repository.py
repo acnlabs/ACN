@@ -53,6 +53,8 @@ class RedisAgentRepository(IAgentRepository):
         agent_dict["metadata"] = json.dumps(agent_dict.get("metadata", {}))
         if agent_dict.get("token_pricing"):
             agent_dict["token_pricing"] = json.dumps(agent_dict["token_pricing"])
+        if agent_dict.get("agent_card"):
+            agent_dict["agent_card"] = json.dumps(agent_dict["agent_card"])
 
         # Filter out None values (Redis doesn't accept None)
         # Also convert booleans to strings for Redis compatibility
@@ -285,6 +287,9 @@ class RedisAgentRepository(IAgentRepository):
             "payment_methods": json.loads(agent_dict.get("payment_methods", "[]")),
             "token_pricing": (
                 json.loads(agent_dict["token_pricing"]) if agent_dict.get("token_pricing") else None
+            ),
+            "agent_card": (
+                json.loads(agent_dict["agent_card"]) if agent_dict.get("agent_card") else None
             ),
             # Auth0 M2M 凭证（client_secret 不持久化）
             "auth0_client_id": agent_dict.get("auth0_client_id"),

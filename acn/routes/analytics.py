@@ -3,11 +3,11 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from .dependencies import AnalyticsDep, RegistryDep  # type: ignore[import-untyped]
 from ..services.activity_service import ActivityService
+from .dependencies import AgentApiKeyDep, AnalyticsDep, RegistryDep, get_agent_service  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
@@ -81,25 +81,47 @@ async def list_activities(
     task_id: str | None = None,
     agent_id: str | None = None,
     agent_ids: str | None = None,  # Comma-separated list of agent IDs
+    authorization: str | None = Header(None, alias="Authorization"),
     registry: RegistryDep = None,
 ):
     """
-    Get recent network activities
+    Get recent network activities.
+
+    Without filters: public endpoint, returns latest network-wide activity feed.
+    With `agent_id` / `agent_ids` filter: requires Agent API Key (`Authorization: Bearer <key>`);
+    the authenticated agent may only query its own activity.
 
     Query parameters:
     - limit: Maximum number of activities to return (default: 20)
     - user_id: Filter by user/actor (optional)
     - task_id: Filter by task (optional)
-    - agent_id: Filter by single agent (optional)
-    - agent_ids: Filter by multiple agents, comma-separated (optional)
-
-    Example:
-    ```bash
-    curl https://acn.agenticplanet.space/api/v1/analytics/activities?limit=20
-    curl https://acn.agenticplanet.space/api/v1/analytics/activities?user_id=user123
-    curl https://acn.agenticplanet.space/api/v1/analytics/activities?agent_ids=agent1,agent2
-    ```
+    - agent_id: Filter by single agent (optional, requires auth)
+    - agent_ids: Filter by multiple agents, comma-separated (optional, requires auth)
     """
+    # Enforce auth when filtering by specific agent identity to prevent enumeration
+    if agent_id or agent_ids:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="Authorization header required when filtering by agent_id or agent_ids",
+            )
+        api_key = authorization[7:]
+        agent_service = get_agent_service()
+        authed_agent = await agent_service.get_agent_by_api_key(api_key)
+        if not authed_agent:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        # Agent may only query its own activity
+        requested_ids = set()
+        if agent_id:
+            requested_ids.add(agent_id)
+        if agent_ids:
+            requested_ids.update(aid.strip() for aid in agent_ids.split(",") if aid.strip())
+        if any(aid != authed_agent.agent_id for aid in requested_ids):
+            raise HTTPException(
+                status_code=403,
+                detail="API key does not match the requested agent_id(s)",
+            )
     # Create ActivityService with registry's redis
     activity_service = ActivityService(redis=registry.redis)
     

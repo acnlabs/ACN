@@ -78,8 +78,9 @@ class MessageRouter:
         self.registry = registry
         self.redis = redis_client
 
-        # Cache of A2A clients by endpoint
+        # Cache of A2A clients by endpoint (capped to prevent unbounded growth)
         self._clients: dict[str, A2AClient] = {}
+        self._clients_max: int = 256
 
         # Message handlers for incoming messages
         self._handlers: dict[str, list[Callable]] = {}
@@ -97,8 +98,19 @@ class MessageRouter:
             A2AClient instance
         """
         if endpoint not in self._clients:
-            # Create A2A client with httpx AsyncClient
-            httpx_client = httpx.AsyncClient(timeout=30.0)
+            if len(self._clients) >= self._clients_max:
+                # Evict the oldest entry to keep memory bounded
+                oldest = next(iter(self._clients))
+                try:
+                    old_client = self._clients.pop(oldest)
+                    if hasattr(old_client, "httpx_client") and old_client.httpx_client:
+                        await old_client.httpx_client.aclose()
+                except Exception:
+                    pass
+            httpx_client = httpx.AsyncClient(
+                timeout=30.0,
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            )
             self._clients[endpoint] = A2AClient(
                 httpx_client=httpx_client,
                 url=endpoint,
@@ -106,6 +118,17 @@ class MessageRouter:
             logger.debug(f"Created A2A client for {endpoint}")
 
         return self._clients[endpoint]
+
+    async def close(self) -> None:
+        """Close all cached A2A clients and their underlying httpx connections"""
+        for endpoint, client in self._clients.items():
+            try:
+                if hasattr(client, 'httpx_client') and client.httpx_client:
+                    await client.httpx_client.aclose()
+            except Exception as e:
+                logger.warning("failed_to_close_a2a_client", endpoint=endpoint, error=str(e))
+        self._clients.clear()
+        logger.info("message_router_closed", clients_cleared=True)
 
     async def route(
         self,
@@ -414,29 +437,34 @@ class MessageRouter:
         }
 
         await self.redis.lpush("acn:dlq", json.dumps(dlq_entry))
+        # Cap DLQ to prevent unbounded Redis memory growth (keep newest 10,000 entries)
+        await self.redis.ltrim("acn:dlq", 0, 9999)
         logger.warning(f"Message {route_id} added to DLQ")
 
-    async def retry_dlq(self, max_retries: int = 3) -> int:
+    async def retry_dlq(self, max_retries: int = 3, batch_limit: int = 100) -> int:
         """
         Retry messages in dead letter queue
 
         Args:
-            max_retries: Maximum retry attempts
+            max_retries: Maximum retry attempts per message
+            batch_limit: Maximum messages to process per call to prevent long blocking
 
         Returns:
             Number of successfully retried messages
         """
         success_count = 0
+        processed = 0
 
-        while True:
+        while processed < batch_limit:
             entry_json = await self.redis.rpop("acn:dlq")
             if not entry_json:
                 break
 
+            processed += 1
             entry = json.loads(entry_json)
 
             if entry["retry_count"] >= max_retries:
-                logger.error(f"Message {entry['route_id']} exceeded max retries")
+                logger.error(f"Message {entry['route_id']} exceeded max retries, discarding")
                 continue
 
             entry["retry_count"] += 1
@@ -469,6 +497,7 @@ class MessageRouter:
             except Exception as e:
                 logger.error(f"DLQ retry failed: {e}")
                 await self.redis.lpush("acn:dlq", json.dumps(entry))
+                await self.redis.ltrim("acn:dlq", 0, 9999)
 
         return success_count
 

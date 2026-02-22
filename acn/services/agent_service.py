@@ -58,6 +58,7 @@ class AgentService:
         subnet_ids: list[str] | None = None,
         description: str | None = None,
         metadata: dict | None = None,
+        agent_card: dict | None = None,
         wallet_address: str | None = None,
         accepts_payment: bool = False,
         payment_methods: list[str] | None = None,
@@ -93,6 +94,8 @@ class AgentService:
             existing_agent.description = description
             existing_agent.skills = skills or []
             existing_agent.metadata = metadata or {}
+            if agent_card is not None:
+                existing_agent.agent_card = agent_card
 
             # Update subnets if provided
             if subnet_ids:
@@ -122,6 +125,7 @@ class AgentService:
             skills=skills or [],
             subnet_ids=subnet_ids or ["public"],
             metadata=metadata or {},
+            agent_card=agent_card,
             wallet_address=wallet_address,
             accepts_payment=accepts_payment,
             payment_methods=payment_methods or [],

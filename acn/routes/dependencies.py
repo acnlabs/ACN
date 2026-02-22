@@ -3,9 +3,13 @@
 Provides dependency injection for core services.
 """
 
-from typing import Annotated
+import secrets
+import time
+from typing import Annotated, Any
 
-from fastapi import Depends
+from fastapi import Depends, Header, HTTPException
+from slowapi import Limiter  # type: ignore[import-untyped]
+from slowapi.util import get_remote_address  # type: ignore[import-untyped]
 
 from ..auth.middleware import get_subject
 from ..config import get_settings
@@ -21,6 +25,9 @@ from ..protocols.ap2 import PaymentDiscoveryService, PaymentTaskManager, Webhook
 from ..services import AgentService, BillingService, MessageService, SubnetService
 
 settings = get_settings()
+
+# Shared rate limiter — single instance used by all routers
+limiter = Limiter(key_func=get_remote_address)
 
 # Global service instances (initialized in lifespan)
 _registry: AgentRegistry | None = None
@@ -212,3 +219,77 @@ BillingServiceDep = Annotated[BillingService, Depends(get_billing_service)]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]
+
+
+# ---------------------------------------------------------------------------
+# Agent API Key authentication — with in-memory cache to reduce Redis load
+# ---------------------------------------------------------------------------
+
+_API_KEY_CACHE_TTL = 60.0  # seconds
+_API_KEY_CACHE_MAX = 10_000  # max entries to prevent unbounded growth
+# {api_key: (agent_id, name, expires_at)}
+_api_key_cache: dict[str, tuple[str, str, float]] = {}
+
+
+def _get_cached_agent(api_key: str) -> dict | None:
+    entry = _api_key_cache.get(api_key)
+    if entry and entry[2] > time.monotonic():
+        return {"agent_id": entry[0], "name": entry[1]}
+    if entry:
+        del _api_key_cache[api_key]
+    return None
+
+
+def _cache_agent(api_key: str, agent_id: str, name: str) -> dict:
+    # Evict all expired entries when the cache is full
+    if len(_api_key_cache) >= _API_KEY_CACHE_MAX:
+        now = time.monotonic()
+        expired = [k for k, v in _api_key_cache.items() if v[2] <= now]
+        for k in expired:
+            del _api_key_cache[k]
+    _api_key_cache[api_key] = (agent_id, name, time.monotonic() + _API_KEY_CACHE_TTL)
+    return {"agent_id": agent_id, "name": name}
+
+
+async def verify_agent_api_key(
+    authorization: str = Header(..., alias="Authorization", description="Bearer <API_KEY>"),
+    agent_service: AgentService = Depends(get_agent_service),
+) -> dict:
+    """Verify an agent's API key and return {agent_id, name}.
+
+    Results are cached in-memory for 60 s (max 10 000 entries) to reduce Redis lookups.
+    """
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authorization header format, expected: Bearer <API_KEY>",
+        )
+    api_key = authorization[7:]
+
+    cached = _get_cached_agent(api_key)
+    if cached:
+        return cached
+
+    agent = await agent_service.get_agent_by_api_key(api_key)
+    if not agent:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    return _cache_agent(api_key, agent.agent_id, agent.name)
+
+
+AgentApiKeyDep = Annotated[dict, Depends(verify_agent_api_key)]
+
+
+# ---------------------------------------------------------------------------
+# Internal service token authentication
+# ---------------------------------------------------------------------------
+
+def verify_internal_token(
+    x_internal_token: str = Header(..., alias="X-Internal-Token"),
+) -> None:
+    """Verify X-Internal-Token for ACN-internal / operator endpoints."""
+    if not secrets.compare_digest(x_internal_token, settings.internal_api_token):
+        raise HTTPException(status_code=403, detail="Invalid internal token")
+
+
+InternalTokenDep = Annotated[None, Depends(verify_internal_token)]

@@ -1,0 +1,76 @@
+groups:
+  - name: acn.service
+    interval: 30s
+    rules:
+      # ACN scrape target is completely unreachable
+      - alert: ACNServiceDown
+        expr: up{job="acn-docker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ACN service is down"
+          description: "ACN has been unreachable for more than 1 minute."
+
+      # High HTTP 5xx error rate (uses FastAPI / Starlette built-in metrics)
+      - alert: ACNHighErrorRate
+        expr: >
+          (
+            sum(rate(http_requests_total{job="acn-docker", status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="acn-docker"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ACN API error rate is high"
+          description: >-
+            More than 5% of requests are returning 5xx errors over the last
+            5 minutes (current: {{ humanizePercentage $value }}).
+
+      # P99 response time > 2 seconds
+      - alert: ACNHighLatency
+        expr: >
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket{job="acn-docker"}[5m])) by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ACN API P99 latency is high"
+          description: >-
+            P99 response time has exceeded 2 seconds for more than 5 minutes
+            (current: {{ $value | humanizeDuration }}).
+
+  - name: acn.redis
+    interval: 30s
+    rules:
+      # Redis scrape target is down
+      # NOTE: Requires redis_exporter sidecar. Add it to docker-compose to enable.
+      - alert: RedisDown
+        expr: up{job="redis-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis exporter is down"
+          description: >-
+            The Redis exporter has been unreachable for more than 1 minute.
+            Redis may be down or the exporter is not running.
+
+      # Redis memory usage > 80%
+      # NOTE: Requires redis_exporter sidecar.
+      - alert: RedisHighMemoryUsage
+        expr: >
+          redis_memory_used_bytes{job="redis-exporter"}
+          / redis_memory_max_bytes{job="redis-exporter"} > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage is high"
+          description: >-
+            Redis memory usage has exceeded 80% for more than 5 minutes
+            (current: {{ humanizePercentage $value }}).

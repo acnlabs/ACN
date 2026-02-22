@@ -14,7 +14,9 @@ from ..protocols.ap2 import (
 )
 from ..services.billing_service import BillingTransactionStatus
 from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
     BillingServiceDep,
+    InternalTokenDep,
     PaymentDiscoveryDep,
     PaymentTasksDep,
     RegistryDep,
@@ -73,10 +75,16 @@ class BillUsageRequest(BaseModel):
 async def set_payment_capability(
     agent_id: str,
     request: PaymentCapabilityRequest,
+    agent_info: AgentApiKeyDep,
     registry: RegistryDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
-    """Set payment capability for agent"""
+    """Set payment capability for agent (requires Agent API Key)
+
+    The authenticated agent must match the path `agent_id`.
+    """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     agent = await registry.get_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -124,9 +132,18 @@ async def discover_payment_agents(
 @router.post("/tasks")
 async def create_payment_task(
     request: CreatePaymentTaskRequest,
+    agent_info: AgentApiKeyDep,
     payment_tasks: PaymentTasksDep = None,
 ):
-    """Create a payment task"""
+    """Create a payment task (requires Agent API Key)
+
+    The authenticated agent must match the `from_agent` field to prevent spoofing.
+    """
+    if agent_info["agent_id"] != request.from_agent:
+        raise HTTPException(
+            status_code=403,
+            detail="Authenticated agent does not match from_agent field",
+        )
     try:
         task_id = await payment_tasks.create_task(
             from_agent=request.from_agent,
@@ -202,14 +219,18 @@ async def get_billing_config():
 async def set_token_pricing(
     agent_id: str,
     request: TokenPricingRequest,
+    agent_info: AgentApiKeyDep,
     registry: RegistryDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """
-    Set token-based pricing for an agent.
-    
+    Set token-based pricing for an agent (requires Agent API Key).
+
+    The authenticated agent must match the path `agent_id`.
     This enables OpenAI-style per-token billing for the agent.
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     agent = await registry.get_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -308,13 +329,15 @@ async def estimate_cost(
 @router.post("/billing/charge")
 async def bill_usage(
     request: BillUsageRequest,
+    _: InternalTokenDep,
     payment_discovery: PaymentDiscoveryDep = None,
     billing_service: BillingServiceDep = None,
     registry: RegistryDep = None,
 ):
     """
-    Bill token usage after a service call.
-    
+    Bill token usage after a service call (requires X-Internal-Token).
+
+    Restricted to ACN backend — triggered after actual service call completes.
     This creates a billing transaction and returns the cost breakdown.
     The actual credit deduction is handled by the backend wallet system.
     """
@@ -409,8 +432,9 @@ async def get_user_billing_stats(
 
 @router.get("/billing/network-fees")
 async def get_network_fee_stats(
+    _: InternalTokenDep,
     billing_service: BillingServiceDep = None,
 ):
-    """Get network fee statistics (admin endpoint)"""
+    """Get network fee statistics (requires X-Internal-Token)"""
     stats = await billing_service.get_network_fee_stats()
     return stats

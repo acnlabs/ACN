@@ -5,15 +5,18 @@ Clean Architecture implementation: Route → MessageService → MessageRouter
 
 import structlog  # type: ignore[import-untyped]
 from a2a.types import Message, TextPart  # type: ignore[import-untyped]
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..core.exceptions import AgentNotFoundException
 from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
     AuditDep,
+    InternalTokenDep,
     MessageServiceDep,
     MetricsDep,
     RouterDep,
+    limiter,
 )
 
 router = APIRouter(prefix="/api/v1/communication", tags=["communication"])
@@ -43,61 +46,61 @@ class BroadcastBySkillRequest(BaseModel):
 
 
 @router.post("/send")
+@limiter.limit("60/minute")
 async def send_message(
-    request: SendMessageRequest,
+    request: Request,
+    body: SendMessageRequest,
+    agent_info: AgentApiKeyDep,
     message_service: MessageServiceDep = None,
     metrics: MetricsDep = None,
     audit: AuditDep = None,
 ):
-    """Send message to specific agent
+    """Send message to specific agent (requires Agent API Key, 60/min per IP)
 
+    The authenticated agent must match the `from_agent` field to prevent spoofing.
     Clean Architecture: Route → MessageService → Repository + MessageRouter
     """
+    if agent_info["agent_id"] != body.from_agent:
+        raise HTTPException(
+            status_code=403,
+            detail="Authenticated agent does not match from_agent field",
+        )
     try:
-        # Convert dict to A2A Message (simplified)
-        # In production, use proper A2A Message construction
         message = Message(
             role="user",
-            parts=[TextPart(text=str(request.message))],
+            parts=[TextPart(text=str(body.message))],
         )
 
-        # Use MessageService (Clean Architecture)
         result = await message_service.send_message(
-            from_agent_id=request.from_agent,
-            to_agent_id=request.target_agent,
+            from_agent_id=body.from_agent,
+            to_agent_id=body.target_agent,
             message=message,
-            priority=request.priority,
+            priority=body.priority,
         )
 
-        # Record metrics
         await metrics.record_message(
-            from_agent=request.from_agent,
-            to_agent=request.target_agent,
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
             message_type="direct",
             success=True,
         )
 
-        # Audit log
         await audit.log_event(
             event_type="message_sent",
-            actor=request.from_agent,
-            resource=request.target_agent,
+            actor=body.from_agent,
+            resource=body.target_agent,
             details={"message_id": result.get("message_id")},
         )
 
-        logger.info(
-            "message_sent",
-            from_agent=request.from_agent,
-            to_agent=request.target_agent,
-        )
+        logger.info("message_sent", from_agent=body.from_agent, to_agent=body.target_agent)
 
         return result
 
     except AgentNotFoundException as e:
         logger.error("message_send_failed", error=str(e))
         await metrics.record_message(
-            from_agent=request.from_agent,
-            to_agent=request.target_agent,
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
             message_type="direct",
             success=False,
         )
@@ -106,8 +109,8 @@ async def send_message(
     except Exception as e:
         logger.error("message_send_failed", error=str(e))
         await metrics.record_message(
-            from_agent=request.from_agent,
-            to_agent=request.target_agent,
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
             message_type="direct",
             success=False,
         )
@@ -115,32 +118,38 @@ async def send_message(
 
 
 @router.post("/broadcast")
+@limiter.limit("10/minute")
 async def broadcast_message(
-    request: BroadcastRequest,
+    request: Request,
+    body: BroadcastRequest,
+    agent_info: AgentApiKeyDep,
     message_service: MessageServiceDep = None,
     metrics: MetricsDep = None,
 ):
-    """Broadcast message to multiple agents
+    """Broadcast message to multiple agents (requires Agent API Key, 10/min per IP)
 
+    The authenticated agent must match the `from_agent` field to prevent spoofing.
     Clean Architecture: Route → MessageService → Repository + MessageRouter
     """
+    if agent_info["agent_id"] != body.from_agent:
+        raise HTTPException(
+            status_code=403,
+            detail="Authenticated agent does not match from_agent field",
+        )
     try:
-        # Convert dict to A2A Message
         message = Message(
             role="user",
-            parts=[TextPart(text=str(request.message))],
+            parts=[TextPart(text=str(body.message))],
         )
 
-        # Use MessageService (Clean Architecture)
         responses = await message_service.broadcast_message(
-            from_agent_id=request.from_agent,
+            from_agent_id=body.from_agent,
             message=message,
-            subnet_id=request.target_subnet,
-            skills=request.target_skills,
-            strategy=request.strategy,
+            subnet_id=body.target_subnet,
+            skills=body.target_skills,
+            strategy=body.strategy,
         )
 
-        # Record metrics
         success_count = len([r for r in responses if r.get("status") == "success"])
         await metrics.record_broadcast(
             message_type="broadcast",
@@ -150,14 +159,14 @@ async def broadcast_message(
 
         logger.info(
             "message_broadcasted",
-            from_agent=request.from_agent,
+            from_agent=body.from_agent,
             target_count=len(responses),
             success_count=success_count,
         )
 
         return {
             "status": "broadcasted",
-            "from_agent": request.from_agent,
+            "from_agent": body.from_agent,
             "responses": responses,
             "total": len(responses),
             "successful": success_count,
@@ -178,35 +187,40 @@ async def broadcast_message(
 
 
 @router.post("/broadcast-by-skill")
+@limiter.limit("10/minute")
 async def broadcast_by_skill(
-    request: BroadcastBySkillRequest,
+    request: Request,
+    body: BroadcastBySkillRequest,
+    agent_info: AgentApiKeyDep,
     message_service: MessageServiceDep = None,
     metrics: MetricsDep = None,
 ):
-    """Broadcast to agents with specific skills
+    """Broadcast to agents with specific skills (requires Agent API Key, 10/min per IP)
 
+    The authenticated agent must match the `from_agent` field to prevent spoofing.
     Clean Architecture: Route → MessageService → Repository
     """
+    if agent_info["agent_id"] != body.from_agent:
+        raise HTTPException(
+            status_code=403,
+            detail="Authenticated agent does not match from_agent field",
+        )
     try:
-        # Convert dict to A2A Message
         message = Message(
             role="user",
-            parts=[TextPart(text=str(request.message))],
+            parts=[TextPart(text=str(body.message))],
         )
 
-        # Use MessageService with skill filter
         responses = await message_service.broadcast_message(
-            from_agent_id=request.from_agent,
+            from_agent_id=body.from_agent,
             message=message,
-            skills=request.skills,
+            skills=body.skills,
             strategy="parallel",
         )
 
-        # Apply limit if specified
-        if request.limit:
-            responses = responses[: request.limit]
+        if body.limit:
+            responses = responses[: body.limit]
 
-        # Record metrics
         success_count = len([r for r in responses if r.get("status") == "success"])
         await metrics.record_broadcast(
             message_type="skill_broadcast",
@@ -216,15 +230,15 @@ async def broadcast_by_skill(
 
         logger.info(
             "skill_broadcast_completed",
-            from_agent=request.from_agent,
-            skills=request.skills,
+            from_agent=body.from_agent,
+            skills=body.skills,
             target_count=len(responses),
         )
 
         return {
             "status": "broadcasted",
-            "from_agent": request.from_agent,
-            "skills": request.skills,
+            "from_agent": body.from_agent,
+            "skills": body.skills,
             "responses": responses,
             "total": len(responses),
             "successful": success_count,
@@ -242,13 +256,20 @@ async def broadcast_by_skill(
 @router.get("/history/{agent_id}")
 async def get_message_history(
     agent_id: str,
+    agent_info: AgentApiKeyDep,
     limit: int = Query(default=100, le=1000),
     message_service: MessageServiceDep = None,
 ):
-    """Get message history for agent
+    """Get message history for agent (requires Agent API Key)
 
+    An agent may only retrieve its own message history.
     Clean Architecture: Route → MessageService → MessageRouter
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="API key does not match agent_id",
+        )
     try:
         # Use MessageService
         history = await message_service.get_message_history(
@@ -276,11 +297,13 @@ async def get_message_history(
 
 @router.post("/retry-dlq")
 async def retry_dead_letter_queue(
+    _: InternalTokenDep,
     max_retries: int = Query(default=3, le=10),
     router: RouterDep = None,
 ):
-    """Retry messages from dead letter queue
+    """Retry messages from dead letter queue (requires X-Internal-Token)
 
+    Infrastructure operation restricted to ACN operators.
     Note: Uses MessageRouter directly (infrastructure operation)
     """
     try:

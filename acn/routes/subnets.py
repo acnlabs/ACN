@@ -11,6 +11,7 @@ from ..config import get_settings
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
 from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
     AgentServiceDep,
     SubnetServiceDep,
 )
@@ -152,13 +153,18 @@ async def get_subnet_agents(
 async def join_subnet(
     agent_id: str,
     subnet_id: str,
+    agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
 ):
-    """Agent joins a subnet
+    """Agent joins a subnet (requires Agent API Key)
 
+    The authenticated agent must match the path `agent_id`.
     Clean Architecture: Route → Service → Repository
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+
     # Verify subnet exists
     try:
         await subnet_service.get_subnet(subnet_id)
@@ -186,13 +192,18 @@ async def join_subnet(
 async def leave_subnet(
     agent_id: str,
     subnet_id: str,
+    agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
 ):
-    """Agent leaves a subnet
+    """Agent leaves a subnet (requires Agent API Key)
 
+    The authenticated agent must match the path `agent_id`.
     Clean Architecture: Route → Service → Repository
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+
     try:
         await agent_service.leave_subnet(agent_id, subnet_id)
         await subnet_service.remove_member(subnet_id, agent_id)
@@ -212,12 +223,16 @@ async def leave_subnet(
 @router.get("/{agent_id}/subnets")
 async def get_agent_subnets(
     agent_id: str,
+    agent_info: AgentApiKeyDep,
     agent_service: AgentServiceDep = None,
 ):
-    """Get subnets an agent belongs to
+    """Get subnets an agent belongs to (requires Agent API Key)
 
+    An agent may only query its own subnet membership.
     Clean Architecture: Route → AgentService → Repository
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     try:
         agent = await agent_service.get_agent(agent_id)
         return {"agent_id": agent_id, "subnets": agent.subnet_ids}

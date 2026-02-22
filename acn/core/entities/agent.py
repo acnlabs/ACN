@@ -71,6 +71,9 @@ class Agent:
     # Owner change tracking
     owner_changed_at: datetime | None = None
 
+    # A2A Agent Card (stored as raw dict; provided by registrant or auto-generated on demand)
+    agent_card: dict | None = None
+
     # Payment capabilities
     wallet_address: str | None = None
     accepts_payment: bool = False
@@ -197,10 +200,6 @@ class Agent:
 
     # [DELETED] set_owner_share() - 不再支持自动分成
 
-    def has_sufficient_balance(self, amount: float) -> bool:
-        """Check if agent has sufficient balance."""
-        return self.balance >= amount
-
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization"""
         return {
@@ -226,6 +225,8 @@ class Agent:
             "owner_changed_at": self.owner_changed_at.isoformat()
             if self.owner_changed_at
             else None,
+            # Agent Card
+            "agent_card": self.agent_card,
             # Payment
             "wallet_address": self.wallet_address,
             "accepts_payment": self.accepts_payment,
