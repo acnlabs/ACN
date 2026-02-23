@@ -53,7 +53,7 @@ class TaskCreateRequest(BaseModel):
     required_skills: list[str] = Field(default_factory=list)
     reward_amount: str = Field(default="0", description="Reward amount")
     reward_currency: str = Field(default="points", description="Currency: USD, USDC, points")
-    is_repeatable: bool = Field(default=False, description="DEPRECATED: use is_multi_participant")
+    is_repeatable: bool = Field(default=False, description="DEPRECATED: use is_multi_participant", deprecated=True)
     is_multi_participant: bool = Field(default=False, description="Multiple agents can work in parallel")
     allow_repeat_by_same: bool = Field(default=False, description="Same agent can rejoin after completing")
     max_completions: int | None = Field(None, description="Max completions (open/multi mode)")
