@@ -13,7 +13,7 @@ from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[i
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..auth.middleware import get_subject, require_permission
+from ..auth.middleware import require_permission
 from ..config import get_settings
 from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
@@ -70,7 +70,7 @@ class AgentClaimResponse(BaseModel):
 
     success: bool
     agent_id: str
-    owner: str
+    owner: str | None
     message: str
 
 
@@ -215,8 +215,7 @@ async def register_agent(
 
     Clean Architecture: Route → AgentService → Repository
     """
-    # Extract owner from Auth0 token
-    token_owner = await get_subject()
+    token_owner: str = payload.get("sub", "")
 
     # Validate owner
     if request.owner != token_owner:
@@ -268,6 +267,70 @@ async def register_agent(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@router.get("/me", response_model=AgentMeResponse)
+async def get_my_agent(
+    authorization: str = Header(..., description="Bearer API_KEY"),
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Get current agent's own information via API key
+
+    This endpoint allows agents to retrieve their own information
+    without knowing their agent_id. Useful for self-service operations.
+
+    Example:
+        GET /api/v1/agents/me
+        Authorization: Bearer acn_xxxxx
+    """
+    # Parse API key from Authorization header
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+
+    api_key = authorization[7:]  # Remove "Bearer " prefix
+
+    # Find agent by API key
+    agent = await agent_service.get_agent_by_api_key(api_key)
+    if not agent:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
+
+    return AgentMeResponse(
+        agent_id=agent.agent_id,
+        name=agent.name,
+        description=agent.description,
+        skills=agent.skills or [],
+        status=agent.status.value,
+        claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
+        owner=agent.owner,
+        registered_at=agent.registered_at.isoformat() if agent.registered_at else None,
+        last_heartbeat=agent.last_heartbeat.isoformat() if agent.last_heartbeat else None,
+        tasks_endpoint=f"{base_url}/api/v1/tasks",
+        heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
+    )
+
+
+@router.get("/unclaimed", response_model=AgentSearchResponse)
+async def list_unclaimed_agents(
+    _: InternalTokenDep,
+    limit: int = 100,
+    agent_service: AgentServiceDep = None,
+):
+    """
+    List all unclaimed agents (requires X-Internal-Token)
+
+    Returns agents that have joined but not been claimed by any owner.
+    Restricted to ACN operators to prevent enumeration attacks.
+    """
+    agents = await agent_service.get_unclaimed_agents(limit=limit)
+    agent_infos = [_agent_entity_to_info(a) for a in agents]
+
+    return AgentSearchResponse(
+        agents=agent_infos,
+        total=len(agent_infos),
+    )
+
+
 @router.get("/{agent_id}", response_model=AgentInfo)
 async def get_agent(agent_id: str, agent_service: AgentServiceDep = None):
     """Get agent information
@@ -283,10 +346,10 @@ async def get_agent(agent_id: str, agent_service: AgentServiceDep = None):
 
 @router.get("", response_model=AgentSearchResponse)
 async def search_agents(
-    skill: str = None,
+    skill: str | None = None,
     status: str = "online",
-    owner: str = None,
-    name: str = None,
+    owner: str | None = None,
+    name: str | None = None,
     agent_service: AgentServiceDep = None,
 ):
     """Search agents
@@ -399,8 +462,7 @@ async def unregister_agent(
 
     Clean Architecture: Route → AgentService → Repository
     """
-    # Extract owner from Auth0 token
-    token_owner = await get_subject()
+    token_owner: str = payload.get("sub", "")
 
     try:
         # AgentService handles authorization check
@@ -515,49 +577,6 @@ async def join_agent(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/me", response_model=AgentMeResponse)
-async def get_my_agent(
-    authorization: str = Header(..., description="Bearer API_KEY"),
-    agent_service: AgentServiceDep = None,
-):
-    """
-    Get current agent's own information via API key
-
-    This endpoint allows agents to retrieve their own information
-    without knowing their agent_id. Useful for self-service operations.
-
-    Example:
-        GET /api/v1/agents/me
-        Authorization: Bearer acn_xxxxx
-    """
-    # Parse API key from Authorization header
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header format")
-
-    api_key = authorization[7:]  # Remove "Bearer " prefix
-
-    # Find agent by API key
-    agent = await agent_service.get_agent_by_api_key(api_key)
-    if not agent:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
-
-    return AgentMeResponse(
-        agent_id=agent.agent_id,
-        name=agent.name,
-        description=agent.description,
-        skills=agent.skills or [],
-        status=agent.status.value,
-        claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
-        owner=agent.owner,
-        registered_at=agent.registered_at.isoformat() if agent.registered_at else None,
-        last_heartbeat=agent.last_heartbeat.isoformat() if agent.last_heartbeat else None,
-        tasks_endpoint=f"{base_url}/api/v1/tasks",
-        heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
-    )
-
-
 @router.post("/{agent_id}/claim", response_model=AgentClaimResponse)
 async def claim_agent(
     agent_id: str,
@@ -570,7 +589,7 @@ async def claim_agent(
 
     Requires Auth0 authentication. The authenticated user becomes the owner.
     """
-    token_owner = await get_subject()
+    token_owner: str = payload.get("sub", "")
 
     try:
         agent = await agent_service.claim_agent(
@@ -605,7 +624,7 @@ async def transfer_agent(
 
     Only the current owner can transfer the agent.
     """
-    token_owner = await get_subject()
+    token_owner: str = payload.get("sub", "")
 
     try:
         agent = await agent_service.transfer_agent(
@@ -646,7 +665,7 @@ async def release_agent(
     Only the current owner can release the agent.
     After release, anyone can claim the agent again.
     """
-    token_owner = await get_subject()
+    token_owner: str = payload.get("sub", "")
 
     try:
         agent = await agent_service.release_agent(
@@ -666,27 +685,6 @@ async def release_agent(
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
-
-
-@router.get("/unclaimed", response_model=AgentSearchResponse)
-async def list_unclaimed_agents(
-    _: InternalTokenDep,
-    limit: int = 100,
-    agent_service: AgentServiceDep = None,
-):
-    """
-    List all unclaimed agents (requires X-Internal-Token)
-
-    Returns agents that have joined but not been claimed by any owner.
-    Restricted to ACN operators to prevent enumeration attacks.
-    """
-    agents = await agent_service.get_unclaimed_agents(limit=limit)
-    agent_infos = [_agent_entity_to_info(a) for a in agents]
-
-    return AgentSearchResponse(
-        agents=agent_infos,
-        total=len(agent_infos),
-    )
 
 
 # ============================================================================
