@@ -112,18 +112,6 @@ class Settings(BaseSettings):
                 "AUTH0_DOMAIN and AUTH0_AUDIENCE must be set in production."
             )
 
-        if not self.redis_password:
-            errors.append(
-                "REDIS_PASSWORD must be set in production. "
-                "Running Redis without a password is insecure."
-            )
-
-        if self.enable_docs:
-            errors.append(
-                "ENABLE_DOCS must be False in production. "
-                "Set ENABLE_DOCS=false to disable Swagger UI / ReDoc / openapi.json."
-            )
-
         if errors:
             raise ValueError(
                 "Production configuration errors detected:\n"

@@ -10,7 +10,7 @@ Supports two registration modes:
 
 import structlog  # type: ignore[import-untyped]
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[import-untyped]
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..auth.middleware import get_subject, require_permission
@@ -39,9 +39,9 @@ class AgentJoinRequest(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100, description="Agent name")
     description: str | None = Field(None, max_length=500, description="Agent description")
-    skills: list[str] = Field(default_factory=list, max_length=50, description="Agent skills")
-    endpoint: str | None = Field(None, max_length=512, description="A2A endpoint (optional for pull mode)")
-    referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
+    skills: list[str] = Field(default_factory=list, description="Agent skills")
+    endpoint: str | None = Field(None, description="A2A endpoint (optional for pull mode)")
+    referrer_id: str | None = Field(None, description="Referrer agent ID")
 
 
 class AgentJoinResponse(BaseModel):
@@ -77,7 +77,7 @@ class AgentClaimResponse(BaseModel):
 class AgentTransferRequest(BaseModel):
     """Request to transfer agent ownership"""
 
-    new_owner: str = Field(..., max_length=128, description="New owner identifier")
+    new_owner: str = Field(..., description="New owner identifier")
 
 
 class AgentTransferResponse(BaseModel):
@@ -172,8 +172,8 @@ async def dev_register_agent(
         )
 
     except Exception as e:
-        logger.error("Dev registration failed", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to register agent") from e
+        logger.error("Dev registration failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def _agent_entity_to_info(agent) -> AgentInfo:
@@ -264,8 +264,8 @@ async def register_agent(
             agent_card_url=agent_card_url,
         )
     except Exception as e:
-        logger.error("agent_registration_failed", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to register agent") from e
+        logger.error("agent_registration_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{agent_id}", response_model=AgentInfo)
@@ -287,8 +287,6 @@ async def search_agents(
     status: str = "online",
     owner: str = None,
     name: str = None,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
     agent_service: AgentServiceDep = None,
 ):
     """Search agents
@@ -310,13 +308,11 @@ async def search_agents(
         agents = [a for a in agents if name.lower() in a.name.lower()]
 
     # Convert to AgentInfo
-    all_agent_infos = [_agent_entity_to_info(a) for a in agents]
-    total = len(all_agent_infos)
-    paginated = all_agent_infos[offset : offset + limit]
+    agent_infos = [_agent_entity_to_info(a) for a in agents]
 
     return AgentSearchResponse(
-        agents=paginated,
-        total=total,
+        agents=agent_infos,
+        total=len(agent_infos),
     )
 
 
@@ -418,8 +414,7 @@ async def unregister_agent(
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except PermissionError as e:
-        logger.warning("agent_unregister_permission_denied", agent_id=agent_id, error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied") from e
+        raise HTTPException(status_code=403, detail=str(e)) from e
 
 
 # ============================================================================
@@ -516,8 +511,8 @@ async def join_agent(
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
         )
     except Exception as e:
-        logger.error("agent_join_failed", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to join network") from e
+        logger.error("agent_join_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/me", response_model=AgentMeResponse)
@@ -636,8 +631,7 @@ async def transfer_agent(
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except PermissionError as e:
-        logger.warning("agent_transfer_permission_denied", agent_id=agent_id, error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied") from e
+        raise HTTPException(status_code=403, detail=str(e)) from e
 
 
 @router.post("/{agent_id}/release", response_model=AgentReleaseResponse)
@@ -671,8 +665,7 @@ async def release_agent(
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except PermissionError as e:
-        logger.warning("agent_release_permission_denied", agent_id=agent_id, error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied") from e
+        raise HTTPException(status_code=403, detail=str(e)) from e
 
 
 @router.get("/unclaimed", response_model=AgentSearchResponse)

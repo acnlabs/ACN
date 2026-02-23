@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 from ..services.activity_service import ActivityService
 from .dependencies import (  # type: ignore[import-untyped]
-    AgentApiKeyDep,
     AnalyticsDep,
     RegistryDep,
     get_agent_service,
@@ -45,16 +44,10 @@ async def get_agent_analytics(analytics: AnalyticsDep = None):
 @router.get("/agents/{agent_id}")
 async def get_agent_activity(
     agent_id: str,
-    agent_info: AgentApiKeyDep,
     days: int = Query(default=7, le=90),
     analytics: AnalyticsDep = None,
 ):
-    """Get specific agent activity (requires Agent API Key; agent may only query its own data)"""
-    if agent_info["agent_id"] != agent_id:
-        raise HTTPException(
-            status_code=403,
-            detail="API key does not match agent_id",
-        )
+    """Get specific agent activity"""
     start_time = datetime.now(UTC) - timedelta(days=days)
     return await analytics.get_agent_activity(agent_id, start_time=start_time)
 
@@ -86,7 +79,7 @@ async def get_subnet_analytics(analytics: AnalyticsDep = None):
 
 @router.get("/activities", response_model=ActivitiesResponse)
 async def list_activities(
-    limit: int = Query(default=20, ge=1, le=100),
+    limit: int = Query(default=20, le=100),
     user_id: str | None = None,
     task_id: str | None = None,
     agent_id: str | None = None,

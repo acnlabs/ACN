@@ -15,7 +15,6 @@ from a2a.types import (  # type: ignore[import-untyped]
     AgentSkill,
 )
 
-from ....core.interfaces import IAgentRepository
 from ....models import AgentInfo
 
 
@@ -23,22 +22,17 @@ class AgentRegistry:
     """
     Agent Registry Service
 
-    Manages Agent registration, storage, and discovery using Redis.
-    When agent_repository is provided, hash writes are delegated to it
-    (unified write path) and this class only maintains its own index sets.
+    Manages Agent registration, storage, and discovery using Redis
     """
 
-    def __init__(self, redis_url: str, agent_repository: IAgentRepository | None = None):
+    def __init__(self, redis_url: str):
         """
         Initialize Agent Registry
 
         Args:
             redis_url: Redis connection URL (e.g., "redis://localhost:6379")
-            agent_repository: Optional shared repository instance; when set,
-                hash writes are delegated to it to avoid double-write inconsistency.
         """
         self.redis = redis.from_url(redis_url, decode_responses=True)
-        self._agent_repository = agent_repository
 
     async def register_agent(
         self,
@@ -124,43 +118,19 @@ class AgentRegistry:
         else:
             agent_data["registered_at"] = datetime.now(UTC).isoformat()
 
-        # Write agent hash — delegate to repository if available (unified write path)
-        if self._agent_repository:
-            from ....core.entities import Agent, AgentStatus
-            agent_entity = Agent(
-                agent_id=agent_id,
-                owner=owner,
-                name=name,
-                description=description,
-                endpoint=endpoint,
-                skills=skills,
-                subnet_ids=subnet_ids,
-                metadata=metadata or {},
-                agent_card=agent_card if isinstance(agent_card, dict) else (
-                    agent_card.model_dump(exclude_none=True) if agent_card else None
-                ),
-                status=AgentStatus.ONLINE,
-            )
-            if is_update and existing_agent.get("registered_at"):
-                try:
-                    agent_entity.registered_at = datetime.fromisoformat(existing_agent["registered_at"])
-                except (ValueError, TypeError):
-                    pass
-            await self._agent_repository.save(agent_entity)
-        else:
-            # Fallback: direct hash write (standalone / legacy mode)
-            await self.redis.hset(f"acn:agents:{agent_id}", mapping=agent_data)
+        # Store in Redis (overwrites if exists - idempotent)
+        await self.redis.hset(f"acn:agents:{agent_id}", mapping=agent_data)
 
         # Clean up old indexes if updating
         if is_update:
             # Remove from old skill indexes
-            old_skills = self._safe_loads(existing_agent.get("skills"), [])
+            old_skills = json.loads(existing_agent.get("skills", "[]"))
             for skill in old_skills:
                 if skill not in skills:
                     await self.redis.srem(f"acn:skills:{skill}", agent_id)
 
             # Remove from old subnet indexes
-            old_subnets = self._safe_loads(existing_agent.get("subnet_ids"), ["public"])
+            old_subnets = json.loads(existing_agent.get("subnet_ids", '["public"]'))
             for subnet_id in old_subnets:
                 if subnet_id not in subnet_ids:
                     await self.redis.srem(f"acn:subnets:{subnet_id}:agents", agent_id)
@@ -195,7 +165,7 @@ class AgentRegistry:
             return False
 
         # Get current subnet_ids
-        subnet_ids = self._safe_loads(data.get("subnet_ids"), ["public"])
+        subnet_ids = json.loads(data.get("subnet_ids", '["public"]'))
         if subnet_id not in subnet_ids:
             subnet_ids.append(subnet_id)
             await self.redis.hset(f"acn:agents:{agent_id}", "subnet_ids", json.dumps(subnet_ids))
@@ -219,7 +189,7 @@ class AgentRegistry:
             return False
 
         # Get current subnet_ids
-        subnet_ids = self._safe_loads(data.get("subnet_ids"), ["public"])
+        subnet_ids = json.loads(data.get("subnet_ids", '["public"]'))
         if subnet_id in subnet_ids:
             subnet_ids.remove(subnet_id)
             # Ensure at least public subnet
@@ -254,11 +224,13 @@ class AgentRegistry:
                 agent_card = None
 
         # Parse metadata
-        metadata = self._safe_loads(data.get("metadata"), {})
+        metadata = {}
+        if data.get("metadata"):
+            metadata = json.loads(data["metadata"])
 
         # Parse subnet_ids (支持新旧格式)
         if data.get("subnet_ids"):
-            subnet_ids = self._safe_loads(data["subnet_ids"], ["public"])
+            subnet_ids = json.loads(data["subnet_ids"])
         elif data.get("subnet_id"):
             # 向后兼容：旧格式 subnet_id 转换为列表
             subnet_ids = [data["subnet_id"]]
@@ -271,14 +243,14 @@ class AgentRegistry:
             name=data["name"],
             description=data.get("description", ""),
             endpoint=data["endpoint"],
-            skills=self._safe_loads(data.get("skills"), []),
+            skills=json.loads(data["skills"]),
             status=data["status"],
             subnet_ids=subnet_ids,
             agent_card=agent_card,
             metadata=metadata,
-            registered_at=self._safe_fromisoformat(data.get("registered_at"), datetime.now(UTC)),
+            registered_at=datetime.fromisoformat(data["registered_at"]),
             last_heartbeat=(
-                self._safe_fromisoformat(data["last_heartbeat"], None)
+                datetime.fromisoformat(data["last_heartbeat"])
                 if data.get("last_heartbeat")
                 else None
             ),
@@ -378,13 +350,13 @@ class AgentRegistry:
             return False
 
         # Remove from skill indexes
-        skills = self._safe_loads(data.get("skills"), [])
+        skills = json.loads(data.get("skills", "[]"))
         for skill in skills:
             await self.redis.srem(f"acn:skills:{skill}", agent_id)
 
         # Remove from all subnet indexes (支持多子网)
         if data.get("subnet_ids"):
-            subnet_ids = self._safe_loads(data["subnet_ids"], ["public"])
+            subnet_ids = json.loads(data["subnet_ids"])
         elif data.get("subnet_id"):
             subnet_ids = [data["subnet_id"]]
         else:
@@ -396,11 +368,8 @@ class AgentRegistry:
         # Remove from agents list
         await self.redis.srem("acn:agents:all", agent_id)
 
-        # Delete agent hash — delegate to repository if available
-        if self._agent_repository:
-            await self._agent_repository.delete(agent_id)
-        else:
-            await self.redis.delete(f"acn:agents:{agent_id}")
+        # Delete agent data
+        await self.redis.delete(f"acn:agents:{agent_id}")
 
         return True
 
@@ -502,23 +471,3 @@ class AgentRegistry:
         """Validate Agent Card by parsing with SDK type (raises on invalid)"""
         AgentCard(**agent_card)
         return True
-
-    @staticmethod
-    def _safe_loads(value: str | None, default):
-        """Safely parse a JSON string; returns *default* on any failure."""
-        if not value:
-            return default
-        try:
-            return json.loads(value)
-        except (json.JSONDecodeError, TypeError):
-            return default
-
-    @staticmethod
-    def _safe_fromisoformat(raw: str | None, default):
-        """Safely parse an ISO datetime string; return default on any error."""
-        if not raw:
-            return default
-        try:
-            return datetime.fromisoformat(raw)
-        except (ValueError, TypeError):
-            return default

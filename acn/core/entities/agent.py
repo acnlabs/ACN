@@ -50,7 +50,7 @@ class Agent:
     skills: list[str] = field(default_factory=list)
     subnet_ids: list[str] = field(default_factory=lambda: ["public"])
     metadata: dict = field(default_factory=dict)
-    registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    registered_at: datetime = field(default_factory=datetime.now)
     last_heartbeat: datetime | None = None
 
     # Authentication (for autonomous agents)
@@ -254,20 +254,11 @@ class Agent:
         # Parse datetime strings
         data = data.copy()
         if isinstance(data.get("registered_at"), str):
-            try:
-                data["registered_at"] = datetime.fromisoformat(data["registered_at"])
-            except (ValueError, TypeError):
-                data["registered_at"] = datetime.now(UTC)
+            data["registered_at"] = datetime.fromisoformat(data["registered_at"])
         if data.get("last_heartbeat") and isinstance(data["last_heartbeat"], str):
-            try:
-                data["last_heartbeat"] = datetime.fromisoformat(data["last_heartbeat"])
-            except (ValueError, TypeError):
-                data.pop("last_heartbeat", None)
+            data["last_heartbeat"] = datetime.fromisoformat(data["last_heartbeat"])
         if data.get("owner_changed_at") and isinstance(data["owner_changed_at"], str):
-            try:
-                data["owner_changed_at"] = datetime.fromisoformat(data["owner_changed_at"])
-            except (ValueError, TypeError):
-                data.pop("owner_changed_at", None)
+            data["owner_changed_at"] = datetime.fromisoformat(data["owner_changed_at"])
         # Parse status enum
         if isinstance(data.get("status"), str):
             data["status"] = AgentStatus(data["status"])

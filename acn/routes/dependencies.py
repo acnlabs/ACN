@@ -293,19 +293,3 @@ def verify_internal_token(
 
 
 InternalTokenDep = Annotated[None, Depends(verify_internal_token)]
-
-
-def verify_internal_token_optional(
-    x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
-) -> bool:
-    """Non-raising internal token check; returns True only when the token is present and valid.
-
-    Used by endpoints that allow Backend to proxy a user identity via x-creator-id,
-    while still accepting unauthenticated-internal callers (e.g. regular JWT users).
-    """
-    if not x_internal_token:
-        return False
-    return secrets.compare_digest(x_internal_token, settings.internal_api_token)
-
-
-OptionalInternalTokenDep = Annotated[bool, Depends(verify_internal_token_optional)]

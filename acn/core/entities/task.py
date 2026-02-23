@@ -67,7 +67,7 @@ class Participation:
 
     # Lifecycle
     status: ParticipationStatus = ParticipationStatus.ACTIVE
-    joined_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    joined_at: datetime = field(default_factory=datetime.now)
 
     # Submission
     submission: str | None = None
@@ -178,20 +178,14 @@ class Participation:
         ]
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
-                try:
-                    data[field_name] = datetime.fromisoformat(data[field_name])
-                except (ValueError, TypeError):
-                    data.pop(field_name, None)
+                data[field_name] = datetime.fromisoformat(data[field_name])
             elif not data.get(field_name):
                 data.pop(field_name, None)
 
         # Parse list fields
         if isinstance(data.get("submission_artifacts"), str):
             import json
-            try:
-                data["submission_artifacts"] = json.loads(data["submission_artifacts"])
-            except (json.JSONDecodeError, TypeError):
-                data["submission_artifacts"] = []
+            data["submission_artifacts"] = json.loads(data["submission_artifacts"])
 
         return cls(**data)
 
@@ -268,16 +262,13 @@ class Task:
     active_participants_count: int = 0  # Number of currently active participations
 
     # Timestamps
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = field(default_factory=datetime.now)
     deadline: datetime | None = None
     completed_at: datetime | None = None
 
     # Approval settings
     approval_type: str = "manual"  # manual, auto, validator, webhook
     validator_id: str | None = None  # For validator type: invite_agent, daily_checkin, etc.
-
-    # Idempotency: tracks whether escrow/payment has been released for this task
-    payment_released: bool = False
 
     # Metadata
     metadata: dict = field(default_factory=dict)
@@ -556,7 +547,6 @@ class Task:
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "approval_type": self.approval_type,
             "validator_id": self.validator_id,
-            "payment_released": self.payment_released,
             "metadata": self.metadata,
         }
 
@@ -581,9 +571,6 @@ class Task:
         ]
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
-                try:
-                    data[field_name] = datetime.fromisoformat(data[field_name])
-                except (ValueError, TypeError):
-                    data.pop(field_name, None)
+                data[field_name] = datetime.fromisoformat(data[field_name])
 
         return cls(**data)
