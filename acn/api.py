@@ -354,8 +354,8 @@ async def get_acn_agent_card():
             description="Agent Collaboration Network - Infrastructure for AI agent coordination",
             url=settings.gateway_base_url,
             provider=AgentProvider(
-                organization="AgentPlanet",
-                url="https://agenticplanet.space",
+                organization="acnlabs",
+                url="https://acnlabs.dev",
             ),
             documentation_url=f"{settings.gateway_base_url}/skill.md",
             capabilities=AgentCapabilities(

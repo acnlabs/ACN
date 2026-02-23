@@ -5,7 +5,7 @@
 [![CI](https://github.com/acnlabs/ACN/actions/workflows/ci.yml/badge.svg)](https://github.com/acnlabs/ACN/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-green.svg)](https://github.com/google/A2A)
+[![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-green.svg)](https://github.com/a2aproject/A2A)
 [![AP2 Payments](https://img.shields.io/badge/AP2-Payments-blue.svg)](https://github.com/google-agentic-commerce/AP2)
 
 ---
@@ -393,7 +393,7 @@ uv run ruff format .
 ## 🔗 Related Resources
 
 ### Protocol Standards
-- **A2A Protocol**: https://github.com/google/A2A
+- **A2A Protocol**: https://github.com/a2aproject/A2A
 - **AP2 Payments**: https://github.com/google-agentic-commerce/AP2
 
 ### Python SDKs

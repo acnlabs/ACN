@@ -610,8 +610,8 @@ def create_a2a_app(
         ),
         url=f"{settings.gateway_base_url}/a2a/jsonrpc",
         provider=AgentProvider(
-            organization="AgentPlanet",
-            url="https://agenticplanet.space",
+            organization="acnlabs",
+            url="https://acnlabs.dev",
         ),
         documentation_url=f"{settings.gateway_base_url}/skill.md",
         capabilities=AgentCapabilities(

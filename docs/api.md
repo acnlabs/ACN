@@ -45,7 +45,7 @@ Content-Type: application/json
     "subnet_ids": ["public"],
     "metadata": {
         "version": "1.0.0",
-        "author": "AgentPlanet"
+        "author": "acnlabs"
     }
 }
 ```
@@ -533,5 +533,5 @@ const { agents } = await client.searchAgents({ skills: 'coding' });
 
 - [README](../README.md) - Project overview
 - [Architecture](./architecture.md) - System architecture
-- [A2A Protocol](https://github.com/google/A2A) - Official protocol
+- [A2A Protocol](https://github.com/a2aproject/A2A) - Official protocol
 - [AP2 Payments](https://github.com/google-agentic-commerce/AP2) - Payment protocol

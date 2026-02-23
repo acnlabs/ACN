@@ -468,5 +468,5 @@ class PaymentProcessor(Protocol):
 
 - [API Documentation](./api.md)
 - [README](../README.md)
-- [A2A Protocol](https://github.com/google/A2A)
+- [A2A Protocol](https://github.com/a2aproject/A2A)
 - [AP2 Protocol](https://github.com/google-agentic-commerce/AP2)

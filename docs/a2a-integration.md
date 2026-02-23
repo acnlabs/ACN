@@ -483,7 +483,7 @@ token_response = httpx.post(
         "grant_type": "client_credentials",
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
-        "audience": "https://api.agenticplanet.space",
+        "audience": "https://api.acnlabs.dev",
     }
 )
 access_token = token_response.json()["access_token"]

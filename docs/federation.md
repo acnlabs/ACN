@@ -351,7 +351,7 @@ https://github.com/acnlabs/ACN
 
 ## References
 
-- [A2A Protocol Specification](https://github.com/google/A2A)
+- [A2A Protocol Specification](https://github.com/a2aproject/A2A)
 - [AP2 Payment Protocol](https://github.com/anthropics/AP2)
 - [ActivityPub W3C Recommendation](https://www.w3.org/TR/activitypub/)
 - [libp2p Specification](https://libp2p.io/)
