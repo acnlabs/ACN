@@ -347,7 +347,7 @@ The best approach combines both:
 ## Contributing
 
 We welcome contributions to the federation design. Please open an issue or PR at:
-https://github.com/ACNet-AI/ACN
+https://github.com/acnlabs/ACN
 
 ## References
 

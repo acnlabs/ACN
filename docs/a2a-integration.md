@@ -245,7 +245,7 @@ from a2a.types import Message, DataPart, Role, SendMessageRequest, MessageSendPa
 httpx_client = httpx.AsyncClient(timeout=30.0)
 acn_client = A2AClient(
     httpx_client=httpx_client,
-    url="https://acn.agenticplanet.space/a2a/jsonrpc"
+    url="https://acn-production.up.railway.app/a2a/jsonrpc"
 )
 
 # 1. Broadcast to multiple agents
@@ -306,7 +306,7 @@ response = await acn_client.send_message(request)
 ```javascript
 import { A2AClient } from '@a2a-js/sdk';
 
-const acnClient = new A2AClient('https://acn.agenticplanet.space/a2a/jsonrpc');
+const acnClient = new A2AClient('https://acn-production.up.railway.app/a2a/jsonrpc');
 
 // Broadcast example
 const response = await acnClient.sendMessage({
@@ -503,7 +503,7 @@ a2a_response = httpx.post(
 
 **ACN Agent Card** (with authentication info):
 ```bash
-curl https://acn.agenticplanet.space/.well-known/agent-card.json
+curl https://acn-production.up.railway.app/.well-known/agent-card.json
 ```
 
 ---

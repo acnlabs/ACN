@@ -43,7 +43,7 @@ By participating in this project, you agree to abide by our Code of Conduct. Ple
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/ACNet-AI/ACN.git
+git clone https://github.com/acnlabs/ACN.git
 cd ACN
 ```
 
@@ -309,8 +309,8 @@ class TestAgentRegistry:
 
 ## Questions?
 
-- Open a [Discussion](https://github.com/ACNet-AI/ACN/discussions)
-- Check existing [Issues](https://github.com/ACNet-AI/ACN/issues)
+- Open a [Discussion](https://github.com/acnlabs/ACN/discussions)
+- Check existing [Issues](https://github.com/acnlabs/ACN/issues)
 - Join our community chat (coming soon)
 
 Thank you for contributing to ACN! 🚀

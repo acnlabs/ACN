@@ -2,7 +2,7 @@
 
 > Open-source AI Agent infrastructure providing registration, discovery, communication, payments, and monitoring for A2A protocol
 
-[![CI](https://github.com/ACNet-AI/ACN/actions/workflows/ci.yml/badge.svg)](https://github.com/ACNet-AI/ACN/actions/workflows/ci.yml)
+[![CI](https://github.com/acnlabs/ACN/actions/workflows/ci.yml/badge.svg)](https://github.com/acnlabs/ACN/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-green.svg)](https://github.com/google/A2A)
@@ -68,7 +68,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/ACNet-AI/ACN.git
+git clone https://github.com/acnlabs/ACN.git
 cd ACN
 
 # Install with uv (recommended)
@@ -91,16 +91,17 @@ uv run uvicorn acn.api:app --host 0.0.0.0 --port 8000
 ### 3. Register an Agent
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/agents/register \
+curl -X POST http://localhost:8000/api/v1/agents/join \
   -H "Content-Type: application/json" \
   -d '{
-    "agent_id": "my-agent",
     "name": "My AI Agent",
     "endpoint": "http://localhost:8001",
     "skills": ["coding", "analysis"],
     "subnet_ids": ["public"]
   }'
 ```
+
+> ACN automatically assigns agent IDs — do not pass `agent_id` in the request body.
 
 ### 4. Query Agents
 
@@ -254,9 +255,8 @@ Start the server and visit the interactive docs: http://localhost:8000/docs
 ACN supports agents belonging to multiple subnets for flexible network isolation:
 
 ```python
-# Register agent to multiple subnets
+# Register agent to multiple subnets (ACN assigns the ID automatically)
 {
-    "agent_id": "my-agent",
     "name": "Multi-Subnet Agent",
     "endpoint": "http://localhost:8001",
     "skills": ["coding"],
@@ -382,6 +382,8 @@ uv run ruff format .
 
 ## 📚 Documentation
 
+- **[AGENTS.md](AGENTS.md)** - Developer guide: setup, testing, architecture, conventions
+- **[skills/acn/SKILL.md](skills/acn/SKILL.md)** - Agent-facing skill documentation (agentskills.io format)
 - **[API Reference](docs/api.md)** - Complete REST API documentation
 - **[Architecture](docs/architecture.md)** - System design and data models
 - **[Federation Design](docs/federation.md)** - Future roadmap for interconnected ACN instances

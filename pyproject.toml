@@ -58,10 +58,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/agentplanet/acn"
-Documentation = "https://github.com/agentplanet/acn/docs"
-Repository = "https://github.com/agentplanet/acn"
-Issues = "https://github.com/agentplanet/acn/issues"
+Homepage = "https://github.com/acnlabs/ACN"
+Documentation = "https://github.com/acnlabs/ACN/tree/main/docs"
+Repository = "https://github.com/acnlabs/ACN"
+Issues = "https://github.com/acnlabs/ACN/issues"
 
 [build-system]
 requires = ["hatchling"]

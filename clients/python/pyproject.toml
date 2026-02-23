@@ -38,10 +38,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ACNet-AI/ACN"
-Documentation = "https://github.com/ACNet-AI/ACN#readme"
-Repository = "https://github.com/ACNet-AI/ACN.git"
-Issues = "https://github.com/ACNet-AI/ACN/issues"
+Homepage = "https://github.com/acnlabs/ACN"
+Documentation = "https://github.com/acnlabs/ACN#readme"
+Repository = "https://github.com/acnlabs/ACN.git"
+Issues = "https://github.com/acnlabs/ACN/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["acn_client"]

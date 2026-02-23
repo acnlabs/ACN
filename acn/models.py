@@ -330,7 +330,7 @@ class ExternalAgentJoinResponse(BaseModel):
     tasks_endpoint: str = Field(..., description="Endpoint to pull tasks from")
     heartbeat_endpoint: str = Field(..., description="Endpoint for heartbeat")
     docs_url: str = Field(
-        default="https://acn.agenticplanet.space/skill.md", description="Documentation URL"
+        default="https://acn-production.up.railway.app/skill.md", description="Documentation URL"
     )
 
     # Important notes for agent
