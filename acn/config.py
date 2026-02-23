@@ -6,7 +6,7 @@ Settings for ACN service
 
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEV_INTERNAL_TOKEN = "dev-internal-token-2024"
@@ -51,8 +51,19 @@ class Settings(BaseSettings):
     billing_webhook_url: str | None = None  # e.g., "https://your-backend.com/api/billing/webhook"
 
     # Auth0 (for JWT verification and Agent Card security scheme)
-    auth0_domain: str | None = None  # e.g., "your-tenant.auth0.com"
+    auth0_domain: str | None = None  # e.g., "your-tenant.auth0.com" or "https://your-tenant.auth0.com"
     auth0_audience: str | None = None  # e.g., "https://api.agentplanet.com"
+
+    @field_validator("auth0_domain", mode="before")
+    @classmethod
+    def normalize_auth0_domain(cls, v: str | None) -> str | None:
+        """Ensure auth0_domain always has https:// prefix when set."""
+        if v is None:
+            return v
+        v = v.strip()
+        if v and not v.startswith(("https://", "http://")):
+            v = f"https://{v}"
+        return v.rstrip("/")
 
     # PostgreSQL (for future persistent storage)
     database_url: str | None = None
