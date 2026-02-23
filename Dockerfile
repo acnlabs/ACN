@@ -24,12 +24,12 @@ RUN useradd --no-create-home --shell /bin/false appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
-# Expose port
+# Expose port (Railway injects $PORT; default to 8000 for local/Docker Compose)
 EXPOSE 8000
 
 # Health check using curl (more reliable than python httpx import)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-# Run application
-CMD ["uvicorn", "acn.api:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run application — use $PORT if set (Railway), otherwise default to 8000
+CMD ["sh", "-c", "uvicorn acn.api:app --host 0.0.0.0 --port ${PORT:-8000}"]
