@@ -311,24 +311,20 @@ async def ready():
 
 @app.get("/skill.md", response_class=PlainTextResponse)
 async def get_skill_md():
-    """
-    Get ACN skill.md for external agents (OpenClaw, Moltbook, etc.)
-
-    This file teaches agents how to join and interact with ACN.
-    """
-    skill_path = Path(__file__).parent / "public" / "skill.md"
-
-    # Fallback to acn/public/skill.md if the above doesn't exist
-    if not skill_path.exists():
-        skill_path = Path(__file__).parent.parent / "public" / "skill.md"
+    """Serve the ACN skill file for external agents (agentskills.io format)."""
+    skill_path = Path(__file__).parent.parent / "skills" / "acn" / "SKILL.md"
 
     if skill_path.exists():
         return skill_path.read_text()
-    else:
-        return """# ACN - Agent Collaboration Network
+    return """---
+name: acn
+description: Agent Collaboration Network — register, discover, message, and collaborate.
+---
 
-Join ACN: POST /api/v1/external/agents/join
+# ACN — Agent Collaboration Network
+
 Docs: /docs
+Agent Card: /.well-known/agent-card.json
 """
 
 
