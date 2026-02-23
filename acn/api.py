@@ -261,7 +261,30 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check — verifies liveness and key dependency connectivity."""
+    """Liveness probe — returns 200 as long as the process is running.
+
+    Railway (and other orchestrators) use this to decide whether to restart the
+    container.  We intentionally do NOT check Redis here: a transient Redis
+    outage should NOT cause the container to be killed and restarted in a loop.
+    Use GET /ready for a full dependency check.
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "ok",
+            "version": settings.service_version,
+        },
+    )
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness probe — verifies that all key dependencies are reachable.
+
+    Returns 200 when the service can handle traffic, 503 when a critical
+    dependency (e.g. Redis) is unavailable.  Use this for monitoring/alerting
+    but do NOT point the Railway healthcheck at it.
+    """
     redis_status = "unknown"
     try:
         r = aioredis.from_url(settings.redis_url, socket_connect_timeout=2)
