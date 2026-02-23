@@ -6,13 +6,17 @@ Clean Architecture implementation: Route → TaskService → Repository
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import get_subject, require_permission
 from ..core.entities import TaskMode, TaskStatus
 from ..services import TaskNotFoundException, TaskService
-from .dependencies import AgentApiKeyDep, InternalTokenDep, OptionalInternalTokenDep  # type: ignore[import-untyped]
+from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
+    InternalTokenDep,
+    OptionalInternalTokenDep,
+)
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 logger = structlog.get_logger()
@@ -33,7 +37,7 @@ def set_task_service(service: TaskService) -> None:
 def get_task_service() -> TaskService:
     """Get the task service instance"""
     if _task_service is None:
-        raise RuntimeError("TaskService not initialized")
+        raise RuntimeError("TaskService not initialized") from None
     return _task_service
 
 
@@ -61,9 +65,9 @@ class TaskCreateRequest(BaseModel):
         try:
             value = float(v)
         except (ValueError, TypeError):
-            raise ValueError("reward_amount must be a valid number (e.g. '100' or '9.99')")
+            raise ValueError("reward_amount must be a valid number (e.g. '100' or '9.99')") from None
         if value < 0:
-            raise ValueError("reward_amount must be >= 0")
+            raise ValueError("reward_amount must be >= 0") from None
         return v
     is_multi_participant: bool = Field(default=False, description="Multiple agents can work in parallel")
     allow_repeat_by_same: bool = Field(default=False, description="Same agent can rejoin after completing")
@@ -258,7 +262,7 @@ async def list_tasks(
         try:
             task_mode = TaskMode(mode)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
+            raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}") from None
 
     # Parse status
     task_status = None
@@ -266,7 +270,7 @@ async def list_tasks(
         try:
             task_status = TaskStatus(status)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}") from None
 
     # Parse skills
     skill_list = skills.split(",") if skills else None
@@ -306,7 +310,7 @@ async def match_tasks_for_agent(
     skill_list = [s.strip() for s in skills.split(",") if s.strip()]
 
     if not skill_list:
-        raise HTTPException(status_code=400, detail="At least one skill is required")
+        raise HTTPException(status_code=400, detail="At least one skill is required") from None
 
     tasks = await task_service.get_tasks_for_agent(skill_list, limit)
 
@@ -326,7 +330,7 @@ async def get_task(
         task = await task_service.get_task(task_id)
         return _task_to_response(task)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
 
 
 # ========== Authenticated Endpoints ==========
@@ -359,7 +363,7 @@ async def create_task(
     try:
         mode = TaskMode(request.mode)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}")
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}") from None
 
     try:
         task = await task_service.create_task(
@@ -395,7 +399,7 @@ async def create_task(
 
     except Exception as e:
         logger.error("task_creation_failed", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to create task")
+        raise HTTPException(status_code=500, detail="Failed to create task") from e
 
 
 @router.post("/{task_id}/accept", response_model=TaskAcceptResponse)
@@ -428,9 +432,9 @@ async def accept_task(
         )
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{task_id}/submit", response_model=TaskResponse)
@@ -459,12 +463,12 @@ async def submit_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
         logger.warning("submit_task_permission_denied", error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied")
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{task_id}/review", response_model=TaskResponse)
@@ -507,12 +511,12 @@ async def review_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
         logger.warning("review_task_permission_denied", error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied")
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse)
@@ -532,12 +536,12 @@ async def cancel_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
         logger.warning("cancel_task_permission_denied", error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied")
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 # ========== Participation Endpoints ==========
@@ -564,7 +568,7 @@ async def list_participations(
             total=len(participations),
         )
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
 
 
 @router.get("/{task_id}/participations/me", response_model=ParticipationResponse | None)
@@ -608,12 +612,12 @@ async def cancel_participation(
         )
         return _task_to_response(task)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
         logger.warning("cancel_participation_permission_denied", error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied")
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 # ========== Internal Endpoints ==========
@@ -638,7 +642,7 @@ async def get_task_internal(
         task = await task_service.get_task(task_id)
         return task.to_dict()
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
 
 
 # ========== Agent API Key Endpoints ==========
@@ -660,7 +664,7 @@ async def agent_create_task(
     try:
         mode = TaskMode(request.mode)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}")
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}") from None
 
     task = await task_service.create_task(
         creator_type="agent",
@@ -698,9 +702,9 @@ async def agent_accept_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/agent/{task_id}/submit", response_model=TaskResponse)
@@ -722,12 +726,12 @@ async def agent_submit_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
         logger.warning("agent_submit_task_permission_denied", error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied")
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{task_id}/retry-payment")
@@ -744,10 +748,10 @@ async def retry_task_payment(
     try:
         task = await task_service.get_task(task_id)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
 
     if task.status.value != "completed":
-        raise HTTPException(status_code=400, detail="Task is not completed")
+        raise HTTPException(status_code=400, detail="Task is not completed") from None
 
     if task.payment_released:
         return {"status": "already_released", "task_id": task_id}

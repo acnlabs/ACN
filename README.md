@@ -402,6 +402,46 @@ pip install ap2      # AP2 payment protocol
 
 ---
 
+## 🗄️ Production Redis Requirements
+
+ACN stores **all data** (agents, tasks, subnets, metrics) in Redis. Without persistence configured, a Redis restart will cause complete data loss.
+
+### Required `redis.conf` settings for production
+
+```ini
+# AOF persistence (required — guarantees at-most-1-second data loss)
+appendonly yes
+appendfsync everysec
+
+# RDB snapshots (supplemental backup)
+save 900 1
+save 300 10
+save 60 10000
+
+# Memory management (tune to actual capacity)
+maxmemory 4gb
+maxmemory-policy allkeys-lru
+```
+
+### Docker Compose example
+
+```yaml
+redis:
+  image: redis:7-alpine
+  command: >
+    redis-server
+    --appendonly yes
+    --appendfsync everysec
+    --maxmemory 4gb
+    --maxmemory-policy allkeys-lru
+  volumes:
+    - redis_data:/data
+```
+
+> **Note**: ACN does not validate Redis persistence mode at runtime. Ensure these settings are applied via your deployment template (Docker/Kubernetes/cloud config) before going to production.
+
+---
+
 ## 📄 License
 
 MIT License - See [LICENSE](LICENSE)

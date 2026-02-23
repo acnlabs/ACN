@@ -75,8 +75,8 @@ async def create_subnet(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        logger.error("subnet_creation_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("subnet_creation_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create subnet") from e
 
 
 @router.get("")
@@ -99,8 +99,8 @@ async def list_subnets(
 
         return {"subnets": subnet_infos, "count": len(subnet_infos)}
     except Exception as e:
-        logger.error("list_subnets_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("list_subnets_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list subnets") from e
 
 
 @router.get("/{subnet_id}")
@@ -145,8 +145,8 @@ async def get_subnet_agents(
 
         return {"subnet_id": subnet_id, "agents": agent_infos, "count": len(agent_infos)}
     except Exception as e:
-        logger.error("get_subnet_agents_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("get_subnet_agents_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve subnet agents") from e
 
 
 @router.post("/{agent_id}/subnets/{subnet_id}")
@@ -184,8 +184,8 @@ async def join_subnet(
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except Exception as e:
-        logger.error("join_subnet_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("join_subnet_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to join subnet") from e
 
 
 @router.delete("/{agent_id}/subnets/{subnet_id}")
@@ -216,8 +216,8 @@ async def leave_subnet(
     except SubnetNotFoundException as e:
         raise HTTPException(status_code=404, detail="Subnet not found") from e
     except Exception as e:
-        logger.error("leave_subnet_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("leave_subnet_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to leave subnet") from e
 
 
 @router.get("/{agent_id}/subnets")
@@ -263,7 +263,8 @@ async def delete_subnet(
     except SubnetNotFoundException as e:
         raise HTTPException(status_code=404, detail="Subnet not found") from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        logger.warning("delete_subnet_permission_denied", subnet_id=subnet_id, error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except Exception as e:
-        logger.error("delete_subnet_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("delete_subnet_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete subnet") from e

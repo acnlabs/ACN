@@ -5,7 +5,7 @@ Pydantic models for ACN service
 """
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 
 from a2a.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
 from a2a.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
@@ -16,7 +16,7 @@ AgentCard = A2AAgentCard
 Skill = A2AAgentSkill
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     ONLINE = "online"
     OFFLINE = "offline"
     BUSY = "busy"

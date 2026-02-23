@@ -79,7 +79,7 @@ class Analytics:
             - recent_registrations: Recently registered agents
         """
         # Get all agent keys
-        agent_keys = await self.redis.keys("acn:agents:*:info")
+        agent_keys = [k async for k in self.redis.scan_iter("acn:agents:*:info")]
 
         stats = {
             "total": len(agent_keys),
@@ -151,7 +151,7 @@ class Analytics:
         """
         # Get metrics for this agent
         prefix = f"acn:metrics:acn_messages_total:from_agent={agent_id}"
-        sent_keys = await self.redis.keys(f"{prefix}*")
+        sent_keys = [k async for k in self.redis.scan_iter(f"{prefix}*")]
 
         messages_sent = 0
         for key in sent_keys:
@@ -159,7 +159,7 @@ class Analytics:
             messages_sent += int(value) if value else 0
 
         prefix = f"acn:metrics:acn_messages_total:*to_agent={agent_id}*"
-        recv_keys = await self.redis.keys(prefix)
+        recv_keys = [k async for k in self.redis.scan_iter(prefix)]
 
         messages_received = 0
         for key in recv_keys:
@@ -168,7 +168,7 @@ class Analytics:
 
         # Get error count
         error_prefix = f"acn:metrics:acn_errors_total:*{agent_id}*"
-        error_keys = await self.redis.keys(error_prefix)
+        error_keys = [k async for k in self.redis.scan_iter(error_prefix)]
 
         errors = 0
         for key in error_keys:
@@ -205,7 +205,7 @@ class Analytics:
         """
         # Get message counters
         total_pattern = "acn:metrics:acn_messages_total:*"
-        keys = await self.redis.keys(total_pattern)
+        keys = [k async for k in self.redis.scan_iter(total_pattern)]
 
         total = 0
         success = 0
@@ -226,7 +226,7 @@ class Analytics:
 
         # Get broadcast stats
         broadcast_pattern = "acn:metrics:acn_broadcasts_total:*"
-        broadcast_keys = await self.redis.keys(broadcast_pattern)
+        broadcast_keys = [k async for k in self.redis.scan_iter(broadcast_pattern)]
         broadcasts = 0
         for key in broadcast_keys:
             value = await self.redis.get(key)
@@ -327,7 +327,7 @@ class Analytics:
             - subnets: List of subnet details
         """
         # Get all subnet keys
-        subnet_keys = await self.redis.keys("acn:subnets:*:info")
+        subnet_keys = [k async for k in self.redis.scan_iter("acn:subnets:*:info")]
 
         subnets = []
         for key in subnet_keys:
@@ -396,7 +396,7 @@ class Analytics:
         message_stats = await self.get_message_stats()
 
         # Check error rate
-        error_keys = await self.redis.keys("acn:metrics:acn_errors_total:*")
+        error_keys = [k async for k in self.redis.scan_iter("acn:metrics:acn_errors_total:*")]
         total_errors = 0
         for key in error_keys:
             value = await self.redis.get(key)
@@ -533,7 +533,7 @@ class Analytics:
     async def _count_agents_in_subnet(self, subnet_id: str) -> int:
         """Count agents in a specific subnet"""
         # Get all agents and filter by subnet
-        agent_keys = await self.redis.keys("acn:agents:*:info")
+        agent_keys = [k async for k in self.redis.scan_iter("acn:agents:*:info")]
         count = 0
 
         for key in agent_keys:

@@ -17,18 +17,22 @@ from pathlib import Path
 
 import redis.asyncio as aioredis
 import structlog  # type: ignore[import-untyped]
-from slowapi import _rate_limit_exceeded_handler  # type: ignore[import-untyped]
-from slowapi.errors import RateLimitExceeded  # type: ignore[import-untyped]
 from a2a.types import (  # type: ignore[import-untyped]
     AgentCapabilities,
-    AgentCard as A2AAgentCard,
     AgentProvider,
     AgentSkill,
+)
+from a2a.types import (
+    AgentCard as A2AAgentCard,
+)
+from a2a.types import (
     SecurityScheme as A2ASecurityScheme,
 )
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from slowapi import _rate_limit_exceeded_handler  # type: ignore[import-untyped]
+from slowapi.errors import RateLimitExceeded  # type: ignore[import-untyped]
 
 from .config import get_settings
 from .infrastructure.messaging import (
@@ -74,10 +78,15 @@ logger = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager"""
-    logger.info("acn_starting", version="0.1.0")
+    logger.info("acn_starting", version=settings.service_version)
 
     # Initialize core services
-    registry_instance = AgentRegistry(settings.redis_url)
+    # agent_repository is created first so registry can share the same write path (P1 unified storage)
+    _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    agent_repository = RedisAgentRepository(_redis_client)
+    registry_instance = AgentRegistry(settings.redis_url, agent_repository=agent_repository)
+    # Reuse same underlying Redis connection to avoid duplicate connections
+    registry_instance.redis = _redis_client
 
     # Initialize Auth0 Credential Client (for Agent M2M credentials)
     auth0_credential_client = Auth0CredentialClient(
@@ -86,7 +95,6 @@ async def lifespan(app: FastAPI):
     )
 
     # Initialize Clean Architecture services
-    agent_repository = RedisAgentRepository(registry_instance.redis)
     agent_service_instance = AgentService(
         agent_repository,
         auth0_client=auth0_credential_client,
@@ -194,6 +202,8 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     logger.info("acn_stopping")
+    await webhook_service_instance.stop()
+    await ws_manager_instance.stop()
     await router_instance.close()
     await registry_instance.redis.close()
     logger.info("acn_stopped")
@@ -203,7 +213,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ACN - Agent Collaboration Network",
     description="Infrastructure for AI agent coordination and communication",
-    version="0.1.0",
+    version=settings.service_version,
     lifespan=lifespan,
     docs_url="/docs" if settings.enable_docs else None,
     redoc_url="/redoc" if settings.enable_docs else None,
@@ -247,7 +257,7 @@ async def root():
     """API root"""
     response = {
         "name": "ACN - Agent Collaboration Network",
-        "version": "0.1.0",
+        "version": settings.service_version,
         "agent_card": "/.well-known/agent-card.json",
     }
     if settings.enable_docs:

@@ -5,7 +5,7 @@ Type definitions synced with ACN API models.
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 # ============================================
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     """Agent status"""
 
     ONLINE = "online"
@@ -23,7 +23,7 @@ class AgentStatus(str, Enum):
     BUSY = "busy"
 
 
-class MessageType(str, Enum):
+class MessageType(StrEnum):
     """Message types"""
 
     TEXT = "text"
@@ -33,7 +33,7 @@ class MessageType(str, Enum):
     RESULT = "result"
 
 
-class BroadcastStrategy(str, Enum):
+class BroadcastStrategy(StrEnum):
     """Broadcast strategy"""
 
     ALL = "all"
@@ -42,7 +42,7 @@ class BroadcastStrategy(str, Enum):
     LOAD_BALANCED = "load_balanced"
 
 
-class PaymentMethod(str, Enum):
+class PaymentMethod(StrEnum):
     """Supported payment methods"""
 
     USDC = "USDC"
@@ -54,7 +54,7 @@ class PaymentMethod(str, Enum):
     PLATFORM_CREDITS = "PLATFORM_CREDITS"
 
 
-class PaymentNetwork(str, Enum):
+class PaymentNetwork(StrEnum):
     """Supported networks"""
 
     ETHEREUM = "ETHEREUM"
@@ -65,7 +65,7 @@ class PaymentNetwork(str, Enum):
     SOLANA = "SOLANA"
 
 
-class PaymentTaskStatus(str, Enum):
+class PaymentTaskStatus(StrEnum):
     """Payment task status"""
 
     PENDING = "pending"

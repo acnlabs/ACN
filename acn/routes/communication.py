@@ -6,7 +6,7 @@ Clean Architecture implementation: Route → MessageService → MessageRouter
 import structlog  # type: ignore[import-untyped]
 from a2a.types import Message, TextPart  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core.exceptions import AgentNotFoundException
 from .dependencies import (  # type: ignore[import-untyped]
@@ -24,25 +24,25 @@ logger = structlog.get_logger()
 
 
 class SendMessageRequest(BaseModel):
-    from_agent: str
-    target_agent: str
+    from_agent: str = Field(..., max_length=128)
+    target_agent: str = Field(..., max_length=128)
     message: dict  # A2A Message dict
-    priority: str = "normal"
+    priority: str = Field(default="normal", max_length=32)
 
 
 class BroadcastRequest(BaseModel):
-    from_agent: str
+    from_agent: str = Field(..., max_length=128)
     message: dict  # A2A Message dict
-    strategy: str = "parallel"
-    target_subnet: str | None = None
-    target_skills: list[str] | None = None
+    strategy: str = Field(default="parallel", max_length=32)
+    target_subnet: str | None = Field(None, max_length=64)
+    target_skills: list[str] | None = Field(None, max_length=20)
 
 
 class BroadcastBySkillRequest(BaseModel):
-    from_agent: str
-    skills: list[str]
+    from_agent: str = Field(..., max_length=128)
+    skills: list[str] = Field(..., max_length=20)
     message: dict  # A2A Message dict
-    limit: int | None = None
+    limit: int | None = Field(None, ge=1, le=100, description="Max agents to broadcast to")
 
 
 @router.post("/send")
@@ -65,6 +65,11 @@ async def send_message(
             status_code=403,
             detail="Authenticated agent does not match from_agent field",
         )
+
+    _MAX_MESSAGE_BYTES = 65536
+    if len(str(body.message).encode("utf-8")) > _MAX_MESSAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Message body exceeds 64KB limit")
+
     try:
         message = Message(
             role="user",
@@ -107,14 +112,14 @@ async def send_message(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
-        logger.error("message_send_failed", error=str(e))
+        logger.error("message_send_failed", error=str(e), exc_info=True)
         await metrics.record_message(
             from_agent=body.from_agent,
             to_agent=body.target_agent,
             message_type="direct",
             success=False,
         )
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to send message") from e
 
 
 @router.post("/broadcast")
@@ -136,6 +141,11 @@ async def broadcast_message(
             status_code=403,
             detail="Authenticated agent does not match from_agent field",
         )
+
+    _MAX_MESSAGE_BYTES = 65536
+    if len(str(body.message).encode("utf-8")) > _MAX_MESSAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Message body exceeds 64KB limit")
+
     try:
         message = Message(
             role="user",
@@ -177,13 +187,13 @@ async def broadcast_message(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
-        logger.error("broadcast_failed", error=str(e))
+        logger.error("broadcast_failed", error=str(e), exc_info=True)
         await metrics.record_broadcast(
             message_type="broadcast",
             target_count=0,
             success=False,
         )
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to broadcast message") from e
 
 
 @router.post("/broadcast-by-skill")
@@ -205,6 +215,11 @@ async def broadcast_by_skill(
             status_code=403,
             detail="Authenticated agent does not match from_agent field",
         )
+
+    _MAX_MESSAGE_BYTES = 65536
+    if len(str(body.message).encode("utf-8")) > _MAX_MESSAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Message body exceeds 64KB limit")
+
     try:
         message = Message(
             role="user",
@@ -249,15 +264,15 @@ async def broadcast_by_skill(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
-        logger.error("skill_broadcast_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("skill_broadcast_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to broadcast message") from e
 
 
 @router.get("/history/{agent_id}")
 async def get_message_history(
     agent_id: str,
     agent_info: AgentApiKeyDep,
-    limit: int = Query(default=100, le=1000),
+    limit: int = Query(default=100, ge=1, le=1000),
     message_service: MessageServiceDep = None,
 ):
     """Get message history for agent (requires Agent API Key)
@@ -291,8 +306,8 @@ async def get_message_history(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
-        logger.error("message_history_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("message_history_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve message history") from e
 
 
 @router.post("/retry-dlq")
@@ -314,5 +329,5 @@ async def retry_dead_letter_queue(
         return result
 
     except Exception as e:
-        logger.error("dlq_retry_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("dlq_retry_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retry dead letter queue") from e

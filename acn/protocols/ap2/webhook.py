@@ -20,7 +20,7 @@ import hashlib
 import hmac
 import logging
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import httpx
@@ -30,7 +30,7 @@ from redis.asyncio import Redis
 logger = logging.getLogger(__name__)
 
 
-class WebhookEventType(str, Enum):
+class WebhookEventType(StrEnum):
     """Webhook event types for payments and tasks"""
 
     # ===== Payment Task Events (AP2) =====
@@ -142,7 +142,7 @@ class WebhookService:
 
     async def start(self):
         """Start the webhook service"""
-        self._http_client = httpx.AsyncClient(timeout=30)
+        self._http_client = httpx.AsyncClient(timeout=30, trust_env=False)
         logger.info("WebhookService started")
 
     async def stop(self):
@@ -204,7 +204,7 @@ class WebhookService:
     ) -> bool:
         """Deliver webhook with retries"""
         if not self._http_client:
-            self._http_client = httpx.AsyncClient(timeout=config.timeout)
+            self._http_client = httpx.AsyncClient(timeout=config.timeout, trust_env=False)
 
         delivery_id = f"wh_{payload.task_id}_{payload.event.value}_{datetime.now(UTC).timestamp()}"
         payload_json = payload.model_dump_json()

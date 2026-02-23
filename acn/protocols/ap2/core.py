@@ -17,7 +17,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -59,7 +59,7 @@ NETWORK_FEE_RATE = 0.15  # 15% network fee, deducted from agent income
 CREDITS_PER_USD = 10.0   # 1 USD = 10 platform credits
 
 
-class SupportedPaymentMethod(str, Enum):
+class SupportedPaymentMethod(StrEnum):
     """Payment methods supported by ACN agents"""
 
     # Traditional
@@ -85,7 +85,7 @@ class SupportedPaymentMethod(str, Enum):
     PLATFORM_CREDITS = "platform_credits"
 
 
-class SupportedNetwork(str, Enum):
+class SupportedNetwork(StrEnum):
     """Blockchain networks supported for crypto payments"""
 
     # EVM
@@ -100,7 +100,7 @@ class SupportedNetwork(str, Enum):
     BITCOIN = "bitcoin"
 
 
-class PaymentTaskStatus(str, Enum):
+class PaymentTaskStatus(StrEnum):
     """Status of a payment task"""
 
     CREATED = "created"  # Task created, payment not initiated
@@ -126,11 +126,11 @@ class PaymentTaskStatus(str, Enum):
 class TokenPricing(BaseModel):
     """
     Token-based pricing model for AI agents.
-    
+
     Follows OpenAI-style pricing: charge per million tokens for input/output.
     This is an ACN extension to AP2, not part of the standard protocol.
     """
-    
+
     input_price_per_million: float = Field(
         ...,
         description="Price in USD per million input tokens",
@@ -145,30 +145,30 @@ class TokenPricing(BaseModel):
         default="USD",
         description="Currency for pricing (currently only USD supported)",
     )
-    
+
     def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
         """
         Calculate total cost in USD for given token usage.
-        
+
         Args:
             input_tokens: Number of input tokens used
             output_tokens: Number of output tokens used
-            
+
         Returns:
             Total cost in USD
         """
         input_cost = (input_tokens / 1_000_000) * self.input_price_per_million
         output_cost = (output_tokens / 1_000_000) * self.output_price_per_million
         return input_cost + output_cost
-    
+
     def calculate_cost_with_network_fee(
-        self, 
-        input_tokens: int, 
+        self,
+        input_tokens: int,
         output_tokens: int
     ) -> dict:
         """
         Calculate cost breakdown including network fee.
-        
+
         Returns:
             Dict with total_usd, network_fee_usd, agent_income_usd,
             and their credits equivalents.
@@ -191,7 +191,7 @@ class TokenPricing(BaseModel):
             "network_fee_credits": float(d_fee_cr),
             "agent_income_credits": float(d_income_cr),
         }
-    
+
     def to_extension_params(self) -> dict:
         """Convert to AP2 extension params format"""
         return {
@@ -255,7 +255,7 @@ class PaymentCapability(BaseModel):
         default_factory=dict,
         description="Pricing for specific skills (e.g., {'coding': '10.00'})",
     )
-    
+
     # Token-based pricing - for usage-based services (ACN extension)
     token_pricing: TokenPricing | None = Field(
         default=None,
@@ -265,7 +265,7 @@ class PaymentCapability(BaseModel):
     def to_agent_card_extension(self) -> dict:
         """Convert to Agent Card extension format for A2A discovery"""
         extensions = []
-        
+
         # Standard AP2 extension
         ap2_params = {
             "accepts_payment": self.accepts_payment,
@@ -280,7 +280,7 @@ class PaymentCapability(BaseModel):
             "description": "Supports AP2 payment protocol",
             "params": ap2_params,
         })
-        
+
         # ACN Token Pricing extension (if configured)
         if self.token_pricing:
             extensions.append({
@@ -288,9 +288,9 @@ class PaymentCapability(BaseModel):
                 "description": "Supports per-token pricing (OpenAI-style)",
                 "params": self.token_pricing.to_extension_params(),
             })
-        
+
         return {"extensions": extensions}
-    
+
     def get_pricing_type(self) -> str:
         """Get the primary pricing type for this agent"""
         if self.token_pricing:
@@ -298,19 +298,19 @@ class PaymentCapability(BaseModel):
         elif self.pricing:
             return "fixed_price"
         return "none"
-    
+
     def estimate_cost(
-        self, 
-        input_tokens: int = 0, 
+        self,
+        input_tokens: int = 0,
         output_tokens: int = 0,
         skill: str | None = None,
     ) -> dict | None:
         """
         Estimate cost for a service call.
-        
+
         For token-based pricing: uses token counts.
         For fixed pricing: uses skill name.
-        
+
         Returns cost breakdown or None if pricing not available.
         """
         if self.token_pricing and (input_tokens > 0 or output_tokens > 0):
@@ -908,7 +908,7 @@ def create_payment_capability(
             networks=["base", "ethereum"],
             pricing={"coding": "50.00", "analysis": "25.00"},
         )
-    
+
     Example (token-based pricing, OpenAI-style):
         cap = create_payment_capability(
             payment_methods=["platform_credits"],
@@ -920,7 +920,7 @@ def create_payment_capability(
     """
     methods = [SupportedPaymentMethod(m) for m in payment_methods]
     nets = [SupportedNetwork(n) for n in (networks or [])]
-    
+
     # Create TokenPricing if provided
     tp = None
     if token_pricing:
@@ -947,13 +947,13 @@ def create_token_pricing(
 ) -> TokenPricing:
     """
     Helper to create TokenPricing configuration.
-    
+
     Example (GPT-4 style pricing):
         pricing = create_token_pricing(
             input_price_per_million=30.00,   # $30 per 1M input tokens
             output_price_per_million=60.00,  # $60 per 1M output tokens
         )
-        
+
     Example (GPT-3.5 style pricing):
         pricing = create_token_pricing(
             input_price_per_million=0.50,   # $0.50 per 1M input tokens

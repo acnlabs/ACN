@@ -1,13 +1,17 @@
 """Analytics API Routes"""
 
 from datetime import UTC, datetime, timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from ..services.activity_service import ActivityService
-from .dependencies import AgentApiKeyDep, AnalyticsDep, RegistryDep, get_agent_service  # type: ignore[import-untyped]
+from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
+    AnalyticsDep,
+    RegistryDep,
+    get_agent_service,
+)
 
 router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
@@ -22,7 +26,7 @@ class ActivityEvent(BaseModel):
     agent_id: str = ""
     agent_name: str = "Unknown"
     description: str = ""
-    points: Optional[int] = None
+    points: int | None = None
     timestamp: datetime
 
 
@@ -41,10 +45,16 @@ async def get_agent_analytics(analytics: AnalyticsDep = None):
 @router.get("/agents/{agent_id}")
 async def get_agent_activity(
     agent_id: str,
+    agent_info: AgentApiKeyDep,
     days: int = Query(default=7, le=90),
     analytics: AnalyticsDep = None,
 ):
-    """Get specific agent activity"""
+    """Get specific agent activity (requires Agent API Key; agent may only query its own data)"""
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="API key does not match agent_id",
+        )
     start_time = datetime.now(UTC) - timedelta(days=days)
     return await analytics.get_agent_activity(agent_id, start_time=start_time)
 
@@ -76,7 +86,7 @@ async def get_subnet_analytics(analytics: AnalyticsDep = None):
 
 @router.get("/activities", response_model=ActivitiesResponse)
 async def list_activities(
-    limit: int = Query(default=20, le=100),
+    limit: int = Query(default=20, ge=1, le=100),
     user_id: str | None = None,
     task_id: str | None = None,
     agent_id: str | None = None,
@@ -124,12 +134,12 @@ async def list_activities(
             )
     # Create ActivityService with registry's redis
     activity_service = ActivityService(redis=registry.redis)
-    
+
     # Parse agent_ids if provided
     agent_id_list = None
     if agent_ids:
         agent_id_list = [aid.strip() for aid in agent_ids.split(",") if aid.strip()]
-    
+
     # Get activities
     raw_activities = await activity_service.list_activities(
         limit=limit,
@@ -138,7 +148,7 @@ async def list_activities(
         agent_id=agent_id,
         agent_ids=agent_id_list,
     )
-    
+
     # Convert to response model
     activities = []
     for event_dict in raw_activities:
@@ -147,7 +157,7 @@ async def list_activities(
             timestamp = datetime.fromisoformat(timestamp_str)
         except (ValueError, TypeError):
             timestamp = datetime.now(UTC)
-            
+
         activities.append(
             ActivityEvent(
                 event_id=event_dict.get("event_id", ""),
@@ -159,5 +169,5 @@ async def list_activities(
                 timestamp=timestamp,
             )
         )
-    
+
     return ActivitiesResponse(activities=activities, total=len(activities))

@@ -11,7 +11,7 @@ router = APIRouter(tags=["monitoring"])
 @router.get("/metrics", response_class=PlainTextResponse)
 async def prometheus_metrics(_: InternalTokenDep, metrics: MetricsDep = None):
     """Prometheus metrics endpoint (requires X-Internal-Token)"""
-    return await metrics.export_prometheus()
+    return await metrics.prometheus_export()
 
 
 @router.get("/api/v1/monitoring/metrics")
@@ -21,9 +21,9 @@ async def get_all_metrics(_: InternalTokenDep, metrics: MetricsDep = None):
 
 
 @router.get("/api/v1/monitoring/health")
-async def get_system_health(_: InternalTokenDep, metrics: MetricsDep = None):
+async def get_system_health(_: InternalTokenDep, analytics: AnalyticsDep = None):
     """Get system health status (requires X-Internal-Token)"""
-    return await metrics.get_health_status()
+    return await analytics.get_system_health()
 
 
 @router.get("/api/v1/monitoring/dashboard")
@@ -34,6 +34,6 @@ async def get_dashboard_data(
 ):
     """Get dashboard data (requires X-Internal-Token)"""
     return {
-        "metrics": await metrics.get_summary(),
-        "analytics": await analytics.get_summary(),
+        "metrics": await metrics.get_all_metrics(),
+        "analytics": await analytics.get_dashboard_data(),
     }

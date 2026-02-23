@@ -38,7 +38,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -52,7 +52,7 @@ from ..persistence.redis.registry import AgentRegistry
 logger = logging.getLogger(__name__)
 
 
-class GatewayMessageType(str, Enum):
+class GatewayMessageType(StrEnum):
     """Gateway protocol message types"""
 
     REGISTER = "register"

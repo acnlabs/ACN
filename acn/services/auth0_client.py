@@ -72,7 +72,10 @@ class Auth0CredentialClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    try:
+                        data = response.json()
+                    except Exception:
+                        data = {}
                     logger.info(
                         "agent_auth0_credentials_created",
                         agent_id=agent_id,

@@ -4,9 +4,9 @@ Shared fixtures for all tests.
 """
 
 import asyncio
+from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import AsyncGenerator
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 import redis.asyncio as redis
@@ -88,12 +88,12 @@ def sample_subnet() -> Subnet:
 async def mock_redis() -> AsyncGenerator[redis.Redis, None]:
     """Mock Redis client for testing"""
     mock = AsyncMock(spec=redis.Redis)
-    
+
     # Setup common return values
     mock.hgetall.return_value = {}
     mock.smembers.return_value = set()
     mock.exists.return_value = 0
-    
+
     yield mock
 
 
@@ -106,8 +106,9 @@ async def mock_redis() -> AsyncGenerator[redis.Redis, None]:
 async def test_client():
     """FastAPI test client"""
     from httpx import AsyncClient
+
     from acn.api import app
-    
+
     async with AsyncClient(app=app, base_url="http://test") as client:
         yield client
 

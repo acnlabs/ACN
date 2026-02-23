@@ -116,7 +116,7 @@ class RewardsClient:
                     "recipient_id": recipient_id,
                     "reward_type": reward_type,
                 }
-                
+
                 if amount is not None:
                     payload["amount"] = amount
                 if reason:

@@ -14,7 +14,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -29,7 +29,7 @@ from .message_router import MessageRouter
 logger = logging.getLogger(__name__)
 
 
-class BroadcastStrategy(str, Enum):
+class BroadcastStrategy(StrEnum):
     """Broadcast delivery strategy"""
 
     PARALLEL = "parallel"  # Send to all simultaneously

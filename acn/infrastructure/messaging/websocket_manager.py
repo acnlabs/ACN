@@ -17,7 +17,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -27,7 +27,7 @@ from fastapi import WebSocket
 logger = logging.getLogger(__name__)
 
 
-class MessageType(str, Enum):
+class MessageType(StrEnum):
     """WebSocket message types"""
 
     # Chat messages

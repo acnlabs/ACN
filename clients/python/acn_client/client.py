@@ -149,7 +149,7 @@ class ACNClient:
         name: str | None = None,
     ) -> list[AgentInfo]:
         """Search agents
-        
+
         Args:
             skills: Filter by agent skills
             status: Filter by status (online, offline, all)

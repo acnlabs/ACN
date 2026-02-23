@@ -222,45 +222,43 @@ class RedisTaskRepository(ITaskRepository):
         # Save to Redis hash
         await self.redis.hset(task_key, mapping=clean_dict)  # type: ignore[arg-type]
 
-        # ===== Update Indices =====
+        # ===== Update Indices (batched via pipeline to reduce round-trips) =====
+        async with self.redis.pipeline(transaction=False) as pipe:
+            # 1. Open tasks index (sorted by created_at)
+            if task.status == TaskStatus.OPEN:
+                timestamp = task.created_at.timestamp()
+                pipe.zadd("acn:tasks:open", {task.task_id: timestamp})
+            else:
+                pipe.zrem("acn:tasks:open", task.task_id)
 
-        # 1. Open tasks index (sorted by created_at)
-        if task.status == TaskStatus.OPEN:
-            timestamp = task.created_at.timestamp()
-            await self.redis.zadd("acn:tasks:open", {task.task_id: timestamp})
-        else:
-            await self.redis.zrem("acn:tasks:open", task.task_id)
+            # 2. Mode index
+            pipe.sadd(f"acn:tasks:by_mode:{task.mode.value}", task.task_id)
+            if existing and existing.mode != task.mode:
+                pipe.srem(f"acn:tasks:by_mode:{existing.mode.value}", task.task_id)
 
-        # 2. Mode index
-        await self.redis.sadd(f"acn:tasks:by_mode:{task.mode.value}", task.task_id)
-        # Clean up old mode if changed
-        if existing and existing.mode != task.mode:
-            await self.redis.srem(f"acn:tasks:by_mode:{existing.mode.value}", task.task_id)
+            # 3. Status index
+            pipe.sadd(f"acn:tasks:by_status:{task.status.value}", task.task_id)
+            if existing and existing.status != task.status:
+                pipe.srem(f"acn:tasks:by_status:{existing.status.value}", task.task_id)
 
-        # 3. Status index
-        await self.redis.sadd(f"acn:tasks:by_status:{task.status.value}", task.task_id)
-        # Clean up old status
-        if existing and existing.status != task.status:
-            await self.redis.srem(f"acn:tasks:by_status:{existing.status.value}", task.task_id)
+            # 4. Skill indices
+            for skill in task.required_skills:
+                pipe.sadd(f"acn:tasks:by_skill:{skill}", task.task_id)
+            if existing:
+                for old_skill in existing.required_skills:
+                    if old_skill not in task.required_skills:
+                        pipe.srem(f"acn:tasks:by_skill:{old_skill}", task.task_id)
 
-        # 4. Skill indices
-        for skill in task.required_skills:
-            await self.redis.sadd(f"acn:tasks:by_skill:{skill}", task.task_id)
-        # Clean up old skills
-        if existing:
-            for old_skill in existing.required_skills:
-                if old_skill not in task.required_skills:
-                    await self.redis.srem(f"acn:tasks:by_skill:{old_skill}", task.task_id)
+            # 5. Creator index
+            pipe.sadd(f"acn:tasks:by_creator:{task.creator_id}", task.task_id)
 
-        # 5. Creator index
-        await self.redis.sadd(f"acn:tasks:by_creator:{task.creator_id}", task.task_id)
+            # 6. Assignee index
+            if task.assignee_id:
+                pipe.sadd(f"acn:tasks:by_assignee:{task.assignee_id}", task.task_id)
+            if existing and existing.assignee_id and existing.assignee_id != task.assignee_id:
+                pipe.srem(f"acn:tasks:by_assignee:{existing.assignee_id}", task.task_id)
 
-        # 6. Assignee index
-        if task.assignee_id:
-            await self.redis.sadd(f"acn:tasks:by_assignee:{task.assignee_id}", task.task_id)
-        # Clean up old assignee
-        if existing and existing.assignee_id and existing.assignee_id != task.assignee_id:
-            await self.redis.srem(f"acn:tasks:by_assignee:{existing.assignee_id}", task.task_id)
+            await pipe.execute()
 
     async def find_by_id(self, task_id: str) -> Task | None:
         """Find task by ID"""
@@ -524,11 +522,11 @@ class RedisTaskRepository(ITaskRepository):
         except redis.ResponseError as e:
             err = str(e)
             if "TASK_NOT_OPEN" in err:
-                raise ValueError("Task is not open for joining")
+                raise ValueError("Task is not open for joining") from e
             elif "TASK_FULL" in err:
-                raise ValueError("Task has reached maximum participants")
+                raise ValueError("Task has reached maximum participants") from e
             elif "ALREADY_JOINED" in err:
-                raise ValueError("You already have an active participation in this task")
+                raise ValueError("You already have an active participation in this task") from e
             raise
 
     async def atomic_cancel_participation(
@@ -551,9 +549,9 @@ class RedisTaskRepository(ITaskRepository):
         except redis.ResponseError as e:
             err = str(e)
             if "NOT_FOUND" in err:
-                raise ValueError("Participation not found")
+                raise ValueError("Participation not found") from e
             elif "CANNOT_CANCEL" in err:
-                raise ValueError("Participation cannot be cancelled (already completed or cancelled)")
+                raise ValueError("Participation cannot be cancelled (already completed or cancelled)") from e
             raise
 
     async def atomic_complete_participation(
@@ -582,7 +580,7 @@ class RedisTaskRepository(ITaskRepository):
             return int(result)
         except redis.ResponseError as e:
             if "NOT_SUBMITTED" in str(e):
-                raise ValueError("Participation is not in submitted status")
+                raise ValueError("Participation is not in submitted status") from e
             raise
 
     async def decrement_active_count(self, task_id: str) -> int:
@@ -665,6 +663,7 @@ class RedisTaskRepository(ITaskRepository):
         data["is_repeatable"] = data.get("is_repeatable", "false").lower() == "true"
         data["is_multi_participant"] = data.get("is_multi_participant", "false").lower() == "true"
         data["allow_repeat_by_same"] = data.get("allow_repeat_by_same", "false").lower() == "true"
+        data["payment_released"] = data.get("payment_released", "false").lower() == "true"
 
         # Parse integers
         data["completed_count"] = int(data.get("completed_count", 0))
@@ -684,7 +683,15 @@ class RedisTaskRepository(ITaskRepository):
         ]
         for field_name in datetime_fields:
             if data.get(field_name):
-                data[field_name] = datetime.fromisoformat(data[field_name])
+                try:
+                    data[field_name] = datetime.fromisoformat(data[field_name])
+                except (ValueError, TypeError):
+                    import logging as _logging
+                    _logging.getLogger(__name__).warning(
+                        "task_repository: invalid datetime field, discarding",
+                        extra={"field": field_name, "value": data[field_name]},
+                    )
+                    data.pop(field_name, None)
             else:
                 data.pop(field_name, None)
 

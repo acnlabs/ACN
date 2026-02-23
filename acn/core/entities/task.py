@@ -5,18 +5,18 @@ Pure business logic for Task and Participation, independent of infrastructure.
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import uuid4
 
 
-class TaskMode(str, Enum):
+class TaskMode(StrEnum):
     """Task mode"""
 
     OPEN = "open"  # Open task, any agent can complete
     ASSIGNED = "assigned"  # Assigned to specific agent
 
 
-class ApprovalType(str, Enum):
+class ApprovalType(StrEnum):
     """Task approval type"""
 
     MANUAL = "manual"  # Human review required (default)
@@ -25,7 +25,7 @@ class ApprovalType(str, Enum):
     WEBHOOK = "webhook"  # Call external webhook (future)
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Task status"""
 
     OPEN = "open"  # Task is open for acceptance
@@ -37,7 +37,7 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"  # Cancelled by creator
 
 
-class ParticipationStatus(str, Enum):
+class ParticipationStatus(StrEnum):
     """Participation lifecycle status"""
 
     ACTIVE = "active"  # Participant is working on the task
@@ -67,7 +67,7 @@ class Participation:
 
     # Lifecycle
     status: ParticipationStatus = ParticipationStatus.ACTIVE
-    joined_at: datetime = field(default_factory=datetime.now)
+    joined_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # Submission
     submission: str | None = None
@@ -178,14 +178,20 @@ class Participation:
         ]
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
-                data[field_name] = datetime.fromisoformat(data[field_name])
+                try:
+                    data[field_name] = datetime.fromisoformat(data[field_name])
+                except (ValueError, TypeError):
+                    data.pop(field_name, None)
             elif not data.get(field_name):
                 data.pop(field_name, None)
 
         # Parse list fields
         if isinstance(data.get("submission_artifacts"), str):
             import json
-            data["submission_artifacts"] = json.loads(data["submission_artifacts"])
+            try:
+                data["submission_artifacts"] = json.loads(data["submission_artifacts"])
+            except (json.JSONDecodeError, TypeError):
+                data["submission_artifacts"] = []
 
         return cls(**data)
 
@@ -262,13 +268,16 @@ class Task:
     active_participants_count: int = 0  # Number of currently active participations
 
     # Timestamps
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     deadline: datetime | None = None
     completed_at: datetime | None = None
 
     # Approval settings
     approval_type: str = "manual"  # manual, auto, validator, webhook
     validator_id: str | None = None  # For validator type: invite_agent, daily_checkin, etc.
+
+    # Idempotency: tracks whether escrow/payment has been released for this task
+    payment_released: bool = False
 
     # Metadata
     metadata: dict = field(default_factory=dict)
@@ -547,6 +556,7 @@ class Task:
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "approval_type": self.approval_type,
             "validator_id": self.validator_id,
+            "payment_released": self.payment_released,
             "metadata": self.metadata,
         }
 
@@ -571,6 +581,9 @@ class Task:
         ]
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
-                data[field_name] = datetime.fromisoformat(data[field_name])
+                try:
+                    data[field_name] = datetime.fromisoformat(data[field_name])
+                except (ValueError, TypeError):
+                    data.pop(field_name, None)
 
         return cls(**data)
