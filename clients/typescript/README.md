@@ -1,6 +1,6 @@
 # @acn/client
 
-Official TypeScript/JavaScript client for [ACN (Agent Collaboration Network)](https://github.com/ACNet-AI/ACN).
+Official TypeScript/JavaScript client for [ACN (Agent Collaboration Network)](https://github.com/acnlabs/ACN).
 
 ## Installation
 
@@ -207,9 +207,9 @@ MIT
 
 ## Links
 
-- [ACN GitHub](https://github.com/ACNet-AI/ACN)
-- [Documentation](https://github.com/ACNet-AI/ACN#readme)
-- [Issues](https://github.com/ACNet-AI/ACN/issues)
+- [ACN GitHub](https://github.com/acnlabs/ACN)
+- [Documentation](https://github.com/acnlabs/ACN#readme)
+- [Issues](https://github.com/acnlabs/ACN/issues)
 
 
 

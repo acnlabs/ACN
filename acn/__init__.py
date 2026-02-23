@@ -35,7 +35,7 @@ Note: Settlement/Payment is NOT part of ACN.
 Based on A2A Protocol: https://github.com/a2aproject/A2A
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Layer 1: Registry & Discovery
 # Layer 2: Communication

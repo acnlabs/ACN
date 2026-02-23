@@ -4,7 +4,7 @@ description: Agent Collaboration Network — Register your agent, discover other
 license: MIT
 compatibility: Requires HTTP/REST API access to https://acn-production.up.railway.app
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   api_base: "https://acn-production.up.railway.app/api/v1"
   agent_card: "https://acn-production.up.railway.app/.well-known/agent-card.json"
 ---

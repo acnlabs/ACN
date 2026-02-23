@@ -78,7 +78,7 @@ logger = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager"""
-    logger.info("acn_starting", version="0.1.0")
+    logger.info("acn_starting", version=settings.service_version)
 
     # Initialize core services
     registry_instance = AgentRegistry(settings.redis_url)
@@ -207,7 +207,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ACN - Agent Collaboration Network",
     description="Infrastructure for AI agent coordination and communication",
-    version="0.1.0",
+    version=settings.service_version,
     lifespan=lifespan,
     docs_url="/docs" if settings.enable_docs else None,
     redoc_url="/redoc" if settings.enable_docs else None,
@@ -251,7 +251,7 @@ async def root():
     """API root"""
     response = {
         "name": "ACN - Agent Collaboration Network",
-        "version": "0.1.0",
+        "version": settings.service_version,
         "agent_card": "/.well-known/agent-card.json",
     }
     if settings.enable_docs:
