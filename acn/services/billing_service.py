@@ -570,7 +570,7 @@ def calculate_estimated_credits(
 ) -> float:
     """
     Quick helper to estimate credits needed for a request.
-    
+
     Example:
         credits = calculate_estimated_credits(
             estimated_input_tokens=1000,
@@ -578,7 +578,7 @@ def calculate_estimated_credits(
             input_price_per_million=3.00,
             output_price_per_million=15.00,
         )
-        print(f"Estimated cost: {credits} credits")
+        # credits == 0.0345
     """
     input_usd = (estimated_input_tokens / 1_000_000) * input_price_per_million
     output_usd = (estimated_output_tokens / 1_000_000) * output_price_per_million

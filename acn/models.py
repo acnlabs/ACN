@@ -9,7 +9,7 @@ from enum import Enum
 
 from a2a.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
 from a2a.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Re-export SDK types as canonical Agent Card / Skill for ACN
 AgentCard = A2AAgentCard
@@ -212,7 +212,9 @@ class SubnetCreateRequest(BaseModel):
     1. No security_schemes = Public subnet (anyone can join)
     2. Bearer token = Simple token auth
     3. API Key = Key-based auth
-    4. OpenID Connect = Enterprise OAuth/SSO
+
+    Note: openIdConnect / oauth2 types are not yet supported and will be rejected.
+    See https://github.com/acnlabs/ACN/issues/9 for implementation plan.
 
     Examples:
         # Public subnet (no auth)
@@ -227,15 +229,12 @@ class SubnetCreateRequest(BaseModel):
             }
         }
 
-        # Enterprise OAuth
+        # API Key auth
         {
-            "subnet_id": "enterprise",
-            "name": "Enterprise",
+            "subnet_id": "team-b",
+            "name": "Team B",
             "security_schemes": {
-                "oauth": {
-                    "type": "openIdConnect",
-                    "openIdConnectUrl": "https://auth.company.com/.well-known/openid"
-                }
+                "key": {"type": "apiKey", "in": "header", "name": "X-Subnet-Key"}
             }
         }
     """
@@ -250,6 +249,23 @@ class SubnetCreateRequest(BaseModel):
         None, max_length=10, description="Required security schemes. None = use first available"
     )
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
+
+    @model_validator(mode="after")
+    def reject_unsupported_security_types(self) -> "SubnetCreateRequest":
+        if not self.security_schemes:
+            return self
+        unsupported = [
+            name
+            for name, scheme in self.security_schemes.items()
+            if scheme.get("type") in ("openIdConnect", "oauth2")
+        ]
+        if unsupported:
+            raise ValueError(
+                f"Security scheme type(s) not yet supported: "
+                f"{', '.join(unsupported)}. "
+                f"Supported types: http (bearer), apiKey."
+            )
+        return self
 
 
 class SubnetCreateResponse(BaseModel):
