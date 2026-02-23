@@ -42,6 +42,7 @@ class AgentJoinRequest(BaseModel):
     skills: list[str] = Field(default_factory=list, description="Agent skills")
     endpoint: str | None = Field(None, description="A2A endpoint (optional for pull mode)")
     referrer_id: str | None = Field(None, description="Referrer agent ID")
+    agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
 
 
 class AgentJoinResponse(BaseModel):
@@ -57,6 +58,7 @@ class AgentJoinResponse(BaseModel):
     claim_url: str = Field(..., description="URL for human to claim this agent")
     tasks_endpoint: str = Field(..., description="Endpoint to fetch tasks")
     heartbeat_endpoint: str = Field(..., description="Heartbeat endpoint")
+    agent_card_url: str = Field(..., description="URL to retrieve the stored Agent Card")
 
 
 class AgentClaimRequest(BaseModel):
@@ -538,6 +540,8 @@ async def join_agent(
             "name": "MyAgent",
             "description": "An autonomous coding agent",
             "skills": ["coding", "review"],
+            "endpoint": "https://my-agent.example.com/a2a",
+            "agent_card": { "name": "MyAgent", "version": "1.0.0", ... },
             "referrer_id": "optional-referrer-agent-id"
         }
     """
@@ -548,6 +552,7 @@ async def join_agent(
             skills=body.skills,
             endpoint=body.endpoint,
             referrer_id=body.referrer_id,
+            agent_card=body.agent_card,
         )
 
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
@@ -571,6 +576,7 @@ async def join_agent(
             claim_url=f"{base_url}/claim/{agent.agent_id}",
             tasks_endpoint=f"{base_url}/api/v1/tasks",
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
+            agent_card_url=f"{base_url}/api/v1/agents/{agent.agent_id}/.well-known/agent-card.json",
         )
     except Exception as e:
         logger.error("agent_join_failed", error=str(e))

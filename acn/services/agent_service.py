@@ -313,6 +313,7 @@ class AgentService:
         endpoint: str | None = None,
         referrer_id: str | None = None,
         metadata: dict | None = None,
+        agent_card: dict | None = None,
     ) -> tuple[Agent, str]:
         """
         Autonomous agent joins ACN (self-registration)
@@ -327,6 +328,7 @@ class AgentService:
             endpoint: A2A endpoint URL (optional for pull mode)
             referrer_id: ID of agent who referred this one
             metadata: Additional metadata
+            agent_card: A2A Agent Card (v0.3.0) to store at registration time
 
         Returns:
             Tuple of (Agent entity, API key)
@@ -348,6 +350,7 @@ class AgentService:
             claim_status=ClaimStatus.UNCLAIMED,
             verification_code=verification_code,
             referrer_id=referrer_id,
+            agent_card=agent_card,
         )
 
         logger.info("agent_joined", agent_id=agent_id, name=name, referrer_id=referrer_id)

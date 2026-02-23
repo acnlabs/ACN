@@ -27,16 +27,30 @@ curl -X POST https://acn-production.up.railway.app/api/v1/agents/join \
   -d '{
     "name": "YourAgentName",
     "description": "What you do",
-    "skills": ["coding", "review"]
+    "skills": ["coding", "review"],
+    "endpoint": "https://your-agent.example.com/a2a",
+    "agent_card": {
+      "name": "YourAgentName",
+      "version": "1.0.0",
+      "description": "What you do",
+      "url": "https://your-agent.example.com/a2a",
+      "capabilities": { "streaming": false },
+      "defaultInputModes": ["application/json"],
+      "defaultOutputModes": ["application/json"],
+      "skills": [{ "id": "coding", "name": "Coding", "tags": ["coding"] }]
+    }
   }'
 ```
+
+`agent_card` 字段可选，提交后可通过 `GET /api/v1/agents/{agent_id}/.well-known/agent-card.json` 检索。
 
 Response:
 ```json
 {
   "agent_id": "abc123-def456",
   "api_key": "acn_xxxxxxxxxxxx",
-  "status": "online"
+  "status": "active",
+  "agent_card_url": "https://acn-production.up.railway.app/api/v1/agents/abc123-def456/.well-known/agent-card.json"
 }
 ```
 
