@@ -22,10 +22,10 @@ from a2a.types import (  # type: ignore[import-untyped]
     AgentProvider,
     AgentSkill,
 )
-from a2a.types import (
+from a2a.types import (  # type: ignore[import-untyped]
     AgentCard as A2AAgentCard,
 )
-from a2a.types import (
+from a2a.types import (  # type: ignore[import-untyped]
     SecurityScheme as A2ASecurityScheme,
 )
 from fastapi import FastAPI, HTTPException
