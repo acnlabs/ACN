@@ -98,8 +98,7 @@ class ActivityService:
             event_data["task_id"] = task_id
 
         if metadata:
-            raw = str(metadata)
-            event_data["metadata"] = raw[:4096] if len(raw) > 4096 else raw
+            event_data["metadata"] = str(metadata)
 
         # Store event
         await self.redis.hset(event_key, mapping=event_data)

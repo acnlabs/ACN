@@ -120,7 +120,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
+                    data = response.json()
                     logger.info(
                         "escrow_locked_v2",
                         task_id=task_id,
@@ -177,7 +177,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
+                    data = response.json()
                     return EscrowDetailResult(
                         success=True,
                         escrow_id=data.get("escrow_id"),
@@ -204,7 +204,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
+                    data = response.json()
                     return EscrowDetailResult(
                         success=True,
                         escrow_id=data.get("escrow_id"),
@@ -232,7 +232,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
+                    data = response.json()
                     return EscrowDetailResult(
                         success=True,
                         escrow_id=data.get("escrow_id"),
@@ -300,7 +300,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
+                    data = response.json()
                     logger.info(
                         "escrow_release_partial",
                         escrow_id=escrow_id,
@@ -375,7 +375,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
+                    data = response.json()
                     logger.info(
                         "escrow_locked",
                         task_id=task_id,
@@ -454,7 +454,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
+                    data = response.json()
                     logger.info(
                         "escrow_released",
                         task_id=task_id,
@@ -528,7 +528,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
+                    data = response.json()
                     logger.info(
                         "escrow_refunded",
                         task_id=task_id,
@@ -590,8 +590,10 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = self._parse_json(response)
-                    return data.get("sufficient", False), data.get("current_balance", 0)
+                    data = response.json()
+                    return data.get("sufficient", False), data.get(
+                        "current_balance", 0
+                    )
                 else:
                     return False, 0
 
@@ -599,14 +601,6 @@ class EscrowClient:
             return False, 0
 
     # ========== Helpers ==========
-
-    @staticmethod
-    def _parse_json(response: httpx.Response) -> dict:
-        """Safely parse JSON response body; returns empty dict on failure."""
-        try:
-            return response.json()
-        except Exception:
-            return {}
 
     @staticmethod
     def _extract_error(response: httpx.Response) -> str:

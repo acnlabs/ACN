@@ -43,16 +43,9 @@ async def websocket_endpoint(
         # Register agent WebSocket connection
         await ws_manager.connect(agent_id, websocket)
 
-        _MAX_WS_MESSAGE_BYTES = 65536
-
         # Keep connection alive and handle messages
         while True:
             data = await websocket.receive_text()
-
-            if len(data.encode("utf-8")) > _MAX_WS_MESSAGE_BYTES:
-                await websocket.close(code=4009, reason="Message too large")
-                return
-
             logger.debug("websocket_message_received", agent_id=agent_id, data=data)
 
             # Echo back for now (can extend with message routing)

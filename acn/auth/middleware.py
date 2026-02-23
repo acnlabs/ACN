@@ -74,7 +74,7 @@ async def _get_jwks(domain: str) -> dict:
             return _jwks_cache["keys"]
 
         jwks_url = f"https://{domain}/.well-known/jwks.json"
-        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(jwks_url)
             resp.raise_for_status()
             jwks = resp.json()
@@ -110,13 +110,6 @@ async def _verify_jwt(token: str) -> dict:
         jwks = await _get_jwks(settings.auth0_domain)
 
         unverified_header = jwt.get_unverified_header(token)
-
-        if unverified_header.get("alg") != "RS256":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unsupported token algorithm",
-            )
-
         rsa_key = {}
         for key in jwks.get("keys", []):
             if key.get("kid") == unverified_header.get("kid"):

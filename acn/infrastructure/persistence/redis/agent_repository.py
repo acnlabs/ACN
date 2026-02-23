@@ -3,17 +3,13 @@
 Concrete implementation using Redis for agent persistence.
 """
 
-import hashlib
 import json
-import logging
-from datetime import UTC, datetime
+from datetime import datetime
 
 import redis.asyncio as redis  # type: ignore[import-untyped]
 
 from ....core.entities import Agent, AgentStatus, ClaimStatus
 from ....core.interfaces import IAgentRepository
-
-logger = logging.getLogger(__name__)
 
 
 class RedisAgentRepository(IAgentRepository):
@@ -23,9 +19,9 @@ class RedisAgentRepository(IAgentRepository):
     Implements IAgentRepository using Redis as storage backend.
 
     Index Keys:
-    - acn:agents:{agent_id} → Agent hash (field api_key_hash stores SHA-256 of key)
+    - acn:agents:{agent_id} → Agent hash
     - acn:agents:by_endpoint:{owner}:{endpoint} → agent_id (for managed agents)
-    - acn:agents:by_api_key:{sha256_hex} → agent_id (for autonomous agents)
+    - acn:agents:by_api_key:{api_key} → agent_id (for autonomous agents)
     - acn:agents:by_owner:{owner} → Set of agent_ids
     - acn:agents:unclaimed → Set of agent_ids (unclaimed agents)
     - acn:subnets:{subnet_id}:agents → Set of agent_ids
@@ -39,15 +35,6 @@ class RedisAgentRepository(IAgentRepository):
             redis_client: Redis async client instance
         """
         self.redis = redis_client
-
-    @staticmethod
-    def _hash_api_key(api_key: str) -> str:
-        """Return the SHA-256 hex digest of an API key for safe storage.
-
-        Raw API keys are NEVER written to Redis; only this hash is stored
-        and used as the lookup index.
-        """
-        return hashlib.sha256(api_key.encode()).hexdigest()
 
     async def save(self, agent: Agent) -> None:
         """Save or update an agent in Redis"""
@@ -80,59 +67,51 @@ class RedisAgentRepository(IAgentRepository):
             else:
                 clean_dict[k] = v
 
-        # Security: never persist the raw API key — store only its SHA-256 hash.
-        raw_api_key: str | None = clean_dict.pop("api_key", None)
-        if raw_api_key:
-            api_key_hash = self._hash_api_key(raw_api_key)
-            clean_dict["api_key_hash"] = api_key_hash
-
         # Save to Redis hash
         await self.redis.hset(agent_key, mapping=clean_dict)  # type: ignore[arg-type]
-        # Defensive: ensure no raw key survives from a legacy record
-        await self.redis.hdel(agent_key, "api_key")
 
-        # ===== Update Indices (batched via pipeline to reduce round-trips) =====
-        async with self.redis.pipeline(transaction=False) as pipe:
-            # 1. Endpoint index (only for agents with owner and endpoint)
-            if agent.owner and agent.endpoint:
-                endpoint_key = f"acn:agents:by_endpoint:{agent.owner}:{agent.endpoint}"
-                pipe.set(endpoint_key, agent.agent_id)
+        # ===== Update Indices =====
 
-            # Clean up old endpoint index if owner changed
-            if existing and existing.owner and existing.endpoint:
-                if existing.owner != agent.owner or existing.endpoint != agent.endpoint:
-                    old_endpoint_key = f"acn:agents:by_endpoint:{existing.owner}:{existing.endpoint}"
-                    pipe.delete(old_endpoint_key)
+        # 1. Endpoint index (only for agents with owner and endpoint)
+        if agent.owner and agent.endpoint:
+            endpoint_key = f"acn:agents:by_endpoint:{agent.owner}:{agent.endpoint}"
+            await self.redis.set(endpoint_key, agent.agent_id)
 
-            # 2. API key index (hashed; only set when a new raw key is provided)
-            if raw_api_key:
-                pipe.set(f"acn:agents:by_api_key:{api_key_hash}", agent.agent_id)
+        # Clean up old endpoint index if owner changed
+        if existing and existing.owner and existing.endpoint:
+            if existing.owner != agent.owner or existing.endpoint != agent.endpoint:
+                old_endpoint_key = f"acn:agents:by_endpoint:{existing.owner}:{existing.endpoint}"
+                await self.redis.delete(old_endpoint_key)
 
-            # 3. Owner index
-            if agent.owner:
-                pipe.sadd(f"acn:agents:by_owner:{agent.owner}", agent.agent_id)
+        # 2. API key index (for autonomous agents)
+        if agent.api_key:
+            api_key_index = f"acn:agents:by_api_key:{agent.api_key}"
+            await self.redis.set(api_key_index, agent.agent_id)
 
-            # Clean up old owner index if owner changed
-            if existing and existing.owner and existing.owner != agent.owner:
-                pipe.srem(f"acn:agents:by_owner:{existing.owner}", agent.agent_id)
+        # 3. Owner index
+        if agent.owner:
+            await self.redis.sadd(f"acn:agents:by_owner:{agent.owner}", agent.agent_id)
 
-            # 4. Unclaimed index
-            if agent.claim_status == ClaimStatus.UNCLAIMED:
-                pipe.sadd("acn:agents:unclaimed", agent.agent_id)
-            else:
-                pipe.srem("acn:agents:unclaimed", agent.agent_id)
+        # Clean up old owner index if owner changed
+        if existing and existing.owner and existing.owner != agent.owner:
+            await self.redis.srem(f"acn:agents:by_owner:{existing.owner}", agent.agent_id)
 
-            # 5. Subnet indices
-            for subnet_id in agent.subnet_ids:
-                pipe.sadd(f"acn:subnets:{subnet_id}:agents", agent.agent_id)
+        # 4. Unclaimed index
+        if agent.claim_status == ClaimStatus.UNCLAIMED:
+            await self.redis.sadd("acn:agents:unclaimed", agent.agent_id)
+        else:
+            # Remove from unclaimed if claimed
+            await self.redis.srem("acn:agents:unclaimed", agent.agent_id)
 
-            # Clean up old subnet indices
-            if existing:
-                for old_subnet in existing.subnet_ids:
-                    if old_subnet not in agent.subnet_ids:
-                        pipe.srem(f"acn:subnets:{old_subnet}:agents", agent.agent_id)
+        # 5. Subnet indices
+        for subnet_id in agent.subnet_ids:
+            await self.redis.sadd(f"acn:subnets:{subnet_id}:agents", agent.agent_id)
 
-            await pipe.execute()
+        # Clean up old subnet indices
+        if existing:
+            for old_subnet in existing.subnet_ids:
+                if old_subnet not in agent.subnet_ids:
+                    await self.redis.srem(f"acn:subnets:{old_subnet}:agents", agent.agent_id)
 
     async def find_by_id(self, agent_id: str) -> Agent | None:
         """Find agent by ID"""
@@ -205,20 +184,19 @@ class RedisAgentRepository(IAgentRepository):
         if not agent:
             return False
 
-        agent_key = f"acn:agents:{agent_id}"
-
-        # Remove API key index before deleting the hash (need hash value first)
-        api_key_hash = await self.redis.hget(agent_key, "api_key_hash")
-        if api_key_hash:
-            await self.redis.delete(f"acn:agents:by_api_key:{api_key_hash}")
-
         # Remove from Redis
+        agent_key = f"acn:agents:{agent_id}"
         await self.redis.delete(agent_key)
 
         # Remove from endpoint index
         if agent.owner and agent.endpoint:
             endpoint_key = f"acn:agents:by_endpoint:{agent.owner}:{agent.endpoint}"
             await self.redis.delete(endpoint_key)
+
+        # Remove from API key index
+        if agent.api_key:
+            api_key_index = f"acn:agents:by_api_key:{agent.api_key}"
+            await self.redis.delete(api_key_index)
 
         # Remove from subnet indices
         for subnet_id in agent.subnet_ids:
@@ -242,13 +220,9 @@ class RedisAgentRepository(IAgentRepository):
         return await self.redis.scard(f"acn:subnets:{subnet_id}:agents")
 
     async def find_by_api_key(self, api_key: str) -> Agent | None:
-        """Find agent by API key (for autonomous agent authentication).
-
-        The lookup key is the SHA-256 hash of the raw API key; the raw key
-        is never stored in Redis.
-        """
-        key_hash = self._hash_api_key(api_key)
-        agent_id = await self.redis.get(f"acn:agents:by_api_key:{key_hash}")
+        """Find agent by API key (for autonomous agent authentication)"""
+        api_key_index = f"acn:agents:by_api_key:{api_key}"
+        agent_id = await self.redis.get(api_key_index)
 
         if not agent_id:
             return None
@@ -271,26 +245,6 @@ class RedisAgentRepository(IAgentRepository):
 
         return agents
 
-    @staticmethod
-    def _safe_loads(raw: str | None, default):
-        """Safely parse a JSON string; return default on any error."""
-        try:
-            return json.loads(raw) if raw else default
-        except (json.JSONDecodeError, TypeError, ValueError):
-            logger.warning("agent_repository: corrupted JSON field, using default", extra={"raw": str(raw)[:200]})
-            return default
-
-    @staticmethod
-    def _safe_fromisoformat(raw: str | None, default):
-        """Safely parse an ISO datetime string; return default on any error."""
-        if not raw:
-            return default
-        try:
-            return datetime.fromisoformat(raw)
-        except (ValueError, TypeError):
-            logger.warning("agent_repository: invalid datetime field, using default", extra={"raw": str(raw)[:50]})
-            return default
-
     def _dict_to_agent(self, agent_dict: dict) -> Agent:
         """Convert Redis dict to Agent entity"""
         # Parse JSON fields
@@ -303,18 +257,17 @@ class RedisAgentRepository(IAgentRepository):
             "endpoint": agent_dict.get("endpoint"),
             "status": AgentStatus(agent_dict["status"]),
             "description": agent_dict.get("description"),
-            "skills": self._safe_loads(agent_dict.get("skills", "[]"), []),
-            "subnet_ids": self._safe_loads(agent_dict.get("subnet_ids", '["public"]'), ["public"]),
-            "metadata": self._safe_loads(agent_dict.get("metadata", "{}"), {}),
-            "registered_at": self._safe_fromisoformat(agent_dict.get("registered_at"), datetime.now(UTC)),
+            "skills": json.loads(agent_dict.get("skills", "[]")),
+            "subnet_ids": json.loads(agent_dict.get("subnet_ids", '["public"]')),
+            "metadata": json.loads(agent_dict.get("metadata", "{}")),
+            "registered_at": datetime.fromisoformat(agent_dict["registered_at"]),
             "last_heartbeat": (
-                self._safe_fromisoformat(agent_dict["last_heartbeat"], None)
+                datetime.fromisoformat(agent_dict["last_heartbeat"])
                 if agent_dict.get("last_heartbeat")
                 else None
             ),
-            # Authentication: raw API key is never loaded from storage (only hash is stored).
-            # The raw key is only available transiently at creation time.
-            "api_key": None,
+            # Authentication
+            "api_key": agent_dict.get("api_key"),
             # Claim status
             "claim_status": (
                 ClaimStatus(agent_dict["claim_status"]) if agent_dict.get("claim_status") else None
@@ -324,16 +277,20 @@ class RedisAgentRepository(IAgentRepository):
             "referrer_id": agent_dict.get("referrer_id"),
             # Owner change tracking
             "owner_changed_at": (
-                self._safe_fromisoformat(agent_dict["owner_changed_at"], None)
+                datetime.fromisoformat(agent_dict["owner_changed_at"])
                 if agent_dict.get("owner_changed_at")
                 else None
             ),
             # Payment
             "wallet_address": agent_dict.get("wallet_address"),
             "accepts_payment": agent_dict.get("accepts_payment", "false").lower() == "true",
-            "payment_methods": self._safe_loads(agent_dict.get("payment_methods", "[]"), []),
-            "token_pricing": self._safe_loads(agent_dict.get("token_pricing"), None),
-            "agent_card": self._safe_loads(agent_dict.get("agent_card"), None),
+            "payment_methods": json.loads(agent_dict.get("payment_methods", "[]")),
+            "token_pricing": (
+                json.loads(agent_dict["token_pricing"]) if agent_dict.get("token_pricing") else None
+            ),
+            "agent_card": (
+                json.loads(agent_dict["agent_card"]) if agent_dict.get("agent_card") else None
+            ),
             # Auth0 M2M 凭证（client_secret 不持久化）
             "auth0_client_id": agent_dict.get("auth0_client_id"),
             "auth0_token_endpoint": agent_dict.get("auth0_token_endpoint"),

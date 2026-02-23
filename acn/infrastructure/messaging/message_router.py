@@ -9,13 +9,11 @@ Routes messages between agents using:
 Based on: https://github.com/a2aproject/A2A
 """
 
-import ipaddress
 import json
 import logging
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
@@ -36,51 +34,6 @@ from a2a.types import (  # type: ignore[import-untyped]
 from ..persistence.redis.registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
-
-_PRIVATE_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-]
-
-
-def _is_safe_endpoint(url: str) -> bool:
-    """Return True if the endpoint URL is safe to route to (not a private/loopback address).
-
-    Only enforced in production (dev_mode=False) to allow local docker networks in development.
-    """
-    from ...config import get_settings
-    if get_settings().dev_mode:
-        return True
-
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-
-    if parsed.scheme not in ("http", "https"):
-        return False
-
-    hostname = parsed.hostname
-    if not hostname:
-        return False
-
-    if hostname.lower() in ("localhost",):
-        return False
-
-    try:
-        addr = ipaddress.ip_address(hostname)
-        for network in _PRIVATE_NETWORKS:
-            if addr in network:
-                return False
-    except ValueError:
-        pass
-
-    return True
 
 
 class MessageRouter:
@@ -156,7 +109,6 @@ class MessageRouter:
                     pass
             httpx_client = httpx.AsyncClient(
                 timeout=30.0,
-                trust_env=False,
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
             )
             self._clients[endpoint] = A2AClient(
@@ -210,23 +162,6 @@ class MessageRouter:
 
         endpoint = agent_info.endpoint
         logger.debug(f"[{route_id}] Discovered endpoint: {endpoint}")
-
-        # 1b. SSRF guard (production only)
-        if not _is_safe_endpoint(endpoint):
-            logger.warning(
-                "endpoint_blocked",
-                route_id=route_id,
-                to_agent=to_agent,
-                reason="private or non-http endpoint",
-            )
-            await self._store_dlq(
-                route_id=route_id,
-                from_agent=from_agent,
-                to_agent=to_agent,
-                message=message,
-                error="endpoint_blocked",
-            )
-            raise ValueError(f"Endpoint blocked for agent {to_agent}")
 
         # 2. Log outbound message
         await self._log_message(
@@ -304,9 +239,8 @@ class MessageRouter:
             if not agents:
                 raise ValueError(f"No agents found with skills: {skills}")
 
-        # Select best agent (simple: first match).
-        # Load balancing and skill-score ranking are not yet implemented;
-        # currently always selects the first result returned by the registry.
+        # Select best agent (simple: first match)
+        # TODO: Add load balancing, skill scoring
         target_agent = agents[0]
 
         logger.info(f"Discovered agent {target_agent.agent_id} for skills {skills}")
@@ -341,15 +275,6 @@ class MessageRouter:
 
         endpoint = agent_info.endpoint
         logger.info(f"Starting stream: {from_agent} -> {to_agent}")
-
-        # SSRF guard (production only)
-        if not _is_safe_endpoint(endpoint):
-            logger.warning(
-                "endpoint_blocked",
-                to_agent=to_agent,
-                reason="private or non-http endpoint",
-            )
-            raise ValueError(f"Endpoint blocked for agent {to_agent}")
 
         # Get A2A client and stream
         client = await self._get_client(endpoint)
@@ -437,13 +362,7 @@ class MessageRouter:
             limit - 1,
         )
 
-        result = []
-        for m in messages:
-            try:
-                result.append(json.loads(m))
-            except (json.JSONDecodeError, TypeError):
-                logger.warning("message_router: skipping malformed message log entry")
-        return result
+        return [json.loads(m) for m in messages]
 
     async def _log_message(
         self,
@@ -542,11 +461,7 @@ class MessageRouter:
                 break
 
             processed += 1
-            try:
-                entry = json.loads(entry_json)
-            except (json.JSONDecodeError, TypeError):
-                logger.error("message_router: skipping malformed DLQ entry")
-                continue
+            entry = json.loads(entry_json)
 
             if entry["retry_count"] >= max_retries:
                 logger.error(f"Message {entry['route_id']} exceeded max retries, discarding")
