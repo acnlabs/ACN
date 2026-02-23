@@ -9,7 +9,8 @@ Supports two registration modes:
 """
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[import-untyped]
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..auth.middleware import get_subject, require_permission
@@ -18,8 +19,11 @@ from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from ..services.rewards_client import RewardsClient
 from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
     AgentServiceDep,
+    InternalTokenDep,
     SubnetManagerDep,
+    limiter,
 )
 
 router = APIRouter(prefix="/api/v1/agents", tags=["registry"])
@@ -35,9 +39,9 @@ class AgentJoinRequest(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100, description="Agent name")
     description: str | None = Field(None, max_length=500, description="Agent description")
-    skills: list[str] = Field(default_factory=list, description="Agent skills")
-    endpoint: str | None = Field(None, description="A2A endpoint (optional for pull mode)")
-    referrer_id: str | None = Field(None, description="Referrer agent ID")
+    skills: list[str] = Field(default_factory=list, max_length=50, description="Agent skills")
+    endpoint: str | None = Field(None, max_length=512, description="A2A endpoint (optional for pull mode)")
+    referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
 
 
 class AgentJoinResponse(BaseModel):
@@ -73,7 +77,7 @@ class AgentClaimResponse(BaseModel):
 class AgentTransferRequest(BaseModel):
     """Request to transfer agent ownership"""
 
-    new_owner: str = Field(..., description="New owner identifier")
+    new_owner: str = Field(..., max_length=128, description="New owner identifier")
 
 
 class AgentTransferResponse(BaseModel):
@@ -155,6 +159,7 @@ async def dev_register_agent(
             endpoint=request.endpoint,
             skills=request.skills,
             subnet_ids=subnet_ids,
+            agent_card=request.agent_card,
         )
 
         # Return response
@@ -167,8 +172,8 @@ async def dev_register_agent(
         )
 
     except Exception as e:
-        logger.error("Dev registration failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("Dev registration failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to register agent") from e
 
 
 def _agent_entity_to_info(agent) -> AgentInfo:
@@ -182,7 +187,7 @@ def _agent_entity_to_info(agent) -> AgentInfo:
         skills=agent.skills,
         status=agent.status.value,
         subnet_ids=agent.subnet_ids,
-        agent_card=None,  # TODO: Generate from entity
+        agent_card=agent.agent_card,
         metadata={
             **agent.metadata,
             # Add claim info to metadata for API consumers
@@ -241,13 +246,14 @@ async def register_agent(
             endpoint=request.endpoint,
             skills=request.skills,
             subnet_ids=subnet_ids,
-            description=request.description if hasattr(request, "description") else "",
-            metadata=request.metadata if hasattr(request, "metadata") else {},
+            description=getattr(request, "description", None),
+            metadata=getattr(request, "metadata", {}),
+            agent_card=request.agent_card,
         )
 
         # Generate Agent Card URL
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
-        agent_card_url = f"{base_url}/.well-known/agent-card.json?agent_id={agent.agent_id}"
+        agent_card_url = f"{base_url}/api/v1/agents/{agent.agent_id}/.well-known/agent-card.json"
 
         logger.info("agent_registered", agent_id=agent.agent_id, owner=agent.owner)
 
@@ -258,8 +264,8 @@ async def register_agent(
             agent_card_url=agent_card_url,
         )
     except Exception as e:
-        logger.error("agent_registration_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("agent_registration_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to register agent") from e
 
 
 @router.get("/{agent_id}", response_model=AgentInfo)
@@ -281,6 +287,8 @@ async def search_agents(
     status: str = "online",
     owner: str = None,
     name: str = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     agent_service: AgentServiceDep = None,
 ):
     """Search agents
@@ -302,20 +310,30 @@ async def search_agents(
         agents = [a for a in agents if name.lower() in a.name.lower()]
 
     # Convert to AgentInfo
-    agent_infos = [_agent_entity_to_info(a) for a in agents]
+    all_agent_infos = [_agent_entity_to_info(a) for a in agents]
+    total = len(all_agent_infos)
+    paginated = all_agent_infos[offset : offset + limit]
 
     return AgentSearchResponse(
-        agents=agent_infos,
-        total=len(agent_infos),
+        agents=paginated,
+        total=total,
     )
 
 
 @router.post("/{agent_id}/heartbeat")
-async def agent_heartbeat(agent_id: str, agent_service: AgentServiceDep = None):
-    """Update agent heartbeat
+async def agent_heartbeat(
+    agent_id: str,
+    agent_info: AgentApiKeyDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Update agent heartbeat (requires Agent API Key)
 
+    The authenticated agent must match the path `agent_id` to prevent
+    falsely keeping other agents alive.
     Clean Architecture: Route → AgentService → Repository
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     try:
         await agent_service.update_heartbeat(agent_id)
         return {"status": "ok", "agent_id": agent_id}
@@ -325,23 +343,39 @@ async def agent_heartbeat(agent_id: str, agent_service: AgentServiceDep = None):
 
 @router.get("/{agent_id}/.well-known/agent-card.json")
 async def get_agent_card(agent_id: str, agent_service: AgentServiceDep = None):
-    """Get agent's A2A Agent Card
+    """Get agent's A2A Agent Card (v0.3.0 compliant)
 
-    Clean Architecture: Route → AgentService → Repository
+    Returns the card submitted at registration time if available.
+    Falls back to auto-generating a minimal card from stored fields.
     """
     try:
         agent = await agent_service.get_agent(agent_id)
 
-        # Generate A2A-compliant Agent Card
-        agent_card = {
-            "protocolVersion": "0.3.0",
-            "name": agent.name,
-            "description": agent.description or "",
-            "url": agent.endpoint,
-            "skills": [{"id": skill, "name": skill} for skill in agent.skills],
-        }
+        # Return the complete card submitted at registration (e.g. OpenPersona-generated)
+        if agent.agent_card:
+            return agent.agent_card
 
-        return agent_card
+        # Fallback: auto-generate a minimal card from stored fields
+        card = AgentCard(
+            name=agent.name,
+            version="0.1.0",
+            description=agent.description or f"{agent.name} on ACN",
+            url=agent.endpoint or "",
+            capabilities=AgentCapabilities(streaming=False),
+            default_input_modes=["text", "application/json"],
+            default_output_modes=["text", "application/json"],
+            skills=[
+                AgentSkill(
+                    id=skill,
+                    name=skill.replace("-", " ").replace("_", " ").title(),
+                    description=f"Capability: {skill}",
+                    tags=[skill],
+                )
+                for skill in agent.skills
+            ],
+        )
+
+        return card.model_dump(exclude_none=True)
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
 
@@ -384,7 +418,8 @@ async def unregister_agent(
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        logger.warning("agent_unregister_permission_denied", agent_id=agent_id, error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
 
 
 # ============================================================================
@@ -424,8 +459,10 @@ async def _grant_referral_reward(referrer_id: str, new_agent_id: str) -> None:
 
 
 @router.post("/join", response_model=AgentJoinResponse)
+@limiter.limit("10/minute")
 async def join_agent(
-    request: AgentJoinRequest,
+    request: Request,
+    body: AgentJoinRequest,
     background_tasks: BackgroundTasks,
     agent_service: AgentServiceDep = None,
 ):
@@ -449,11 +486,11 @@ async def join_agent(
     """
     try:
         agent, api_key = await agent_service.join_agent(
-            name=request.name,
-            description=request.description,
-            skills=request.skills,
-            endpoint=request.endpoint,
-            referrer_id=request.referrer_id,
+            name=body.name,
+            description=body.description,
+            skills=body.skills,
+            endpoint=body.endpoint,
+            referrer_id=body.referrer_id,
         )
 
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
@@ -461,10 +498,10 @@ async def join_agent(
         logger.info("agent_joined", agent_id=agent.agent_id, name=agent.name)
 
         # Grant referral reward in background (if referrer provided)
-        if request.referrer_id:
+        if body.referrer_id:
             background_tasks.add_task(
                 _grant_referral_reward,
-                referrer_id=request.referrer_id,
+                referrer_id=body.referrer_id,
                 new_agent_id=agent.agent_id,
             )
 
@@ -479,8 +516,8 @@ async def join_agent(
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
         )
     except Exception as e:
-        logger.error("agent_join_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("agent_join_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to join network") from e
 
 
 @router.get("/me", response_model=AgentMeResponse)
@@ -599,7 +636,8 @@ async def transfer_agent(
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        logger.warning("agent_transfer_permission_denied", agent_id=agent_id, error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
 
 
 @router.post("/{agent_id}/release", response_model=AgentReleaseResponse)
@@ -633,18 +671,21 @@ async def release_agent(
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        logger.warning("agent_release_permission_denied", agent_id=agent_id, error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
 
 
 @router.get("/unclaimed", response_model=AgentSearchResponse)
 async def list_unclaimed_agents(
+    _: InternalTokenDep,
     limit: int = 100,
     agent_service: AgentServiceDep = None,
 ):
     """
-    List all unclaimed agents
+    List all unclaimed agents (requires X-Internal-Token)
 
     Returns agents that have joined but not been claimed by any owner.
+    Restricted to ACN operators to prevent enumeration attacks.
     """
     agents = await agent_service.get_unclaimed_agents(limit=limit)
     agent_infos = [_agent_entity_to_info(a) for a in agents]

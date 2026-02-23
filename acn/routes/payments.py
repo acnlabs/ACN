@@ -1,5 +1,6 @@
 """Payment System API Routes"""
 
+import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -14,13 +15,16 @@ from ..protocols.ap2 import (
 )
 from ..services.billing_service import BillingTransactionStatus
 from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
     BillingServiceDep,
+    InternalTokenDep,
     PaymentDiscoveryDep,
     PaymentTasksDep,
     RegistryDep,
 )
 
 router = APIRouter(prefix="/api/v1/payments", tags=["payments"])
+logger = structlog.get_logger()
 
 
 class PaymentCapabilityRequest(BaseModel):
@@ -34,7 +38,7 @@ class PaymentCapabilityRequest(BaseModel):
 class CreatePaymentTaskRequest(BaseModel):
     from_agent: str
     to_agent: str
-    amount: float
+    amount: float = Field(..., gt=0, description="Payment amount (must be positive)")
     currency: str
     payment_method: SupportedPaymentMethod
     network: SupportedNetwork
@@ -73,10 +77,16 @@ class BillUsageRequest(BaseModel):
 async def set_payment_capability(
     agent_id: str,
     request: PaymentCapabilityRequest,
+    agent_info: AgentApiKeyDep,
     registry: RegistryDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
-    """Set payment capability for agent"""
+    """Set payment capability for agent (requires Agent API Key)
+
+    The authenticated agent must match the path `agent_id`.
+    """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     agent = await registry.get_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -95,7 +105,8 @@ async def set_payment_capability(
         return {"status": "registered", "agent_id": agent_id}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("set_payment_capability_failed", agent_id=agent_id, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to register payment capability") from e
 
 
 @router.get("/{agent_id}/payment-capability")
@@ -124,9 +135,18 @@ async def discover_payment_agents(
 @router.post("/tasks")
 async def create_payment_task(
     request: CreatePaymentTaskRequest,
+    agent_info: AgentApiKeyDep,
     payment_tasks: PaymentTasksDep = None,
 ):
-    """Create a payment task"""
+    """Create a payment task (requires Agent API Key)
+
+    The authenticated agent must match the `from_agent` field to prevent spoofing.
+    """
+    if agent_info["agent_id"] != request.from_agent:
+        raise HTTPException(
+            status_code=403,
+            detail="Authenticated agent does not match from_agent field",
+        )
     try:
         task_id = await payment_tasks.create_task(
             from_agent=request.from_agent,
@@ -142,7 +162,8 @@ async def create_payment_task(
         return {"task_id": task_id, "status": "created"}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("create_payment_task_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create payment task") from e
 
 
 @router.get("/tasks/{task_id}")
@@ -157,12 +178,15 @@ async def get_payment_task(task_id: str, payment_tasks: PaymentTasksDep = None):
 @router.get("/tasks/agent/{agent_id}")
 async def get_agent_payment_tasks(
     agent_id: str,
+    agent_info: AgentApiKeyDep,
     status: PaymentTaskStatus | None = None,
-    limit: int = Query(default=100, le=1000),
+    limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     payment_tasks: PaymentTasksDep = None,
 ):
-    """Get payment tasks for agent"""
+    """Get payment tasks for agent (requires Agent API Key matching agent_id)"""
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     tasks = await payment_tasks.get_agent_tasks(
         agent_id=agent_id,
         status=status,
@@ -175,9 +199,12 @@ async def get_agent_payment_tasks(
 @router.get("/stats/{agent_id}")
 async def get_agent_payment_stats(
     agent_id: str,
+    agent_info: AgentApiKeyDep,
     payment_tasks: PaymentTasksDep = None,
 ):
-    """Get payment statistics for agent"""
+    """Get payment statistics for agent (requires Agent API Key matching agent_id)"""
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     stats = await payment_tasks.get_agent_stats(agent_id)
     return stats
 
@@ -202,25 +229,29 @@ async def get_billing_config():
 async def set_token_pricing(
     agent_id: str,
     request: TokenPricingRequest,
+    agent_info: AgentApiKeyDep,
     registry: RegistryDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """
-    Set token-based pricing for an agent.
-    
+    Set token-based pricing for an agent (requires Agent API Key).
+
+    The authenticated agent must match the path `agent_id`.
     This enables OpenAI-style per-token billing for the agent.
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     agent = await registry.get_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    
+
     try:
         # Create token pricing
         token_pricing = TokenPricing(
             input_price_per_million=request.input_price_per_million,
             output_price_per_million=request.output_price_per_million,
         )
-        
+
         # Get existing capability or create new one
         existing = await payment_discovery.get_agent_payment_capability(agent_id)
         if existing:
@@ -232,9 +263,9 @@ async def set_token_pricing(
                 payment_methods=[SupportedPaymentMethod.PLATFORM_CREDITS],
                 token_pricing=token_pricing,
             )
-        
+
         await payment_discovery.index_payment_capability(agent_id, capability)
-        
+
         return {
             "status": "configured",
             "agent_id": agent_id,
@@ -245,9 +276,10 @@ async def set_token_pricing(
             },
             "network_fee_rate": NETWORK_FEE_RATE,
         }
-    
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("set_token_pricing_failed", agent_id=agent_id, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to set token pricing") from e
 
 
 @router.get("/{agent_id}/token-pricing")
@@ -259,10 +291,10 @@ async def get_token_pricing(
     capability = await payment_discovery.get_agent_payment_capability(agent_id)
     if not capability or not capability.token_pricing:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail="Token pricing not configured for this agent"
         )
-    
+
     return {
         "agent_id": agent_id,
         "token_pricing": {
@@ -282,7 +314,7 @@ async def estimate_cost(
 ):
     """
     Estimate cost before calling an agent.
-    
+
     Returns cost breakdown including network fee.
     """
     capability = await payment_discovery.get_agent_payment_capability(request.agent_id)
@@ -291,13 +323,13 @@ async def estimate_cost(
             status_code=404,
             detail="Token pricing not configured for this agent"
         )
-    
+
     # Calculate cost breakdown
     breakdown = capability.token_pricing.calculate_cost_with_network_fee(
         request.estimated_input_tokens,
         request.estimated_output_tokens,
     )
-    
+
     return {
         "agent_id": request.agent_id,
         "estimate": breakdown,
@@ -308,13 +340,15 @@ async def estimate_cost(
 @router.post("/billing/charge")
 async def bill_usage(
     request: BillUsageRequest,
+    _: InternalTokenDep,
     payment_discovery: PaymentDiscoveryDep = None,
     billing_service: BillingServiceDep = None,
     registry: RegistryDep = None,
 ):
     """
-    Bill token usage after a service call.
-    
+    Bill token usage after a service call (requires X-Internal-Token).
+
+    Restricted to ACN backend — triggered after actual service call completes.
     This creates a billing transaction and returns the cost breakdown.
     The actual credit deduction is handled by the backend wallet system.
     """
@@ -325,18 +359,18 @@ async def bill_usage(
             status_code=404,
             detail="Token pricing not configured for this agent"
         )
-    
+
     # Get agent owner
     agent = await registry.get_agent(request.agent_id)
     agent_owner_id = agent.owner if agent else None
-    
+
     # Calculate cost
     cost = billing_service.calculate_cost(
         request.input_tokens,
         request.output_tokens,
         capability.token_pricing,
     )
-    
+
     # Create transaction
     transaction = await billing_service.create_transaction(
         user_id=request.user_id,
@@ -345,7 +379,7 @@ async def bill_usage(
         cost=cost,
         task_id=request.task_id,
     )
-    
+
     return {
         "transaction_id": transaction.transaction_id,
         "status": transaction.status.value,
@@ -364,24 +398,26 @@ async def bill_usage(
 @router.get("/billing/transactions/{transaction_id}")
 async def get_billing_transaction(
     transaction_id: str,
+    _: InternalTokenDep,
     billing_service: BillingServiceDep = None,
 ):
-    """Get a billing transaction by ID"""
+    """Get a billing transaction by ID (requires X-Internal-Token)"""
     transaction = await billing_service.get_transaction(transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    
+
     return transaction
 
 
 @router.get("/billing/user/{user_id}/transactions")
 async def get_user_billing_transactions(
     user_id: str,
+    _: InternalTokenDep,
     status: BillingTransactionStatus | None = None,
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=50, ge=1, le=200),
     billing_service: BillingServiceDep = None,
 ):
-    """Get billing transactions for a user"""
+    """Get billing transactions for a user (requires X-Internal-Token)"""
     transactions = await billing_service.get_user_transactions(
         user_id=user_id,
         limit=limit,
@@ -397,9 +433,10 @@ async def get_user_billing_transactions(
 @router.get("/billing/user/{user_id}/stats")
 async def get_user_billing_stats(
     user_id: str,
+    _: InternalTokenDep,
     billing_service: BillingServiceDep = None,
 ):
-    """Get billing statistics for a user"""
+    """Get billing statistics for a user (requires X-Internal-Token)"""
     stats = await billing_service.get_user_billing_stats(user_id)
     return {
         "user_id": user_id,
@@ -409,8 +446,9 @@ async def get_user_billing_stats(
 
 @router.get("/billing/network-fees")
 async def get_network_fee_stats(
+    _: InternalTokenDep,
     billing_service: BillingServiceDep = None,
 ):
-    """Get network fee statistics (admin endpoint)"""
+    """Get network fee statistics (requires X-Internal-Token)"""
     stats = await billing_service.get_network_fee_stats()
     return stats

@@ -6,12 +6,17 @@ Clean Architecture implementation: Route → TaskService → Repository
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import get_subject, require_permission
 from ..core.entities import TaskMode, TaskStatus
 from ..services import TaskNotFoundException, TaskService
+from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
+    InternalTokenDep,
+    OptionalInternalTokenDep,
+)
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 logger = structlog.get_logger()
@@ -32,7 +37,7 @@ def set_task_service(service: TaskService) -> None:
 def get_task_service() -> TaskService:
     """Get the task service instance"""
     if _task_service is None:
-        raise RuntimeError("TaskService not initialized")
+        raise RuntimeError("TaskService not initialized") from None
     return _task_service
 
 
@@ -46,19 +51,30 @@ class TaskCreateRequest(BaseModel):
     """Request to create a task"""
 
     title: str = Field(..., min_length=3, max_length=200)
-    description: str = Field(..., min_length=10)
+    description: str = Field(..., min_length=10, max_length=10000)
     mode: str = Field(default="open", description="Task mode: open or assigned")
-    task_type: str = Field(default="general", description="Task type category")
+    task_type: str = Field(default="general", max_length=64, description="Task type category")
     required_skills: list[str] = Field(default_factory=list)
-    reward_amount: str = Field(default="0", description="Reward amount")
+    reward_amount: str = Field(default="0", description="Reward amount (non-negative number as string)")
     reward_currency: str = Field(default="points", description="Currency: USD, USDC, points")
-    is_repeatable: bool = Field(default=False, description="DEPRECATED: use is_multi_participant")
+    is_repeatable: bool = Field(default=False, description="DEPRECATED: use is_multi_participant", deprecated=True)
+
+    @field_validator("reward_amount")
+    @classmethod
+    def reward_amount_must_be_non_negative(cls, v: str) -> str:
+        try:
+            value = float(v)
+        except (ValueError, TypeError):
+            raise ValueError("reward_amount must be a valid number (e.g. '100' or '9.99')") from None
+        if value < 0:
+            raise ValueError("reward_amount must be >= 0") from None
+        return v
     is_multi_participant: bool = Field(default=False, description="Multiple agents can work in parallel")
     allow_repeat_by_same: bool = Field(default=False, description="Same agent can rejoin after completing")
     max_completions: int | None = Field(None, description="Max completions (open/multi mode)")
     deadline_hours: int | None = Field(None, ge=1, le=720, description="Deadline in hours")
-    assignee_id: str | None = Field(None, description="Pre-assigned agent (assigned mode)")
-    assignee_name: str | None = Field(None)
+    assignee_id: str | None = Field(None, max_length=128, description="Pre-assigned agent (assigned mode)")
+    assignee_name: str | None = Field(None, max_length=128)
     approval_type: str = Field(
         default="manual", description="Approval type: manual, auto, validator"
     )
@@ -137,7 +153,7 @@ class TaskListResponse(BaseModel):
 class TaskAcceptRequest(BaseModel):
     """Request to accept/join a task"""
 
-    message: str = Field(default="", description="Optional message to creator")
+    message: str = Field(default="", max_length=1000, description="Optional message to creator")
 
 
 class TaskAcceptResponse(BaseModel):
@@ -150,7 +166,7 @@ class TaskAcceptResponse(BaseModel):
 class TaskSubmitRequest(BaseModel):
     """Request to submit task result"""
 
-    submission: str = Field(..., min_length=5, description="Task result/deliverable")
+    submission: str = Field(..., min_length=5, max_length=20000, description="Task result/deliverable")
     artifacts: list[dict] = Field(default_factory=list, description="Optional artifacts")
     participation_id: str | None = Field(None, description="Participation ID (for multi-participant tasks)")
 
@@ -159,7 +175,7 @@ class TaskReviewRequest(BaseModel):
     """Request to approve or reject submission"""
 
     approved: bool = Field(..., description="Whether to approve")
-    notes: str = Field(default="", description="Review notes")
+    notes: str = Field(default="", max_length=2000, description="Review notes")
     participation_id: str | None = Field(None, description="Participation ID (for multi-participant tasks)")
     agent_id: str | None = Field(None, description="Agent ID (alternative to participation_id)")
 
@@ -246,7 +262,7 @@ async def list_tasks(
         try:
             task_mode = TaskMode(mode)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
+            raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}") from None
 
     # Parse status
     task_status = None
@@ -254,7 +270,7 @@ async def list_tasks(
         try:
             task_status = TaskStatus(status)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+            raise HTTPException(status_code=400, detail=f"Invalid status: {status}") from None
 
     # Parse skills
     skill_list = skills.split(",") if skills else None
@@ -294,7 +310,7 @@ async def match_tasks_for_agent(
     skill_list = [s.strip() for s in skills.split(",") if s.strip()]
 
     if not skill_list:
-        raise HTTPException(status_code=400, detail="At least one skill is required")
+        raise HTTPException(status_code=400, detail="At least one skill is required") from None
 
     tasks = await task_service.get_tasks_for_agent(skill_list, limit)
 
@@ -314,7 +330,7 @@ async def get_task(
         task = await task_service.get_task(task_id)
         return _task_to_response(task)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
 
 
 # ========== Authenticated Endpoints ==========
@@ -325,29 +341,29 @@ async def create_task(
     request: TaskCreateRequest,
     http_request: Request,
     payload: dict = Depends(require_permission("acn:write")),
+    is_internal: OptionalInternalTokenDep = False,
     task_service: TaskServiceDep = None,
 ):
     """
     Create a new task
 
     Requires authentication. The authenticated user becomes the creator.
-    In dev mode, X-Creator-Id header can override the subject.
+    Backend services with X-Internal-Token may supply X-Creator-Id to proxy user identity.
     """
     token_owner = await get_subject()
 
-    # Dev mode: allow X-Creator-Id header override
     creator_id_header = http_request.headers.get("x-creator-id")
     creator_name_header = http_request.headers.get("x-creator-name")
     creator_type_header = http_request.headers.get("x-creator-type", "human")
 
-    if creator_id_header:
+    if is_internal and creator_id_header:
         token_owner = creator_id_header
 
     # Parse mode
     try:
         mode = TaskMode(request.mode)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}")
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}") from None
 
     try:
         task = await task_service.create_task(
@@ -382,8 +398,8 @@ async def create_task(
         return _task_to_response(task)
 
     except Exception as e:
-        logger.error("task_creation_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("task_creation_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create task") from e
 
 
 @router.post("/{task_id}/accept", response_model=TaskAcceptResponse)
@@ -392,12 +408,14 @@ async def accept_task(
     http_request: Request,
     request: TaskAcceptRequest = None,
     payload: dict = Depends(require_permission("acn:write")),
+    is_internal: OptionalInternalTokenDep = False,
     task_service: TaskServiceDep = None,
 ):
     """Accept/join a task. Returns participation_id for multi-participant tasks."""
     token_owner = await get_subject()
 
-    agent_id = http_request.headers.get("x-creator-id") or token_owner
+    creator_id_header = http_request.headers.get("x-creator-id")
+    agent_id = (creator_id_header if is_internal and creator_id_header else None) or token_owner
     agent_name = http_request.headers.get("x-creator-name") or agent_id
     agent_type = http_request.headers.get("x-creator-type", "agent")
 
@@ -414,9 +432,9 @@ async def accept_task(
         )
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{task_id}/submit", response_model=TaskResponse)
@@ -425,13 +443,14 @@ async def submit_task(
     http_request: Request,
     request: TaskSubmitRequest,
     payload: dict = Depends(require_permission("acn:write")),
+    is_internal: OptionalInternalTokenDep = False,
     task_service: TaskServiceDep = None,
 ):
     """Submit task result"""
     token_owner = await get_subject()
 
-    # Dev mode: allow X-Creator-Id header override
-    agent_id = http_request.headers.get("x-creator-id") or token_owner
+    creator_id_header = http_request.headers.get("x-creator-id")
+    agent_id = (creator_id_header if is_internal and creator_id_header else None) or token_owner
 
     try:
         task = await task_service.submit_task(
@@ -444,11 +463,12 @@ async def submit_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        logger.warning("submit_task_permission_denied", error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{task_id}/review", response_model=TaskResponse)
@@ -457,11 +477,13 @@ async def review_task(
     http_request: Request,
     request: TaskReviewRequest,
     payload: dict = Depends(require_permission("acn:write")),
+    is_internal: OptionalInternalTokenDep = False,
     task_service: TaskServiceDep = None,
 ):
     """Approve or reject task/participation submission"""
     token_owner = await get_subject()
-    reviewer_id = http_request.headers.get("x-creator-id") or token_owner
+    creator_id_header = http_request.headers.get("x-creator-id")
+    reviewer_id = (creator_id_header if is_internal and creator_id_header else None) or token_owner
 
     try:
         # Multi-participant review (participation_id or agent_id provided)
@@ -489,11 +511,12 @@ async def review_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        logger.warning("review_task_permission_denied", error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse)
@@ -513,11 +536,12 @@ async def cancel_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        logger.warning("cancel_task_permission_denied", error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 # ========== Participation Endpoints ==========
@@ -544,7 +568,7 @@ async def list_participations(
             total=len(participations),
         )
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
 
 
 @router.get("/{task_id}/participations/me", response_model=ParticipationResponse | None)
@@ -552,11 +576,13 @@ async def get_my_participation(
     task_id: str,
     http_request: Request,
     payload: dict = Depends(require_permission("acn:read")),
+    is_internal: OptionalInternalTokenDep = False,
     task_service: TaskServiceDep = None,
 ):
     """Get the current user's participation in a task"""
     token_owner = await get_subject()
-    agent_id = http_request.headers.get("x-creator-id") or token_owner
+    creator_id_header = http_request.headers.get("x-creator-id")
+    agent_id = (creator_id_header if is_internal and creator_id_header else None) or token_owner
 
     p = await task_service.get_user_participation(task_id, agent_id)
     if not p:
@@ -570,11 +596,13 @@ async def cancel_participation(
     participation_id: str,
     http_request: Request,
     payload: dict = Depends(require_permission("acn:write")),
+    is_internal: OptionalInternalTokenDep = False,
     task_service: TaskServiceDep = None,
 ):
     """Cancel a participation (participant withdraws)"""
     token_owner = await get_subject()
-    agent_id = http_request.headers.get("x-creator-id") or token_owner
+    creator_id_header = http_request.headers.get("x-creator-id")
+    agent_id = (creator_id_header if is_internal and creator_id_header else None) or token_owner
 
     try:
         task = await task_service.cancel_participation(
@@ -584,11 +612,12 @@ async def cancel_participation(
         )
         return _task_to_response(task)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        logger.warning("cancel_participation_permission_denied", error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 # ========== Internal Endpoints ==========
@@ -598,7 +627,7 @@ async def cancel_participation(
 @router.get("/{task_id}/internal")
 async def get_task_internal(
     task_id: str,
-    x_internal_token: str = Header(..., alias="X-Internal-Token"),
+    _: InternalTokenDep,
     task_service: TaskServiceDep = None,
 ):
     """
@@ -609,54 +638,21 @@ async def get_task_internal(
 
     Requires X-Internal-Token header matching the shared INTERNAL_API_TOKEN.
     """
-    from ..config import get_settings
-
-    _settings = get_settings()
-    expected_token = _settings.internal_api_token
-
-    # Development mode: allow when token is default dev value
-    if expected_token and expected_token != "dev-internal-token-2024":
-        if x_internal_token != expected_token:
-            raise HTTPException(status_code=401, detail="Invalid internal token")
-    elif not _settings.dev_mode:
-        raise HTTPException(
-            status_code=500, detail="Internal API token not configured for production"
-        )
-
     try:
         task = await task_service.get_task(task_id)
         return task.to_dict()
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
 
 
 # ========== Agent API Key Endpoints ==========
 # For autonomous agents using API key authentication
 
 
-async def verify_agent_api_key(
-    authorization: str = Header(..., description="Bearer API_KEY"),
-    task_service: TaskServiceDep = None,
-) -> dict:
-    """Verify agent API key and return agent info"""
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization format")
-
-    api_key = authorization[7:]
-
-    # Get agent by API key via AgentService
-    # Note: This requires AgentService to be available
-    # For now, we'll just extract agent_id from the key or use a simple lookup
-    # In production, this should validate against the repository
-
-    # Placeholder - in real implementation, look up agent by API key
-    return {"api_key": api_key, "agent_id": "unknown"}
-
-
 @router.post("/agent/create", response_model=TaskResponse)
 async def agent_create_task(
     request: TaskCreateRequest,
-    authorization: str = Header(..., description="Bearer API_KEY"),
+    agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
     """
@@ -664,12 +660,11 @@ async def agent_create_task(
 
     For autonomous agents to create tasks using their API key.
     """
-    agent_info = await verify_agent_api_key(authorization)
 
     try:
         mode = TaskMode(request.mode)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}")
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}") from None
 
     task = await task_service.create_task(
         creator_type="agent",
@@ -693,11 +688,10 @@ async def agent_create_task(
 @router.post("/agent/{task_id}/accept", response_model=TaskResponse)
 async def agent_accept_task(
     task_id: str,
-    authorization: str = Header(..., description="Bearer API_KEY"),
+    agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
     """Accept a task (Agent API Key auth)"""
-    agent_info = await verify_agent_api_key(authorization)
 
     try:
         task = await task_service.accept_task(
@@ -708,20 +702,19 @@ async def agent_accept_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/agent/{task_id}/submit", response_model=TaskResponse)
 async def agent_submit_task(
     task_id: str,
     request: TaskSubmitRequest,
-    authorization: str = Header(..., description="Bearer API_KEY"),
+    agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
     """Submit task result (Agent API Key auth)"""
-    agent_info = await verify_agent_api_key(authorization)
 
     try:
         task = await task_service.submit_task(
@@ -733,8 +726,54 @@ async def agent_submit_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Task not found") from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        logger.warning("agent_submit_task_permission_denied", error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/{task_id}/retry-payment")
+async def retry_task_payment(
+    task_id: str,
+    _token: InternalTokenDep,
+    task_service: TaskServiceDep = None,
+):
+    """Retry releasing payment for a completed task where payment was not released.
+
+    Internal endpoint — requires internal service token.
+    Safe to call multiple times (idempotent via payment_released flag).
+    """
+    try:
+        task = await task_service.get_task(task_id)
+    except TaskNotFoundException:
+        raise HTTPException(status_code=404, detail="Task not found") from None
+
+    if task.status.value != "completed":
+        raise HTTPException(status_code=400, detail="Task is not completed") from None
+
+    if task.payment_released:
+        return {"status": "already_released", "task_id": task_id}
+
+    # Delegate to TaskService reward distribution
+    try:
+        result = await task_service._distribute_reward(
+            task=task,
+            amount=float(task.reward_amount),
+            description=f"Retry payment for task: {task.title}",
+        )
+        if result.get("success"):
+            task.payment_released = True
+            await task_service.repository.save(task)
+            logger.info("retry_payment_success", task_id=task_id)
+            return {"status": "released", "task_id": task_id}
+        else:
+            err_msg = result.get("error", "unknown")
+            logger.error("retry_payment_failed", task_id=task_id, error=err_msg)
+            raise HTTPException(status_code=502, detail=f"Payment failed: {err_msg}") from None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("retry_payment_error", task_id=task_id, error=str(e))
+        raise HTTPException(status_code=500, detail="Internal error during payment retry") from e

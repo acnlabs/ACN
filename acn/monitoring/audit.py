@@ -30,14 +30,14 @@ Architecture:
 
 import json
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 
 
-class AuditEventType(str, Enum):
+class AuditEventType(StrEnum):
     """Types of audit events"""
 
     # Agent lifecycle
@@ -77,7 +77,7 @@ class AuditEventType(str, Enum):
     ERROR_OCCURRED = "error_occurred"
 
 
-class AuditLevel(str, Enum):
+class AuditLevel(StrEnum):
     """Severity levels for audit events"""
 
     DEBUG = "debug"

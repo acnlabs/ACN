@@ -16,7 +16,6 @@ from acn.core.entities.task import (
     TaskStatus,
 )
 
-
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -24,29 +23,29 @@ from acn.core.entities.task import (
 
 def _make_task(**overrides) -> Task:
     """Factory for a minimal valid Task"""
-    defaults = dict(
-        task_id="task-001",
-        mode=TaskMode.OPEN,
-        creator_type="human",
-        creator_id="creator-001",
-        creator_name="Alice",
-        title="Test Task",
-        description="A test task",
-        reward_amount="100",
-    )
+    defaults = {
+        "task_id": "task-001",
+        "mode": TaskMode.OPEN,
+        "creator_type": "human",
+        "creator_id": "creator-001",
+        "creator_name": "Alice",
+        "title": "Test Task",
+        "description": "A test task",
+        "reward_amount": "100",
+    }
     defaults.update(overrides)
     return Task(**defaults)
 
 
 def _make_participation(**overrides) -> Participation:
     """Factory for a minimal valid Participation"""
-    defaults = dict(
-        participation_id="part-001",
-        task_id="task-001",
-        participant_id="agent-001",
-        participant_name="Bot-1",
-        participant_type="agent",
-    )
+    defaults = {
+        "participation_id": "part-001",
+        "task_id": "task-001",
+        "participant_id": "agent-001",
+        "participant_name": "Bot-1",
+        "participant_type": "agent",
+    }
     defaults.update(overrides)
     return Participation(**defaults)
 

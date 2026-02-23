@@ -5,29 +5,40 @@ Core registry service for Agent registration, discovery, and management
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import redis.asyncio as redis
+from a2a.types import (  # type: ignore[import-untyped]
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+)
 
-from ....models import AgentCard, AgentInfo
+from ....core.interfaces import IAgentRepository
+from ....models import AgentInfo
 
 
 class AgentRegistry:
     """
     Agent Registry Service
 
-    Manages Agent registration, storage, and discovery using Redis
+    Manages Agent registration, storage, and discovery using Redis.
+    When agent_repository is provided, hash writes are delegated to it
+    (unified write path) and this class only maintains its own index sets.
     """
 
-    def __init__(self, redis_url: str):
+    def __init__(self, redis_url: str, agent_repository: IAgentRepository | None = None):
         """
         Initialize Agent Registry
 
         Args:
             redis_url: Redis connection URL (e.g., "redis://localhost:6379")
+            agent_repository: Optional shared repository instance; when set,
+                hash writes are delegated to it to avoid double-write inconsistency.
         """
         self.redis = redis.from_url(redis_url, decode_responses=True)
+        self._agent_repository = agent_repository
 
     async def register_agent(
         self,
@@ -111,21 +122,45 @@ class AgentRegistry:
         if is_update and existing_agent.get("registered_at"):
             agent_data["registered_at"] = existing_agent["registered_at"]
         else:
-            agent_data["registered_at"] = datetime.now().isoformat()
+            agent_data["registered_at"] = datetime.now(UTC).isoformat()
 
-        # Store in Redis (overwrites if exists - idempotent)
-        await self.redis.hset(f"acn:agents:{agent_id}", mapping=agent_data)
+        # Write agent hash — delegate to repository if available (unified write path)
+        if self._agent_repository:
+            from ....core.entities import Agent, AgentStatus
+            agent_entity = Agent(
+                agent_id=agent_id,
+                owner=owner,
+                name=name,
+                description=description,
+                endpoint=endpoint,
+                skills=skills,
+                subnet_ids=subnet_ids,
+                metadata=metadata or {},
+                agent_card=agent_card if isinstance(agent_card, dict) else (
+                    agent_card.model_dump(exclude_none=True) if agent_card else None
+                ),
+                status=AgentStatus.ONLINE,
+            )
+            if is_update and existing_agent.get("registered_at"):
+                try:
+                    agent_entity.registered_at = datetime.fromisoformat(existing_agent["registered_at"])
+                except (ValueError, TypeError):
+                    pass
+            await self._agent_repository.save(agent_entity)
+        else:
+            # Fallback: direct hash write (standalone / legacy mode)
+            await self.redis.hset(f"acn:agents:{agent_id}", mapping=agent_data)
 
         # Clean up old indexes if updating
         if is_update:
             # Remove from old skill indexes
-            old_skills = json.loads(existing_agent.get("skills", "[]"))
+            old_skills = self._safe_loads(existing_agent.get("skills"), [])
             for skill in old_skills:
                 if skill not in skills:
                     await self.redis.srem(f"acn:skills:{skill}", agent_id)
 
             # Remove from old subnet indexes
-            old_subnets = json.loads(existing_agent.get("subnet_ids", '["public"]'))
+            old_subnets = self._safe_loads(existing_agent.get("subnet_ids"), ["public"])
             for subnet_id in old_subnets:
                 if subnet_id not in subnet_ids:
                     await self.redis.srem(f"acn:subnets:{subnet_id}:agents", agent_id)
@@ -160,7 +195,7 @@ class AgentRegistry:
             return False
 
         # Get current subnet_ids
-        subnet_ids = json.loads(data.get("subnet_ids", '["public"]'))
+        subnet_ids = self._safe_loads(data.get("subnet_ids"), ["public"])
         if subnet_id not in subnet_ids:
             subnet_ids.append(subnet_id)
             await self.redis.hset(f"acn:agents:{agent_id}", "subnet_ids", json.dumps(subnet_ids))
@@ -184,7 +219,7 @@ class AgentRegistry:
             return False
 
         # Get current subnet_ids
-        subnet_ids = json.loads(data.get("subnet_ids", '["public"]'))
+        subnet_ids = self._safe_loads(data.get("subnet_ids"), ["public"])
         if subnet_id in subnet_ids:
             subnet_ids.remove(subnet_id)
             # Ensure at least public subnet
@@ -210,20 +245,20 @@ class AgentRegistry:
         if not data:
             return None
 
-        # Parse Agent Card
+        # Parse Agent Card (stored as model_dump dict, parse back to SDK type)
         agent_card = None
         if data.get("agent_card"):
-            agent_card_dict = json.loads(data["agent_card"])
-            agent_card = AgentCard(**agent_card_dict)
+            try:
+                agent_card = AgentCard(**json.loads(data["agent_card"]))
+            except Exception:
+                agent_card = None
 
         # Parse metadata
-        metadata = {}
-        if data.get("metadata"):
-            metadata = json.loads(data["metadata"])
+        metadata = self._safe_loads(data.get("metadata"), {})
 
         # Parse subnet_ids (支持新旧格式)
         if data.get("subnet_ids"):
-            subnet_ids = json.loads(data["subnet_ids"])
+            subnet_ids = self._safe_loads(data["subnet_ids"], ["public"])
         elif data.get("subnet_id"):
             # 向后兼容：旧格式 subnet_id 转换为列表
             subnet_ids = [data["subnet_id"]]
@@ -236,14 +271,14 @@ class AgentRegistry:
             name=data["name"],
             description=data.get("description", ""),
             endpoint=data["endpoint"],
-            skills=json.loads(data["skills"]),
+            skills=self._safe_loads(data.get("skills"), []),
             status=data["status"],
             subnet_ids=subnet_ids,
             agent_card=agent_card,
             metadata=metadata,
-            registered_at=datetime.fromisoformat(data["registered_at"]),
+            registered_at=self._safe_fromisoformat(data.get("registered_at"), datetime.now(UTC)),
             last_heartbeat=(
-                datetime.fromisoformat(data["last_heartbeat"])
+                self._safe_fromisoformat(data["last_heartbeat"], None)
                 if data.get("last_heartbeat")
                 else None
             ),
@@ -264,8 +299,10 @@ class AgentRegistry:
         if not data or not data.get("agent_card"):
             return None
 
-        agent_card_dict = json.loads(data["agent_card"])
-        return AgentCard(**agent_card_dict)
+        try:
+            return AgentCard(**json.loads(data["agent_card"]))
+        except Exception:
+            return None
 
     async def search_agents(
         self,
@@ -341,13 +378,13 @@ class AgentRegistry:
             return False
 
         # Remove from skill indexes
-        skills = json.loads(data.get("skills", "[]"))
+        skills = self._safe_loads(data.get("skills"), [])
         for skill in skills:
             await self.redis.srem(f"acn:skills:{skill}", agent_id)
 
         # Remove from all subnet indexes (支持多子网)
         if data.get("subnet_ids"):
-            subnet_ids = json.loads(data["subnet_ids"])
+            subnet_ids = self._safe_loads(data["subnet_ids"], ["public"])
         elif data.get("subnet_id"):
             subnet_ids = [data["subnet_id"]]
         else:
@@ -359,8 +396,11 @@ class AgentRegistry:
         # Remove from agents list
         await self.redis.srem("acn:agents:all", agent_id)
 
-        # Delete agent data
-        await self.redis.delete(f"acn:agents:{agent_id}")
+        # Delete agent hash — delegate to repository if available
+        if self._agent_repository:
+            await self._agent_repository.delete(agent_id)
+        else:
+            await self.redis.delete(f"acn:agents:{agent_id}")
 
         return True
 
@@ -382,7 +422,7 @@ class AgentRegistry:
         await self.redis.hset(
             f"acn:agents:{agent_id}",
             mapping={
-                "last_heartbeat": datetime.now().isoformat(),
+                "last_heartbeat": datetime.now(UTC).isoformat(),
                 "status": "online",
             },
         )
@@ -437,66 +477,48 @@ class AgentRegistry:
     def _generate_agent_card(
         self, name: str, endpoint: str, skills: list[str], description: str = ""
     ) -> dict:
-        """
-        Generate a standard Agent Card (A2A compliant)
-
-        This is called automatically when an agent registers without
-        providing their own Agent Card. Supports agents from different
-        frameworks (LangChain, AutoGPT, custom, etc.)
-
-        Args:
-            name: Agent name
-            endpoint: Agent endpoint URL
-            skills: List of skill IDs
-            description: Agent description
-
-        Returns:
-            Agent Card dictionary (A2A 0.3.0 format)
-        """
-        return {
-            "protocolVersion": "0.3.0",
-            "name": name,
-            "description": description or f"{name} - Registered via ACN",
-            "url": endpoint,
-            "skills": [
-                {
-                    "id": skill,
-                    "name": skill.replace("-", " ").replace("_", " ").title(),
-                    "description": f"Capability: {skill}",
-                }
+        """Generate an A2A v0.3.0 compliant Agent Card"""
+        card = AgentCard(
+            name=name,
+            version="0.1.0",
+            description=description or f"{name} - Registered via ACN",
+            url=endpoint,
+            capabilities=AgentCapabilities(streaming=False),
+            default_input_modes=["text", "application/json"],
+            default_output_modes=["text", "application/json"],
+            skills=[
+                AgentSkill(
+                    id=skill,
+                    name=skill.replace("-", " ").replace("_", " ").title(),
+                    description=f"Capability: {skill}",
+                    tags=[skill],
+                )
                 for skill in skills
             ],
-            "authentication": {
-                "type": "bearer",
-                "description": "OAuth 2.0 Bearer Token",
-            },
-        }
+        )
+        return card.model_dump(exclude_none=True)
 
     def _validate_agent_card(self, agent_card: dict) -> bool:
-        """
-        Validate Agent Card format
-
-        Args:
-            agent_card: Agent Card dictionary
-
-        Raises:
-            ValueError: If Agent Card is invalid
-
-        Returns:
-            True if valid
-        """
-        # Support both camelCase and snake_case for compatibility
-        required_fields = {
-            "protocolVersion": ["protocolVersion", "protocol_version"],
-            "name": ["name"],
-            "url": ["url", "endpoint"],
-        }
-
-        for canonical_name, field_variants in required_fields.items():
-            if not any(variant in agent_card for variant in field_variants):
-                raise ValueError(
-                    f"Agent Card missing required field: {canonical_name} "
-                    f"(tried: {', '.join(field_variants)})"
-                )
-
+        """Validate Agent Card by parsing with SDK type (raises on invalid)"""
+        AgentCard(**agent_card)
         return True
+
+    @staticmethod
+    def _safe_loads(value: str | None, default):
+        """Safely parse a JSON string; returns *default* on any failure."""
+        if not value:
+            return default
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return default
+
+    @staticmethod
+    def _safe_fromisoformat(raw: str | None, default):
+        """Safely parse an ISO datetime string; return default on any error."""
+        if not raw:
+            return default
+        try:
+            return datetime.fromisoformat(raw)
+        except (ValueError, TypeError):
+            return default

@@ -5,7 +5,7 @@ using mocked dependencies (no Redis, no network).
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,40 +20,39 @@ from acn.core.interfaces.task_repository import ITaskRepository
 from acn.infrastructure.task_pool import TaskPool
 from acn.services.task_service import TaskService
 
-
 # ============================================================================
 # Helpers
 # ============================================================================
 
 
 def _make_task(**overrides) -> Task:
-    defaults = dict(
-        task_id="task-001",
-        mode=TaskMode.OPEN,
-        creator_type="human",
-        creator_id="creator-001",
-        creator_name="Alice",
-        title="Test Multi Task",
-        description="A multi-participant task",
-        reward_amount="50",
-        reward_currency="points",
-        is_multi_participant=True,
-        max_completions=5,
-    )
+    defaults = {
+        "task_id": "task-001",
+        "mode": TaskMode.OPEN,
+        "creator_type": "human",
+        "creator_id": "creator-001",
+        "creator_name": "Alice",
+        "title": "Test Multi Task",
+        "description": "A multi-participant task",
+        "reward_amount": "50",
+        "reward_currency": "points",
+        "is_multi_participant": True,
+        "max_completions": 5,
+    }
     defaults.update(overrides)
     return Task(**defaults)
 
 
 def _make_participation(**overrides) -> Participation:
-    defaults = dict(
-        participation_id="part-001",
-        task_id="task-001",
-        participant_id="agent-001",
-        participant_name="Bot-1",
-        participant_type="agent",
-        status=ParticipationStatus.ACTIVE,
-        joined_at=datetime(2025, 6, 1),
-    )
+    defaults = {
+        "participation_id": "part-001",
+        "task_id": "task-001",
+        "participant_id": "agent-001",
+        "participant_name": "Bot-1",
+        "participant_type": "agent",
+        "status": ParticipationStatus.ACTIVE,
+        "joined_at": datetime(2025, 6, 1),
+    }
     defaults.update(overrides)
     return Participation(**defaults)
 
@@ -160,7 +159,7 @@ class TestSubmitTaskMultiParticipant:
         mock_repo.find_by_id.return_value = task
         mock_task_pool.get_participation.return_value = p
 
-        result = await service.submit_task(
+        await service.submit_task(
             task_id="task-001",
             agent_id="agent-001",
             submission="Here is my work",
@@ -179,7 +178,7 @@ class TestSubmitTaskMultiParticipant:
         mock_repo.find_by_id.return_value = task
         mock_task_pool.get_user_participation.return_value = p
 
-        result = await service.submit_task(
+        await service.submit_task(
             task_id="task-001",
             agent_id="agent-001",
             submission="Auto-found work",
@@ -212,7 +211,7 @@ class TestSubmitTaskMultiParticipant:
         mock_task_pool.complete_participation.return_value = 1
         mock_task_pool.record_completion.return_value = None
 
-        result = await service.submit_task(
+        await service.submit_task(
             task_id="task-001",
             agent_id="agent-001",
             submission="Auto work",
@@ -239,7 +238,7 @@ class TestReviewParticipation:
         mock_task_pool.complete_participation.return_value = 1
         mock_task_pool.record_completion.return_value = None
 
-        result = await service.review_participation(
+        await service.review_participation(
             task_id="task-001",
             approver_id="creator-001",
             approved=True,
@@ -257,7 +256,7 @@ class TestReviewParticipation:
         mock_repo.find_by_id.return_value = task
         mock_task_pool.get_participation.return_value = p
 
-        result = await service.review_participation(
+        await service.review_participation(
             task_id="task-001",
             approver_id="creator-001",
             approved=False,
@@ -292,7 +291,7 @@ class TestReviewParticipation:
         mock_task_pool.record_completion.return_value = None
         mock_task_pool.batch_cancel_participations.return_value = 2
 
-        result = await service.review_participation(
+        await service.review_participation(
             task_id="task-001",
             approver_id="creator-001",
             approved=True,
@@ -316,7 +315,7 @@ class TestReviewParticipation:
         mock_task_pool.record_completion.return_value = None
 
         # This should internally call complete_task instead of working with participations
-        result = await service.review_participation(
+        await service.review_participation(
             task_id="task-001",
             approver_id="creator-001",
             approved=True,
@@ -342,7 +341,7 @@ class TestCancelParticipation:
         mock_task_pool.cancel_participation.return_value = None
         mock_repo.find_by_id.return_value = _make_task()
 
-        result = await service.cancel_participation(
+        await service.cancel_participation(
             task_id="task-001",
             participation_id="part-001",
             canceller_id="agent-001",

@@ -38,7 +38,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -52,7 +52,7 @@ from ..persistence.redis.registry import AgentRegistry
 logger = logging.getLogger(__name__)
 
 
-class GatewayMessageType(str, Enum):
+class GatewayMessageType(StrEnum):
     """Gateway protocol message types"""
 
     REGISTER = "register"
@@ -336,15 +336,17 @@ class SubnetManager:
                 if api_key and api_key == subnet.generated_token:
                     return True
 
-            elif scheme.type == "openIdConnect":
-                # OAuth validation would require external verification
-                # For now, just check if access_token is provided
-                # In production, would verify with OAuth provider
-                access_token = credentials.get("access_token")
-                if access_token:
-                    # TODO: Verify with OAuth provider
-                    logger.warning(f"OAuth validation not fully implemented for {subnet_id}")
-                    return True
+            elif scheme.type in ("openIdConnect", "oauth2"):
+                # openIdConnect / oauth2 subnet creation is blocked at the API layer.
+                # This branch handles any subnets that existed before that restriction
+                # was introduced. Deny access until token introspection is implemented.
+                # Tracked: https://github.com/acnlabs/ACN/issues/9
+                logger.warning(
+                    "Subnet %s uses unsupported auth type '%s'. Access denied.",
+                    subnet_id,
+                    scheme.type,
+                )
+                return False
 
         return False
 
@@ -811,7 +813,11 @@ class SubnetManager:
 
                 data = await self.redis.get(key)
                 if data:
-                    subnet_data = json.loads(data)
+                    try:
+                        subnet_data = json.loads(data)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"subnet_manager: skipping corrupted subnet key during restore: {key}")
+                        continue
                     subnet_id = subnet_data["subnet_id"]
 
                     if subnet_id not in self._subnets:

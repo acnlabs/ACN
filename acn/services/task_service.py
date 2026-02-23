@@ -3,7 +3,7 @@
 Business logic for task management, including AP2 payment integration.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import structlog
@@ -121,25 +121,26 @@ class TaskService:
         # Calculate deadline
         deadline = None
         if deadline_hours:
-            deadline = datetime.now() + timedelta(hours=deadline_hours)
+            deadline = datetime.now(UTC) + timedelta(hours=deadline_hours)
 
         # Calculate total budget
-        # For non-repeatable: budget = reward_amount × 1
-        # For repeatable: budget = reward_amount × max_completions
+        # - Multi-participant with max: budget = reward_amount × max_completions
+        # - Multi-participant unlimited (max_completions=None): budget = reward_amount
+        #   (per-completion payouts via release_partial; creator balance checked each time)
+        # - Single completion: budget = reward_amount
         reward_float = float(reward_amount) if reward_amount else 0
         if (is_repeatable or is_multi_participant) and max_completions:
             total_budget = str(reward_float * max_completions)
         else:
-            # Single completion tasks (including assigned mode)
             total_budget = str(reward_float)
             # For single-participant open tasks, enforce max_completions = 1
             if mode == TaskMode.OPEN and not is_repeatable and not is_multi_participant:
                 max_completions = 1
 
-        # Backward compat: is_repeatable implies is_multi_participant
-        effective_multi = is_multi_participant or is_repeatable
-
         # Create task entity
+        # Note: __post_init__ handles backward compat sync:
+        #   is_repeatable=True → is_multi_participant=True
+        #   is_multi_participant=True → is_repeatable=True (for old API consumers)
         task = Task(
             task_id=task_id,
             mode=mode,
@@ -155,9 +156,9 @@ class TaskService:
             reward_unit="completion",  # Default for now
             total_budget=total_budget,
             released_amount="0",
-            is_multi_participant=effective_multi,
+            is_multi_participant=is_multi_participant or is_repeatable,
             allow_repeat_by_same=allow_repeat_by_same,
-            is_repeatable=is_repeatable or effective_multi,
+            is_repeatable=is_repeatable,
             max_completions=max_completions,
             deadline=deadline,
             approval_type=approval_type,
@@ -169,7 +170,7 @@ class TaskService:
         if mode == TaskMode.ASSIGNED and assignee_id:
             task.assignee_id = assignee_id
             task.assignee_name = assignee_name
-            task.assigned_at = datetime.now()
+            task.assigned_at = datetime.now(UTC)
 
         # 统一 escrow 锁定：human 和 agent 创建者都走 v2 escrow
         if (
@@ -291,7 +292,8 @@ class TaskService:
             return await self._join_task(task, agent_id, agent_name, agent_type)
 
         # ---- Single-participant path (original) ----
-        if not task.is_repeatable:
+        # is_multi_participant is the single source of truth; is_repeatable is kept for API compat only
+        if not task.is_multi_participant:
             has_completed = await self.task_pool.has_agent_completed(task_id, agent_id)
             if has_completed:
                 raise ValueError("You have already completed this task")
@@ -554,8 +556,6 @@ class TaskService:
                 )
 
         # Send webhook notification
-        from ..protocols.ap2 import WebhookEventType
-
         await self._notify_webhook(WebhookEventType.TASK_COMPLETED, task)
 
         # Record activity
@@ -579,6 +579,34 @@ class TaskService:
         )
 
         return task
+
+    async def _check_and_finalize_exhaustion(self, task: Task, new_count: int) -> bool:
+        """
+        Check if a multi-participant task has reached its max completions.
+        If so, cancel remaining participations and mark task COMPLETED.
+
+        Args:
+            task: Task entity (will be mutated and saved if exhausted)
+            new_count: The latest completed_count from the atomic Lua operation
+
+        Returns:
+            True if task was finalized as COMPLETED
+        """
+        if not task.max_completions or new_count < task.max_completions:
+            return False
+
+        await self.task_pool.batch_cancel_participations(task.task_id)
+        # Sync counters from Lua results before saving to avoid overwriting:
+        # - completed_count: from the atomic completion Lua script return value
+        # - active_participants_count: batch_cancel Lua scripts set this to 0 on the hash;
+        #   we must sync it here so save() doesn't overwrite with a stale in-memory value
+        task.completed_count = new_count
+        task.active_participants_count = 0
+        task.status = TaskStatus.COMPLETED
+        task.completed_at = datetime.now(UTC)
+        await self.repository.save(task)
+        logger.info("task_exhausted", task_id=task.task_id, completed_count=new_count)
+        return True
 
     async def _auto_complete_participation(self, task: Task, p: Participation) -> None:
         """Auto-complete a participation (for auto-approval tasks)"""
@@ -612,13 +640,7 @@ class TaskService:
                 )
 
         # Check if task is exhausted (all slots filled)
-        if task.max_completions and new_count >= task.max_completions:
-            # Task is complete — cancel remaining active participations
-            await self.task_pool.batch_cancel_participations(task.task_id)
-            task.status = TaskStatus.COMPLETED
-            task.completed_at = datetime.now()
-            await self.repository.save(task)
-            logger.info("task_exhausted", task_id=task.task_id, completed_count=new_count)
+        await self._check_and_finalize_exhaustion(task, new_count)
 
     async def review_participation(
         self,
@@ -699,12 +721,8 @@ class TaskService:
                     reward_currency=task.reward_currency,
                 )
 
-            # Check if task is exhausted
-            if task.max_completions and new_count >= task.max_completions:
-                await self.task_pool.batch_cancel_participations(task_id)
-                task.status = TaskStatus.COMPLETED
-                task.completed_at = datetime.now()
-                await self.repository.save(task)
+            # Check if task is exhausted (uses extracted common method)
+            await self._check_and_finalize_exhaustion(task, new_count)
 
             logger.info(
                 "participation_approved",
@@ -719,17 +737,16 @@ class TaskService:
             await self.repository.save_participation(p)
 
             # Manually decrement active count (don't use atomic_cancel which overwrites to 'cancelled')
+            # Fix: use active_count key (consistent with Lua scripts in task_repository.py)
             if was_active:
-                active_key = f"acn:task:{task_id}:active_participants"
-                task_key = f"acn:task:{task_id}"
                 try:
-                    new_count = await self.repository.redis.decr(active_key)
-                    if new_count < 0:
-                        await self.repository.redis.set(active_key, 0)
-                        new_count = 0
-                    await self.repository.redis.hset(task_key, "active_participants_count", str(new_count))
+                    await self.repository.decrement_active_count(task_id)
                 except Exception:
-                    pass  # Best-effort count sync
+                    logger.warning(
+                        "active_count_decrement_failed",
+                        task_id=task_id,
+                        participation_id=p.participation_id,
+                    )
 
             if self.activity and hasattr(self.activity, "record_task_rejected"):
                 await self.activity.record_task_rejected(
@@ -1139,8 +1156,8 @@ class TaskService:
         """
         Distribute task reward to agent.
 
-        For multi-participant tasks, participant_id must be provided.
-        For single-participant tasks, uses task.assignee_id.
+        For multi-participant tasks, uses release_partial for per-completion payouts.
+        For single-participant tasks, uses full release via v1 endpoint.
         """
         recipient_id = participant_id or task.assignee_id
         if not recipient_id:
@@ -1160,6 +1177,7 @@ class TaskService:
                     task_id=task.task_id,
                     escrow_id=escrow_info.escrow_id,
                     recipient_id=recipient_id,
+                    is_multi=task.is_multi_participant,
                 )
 
                 # Ensure escrow is activated
@@ -1170,6 +1188,41 @@ class TaskService:
                         assignee_type="agent",
                     )
 
+                # Multi-participant: use release_partial for per-completion payouts
+                if task.is_multi_participant:
+                    result = await self.escrow.release_partial(
+                        escrow_id=escrow_info.escrow_id,
+                        recipient_id=recipient_id,
+                        recipient_type="agent",
+                        amount=amount,
+                        notes=description,
+                    )
+                    if result.success:
+                        # Track released amount on the task entity and persist
+                        task.release_reward()
+                        await self.repository.save(task)
+                        logger.info(
+                            "reward_released_partial",
+                            task_id=task.task_id,
+                            escrow_id=escrow_info.escrow_id,
+                            recipient_id=recipient_id,
+                            amount=amount,
+                        )
+                        return {
+                            "success": True,
+                            "agent_amount": amount,
+                            "owner_amount": 0,
+                            "via": "escrow_release_partial",
+                        }
+                    else:
+                        logger.error(
+                            "escrow_release_partial_failed",
+                            task_id=task.task_id,
+                            error=result.error,
+                        )
+                        return {"success": False, "error": result.error}
+
+                # Single-participant: full release via v1 path
                 if escrow_info.status in ("locked", "in_progress"):
                     await self.escrow.submit_v2(escrow_info.escrow_id)
 

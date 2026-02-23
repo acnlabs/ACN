@@ -120,7 +120,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "escrow_locked_v2",
                         task_id=task_id,
@@ -177,7 +177,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     return EscrowDetailResult(
                         success=True,
                         escrow_id=data.get("escrow_id"),
@@ -204,7 +204,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     return EscrowDetailResult(
                         success=True,
                         escrow_id=data.get("escrow_id"),
@@ -232,7 +232,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     return EscrowDetailResult(
                         success=True,
                         escrow_id=data.get("escrow_id"),
@@ -255,6 +255,80 @@ class EscrowClient:
                     )
 
         except httpx.RequestError as e:
+            return EscrowDetailResult(success=False, error=str(e))
+
+    async def release_partial(
+        self,
+        escrow_id: str,
+        recipient_id: str,
+        recipient_type: str = "agent",
+        amount: float = 0,
+        notes: str | None = None,
+    ) -> EscrowDetailResult:
+        """
+        v2: Release a partial amount from escrow pool (multi-participant mode).
+
+        Unlike release() which releases all remaining funds, this releases
+        a specific amount to a specific recipient and keeps the escrow active.
+
+        Args:
+            escrow_id: Escrow ID
+            recipient_id: Recipient agent/user ID
+            recipient_type: "agent" or "human"
+            amount: Amount to release for this completion
+            notes: Optional notes
+
+        Returns:
+            EscrowDetailResult
+        """
+        if amount <= 0:
+            return EscrowDetailResult(success=True, escrow_id=escrow_id)
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, trust_env=False
+            ) as client:
+                response = await client.post(
+                    f"{self.backend_url}/api/labs/escrow/v2/{escrow_id}/release_partial",
+                    headers=self._get_headers(),
+                    json={
+                        "recipient_id": recipient_id,
+                        "recipient_type": recipient_type,
+                        "amount": amount,
+                        "notes": notes,
+                    },
+                )
+
+                if response.status_code == 200:
+                    data = self._parse_json(response)
+                    logger.info(
+                        "escrow_release_partial",
+                        escrow_id=escrow_id,
+                        recipient_id=recipient_id,
+                        amount=amount,
+                    )
+                    return EscrowDetailResult(
+                        success=True,
+                        escrow_id=data.get("escrow_id"),
+                        status=data.get("status"),
+                        total_amount=data.get("total_amount"),
+                        released_amount=data.get("released_amount"),
+                    )
+                else:
+                    error = self._extract_error(response)
+                    logger.warning(
+                        "escrow_release_partial_failed",
+                        escrow_id=escrow_id,
+                        status_code=response.status_code,
+                        error=error,
+                    )
+                    return EscrowDetailResult(
+                        success=False,
+                        error=str(error),
+                    )
+
+        except httpx.RequestError as e:
+            logger.error("escrow_release_partial_error", escrow_id=escrow_id, error=str(e))
             return EscrowDetailResult(success=False, error=str(e))
 
     # ========== v1 Endpoints (ACN 兼容) ==========
@@ -301,7 +375,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "escrow_locked",
                         task_id=task_id,
@@ -380,7 +454,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "escrow_released",
                         task_id=task_id,
@@ -454,7 +528,7 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "escrow_refunded",
                         task_id=task_id,
@@ -516,10 +590,8 @@ class EscrowClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
-                    return data.get("sufficient", False), data.get(
-                        "current_balance", 0
-                    )
+                    data = self._parse_json(response)
+                    return data.get("sufficient", False), data.get("current_balance", 0)
                 else:
                     return False, 0
 
@@ -527,6 +599,14 @@ class EscrowClient:
             return False, 0
 
     # ========== Helpers ==========
+
+    @staticmethod
+    def _parse_json(response: httpx.Response) -> dict:
+        """Safely parse JSON response body; returns empty dict on failure."""
+        try:
+            return response.json()
+        except Exception:
+            return {}
 
     @staticmethod
     def _extract_error(response: httpx.Response) -> str:

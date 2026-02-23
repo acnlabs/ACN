@@ -68,6 +68,18 @@ class WalletClient:
             headers["X-Internal-Token"] = self.internal_token
         return headers
 
+    @staticmethod
+    def _parse_json(response: httpx.Response) -> dict:
+        """Safely parse JSON response body; returns empty dict on failure."""
+        try:
+            return response.json()
+        except Exception:
+            return {}
+
+    def _extract_error(self, response: httpx.Response) -> str:
+        """Extract error detail from a non-2xx response."""
+        return self._parse_json(response).get("detail", response.text) or f"HTTP {response.status_code}"
+
     async def get_balance(self, agent_id: str) -> tuple[bool, float]:
         """
         Get agent wallet balance
@@ -86,7 +98,7 @@ class WalletClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     return True, data.get("balance", 0)
                 elif response.status_code == 404:
                     return False, 0
@@ -135,7 +147,7 @@ class WalletClient:
                 )
 
                 if response.status_code in (200, 201):
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "wallet_created",
                         agent_id=agent_id,
@@ -147,7 +159,7 @@ class WalletClient:
                         balance=data.get("balance"),
                     )
                 else:
-                    error = response.json().get("detail", response.text)
+                    error = self._extract_error(response)
                     return WalletResult(
                         success=False,
                         message="Failed to create wallet",
@@ -201,7 +213,7 @@ class WalletClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "wallet_spend",
                         agent_id=agent_id,
@@ -214,7 +226,7 @@ class WalletClient:
                         balance=data.get("balance"),
                     )
                 else:
-                    error = response.json().get("detail", response.text)
+                    error = self._extract_error(response)
                     logger.warning(
                         "wallet_spend_failed",
                         agent_id=agent_id,
@@ -274,7 +286,7 @@ class WalletClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "wallet_receive",
                         agent_id=agent_id,
@@ -287,7 +299,7 @@ class WalletClient:
                         balance=data.get("balance"),
                     )
                 else:
-                    error = response.json().get("detail", response.text)
+                    error = self._extract_error(response)
                     logger.warning(
                         "wallet_receive_failed",
                         agent_id=agent_id,
@@ -347,7 +359,7 @@ class WalletClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     agent_wallet = data.get("agent_wallet", {})
                     logger.info(
                         "wallet_earnings_added",
@@ -364,7 +376,7 @@ class WalletClient:
                         balance=agent_wallet.get("balance"),
                     )
                 else:
-                    error = response.json().get("detail", response.text)
+                    error = self._extract_error(response)
                     logger.warning(
                         "wallet_earnings_failed",
                         agent_id=agent_id,
@@ -427,7 +439,7 @@ class WalletClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "wallet_topup",
                         agent_id=agent_id,
@@ -440,7 +452,7 @@ class WalletClient:
                         balance=data.get("balance"),
                     )
                 else:
-                    error = response.json().get("detail", response.text)
+                    error = self._extract_error(response)
                     logger.warning(
                         "wallet_topup_failed",
                         agent_id=agent_id,
@@ -502,7 +514,7 @@ class WalletClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "wallet_withdraw",
                         agent_id=agent_id,
@@ -515,7 +527,7 @@ class WalletClient:
                         balance=data.get("balance"),
                     )
                 else:
-                    error = response.json().get("detail", response.text)
+                    error = self._extract_error(response)
                     logger.warning(
                         "wallet_withdraw_failed",
                         agent_id=agent_id,
@@ -575,7 +587,7 @@ class WalletClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     logger.info(
                         "wallet_owner_share_set",
                         agent_id=agent_id,
@@ -587,7 +599,7 @@ class WalletClient:
                         balance=data.get("balance"),
                     )
                 else:
-                    error = response.json().get("detail", response.text)
+                    error = self._extract_error(response)
                     logger.warning(
                         "wallet_owner_share_failed",
                         agent_id=agent_id,
@@ -635,7 +647,7 @@ class WalletClient:
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = self._parse_json(response)
                     return data.get("sufficient", False), data.get("current_balance", 0)
                 else:
                     return False, 0

@@ -4,11 +4,11 @@ Pure business logic for Agent, independent of infrastructure.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     """Agent operational status"""
 
     ONLINE = "online"
@@ -16,7 +16,7 @@ class AgentStatus(str, Enum):
     BUSY = "busy"
 
 
-class ClaimStatus(str, Enum):
+class ClaimStatus(StrEnum):
     """Agent claim status"""
 
     UNCLAIMED = "unclaimed"  # No owner yet
@@ -50,7 +50,7 @@ class Agent:
     skills: list[str] = field(default_factory=list)
     subnet_ids: list[str] = field(default_factory=lambda: ["public"])
     metadata: dict = field(default_factory=dict)
-    registered_at: datetime = field(default_factory=datetime.now)
+    registered_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_heartbeat: datetime | None = None
 
     # Authentication (for autonomous agents)
@@ -70,6 +70,9 @@ class Agent:
 
     # Owner change tracking
     owner_changed_at: datetime | None = None
+
+    # A2A Agent Card (stored as raw dict; provided by registrant or auto-generated on demand)
+    agent_card: dict | None = None
 
     # Payment capabilities
     wallet_address: str | None = None
@@ -121,7 +124,7 @@ class Agent:
 
     def update_heartbeat(self) -> None:
         """Update last heartbeat timestamp"""
-        self.last_heartbeat = datetime.now()
+        self.last_heartbeat = datetime.now(UTC)
 
     def mark_offline(self) -> None:
         """Mark agent as offline"""
@@ -172,7 +175,7 @@ class Agent:
 
         self.owner = owner
         self.claim_status = ClaimStatus.CLAIMED
-        self.owner_changed_at = datetime.now()
+        self.owner_changed_at = datetime.now(UTC)
 
     def transfer(self, new_owner: str) -> None:
         """
@@ -182,13 +185,13 @@ class Agent:
             new_owner: New owner identifier
         """
         self.owner = new_owner
-        self.owner_changed_at = datetime.now()
+        self.owner_changed_at = datetime.now(UTC)
 
     def release(self) -> None:
         """Release ownership (make agent unowned)"""
         self.owner = None
         self.claim_status = ClaimStatus.UNCLAIMED
-        self.owner_changed_at = datetime.now()
+        self.owner_changed_at = datetime.now(UTC)
 
     # [REMOVED] Wallet Methods (add_earnings, spend, receive)
     # 钱包操作全部通过 Backend Wallet API (wallet_client) 进行
@@ -196,10 +199,6 @@ class Agent:
     # [DELETED] withdraw() - 使用 spend() 或 transfer_balance 代替
 
     # [DELETED] set_owner_share() - 不再支持自动分成
-
-    def has_sufficient_balance(self, amount: float) -> bool:
-        """Check if agent has sufficient balance."""
-        return self.balance >= amount
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization"""
@@ -226,6 +225,8 @@ class Agent:
             "owner_changed_at": self.owner_changed_at.isoformat()
             if self.owner_changed_at
             else None,
+            # Agent Card
+            "agent_card": self.agent_card,
             # Payment
             "wallet_address": self.wallet_address,
             "accepts_payment": self.accepts_payment,
@@ -253,11 +254,20 @@ class Agent:
         # Parse datetime strings
         data = data.copy()
         if isinstance(data.get("registered_at"), str):
-            data["registered_at"] = datetime.fromisoformat(data["registered_at"])
+            try:
+                data["registered_at"] = datetime.fromisoformat(data["registered_at"])
+            except (ValueError, TypeError):
+                data["registered_at"] = datetime.now(UTC)
         if data.get("last_heartbeat") and isinstance(data["last_heartbeat"], str):
-            data["last_heartbeat"] = datetime.fromisoformat(data["last_heartbeat"])
+            try:
+                data["last_heartbeat"] = datetime.fromisoformat(data["last_heartbeat"])
+            except (ValueError, TypeError):
+                data.pop("last_heartbeat", None)
         if data.get("owner_changed_at") and isinstance(data["owner_changed_at"], str):
-            data["owner_changed_at"] = datetime.fromisoformat(data["owner_changed_at"])
+            try:
+                data["owner_changed_at"] = datetime.fromisoformat(data["owner_changed_at"])
+            except (ValueError, TypeError):
+                data.pop("owner_changed_at", None)
         # Parse status enum
         if isinstance(data.get("status"), str):
             data["status"] = AgentStatus(data["status"])

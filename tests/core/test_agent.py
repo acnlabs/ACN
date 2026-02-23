@@ -21,7 +21,7 @@ class TestAgentEntity:
             name="Test Agent",
             endpoint="https://agent.example.com",
         )
-        
+
         assert agent.agent_id == "agent-123"
         assert agent.owner == "user-456"
         assert agent.name == "Test Agent"
@@ -39,15 +39,22 @@ class TestAgentEntity:
                 endpoint="https://agent.example.com",
             )
 
-    def test_agent_validation_empty_owner(self):
-        """Test agent requires non-empty owner"""
-        with pytest.raises(ValueError, match="owner cannot be empty"):
-            Agent(
-                agent_id="agent-123",
-                owner="",
-                name="Test Agent",
-                endpoint="https://agent.example.com",
-            )
+    def test_agent_owner_is_optional(self):
+        """Test agent allows empty or None owner (autonomous agents)"""
+        agent = Agent(
+            agent_id="agent-123",
+            owner="",
+            name="Test Agent",
+            endpoint="https://agent.example.com",
+        )
+        assert agent.owner == ""
+
+        agent_no_owner = Agent(
+            agent_id="agent-456",
+            name="Test Agent 2",
+            endpoint="https://agent.example.com",
+        )
+        assert agent_no_owner.owner is None
 
     def test_is_online(self):
         """Test is_online check"""
@@ -58,9 +65,9 @@ class TestAgentEntity:
             endpoint="https://agent.example.com",
             status=AgentStatus.ONLINE,
         )
-        
+
         assert agent.is_online() is True
-        
+
         agent.status = AgentStatus.OFFLINE
         assert agent.is_online() is False
 
@@ -73,7 +80,7 @@ class TestAgentEntity:
             endpoint="https://agent.example.com",
             skills=["task-planning", "code-generation"],
         )
-        
+
         assert agent.has_skill("task-planning") is True
         assert agent.has_skill("code-generation") is True
         assert agent.has_skill("data-analysis") is False
@@ -87,7 +94,7 @@ class TestAgentEntity:
             endpoint="https://agent.example.com",
             skills=["task-planning", "code-generation", "data-analysis"],
         )
-        
+
         assert agent.has_all_skills(["task-planning", "code-generation"]) is True
         assert agent.has_all_skills(["task-planning", "missing-skill"]) is False
 
@@ -100,15 +107,15 @@ class TestAgentEntity:
             endpoint="https://agent.example.com",
             subnet_ids=["public"],
         )
-        
+
         # Add subnet
         agent.add_to_subnet("private-subnet")
         assert "private-subnet" in agent.subnet_ids
-        
+
         # Remove subnet
         agent.remove_from_subnet("private-subnet")
         assert "private-subnet" not in agent.subnet_ids
-        
+
         # Cannot remove last subnet (ensures at least one)
         agent.remove_from_subnet("public")
         assert agent.subnet_ids == ["public"]
@@ -121,9 +128,9 @@ class TestAgentEntity:
             name="Test Agent",
             endpoint="https://agent.example.com",
         )
-        
+
         assert agent.last_heartbeat is None
-        
+
         agent.update_heartbeat()
         assert agent.last_heartbeat is not None
         assert isinstance(agent.last_heartbeat, datetime)
@@ -136,12 +143,12 @@ class TestAgentEntity:
             name="Test Agent",
             endpoint="https://agent.example.com",
         )
-        
+
         assert agent.status == AgentStatus.ONLINE
-        
+
         agent.mark_offline()
         assert agent.status == AgentStatus.OFFLINE
-        
+
         agent.mark_online()
         assert agent.status == AgentStatus.ONLINE
 
@@ -155,9 +162,9 @@ class TestAgentEntity:
             skills=["task-planning"],
             subnet_ids=["public"],
         )
-        
+
         data = agent.to_dict()
-        
+
         assert data["agent_id"] == "agent-123"
         assert data["owner"] == "user-456"
         assert data["name"] == "Test Agent"
@@ -181,9 +188,9 @@ class TestAgentEntity:
             "accepts_payment": False,
             "payment_methods": [],
         }
-        
+
         agent = Agent.from_dict(data)
-        
+
         assert agent.agent_id == "agent-123"
         assert agent.owner == "user-456"
         assert agent.status == AgentStatus.ONLINE

@@ -11,6 +11,7 @@ from ..config import get_settings
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
 from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
     AgentServiceDep,
     SubnetServiceDep,
 )
@@ -74,8 +75,8 @@ async def create_subnet(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        logger.error("subnet_creation_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("subnet_creation_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create subnet") from e
 
 
 @router.get("")
@@ -98,8 +99,8 @@ async def list_subnets(
 
         return {"subnets": subnet_infos, "count": len(subnet_infos)}
     except Exception as e:
-        logger.error("list_subnets_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("list_subnets_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list subnets") from e
 
 
 @router.get("/{subnet_id}")
@@ -144,21 +145,26 @@ async def get_subnet_agents(
 
         return {"subnet_id": subnet_id, "agents": agent_infos, "count": len(agent_infos)}
     except Exception as e:
-        logger.error("get_subnet_agents_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("get_subnet_agents_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve subnet agents") from e
 
 
 @router.post("/{agent_id}/subnets/{subnet_id}")
 async def join_subnet(
     agent_id: str,
     subnet_id: str,
+    agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
 ):
-    """Agent joins a subnet
+    """Agent joins a subnet (requires Agent API Key)
 
+    The authenticated agent must match the path `agent_id`.
     Clean Architecture: Route → Service → Repository
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+
     # Verify subnet exists
     try:
         await subnet_service.get_subnet(subnet_id)
@@ -178,21 +184,26 @@ async def join_subnet(
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
     except Exception as e:
-        logger.error("join_subnet_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("join_subnet_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to join subnet") from e
 
 
 @router.delete("/{agent_id}/subnets/{subnet_id}")
 async def leave_subnet(
     agent_id: str,
     subnet_id: str,
+    agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
 ):
-    """Agent leaves a subnet
+    """Agent leaves a subnet (requires Agent API Key)
 
+    The authenticated agent must match the path `agent_id`.
     Clean Architecture: Route → Service → Repository
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+
     try:
         await agent_service.leave_subnet(agent_id, subnet_id)
         await subnet_service.remove_member(subnet_id, agent_id)
@@ -205,19 +216,23 @@ async def leave_subnet(
     except SubnetNotFoundException as e:
         raise HTTPException(status_code=404, detail="Subnet not found") from e
     except Exception as e:
-        logger.error("leave_subnet_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("leave_subnet_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to leave subnet") from e
 
 
 @router.get("/{agent_id}/subnets")
 async def get_agent_subnets(
     agent_id: str,
+    agent_info: AgentApiKeyDep,
     agent_service: AgentServiceDep = None,
 ):
-    """Get subnets an agent belongs to
+    """Get subnets an agent belongs to (requires Agent API Key)
 
+    An agent may only query its own subnet membership.
     Clean Architecture: Route → AgentService → Repository
     """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(status_code=403, detail="API key does not match agent_id")
     try:
         agent = await agent_service.get_agent(agent_id)
         return {"agent_id": agent_id, "subnets": agent.subnet_ids}
@@ -248,7 +263,8 @@ async def delete_subnet(
     except SubnetNotFoundException as e:
         raise HTTPException(status_code=404, detail="Subnet not found") from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        logger.warning("delete_subnet_permission_denied", subnet_id=subnet_id, error=str(e))
+        raise HTTPException(status_code=403, detail="Permission denied") from e
     except Exception as e:
-        logger.error("delete_subnet_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.error("delete_subnet_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete subnet") from e

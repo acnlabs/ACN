@@ -4,35 +4,22 @@ ACN Data Models
 Pydantic models for ACN service
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
+from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from a2a.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
+from a2a.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+# Re-export SDK types as canonical Agent Card / Skill for ACN
+AgentCard = A2AAgentCard
+Skill = A2AAgentSkill
 
 
-class Skill(BaseModel):
-    """Agent Skill"""
-
-    id: str = Field(..., description="Skill identifier (e.g., 'task-planning')")
-    name: str = Field(..., description="Human-readable skill name")
-    description: str | None = Field(None, description="Skill description")
-
-
-class AgentCard(BaseModel):
-    """
-    A2A-compliant Agent Card
-
-    Follows the Agent-to-Agent (A2A) protocol specification
-    """
-
-    protocol_version: str = Field(default="0.3.0", alias="protocolVersion")
-    name: str = Field(..., description="Agent name")
-    description: str | None = Field(None, description="Agent description")
-    url: str = Field(..., description="Agent A2A endpoint URL")
-    skills: list[Skill] = Field(default_factory=list, description="Agent skills")
-    authentication: dict | None = Field(None, description="Authentication config")
-
-    class Config:
-        populate_by_name = True
+class AgentStatus(StrEnum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    BUSY = "busy"
 
 
 class AgentInfo(BaseModel):
@@ -44,15 +31,22 @@ class AgentInfo(BaseModel):
     description: str | None = Field(None, description="Agent description")
     endpoint: str = Field(..., description="Agent A2A endpoint URL")
     skills: list[str] = Field(default_factory=list, description="Agent skill IDs")
-    status: str = Field(default="online", description="Agent status (online/offline/busy)")
+    status: AgentStatus = Field(default=AgentStatus.ONLINE, description="Agent status")
     # 支持多子网归属
     subnet_ids: list[str] = Field(
         default_factory=lambda: ["public"],
         description="Subnets the agent belongs to (can be multiple)",
     )
-    agent_card: AgentCard | None = Field(None, description="A2A Agent Card")
+    agent_card: dict | None = Field(
+        None,
+        description=(
+            "A2A Agent Card stored as a plain dict (NOT a file path). "
+            "Provided at registration time or auto-generated on demand via "
+            "GET /.well-known/agent-card.json?agent_id=<id>."
+        ),
+    )
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
-    registered_at: datetime = Field(default_factory=datetime.now)
+    registered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     last_heartbeat: datetime | None = Field(None)
 
     # Payment capability (AP2 Protocol integration)
@@ -81,21 +75,41 @@ class AgentRegisterRequest(BaseModel):
     - Re-registration (same owner + endpoint): Updates existing agent (ID unchanged)
     """
 
-    owner: str = Field(..., description="Agent owner (system/user-{id}/provider-{id})")
-    name: str = Field(..., description="Agent name")
-    endpoint: str = Field(..., description="Agent A2A endpoint URL")
-    skills: list[str] = Field(default_factory=list, description="Agent skill IDs")
+    owner: str = Field(..., min_length=1, max_length=128, description="Agent owner (system/user-{id}/provider-{id})")
+    name: str = Field(..., min_length=1, max_length=128, description="Agent name")
+    endpoint: str = Field(..., max_length=512, description="Agent A2A endpoint URL")
+    skills: list[str] = Field(default_factory=list, max_length=50, description="Agent skill IDs")
     agent_card: dict | None = Field(
-        None, description="Optional Agent Card (auto-generated if not provided)"
+        None,
+        description=(
+            "Optional A2A Agent Card as a plain dict (NOT a file path). "
+            "Example: {'name': 'MyAgent', 'url': 'https://...', 'skills': [...]}. "
+            "Auto-generated on demand if omitted."
+        ),
     )
     # 支持多子网归属
     subnet_ids: list[str] | None = Field(
-        None, description="Subnets to join (default: ['public']). Can be multiple."
+        None, max_length=20, description="Subnets to join (default: ['public']). Can be multiple."
     )
     # 向后兼容：单子网参数
     subnet_id: str | None = Field(
-        None, description="[Deprecated] Single subnet to join. Use subnet_ids instead."
+        None, max_length=64, description="[Deprecated] Single subnet to join. Use subnet_ids instead."
     )
+
+    @field_validator("endpoint")
+    @classmethod
+    def endpoint_must_be_url(cls, v: str) -> str:
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("endpoint must start with http:// or https://")
+        return v
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def skills_items_max_length(cls, v: list) -> list:
+        for s in v:
+            if isinstance(s, str) and len(s) > 64:
+                raise ValueError(f"each skill ID must be ≤ 64 characters, got: {s[:70]!r}")
+        return v
 
     def get_subnet_ids(self) -> list[str]:
         """Get effective subnet IDs (handles backward compatibility)"""
@@ -120,8 +134,8 @@ class AgentRegisterResponse(BaseModel):
 class AgentSearchRequest(BaseModel):
     """Request to search agents"""
 
-    skills: list[str] | None = Field(None, description="Required skills")
-    status: str = Field(default="online", description="Agent status filter")
+    skills: list[str] | None = Field(None, max_length=20, description="Required skills")
+    status: AgentStatus = Field(default=AgentStatus.ONLINE, description="Agent status filter")
 
 
 class AgentSearchResponse(BaseModel):
@@ -161,8 +175,7 @@ class SecurityScheme(BaseModel):
         None, alias="openIdConnectUrl", description="For openIdConnect"
     )
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class SubnetInfo(BaseModel):
@@ -187,7 +200,7 @@ class SubnetInfo(BaseModel):
         None, description="Required security scheme names. None = use first available"
     )
 
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
 
 
@@ -199,7 +212,9 @@ class SubnetCreateRequest(BaseModel):
     1. No security_schemes = Public subnet (anyone can join)
     2. Bearer token = Simple token auth
     3. API Key = Key-based auth
-    4. OpenID Connect = Enterprise OAuth/SSO
+
+    Note: openIdConnect / oauth2 types are not yet supported and will be rejected.
+    See https://github.com/acnlabs/ACN/issues/9 for implementation plan.
 
     Examples:
         # Public subnet (no auth)
@@ -214,29 +229,43 @@ class SubnetCreateRequest(BaseModel):
             }
         }
 
-        # Enterprise OAuth
+        # API Key auth
         {
-            "subnet_id": "enterprise",
-            "name": "Enterprise",
+            "subnet_id": "team-b",
+            "name": "Team B",
             "security_schemes": {
-                "oauth": {
-                    "type": "openIdConnect",
-                    "openIdConnectUrl": "https://auth.company.com/.well-known/openid"
-                }
+                "key": {"type": "apiKey", "in": "header", "name": "X-Subnet-Key"}
             }
         }
     """
 
-    subnet_id: str = Field(..., description="Unique subnet identifier")
-    name: str = Field(..., description="Subnet name")
-    description: str | None = Field(None, description="Subnet description")
+    subnet_id: str = Field(..., min_length=1, max_length=64, description="Unique subnet identifier")
+    name: str = Field(..., min_length=1, max_length=128, description="Subnet name")
+    description: str | None = Field(None, max_length=500, description="Subnet description")
     security_schemes: dict[str, dict] | None = Field(
         None, description="Security schemes (A2A format). None = public subnet"
     )
     default_security: list[str] | None = Field(
-        None, description="Required security schemes. None = use first available"
+        None, max_length=10, description="Required security schemes. None = use first available"
     )
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
+
+    @model_validator(mode="after")
+    def reject_unsupported_security_types(self) -> "SubnetCreateRequest":
+        if not self.security_schemes:
+            return self
+        unsupported = [
+            name
+            for name, scheme in self.security_schemes.items()
+            if scheme.get("type") in ("openIdConnect", "oauth2")
+        ]
+        if unsupported:
+            raise ValueError(
+                f"Security scheme type(s) not yet supported: "
+                f"{', '.join(unsupported)}. "
+                f"Supported types: http (bearer), apiKey."
+            )
+        return self
 
 
 class SubnetCreateResponse(BaseModel):
@@ -318,7 +347,7 @@ class ExternalAgentTask(BaseModel):
     prompt: str = Field(..., description="Task description/prompt")
     context: dict = Field(default_factory=dict, description="Additional context")
     priority: str = Field(default="normal", description="Task priority: low, normal, high")
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     deadline: datetime | None = Field(None, description="Optional deadline")
 
 
@@ -347,7 +376,7 @@ class ExternalAgentHeartbeatResponse(BaseModel):
     status: str = Field(default="ok")
     agent_id: str
     pending_tasks: int = Field(default=0, description="Number of pending tasks")
-    last_seen: datetime = Field(default_factory=datetime.now)
+    last_seen: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ========== Labs Open Tasks System ==========
@@ -374,7 +403,7 @@ class LabsOpenTask(BaseModel):
         default_factory=dict, description="Conditions for automatic completion"
     )
     completed_count: int = Field(default=0, description="Total completion count")
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class LabsOpenTasksResponse(BaseModel):
@@ -412,7 +441,7 @@ class LabsActivityEvent(BaseModel):
     description: str = Field(..., description="Human-readable description")
     points: int | None = Field(None, description="Points awarded (if applicable)")
     metadata: dict = Field(default_factory=dict, description="Additional event data")
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class LabsActivitiesResponse(BaseModel):

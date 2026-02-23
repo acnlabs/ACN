@@ -108,7 +108,6 @@ from .core import (
     NETWORK_FEE_RATE,
     # Models
     PaymentCapability,
-    TokenPricing,
     # Services (ACN unique value)
     PaymentDiscoveryService,
     PaymentTask,
@@ -116,6 +115,7 @@ from .core import (
     PaymentTaskStatus,
     SupportedNetwork,
     SupportedPaymentMethod,
+    TokenPricing,
     # Helpers
     create_payment_capability,
 )

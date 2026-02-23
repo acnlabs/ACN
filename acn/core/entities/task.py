@@ -4,19 +4,19 @@ Pure business logic for Task and Participation, independent of infrastructure.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from uuid import uuid4
 
 
-class TaskMode(str, Enum):
+class TaskMode(StrEnum):
     """Task mode"""
 
     OPEN = "open"  # Open task, any agent can complete
     ASSIGNED = "assigned"  # Assigned to specific agent
 
 
-class ApprovalType(str, Enum):
+class ApprovalType(StrEnum):
     """Task approval type"""
 
     MANUAL = "manual"  # Human review required (default)
@@ -25,7 +25,7 @@ class ApprovalType(str, Enum):
     WEBHOOK = "webhook"  # Call external webhook (future)
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Task status"""
 
     OPEN = "open"  # Task is open for acceptance
@@ -37,7 +37,7 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"  # Cancelled by creator
 
 
-class ParticipationStatus(str, Enum):
+class ParticipationStatus(StrEnum):
     """Participation lifecycle status"""
 
     ACTIVE = "active"  # Participant is working on the task
@@ -67,7 +67,7 @@ class Participation:
 
     # Lifecycle
     status: ParticipationStatus = ParticipationStatus.ACTIVE
-    joined_at: datetime = field(default_factory=datetime.now)
+    joined_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # Submission
     submission: str | None = None
@@ -92,7 +92,7 @@ class Participation:
             raise ValueError(f"Cannot submit in status: {self.status}")
         self.submission = submission
         self.submission_artifacts = artifacts or []
-        self.submitted_at = datetime.now()
+        self.submitted_at = datetime.now(UTC)
         self.status = ParticipationStatus.SUBMITTED
 
     def complete(self, reviewer_id: str | None = None, notes: str | None = None) -> None:
@@ -101,7 +101,7 @@ class Participation:
             raise ValueError(f"Cannot complete in status: {self.status}")
         self.reviewed_by = reviewer_id
         self.review_notes = notes
-        self.completed_at = datetime.now()
+        self.completed_at = datetime.now(UTC)
         self.status = ParticipationStatus.COMPLETED
 
     def reject(self, reviewer_id: str | None = None, reason: str | None = None) -> None:
@@ -110,14 +110,14 @@ class Participation:
             raise ValueError(f"Cannot reject in status: {self.status}")
         self.reviewed_by = reviewer_id
         self.rejection_reason = reason
-        self.rejected_at = datetime.now()
+        self.rejected_at = datetime.now(UTC)
         self.status = ParticipationStatus.REJECTED
 
     def cancel(self) -> None:
         """Cancel this participation (withdraw)"""
         if self.status in (ParticipationStatus.COMPLETED, ParticipationStatus.CANCELLED):
             raise ValueError(f"Cannot cancel in status: {self.status}")
-        self.cancelled_at = datetime.now()
+        self.cancelled_at = datetime.now(UTC)
         self.status = ParticipationStatus.CANCELLED
 
     def resubmit(self, submission: str, artifacts: list[dict] | None = None) -> None:
@@ -126,7 +126,7 @@ class Participation:
             raise ValueError(f"Cannot resubmit in status: {self.status}")
         self.submission = submission
         self.submission_artifacts = artifacts or []
-        self.submitted_at = datetime.now()
+        self.submitted_at = datetime.now(UTC)
         self.rejection_reason = None
         self.rejected_at = None
         self.reject_response_deadline = None
@@ -178,14 +178,20 @@ class Participation:
         ]
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
-                data[field_name] = datetime.fromisoformat(data[field_name])
+                try:
+                    data[field_name] = datetime.fromisoformat(data[field_name])
+                except (ValueError, TypeError):
+                    data.pop(field_name, None)
             elif not data.get(field_name):
                 data.pop(field_name, None)
 
         # Parse list fields
         if isinstance(data.get("submission_artifacts"), str):
             import json
-            data["submission_artifacts"] = json.loads(data["submission_artifacts"])
+            try:
+                data["submission_artifacts"] = json.loads(data["submission_artifacts"])
+            except (json.JSONDecodeError, TypeError):
+                data["submission_artifacts"] = []
 
         return cls(**data)
 
@@ -253,20 +259,25 @@ class Task:
     is_multi_participant: bool = False  # Multiple agents can work in parallel
     allow_repeat_by_same: bool = False  # Same agent can complete again after finishing
 
-    # Open task specific (backward compat: is_repeatable maps to is_multi_participant)
-    is_repeatable: bool = False  # DEPRECATED — use is_multi_participant instead
+    # DEPRECATED — kept for API backward compatibility only.
+    # Internal logic should use is_multi_participant exclusively.
+    # __post_init__ ensures is_multi_participant=True → is_repeatable=True for serialization.
+    is_repeatable: bool = False
     completed_count: int = 0  # Number of completions
     max_completions: int | None = None  # Max completions (None = unlimited, not recommended)
     active_participants_count: int = 0  # Number of currently active participations
 
     # Timestamps
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     deadline: datetime | None = None
     completed_at: datetime | None = None
 
     # Approval settings
     approval_type: str = "manual"  # manual, auto, validator, webhook
     validator_id: str | None = None  # For validator type: invite_agent, daily_checkin, etc.
+
+    # Idempotency: tracks whether escrow/payment has been released for this task
+    payment_released: bool = False
 
     # Metadata
     metadata: dict = field(default_factory=dict)
@@ -280,36 +291,55 @@ class Task:
         if not self.creator_id:
             raise ValueError("creator_id cannot be empty")
 
-        # Backward compat: is_repeatable=True implies is_multi_participant=True
+        # Backward compat: is_repeatable=True from old API consumers → enable is_multi_participant
         if self.is_repeatable and not self.is_multi_participant:
             self.is_multi_participant = True
-        # Forward sync: is_multi_participant=True keeps is_repeatable=True for old consumers
+        # Forward sync: keep is_repeatable=True for serialization when is_multi_participant is set
+        # (old API consumers expect this field; internal logic uses is_multi_participant only)
         if self.is_multi_participant:
             self.is_repeatable = True
 
     # ========== Status Transitions ==========
 
     def can_be_accepted(self) -> bool:
-        """Check if task can be accepted (single-participant mode)"""
+        """
+        Check if task can be accepted.
+
+        For multi-participant tasks, delegates to can_join().
+        For single-participant tasks, checks status and completion state.
+
+        NOTE: This is a fast-fail pre-filter for better error messages.
+        The Lua scripts in TaskRepository are the atomic source of truth
+        for capacity checks under concurrent access.
+        """
+        if self.status != TaskStatus.OPEN:
+            return False
         if self.is_multi_participant:
-            # Multi-participant tasks use can_join() instead
-            return self.can_join()
+            return self._has_capacity()
+        # Single-participant: open tasks need no prior completion
         if self.mode == TaskMode.OPEN:
-            return self.status == TaskStatus.OPEN and self.completed_count == 0
-        else:
-            # Assigned tasks can only be accepted when in OPEN status
-            return self.status == TaskStatus.OPEN
+            return self.completed_count == 0
+        # Assigned tasks: just need OPEN status (checked above)
+        return True
 
     def can_join(self) -> bool:
-        """Check if a new participant can join (multi-participant mode)"""
+        """
+        Check if a new participant can join (multi-participant mode).
+
+        NOTE: This is a fast-fail pre-filter for better error messages.
+        The Lua scripts in TaskRepository perform the same checks atomically
+        and are the single source of truth under concurrent access.
+        """
         if not self.is_multi_participant:
             return False
         if self.status != TaskStatus.OPEN:
             return False
-        # Check capacity: completed + active < max (if max is set)
+        return self._has_capacity()
+
+    def _has_capacity(self) -> bool:
+        """Check capacity: completed + active < max (if max is set)"""
         if self.max_completions is not None:
-            if (self.completed_count + self.active_participants_count) >= self.max_completions:
-                return False
+            return (self.completed_count + self.active_participants_count) < self.max_completions
         return True
 
     def accept(self, agent_id: str, agent_name: str) -> None:
@@ -328,7 +358,7 @@ class Task:
 
         self.assignee_id = agent_id
         self.assignee_name = agent_name
-        self.assigned_at = datetime.now()
+        self.assigned_at = datetime.now(UTC)
         self.status = TaskStatus.IN_PROGRESS
 
     def submit(self, submission: str, artifacts: list[dict] | None = None) -> None:
@@ -347,7 +377,7 @@ class Task:
 
         self.submission = submission
         self.submission_artifacts = artifacts or []
-        self.submitted_at = datetime.now()
+        self.submitted_at = datetime.now(UTC)
         self.status = TaskStatus.SUBMITTED
 
     def complete(self, reviewer_id: str | None = None, notes: str | None = None) -> None:
@@ -370,7 +400,7 @@ class Task:
 
         self.reviewed_by = reviewer_id
         self.review_notes = notes
-        self.completed_at = datetime.now()
+        self.completed_at = datetime.now(UTC)
         self.completed_count += 1
 
         # Release reward from budget
@@ -379,8 +409,9 @@ class Task:
 
         self.status = TaskStatus.COMPLETED
 
-        # For repeatable tasks, reset to open after completion
-        if self.is_repeatable and self.mode == TaskMode.OPEN:
+        # For multi-participant tasks, reset to open after completion
+        # (single-participant repeatable tasks go through this same path via is_multi_participant)
+        if self.is_multi_participant and self.mode == TaskMode.OPEN:
             # Check max completions
             if self.max_completions is None or self.completed_count < self.max_completions:
                 self._reset_for_next_completion()
@@ -477,7 +508,7 @@ class Task:
         """Check if task is past deadline"""
         if not self.deadline:
             return False
-        return datetime.now() > self.deadline
+        return datetime.now(UTC) > self.deadline
 
     def matches_skills(self, agent_skills: list[str]) -> bool:
         """Check if agent has required skills"""
@@ -525,6 +556,7 @@ class Task:
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "approval_type": self.approval_type,
             "validator_id": self.validator_id,
+            "payment_released": self.payment_released,
             "metadata": self.metadata,
         }
 
@@ -549,6 +581,9 @@ class Task:
         ]
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
-                data[field_name] = datetime.fromisoformat(data[field_name])
+                try:
+                    data[field_name] = datetime.fromisoformat(data[field_name])
+                except (ValueError, TypeError):
+                    data.pop(field_name, None)
 
         return cls(**data)

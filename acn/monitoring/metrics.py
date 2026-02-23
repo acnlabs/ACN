@@ -27,13 +27,13 @@ Architecture:
 
 import time
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from redis.asyncio import Redis
 
 
-class MetricType(str, Enum):
+class MetricType(StrEnum):
     """Types of metrics"""
 
     COUNTER = "counter"
@@ -242,12 +242,16 @@ class MetricsCollector:
         key = self._build_key("acn_latency_seconds", {"operation": operation})
 
         # Store in a Redis list for histogram calculation
+        _ttl = 90 * 86400  # 90 days
         await self.redis.lpush(f"{key}:values", str(latency_seconds))
         await self.redis.ltrim(f"{key}:values", 0, 9999)  # Keep last 10000 values
+        await self.redis.expire(f"{key}:values", _ttl)
 
         # Update sum and count for average calculation
         await self.redis.incrbyfloat(f"{key}:sum", latency_seconds)
+        await self.redis.expire(f"{key}:sum", _ttl)
         await self.redis.incr(f"{key}:count")
+        await self.redis.expire(f"{key}:count", _ttl)
 
     async def observe_message_size(self, size_bytes: int, direction: str = "outgoing"):
         """
@@ -259,10 +263,14 @@ class MetricsCollector:
         """
         key = self._build_key("acn_message_size_bytes", {"direction": direction})
 
+        _ttl = 90 * 86400  # 90 days
         await self.redis.lpush(f"{key}:values", str(size_bytes))
         await self.redis.ltrim(f"{key}:values", 0, 9999)
+        await self.redis.expire(f"{key}:values", _ttl)
         await self.redis.incrbyfloat(f"{key}:sum", size_bytes)
+        await self.redis.expire(f"{key}:sum", _ttl)
         await self.redis.incr(f"{key}:count")
+        await self.redis.expire(f"{key}:count", _ttl)
 
     def timer(self, operation: str):
         """
@@ -350,7 +358,7 @@ class MetricsCollector:
         lines = []
 
         # Get all metric keys
-        keys = await self.redis.keys(f"{self._prefix}*")
+        keys = [k async for k in self.redis.scan_iter(f"{self._prefix}*")]
 
         metrics_data: dict[str, list[tuple[dict[str, str], str]]] = {}
 
@@ -423,7 +431,7 @@ class MetricsCollector:
             elif meta["labels"]:
                 # Get all label combinations
                 pattern = f"{self._prefix}{metric_name}:*"
-                keys = await self.redis.keys(pattern)
+                keys = [k async for k in self.redis.scan_iter(pattern)]
                 values = {}
                 for key in keys:
                     key_str = key.decode() if isinstance(key, bytes) else key

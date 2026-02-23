@@ -4,7 +4,7 @@ Pure business logic for Subnet.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -22,7 +22,7 @@ class Subnet:
     is_private: bool = False
     security_config: dict = field(default_factory=dict)
     member_agent_ids: set[str] = field(default_factory=set)
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -81,7 +81,10 @@ class Subnet:
         """Create Subnet from dictionary"""
         data = data.copy()
         if isinstance(data.get("created_at"), str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"])
+            try:
+                data["created_at"] = datetime.fromisoformat(data["created_at"])
+            except (ValueError, TypeError):
+                data["created_at"] = datetime.now(UTC)
         if isinstance(data.get("member_agent_ids"), list):
             data["member_agent_ids"] = set(data["member_agent_ids"])
         return cls(**data)

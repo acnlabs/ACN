@@ -8,7 +8,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 try:
@@ -21,7 +21,7 @@ except ImportError:
     WebSocketClientProtocol = Any
 
 
-class WSState(str, Enum):
+class WSState(StrEnum):
     """WebSocket connection state"""
 
     CONNECTING = "connecting"

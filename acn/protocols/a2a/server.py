@@ -26,6 +26,7 @@ from a2a.server.request_handlers import (  # type: ignore[import-untyped]
 from a2a.types import (  # type: ignore[import-untyped]
     AgentCapabilities,
     AgentCard,
+    AgentProvider,
     AgentSkill,
     Artifact,
     DataPart,
@@ -598,47 +599,60 @@ def create_a2a_app(
         task_store=task_store,
     )
 
-    # Create ACN Agent Card
+    # Create ACN Agent Card (A2A Protocol v0.3.0 compliant)
     agent_card = AgentCard(
-        protocol_version="0.4.0",
+        protocol_version=settings.a2a_protocol_version,
         name="ACN Infrastructure Agent",
-        version="0.1.0",
+        version=settings.service_version,
         description=(
             "Agent Collaboration Network provides infrastructure services: "
             "broadcast, discovery, routing, and subnet gateway"
         ),
         url=f"{settings.gateway_base_url}/a2a/jsonrpc",
+        provider=AgentProvider(
+            organization="AgentPlanet",
+            url="https://agenticplanet.space",
+        ),
+        documentation_url=f"{settings.gateway_base_url}/skill.md",
         capabilities=AgentCapabilities(
             streaming=True,
             push_notifications=False,
             state_transition_history=False,
         ),
-        default_input_modes=["text"],
-        default_output_modes=["text"],
+        default_input_modes=["text", "application/json"],
+        default_output_modes=["text", "application/json"],
         skills=[
             AgentSkill(
                 id="acn:broadcast",
                 name="Multi-Agent Broadcasting",
                 description="Broadcast messages to multiple agents simultaneously",
                 tags=["infrastructure", "broadcast", "messaging"],
+                input_modes=["application/json"],
+                output_modes=["application/json"],
             ),
             AgentSkill(
                 id="acn:discovery",
                 name="Agent Discovery",
                 description="Find agents by skills and status",
                 tags=["infrastructure", "discovery", "registry"],
+                input_modes=["application/json"],
+                output_modes=["application/json"],
             ),
             AgentSkill(
                 id="acn:routing",
                 name="Point-to-Point Routing",
-                description="Route messages with logging and retry",
+                description="Route messages between agents with logging and retry",
                 tags=["infrastructure", "routing", "messaging"],
+                input_modes=["text", "application/json"],
+                output_modes=["text", "application/json"],
             ),
             AgentSkill(
                 id="acn:subnet_routing",
                 name="Subnet Gateway Routing",
-                description="Route through subnets for NAT traversal",
+                description="Route through subnets for NAT traversal and private network access",
                 tags=["infrastructure", "routing", "gateway", "nat"],
+                input_modes=["application/json"],
+                output_modes=["application/json"],
             ),
         ],
     )
