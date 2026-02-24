@@ -13,12 +13,12 @@ from typing import Any
 
 try:
     import websockets
-    from websockets.client import WebSocketClientProtocol
+    from websockets.asyncio.client import ClientConnection as WebSocketClientProtocol
 
     WEBSOCKETS_AVAILABLE = True
 except ImportError:
     WEBSOCKETS_AVAILABLE = False
-    WebSocketClientProtocol = Any
+    WebSocketClientProtocol = Any  # type: ignore[assignment,misc]
 
 
 class WSState(StrEnum):
