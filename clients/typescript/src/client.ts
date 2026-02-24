@@ -416,14 +416,8 @@ export class ACNClient {
     } = options;
 
     // Lazy import viem (peer dependency)
-    const {
-      createWalletClient,
-      createPublicClient,
-      http,
-      parseAbi,
-      generatePrivateKey,
-      privateKeyToAccount,
-    } = await import('viem');
+    const { createWalletClient, createPublicClient, http } = await import('viem');
+    const { generatePrivateKey, privateKeyToAccount } = await import('viem/accounts');
     const { base, baseSepolia } = await import('viem/chains');
 
     const chainConfigs = {
@@ -443,13 +437,15 @@ export class ACNClient {
 
     // ---- Wallet ----
     let walletGenerated = false;
-    let privateKey = options.privateKey;
-    if (!privateKey) {
+    let privateKey: `0x${string}`;
+    if (!options.privateKey) {
       privateKey = generatePrivateKey();
       walletGenerated = true;
       if (saveWalletPath) {
         await this._saveWalletToEnv(saveWalletPath, privateKey);
       }
+    } else {
+      privateKey = options.privateKey as `0x${string}`;
     }
     const account = privateKeyToAccount(privateKey);
 
@@ -458,10 +454,24 @@ export class ACNClient {
       `${this.baseUrl}/api/v1/agents/${agentId}/.well-known/agent-registration.json`;
 
     // ---- Contract ABI ----
-    const abi = parseAbi([
-      'function register(string agentURI) returns (uint256 agentId)',
-      'event Registered(uint256 indexed agentId, string agentURI, address indexed owner)',
-    ]);
+    const abi = [
+      {
+        name: 'register',
+        type: 'function',
+        stateMutability: 'nonpayable',
+        inputs: [{ type: 'string', name: 'agentURI' }],
+        outputs: [{ type: 'uint256', name: 'agentId' }],
+      },
+      {
+        name: 'Registered',
+        type: 'event',
+        inputs: [
+          { type: 'uint256', name: 'agentId', indexed: true },
+          { type: 'string', name: 'agentURI', indexed: false },
+          { type: 'address', name: 'owner', indexed: true },
+        ],
+      },
+    ] as const;
 
     // ---- Send transaction ----
     const transport = http(rpcUrl ?? undefined);
