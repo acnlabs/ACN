@@ -12,6 +12,7 @@ Provides:
 Based on A2A Protocol: https://github.com/a2aproject/A2A
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -194,9 +195,23 @@ async def lifespan(app: FastAPI):
 
     logger.info("acn_started")
 
+    # Background watchdog: sync status field for stale agents every 30 min
+    async def _heartbeat_watchdog():
+        while True:
+            await asyncio.sleep(1800)
+            try:
+                count = await agent_repository.mark_offline_stale()
+                if count:
+                    logger.info("heartbeat_watchdog_ran", marked_offline=count)
+            except Exception as e:
+                logger.error("heartbeat_watchdog_error", error=str(e))
+
+    watchdog_task = asyncio.create_task(_heartbeat_watchdog())
+
     yield
 
     # Cleanup
+    watchdog_task.cancel()
     logger.info("acn_stopping")
     await router_instance.close()
     await registry_instance.redis.close()

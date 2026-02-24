@@ -167,3 +167,39 @@ class IAgentRepository(ABC):
             List of unclaimed agents
         """
         pass
+
+    @abstractmethod
+    async def set_alive(self, agent_id: str, ttl: int) -> None:
+        """
+        Set or renew the alive signal key for an agent.
+
+        Args:
+            agent_id: Agent identifier
+            ttl: Time-to-live in seconds
+        """
+        pass
+
+    @abstractmethod
+    async def filter_alive(self, agent_ids: list[str]) -> set[str]:
+        """
+        Return the subset of agent_ids whose alive key exists in Redis.
+        Uses a PIPELINE for efficiency.
+
+        Args:
+            agent_ids: List of agent identifiers to check
+
+        Returns:
+            Set of agent_ids that are currently alive
+        """
+        pass
+
+    @abstractmethod
+    async def mark_offline_stale(self) -> int:
+        """
+        Mark agents whose alive key has expired as offline in Redis.
+        Used by the background watchdog task.
+
+        Returns:
+            Number of agents marked offline
+        """
+        pass

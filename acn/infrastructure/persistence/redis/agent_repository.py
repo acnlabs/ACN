@@ -11,6 +11,10 @@ import redis.asyncio as redis  # type: ignore[import-untyped]
 from ....core.entities import Agent, AgentStatus, ClaimStatus
 from ....core.interfaces import IAgentRepository
 
+# TTL constants (seconds)
+ALIVE_GRACE_TTL = 1800   # 30 min — new registrations, no heartbeat yet
+ALIVE_RENEW_TTL = 3600   # 60 min — renewed on each heartbeat
+
 
 class RedisAgentRepository(IAgentRepository):
     """
@@ -19,11 +23,12 @@ class RedisAgentRepository(IAgentRepository):
     Implements IAgentRepository using Redis as storage backend.
 
     Index Keys:
-    - acn:agents:{agent_id} → Agent hash
-    - acn:agents:by_endpoint:{owner}:{endpoint} → agent_id (for managed agents)
-    - acn:agents:by_api_key:{api_key} → agent_id (for autonomous agents)
-    - acn:agents:by_owner:{owner} → Set of agent_ids
-    - acn:agents:unclaimed → Set of agent_ids (unclaimed agents)
+    - acn:agents:{agent_id}        → Agent hash (permanent)
+    - acn:agents:{agent_id}:alive  → Alive signal key with TTL (ephemeral)
+    - acn:agents:by_endpoint:{owner}:{endpoint} → agent_id
+    - acn:agents:by_api_key:{api_key} → agent_id
+    - acn:agents:by_owner:{owner}  → Set of agent_ids
+    - acn:agents:unclaimed         → Set of agent_ids
     - acn:subnets:{subnet_id}:agents → Set of agent_ids
     """
 
@@ -244,6 +249,38 @@ class RedisAgentRepository(IAgentRepository):
                 count += 1
 
         return agents
+
+    async def set_alive(self, agent_id: str, ttl: int) -> None:
+        """Set or renew the alive signal key for an agent."""
+        await self.redis.set(f"acn:agents:{agent_id}:alive", "1", ex=ttl)
+
+    async def filter_alive(self, agent_ids: list[str]) -> set[str]:
+        """Return subset of agent_ids whose alive key exists (PIPELINE)."""
+        if not agent_ids:
+            return set()
+        pipe = self.redis.pipeline()
+        for agent_id in agent_ids:
+            pipe.exists(f"acn:agents:{agent_id}:alive")
+        results = await pipe.execute()
+        return {aid for aid, alive in zip(agent_ids, results) if alive}
+
+    async def mark_offline_stale(self) -> int:
+        """Mark agents whose alive key has expired as offline. Returns count."""
+        count = 0
+        async for key in self.redis.scan_iter("acn:agents:*"):
+            # Skip index/alive/subnet keys — only process main agent hashes
+            key_str = key if isinstance(key, str) else key.decode()
+            if (":by_" in key_str or ":subnets:" in key_str
+                    or key_str.endswith(":unclaimed") or key_str.endswith(":alive")):
+                continue
+            agent_id = key_str.removeprefix("acn:agents:")
+            current_status = await self.redis.hget(key_str, "status")
+            if current_status in ("online", b"online"):
+                alive = await self.redis.exists(f"acn:agents:{agent_id}:alive")
+                if not alive:
+                    await self.redis.hset(key_str, "status", "offline")
+                    count += 1
+        return count
 
     def _dict_to_agent(self, agent_dict: dict) -> Agent:
         """Convert Redis dict to Agent entity"""

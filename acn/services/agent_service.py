@@ -11,6 +11,7 @@ import structlog  # type: ignore[import-untyped]
 from ..core.entities import Agent, ClaimStatus
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
+from ..infrastructure.persistence.redis.agent_repository import ALIVE_GRACE_TTL, ALIVE_RENEW_TTL
 from .auth0_client import Auth0CredentialClient
 
 logger = structlog.get_logger()
@@ -211,11 +212,19 @@ class AgentService:
             return agents
 
         if skills:
-            return await self.repository.find_by_skills(skills, status)
+            candidates = await self.repository.find_by_skills(skills, status)
+            if status == "online":
+                alive_ids = await self.repository.filter_alive([a.agent_id for a in candidates])
+                return [a for a in candidates if a.agent_id in alive_ids]
+            return candidates
 
-        # Return all agents matching status
+        # Return all agents matching status, filtered by alive key for online
         all_agents = await self.repository.find_all()
-        return [a for a in all_agents if a.status.value == status]
+        candidates = [a for a in all_agents if a.status.value == status]
+        if status == "online":
+            alive_ids = await self.repository.filter_alive([a.agent_id for a in candidates])
+            return [a for a in candidates if a.agent_id in alive_ids]
+        return candidates
 
     async def unregister_agent(self, agent_id: str, owner: str) -> bool:
         """
@@ -255,6 +264,7 @@ class AgentService:
         agent.update_heartbeat()
         agent.mark_online()
         await self.repository.save(agent)
+        await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)
         return agent
 
     async def get_agents_by_owner(self, owner: str) -> list[Agent]:
@@ -355,6 +365,7 @@ class AgentService:
 
         logger.info("agent_joined", agent_id=agent_id, name=name, referrer_id=referrer_id)
         await self.repository.save(agent)
+        await self.repository.set_alive(agent_id, ALIVE_GRACE_TTL)
         return agent, api_key
 
     async def get_agent_by_api_key(self, api_key: str) -> Agent | None:
