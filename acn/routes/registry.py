@@ -14,7 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from pydantic import BaseModel, Field
 
 from ..auth.middleware import require_permission
-from ..config import get_settings
+from ..config import Settings, get_settings
 from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from ..services.rewards_client import RewardsClient
@@ -437,6 +437,27 @@ async def get_agent_card(agent_id: str, agent_service: AgentServiceDep = None):
         )
 
         return card.model_dump(exclude_none=True)
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+
+
+@router.get("/{agent_id}/.well-known/agent-registration.json")
+async def get_agent_registration_file(
+    agent_id: str,
+    agent_service: AgentServiceDep = None,
+    cfg: Settings = Depends(get_settings),
+):
+    """Get agent's ERC-8004 Registration File.
+
+    This endpoint serves as the on-chain agentURI. It is separate from the
+    A2A agent-card.json endpoint and follows the ERC-8004 registration file
+    schema (type, name, description, services, registrations, x402Support).
+    """
+    from ..services.agent_service import build_erc8004_registration_file
+
+    try:
+        agent = await agent_service.get_agent(agent_id)
+        return build_erc8004_registration_file(agent, cfg)
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
 

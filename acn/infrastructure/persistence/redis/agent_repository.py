@@ -104,7 +104,13 @@ class RedisAgentRepository(IAgentRepository):
             # Remove from unclaimed if claimed
             await self.redis.srem("acn:agents:unclaimed", agent.agent_id)
 
-        # 5. Subnet indices
+        # 5. ERC-8004 token_id reverse index (for duplicate-bind prevention)
+        if agent.erc8004_agent_id:
+            await self.redis.set(
+                f"acn:agents:by_erc8004_id:{agent.erc8004_agent_id}", agent.agent_id
+            )
+
+        # 6. Subnet indices
         for subnet_id in agent.subnet_ids:
             await self.redis.sadd(f"acn:subnets:{subnet_id}:agents", agent.agent_id)
 
@@ -327,6 +333,15 @@ class RedisAgentRepository(IAgentRepository):
             "auth0_client_id": agent_dict.get("auth0_client_id"),
             "auth0_token_endpoint": agent_dict.get("auth0_token_endpoint"),
             # [REMOVED] Agent Wallet fields - 由 Backend 管理
+            # ERC-8004 On-Chain Identity
+            "erc8004_agent_id": agent_dict.get("erc8004_agent_id"),
+            "erc8004_chain": agent_dict.get("erc8004_chain"),
+            "erc8004_tx_hash": agent_dict.get("erc8004_tx_hash"),
+            "erc8004_registered_at": (
+                datetime.fromisoformat(agent_dict["erc8004_registered_at"])
+                if agent_dict.get("erc8004_registered_at")
+                else None
+            ),
         }
 
         return Agent(**data)

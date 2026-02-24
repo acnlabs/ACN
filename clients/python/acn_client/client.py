@@ -432,3 +432,180 @@ class ACNClient:
         )
         events: list[dict[str, Any]] = data.get("events", [])
         return events
+
+    # -------------------------------------------------------------------------
+    # ERC-8004 On-Chain Identity
+    # -------------------------------------------------------------------------
+
+    async def register_onchain(
+        self,
+        agent_id: str,
+        private_key: str | None = None,
+        chain: str = "base",
+        rpc_url: str | None = None,
+        save_wallet_path: str | None = ".env",
+    ) -> dict[str, Any]:
+        """Register the agent on ERC-8004 Identity Registry and bind to ACN.
+
+        Handles the full flow:
+        1. Generate wallet if private_key is None (saved to save_wallet_path).
+        2. Construct agentURI pointing to this agent's agent-registration.json.
+        3. Build and sign register(agentURI) transaction.
+        4. Broadcast and wait for receipt.
+        5. Extract token ID from Registered event.
+        6. POST /api/v1/onchain/agents/{agent_id}/bind to inform ACN.
+
+        Args:
+            agent_id: ACN agent ID (from join response).
+            private_key: Ethereum private key (hex). None = auto-generate.
+            chain: Target chain. "base" (mainnet) or "base-sepolia" (testnet).
+            rpc_url: Custom RPC URL. Defaults to public endpoint for chain.
+            save_wallet_path: File path to save generated wallet. Ignored if
+                private_key is provided.
+
+        Returns:
+            dict with token_id, tx_hash, chain, agent_registration_url,
+            wallet_address.
+        """
+        try:
+            from eth_account import Account  # type: ignore[import-untyped]
+            from web3 import Web3  # type: ignore[import-untyped]
+        except ImportError as e:
+            raise ImportError(
+                "web3 is required for on-chain registration. "
+                "Install it with: pip install web3"
+            ) from e
+
+        import json
+        import os
+
+        # ---- Chain configuration ----
+        chain_configs: dict[str, dict[str, Any]] = {
+            "base": {
+                "rpc": "https://mainnet.base.org",
+                "chain_id": 8453,
+                "identity_contract": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+                "namespace": "eip155:8453",
+            },
+            "base-sepolia": {
+                "rpc": "https://sepolia.base.org",
+                "chain_id": 84532,
+                "identity_contract": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
+                "namespace": "eip155:84532",
+            },
+        }
+        if chain not in chain_configs:
+            raise ValueError(f"Unsupported chain: {chain}. Use 'base' or 'base-sepolia'.")
+        cfg = chain_configs[chain]
+        effective_rpc = rpc_url or cfg["rpc"]
+
+        # ---- Wallet ----
+        wallet_generated = False
+        if private_key is None:
+            account = Account.create()
+            private_key = account.key.hex()
+            wallet_address = account.address
+            wallet_generated = True
+            if save_wallet_path:
+                _save_wallet_to_env(save_wallet_path, private_key, wallet_address)
+            print(f"Wallet generated: {wallet_address}")
+            print(f"  Private key saved to: {save_wallet_path}")
+            print("  ⚠  Back up your private key!")
+        else:
+            account = Account.from_key(private_key)
+            wallet_address = account.address
+
+        # ---- agentURI ----
+        agent_registration_url = (
+            f"{self.base_url}/api/v1/agents/{agent_id}"
+            "/.well-known/agent-registration.json"
+        )
+
+        # ---- Minimal Identity Registry ABI (register function + Registered event) ----
+        identity_abi = [
+            {
+                "inputs": [{"internalType": "string", "name": "agentURI", "type": "string"}],
+                "name": "register",
+                "outputs": [{"internalType": "uint256", "name": "agentId", "type": "uint256"}],
+                "stateMutability": "nonpayable",
+                "type": "function",
+            },
+            {
+                "anonymous": False,
+                "inputs": [
+                    {"indexed": True, "internalType": "uint256", "name": "agentId", "type": "uint256"},
+                    {"indexed": False, "internalType": "string", "name": "agentURI", "type": "string"},
+                    {"indexed": True, "internalType": "address", "name": "owner", "type": "address"},
+                ],
+                "name": "Registered",
+                "type": "event",
+            },
+        ]
+
+        # ---- Build & send transaction ----
+        w3 = Web3(Web3.HTTPProvider(effective_rpc))
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(cfg["identity_contract"]),
+            abi=identity_abi,
+        )
+
+        tx = contract.functions.register(agent_registration_url).build_transaction(
+            {
+                "from": wallet_address,
+                "nonce": w3.eth.get_transaction_count(wallet_address),
+                "chainId": cfg["chain_id"],
+            }
+        )
+        signed = account.sign_transaction(tx)
+        tx_hash_bytes = w3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash_bytes)
+        tx_hash = receipt["transactionHash"].hex()
+
+        # ---- Extract token ID from Registered event ----
+        registered_events = contract.events.Registered().process_receipt(receipt)
+        if not registered_events:
+            raise RuntimeError("Registered event not found in transaction receipt")
+        token_id: int = registered_events[0]["args"]["agentId"]
+
+        # ---- Notify ACN ----
+        await self._request(
+            "POST",
+            f"/api/v1/onchain/agents/{agent_id}/bind",
+            json={"token_id": token_id, "chain": cfg["namespace"], "tx_hash": tx_hash},
+        )
+
+        print(f"\nAgent registered on-chain!")
+        print(f"  Token ID:         {token_id}")
+        print(f"  Tx Hash:          {tx_hash}")
+        print(f"  Chain:            {cfg['namespace']}")
+        print(f"  Registration URL: {agent_registration_url}")
+
+        return {
+            "token_id": token_id,
+            "tx_hash": tx_hash,
+            "chain": cfg["namespace"],
+            "agent_registration_url": agent_registration_url,
+            "wallet_address": wallet_address,
+            "wallet_generated": wallet_generated,
+        }
+
+
+def _save_wallet_to_env(path: str, private_key: str, address: str) -> None:
+    """Append wallet credentials to a .env file (creates if absent)."""
+    import os
+
+    lines = []
+    if os.path.exists(path):
+        with open(path) as f:
+            lines = f.readlines()
+
+    keys_to_set = {
+        "WALLET_PRIVATE_KEY": private_key,
+        "WALLET_ADDRESS": address,
+    }
+    existing_keys = {line.split("=")[0].strip() for line in lines if "=" in line}
+
+    with open(path, "a") as f:
+        for key, value in keys_to_set.items():
+            if key not in existing_keys:
+                f.write(f"{key}={value}\n")

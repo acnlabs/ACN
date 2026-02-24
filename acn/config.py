@@ -90,6 +90,21 @@ class Settings(BaseSettings):
     # Labs features (experimental)
     labs_onboarding_enabled: bool = True  # Agent self-onboarding experiment
 
+    # ERC-8004 On-Chain Identity
+    erc8004_enabled: bool = True
+    erc8004_rpc_url: str = "https://mainnet.base.org"
+    erc8004_chain_id: int = 8453  # Base mainnet; use 84532 for Base Sepolia
+    # Mainnet contracts (same address on Base / Ethereum / Arbitrum / Polygon / etc.)
+    erc8004_identity_contract: str = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+    erc8004_reputation_contract: str = "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63"
+    # Testnet contracts (Base Sepolia / Arbitrum Sepolia / etc.)
+    erc8004_identity_contract_testnet: str = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
+    erc8004_reputation_contract_testnet: str = "0x8004B663056A597Dffe9eCcC1965A193B7388713"
+    # Validation Registry — experimental, addresses not yet published in ERC-8004 README.
+    # Set via ERC8004_VALIDATION_CONTRACT env var when the address becomes available.
+    erc8004_validation_contract: str | None = None
+    erc8004_validation_contract_testnet: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

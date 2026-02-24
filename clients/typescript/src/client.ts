@@ -376,6 +376,158 @@ export class ACNClient {
     return this.get('/api/v1/audit/events/recent', { limit });
   }
 
+  // ============================================
+  // ERC-8004 On-Chain Identity
+  // ============================================
+
+  /**
+   * Register the agent on ERC-8004 Identity Registry and bind to ACN.
+   *
+   * Full flow:
+   * 1. Generate wallet if privateKey is undefined (saved to saveWalletPath).
+   * 2. Construct agentURI → agent-registration.json endpoint.
+   * 3. Sign and broadcast register(agentURI) transaction via viem.
+   * 4. Extract token ID from Registered event.
+   * 5. POST /api/v1/onchain/agents/{agentId}/bind to inform ACN.
+   *
+   * @param agentId  - ACN agent ID (from join response).
+   * @param options  - Chain, RPC, private key, wallet save path.
+   */
+  async registerOnchain(
+    agentId: string,
+    options: {
+      privateKey?: `0x${string}`;
+      chain?: 'base' | 'base-sepolia';
+      rpcUrl?: string;
+      saveWalletPath?: string;
+    } = {}
+  ): Promise<{
+    tokenId: bigint;
+    txHash: string;
+    chain: string;
+    agentRegistrationUrl: string;
+    walletAddress: string;
+    walletGenerated: boolean;
+  }> {
+    const {
+      chain = 'base',
+      rpcUrl,
+      saveWalletPath = '.env',
+    } = options;
+
+    // Lazy import viem (peer dependency)
+    const {
+      createWalletClient,
+      createPublicClient,
+      http,
+      parseAbi,
+      generatePrivateKey,
+      privateKeyToAccount,
+    } = await import('viem');
+    const { base, baseSepolia } = await import('viem/chains');
+
+    const chainConfigs = {
+      base: {
+        viemChain: base,
+        identityContract: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432' as `0x${string}`,
+        namespace: 'eip155:8453',
+      },
+      'base-sepolia': {
+        viemChain: baseSepolia,
+        identityContract: '0x8004A818BFB912233c491871b3d84c89A494BD9e' as `0x${string}`,
+        namespace: 'eip155:84532',
+      },
+    } as const;
+
+    const cfg = chainConfigs[chain];
+
+    // ---- Wallet ----
+    let walletGenerated = false;
+    let privateKey = options.privateKey;
+    if (!privateKey) {
+      privateKey = generatePrivateKey();
+      walletGenerated = true;
+      if (saveWalletPath) {
+        await this._saveWalletToEnv(saveWalletPath, privateKey);
+      }
+    }
+    const account = privateKeyToAccount(privateKey);
+
+    // ---- agentURI ----
+    const agentRegistrationUrl =
+      `${this.baseUrl}/api/v1/agents/${agentId}/.well-known/agent-registration.json`;
+
+    // ---- Contract ABI ----
+    const abi = parseAbi([
+      'function register(string agentURI) returns (uint256 agentId)',
+      'event Registered(uint256 indexed agentId, string agentURI, address indexed owner)',
+    ]);
+
+    // ---- Send transaction ----
+    const transport = http(rpcUrl ?? undefined);
+    const walletClient = createWalletClient({ account, chain: cfg.viemChain, transport });
+    const publicClient = createPublicClient({ chain: cfg.viemChain, transport });
+
+    const txHash = await walletClient.writeContract({
+      address: cfg.identityContract,
+      abi,
+      functionName: 'register',
+      args: [agentRegistrationUrl],
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+    // ---- Extract token ID from Registered event ----
+    const { decodeEventLog } = await import('viem');
+    let tokenId: bigint | undefined;
+    for (const log of receipt.logs) {
+      try {
+        const decoded = decodeEventLog({ abi, data: log.data, topics: log.topics });
+        if (decoded.eventName === 'Registered') {
+          tokenId = (decoded.args as { agentId: bigint }).agentId;
+          break;
+        }
+      } catch {
+        // not our event
+      }
+    }
+    if (tokenId === undefined) {
+      throw new Error('Registered event not found in transaction receipt');
+    }
+
+    // ---- Notify ACN ----
+    await this.post(`/api/v1/onchain/agents/${agentId}/bind`, {
+      token_id: Number(tokenId),
+      chain: cfg.namespace,
+      tx_hash: txHash,
+    });
+
+    return {
+      tokenId,
+      txHash,
+      chain: cfg.namespace,
+      agentRegistrationUrl,
+      walletAddress: account.address,
+      walletGenerated,
+    };
+  }
+
+  /** @internal Save generated wallet credentials to a .env file. */
+  private async _saveWalletToEnv(path: string, privateKey: string): Promise<void> {
+    if (typeof window !== 'undefined') return; // browser — skip
+    try {
+      const fs = await import('fs/promises');
+      let content = '';
+      try { content = await fs.readFile(path, 'utf8'); } catch { /* file absent */ }
+      const existing = new Set(content.split('\n').map(l => l.split('=')[0].trim()));
+      const toAdd: string[] = [];
+      if (!existing.has('WALLET_PRIVATE_KEY')) toAdd.push(`WALLET_PRIVATE_KEY=${privateKey}`);
+      if (toAdd.length) await fs.appendFile(path, '\n' + toAdd.join('\n') + '\n');
+    } catch {
+      // non-fatal
+    }
+  }
+
   /** Get audit statistics */
   async getAuditStats(options?: { start_time?: string; end_time?: string }): Promise<Record<string, unknown>> {
     return this.get('/api/v1/audit/stats', options);

@@ -8,7 +8,8 @@ from uuid import uuid4
 
 import structlog  # type: ignore[import-untyped]
 
-from ..core.entities import Agent, ClaimStatus
+from ..config import Settings
+from ..core.entities import Agent, AgentStatus, ClaimStatus
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
 from .auth0_client import Auth0CredentialClient
@@ -498,3 +499,49 @@ class AgentService:
             List of unclaimed agents
         """
         return await self.repository.find_unclaimed(limit)
+
+
+def build_erc8004_registration_file(agent: Agent, settings: Settings) -> dict:
+    """Build an ERC-8004 compliant agent registration file for the given agent.
+
+    This JSON is served at /{agent_id}/.well-known/agent-registration.json
+    and used as the on-chain agentURI when the agent registers on ERC-8004.
+
+    Spec: https://eips.ethereum.org/EIPS/eip-8004#registration-v1
+    """
+    base_url = settings.gateway_base_url
+    file: dict = {
+        "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+        "name": agent.name,
+        "description": agent.description or "",
+        "services": [
+            {
+                "name": "A2A",
+                "endpoint": (
+                    f"{base_url}/api/v1/agents/{agent.agent_id}"
+                    "/.well-known/agent-card.json"
+                ),
+                "version": settings.a2a_protocol_version,
+            }
+        ],
+        "x402Support": agent.accepts_payment,
+        "active": agent.status == AgentStatus.ONLINE,
+    }
+
+    # Top-level agentWallet field per ERC-8004 spec (plain Ethereum address)
+    if agent.wallet_address:
+        file["agentWallet"] = agent.wallet_address
+
+    # Include on-chain registration reference once the agent has bound a token ID
+    if agent.erc8004_agent_id:
+        file["registrations"] = [
+            {
+                "agentId": int(agent.erc8004_agent_id),
+                "agentRegistry": (
+                    f"eip155:{settings.erc8004_chain_id}"
+                    f":{settings.erc8004_identity_contract}"
+                ),
+            }
+        ]
+
+    return file

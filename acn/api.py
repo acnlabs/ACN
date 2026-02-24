@@ -59,6 +59,7 @@ from .routes import (
     communication,
     dependencies,
     monitoring,
+    onchain,
     payments,
     registry,
     subnets,
@@ -245,6 +246,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(registry.router)
+app.include_router(onchain.router)
 app.include_router(communication.router)
 app.include_router(subnets.router)
 app.include_router(monitoring.router)

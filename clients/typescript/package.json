@@ -44,6 +44,9 @@
   "bugs": {
     "url": "https://github.com/acnlabs/ACN/issues"
   },
+  "dependencies": {
+    "viem": "^2.0.0"
+  },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",

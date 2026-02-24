@@ -60,6 +60,12 @@ class AgentInfo(BaseModel):
     # [REMOVED] Agent Wallet fields (balance, total_earned, total_spent, owner_share)
     # 钱包数据由 Backend Wallet API 管理
 
+    # ERC-8004 On-Chain Identity (optional, populated after agent self-registers on-chain)
+    erc8004_agent_id: str | None = Field(None, description="ERC-8004 NFT token ID")
+    erc8004_chain: str | None = Field(None, description='Chain namespace, e.g. "eip155:8453"')
+    erc8004_tx_hash: str | None = Field(None, description="On-chain registration tx hash")
+    erc8004_registered_at: datetime | None = Field(None, description="On-chain registration timestamp")
+
     @property
     def subnet_id(self) -> str:
         """Primary subnet (for backward compatibility)"""

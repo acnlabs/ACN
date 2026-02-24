@@ -26,6 +26,8 @@ requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.25.0",
     "pydantic>=2.0.0",
+    # ERC-8004 on-chain registration (wallet generation + transaction signing)
+    "web3>=7.0",
 ]
 
 [project.optional-dependencies]

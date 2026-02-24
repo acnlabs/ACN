@@ -86,6 +86,12 @@ class Agent:
     # Agent Wallet - 钱包数据由 Backend 管理，不在 ACN 存储
     # [REMOVED] balance, total_earned, total_spent, owner_share - 全部迁移到 Backend Wallet
 
+    # ERC-8004 On-Chain Identity (optional, self-registered by agent)
+    erc8004_agent_id: str | None = None       # NFT token ID after on-chain registration
+    erc8004_chain: str | None = None          # e.g. "eip155:8453"
+    erc8004_tx_hash: str | None = None        # registration tx hash (informational)
+    erc8004_registered_at: datetime | None = None
+
     def __post_init__(self):
         """Validate invariants"""
         if not self.agent_id:
@@ -236,6 +242,13 @@ class Agent:
             "auth0_client_id": self.auth0_client_id,
             "auth0_token_endpoint": self.auth0_token_endpoint,
             # [REMOVED] Agent Wallet fields - 由 Backend 管理
+            # ERC-8004 On-Chain Identity
+            "erc8004_agent_id": self.erc8004_agent_id,
+            "erc8004_chain": self.erc8004_chain,
+            "erc8004_tx_hash": self.erc8004_tx_hash,
+            "erc8004_registered_at": (
+                self.erc8004_registered_at.isoformat() if self.erc8004_registered_at else None
+            ),
         }
 
     def has_token_pricing(self) -> bool:
@@ -259,6 +272,8 @@ class Agent:
             data["last_heartbeat"] = datetime.fromisoformat(data["last_heartbeat"])
         if data.get("owner_changed_at") and isinstance(data["owner_changed_at"], str):
             data["owner_changed_at"] = datetime.fromisoformat(data["owner_changed_at"])
+        if data.get("erc8004_registered_at") and isinstance(data["erc8004_registered_at"], str):
+            data["erc8004_registered_at"] = datetime.fromisoformat(data["erc8004_registered_at"])
         # Parse status enum
         if isinstance(data.get("status"), str):
             data["status"] = AgentStatus(data["status"])

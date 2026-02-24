@@ -45,6 +45,8 @@ dependencies = [
     "structlog>=25.5.0",
     # Rate limiting
     "slowapi>=0.1.9",
+    # ERC-8004 On-Chain Identity
+    "web3>=7.0",
 ]
 
 [project.optional-dependencies]
