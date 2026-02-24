@@ -334,11 +334,13 @@ class ERC8004Client:
             if not record:
                 continue
             status = record["response"]
-            counts[status] = counts.get(status, 0) + 1
+            counts.setdefault(status, 0)
+            counts[status] += 1
             tag = record["tag"] or "untagged"
             if tag not in by_tag:
                 by_tag[tag] = {"approved": 0, "rejected": 0, "pending": 0}
-            by_tag[tag][status] = by_tag[tag].get(status, 0) + 1
+            by_tag[tag].setdefault(status, 0)
+            by_tag[tag][status] += 1
 
         return {
             "token_id": token_id,

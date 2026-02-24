@@ -10,7 +10,6 @@ All read operations are public (no auth required).
 from __future__ import annotations
 
 import json
-import logging
 from datetime import UTC, datetime
 
 import structlog  # type: ignore[import-untyped]
@@ -43,9 +42,6 @@ def get_erc8004_client(settings: Settings = Depends(get_settings)) -> ERC8004Cli
             validation_contract=settings.erc8004_validation_contract,
         )
     return _erc8004_client
-
-
-ERC8004ClientDep = ERC8004Client
 
 
 # ---------------------------------------------------------------------------
@@ -275,8 +271,11 @@ async def discover_onchain_agents(
 ):
     """Discover agents registered on the ERC-8004 Identity Registry.
 
-    Scans Transfer(from=0x0) mint events on-chain. Results are cached in
-    Redis for 5 minutes to avoid repeated expensive event scans.
+    Primary path: calls totalSupply() and iterates from the newest token
+    backward — pure eth_call, no event scanning.
+    Fallback: if totalSupply() is unavailable, scans recent Transfer mint
+    events via getLogs() in 2000-block batches (compatible with public RPCs).
+    Results are cached in Redis for 5 minutes.
     """
     cache_key = f"acn:erc8004:discover:limit:{limit}"
 
