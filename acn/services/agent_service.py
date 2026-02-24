@@ -11,8 +11,11 @@ import structlog  # type: ignore[import-untyped]
 from ..core.entities import Agent, ClaimStatus
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
-from ..infrastructure.persistence.redis.agent_repository import ALIVE_GRACE_TTL, ALIVE_RENEW_TTL
 from .auth0_client import Auth0CredentialClient
+
+# Heartbeat TTL policy (seconds)
+ALIVE_GRACE_TTL = 1800   # 30 min — grace period after join, no heartbeat yet
+ALIVE_RENEW_TTL = 3600   # 60 min — renewed on each heartbeat call
 
 logger = structlog.get_logger()
 
@@ -113,6 +116,7 @@ class AgentService:
             existing_agent.mark_online()
 
             await self.repository.save(existing_agent)
+            await self.repository.set_alive(existing_agent.agent_id, ALIVE_RENEW_TTL)
             return existing_agent
 
         # Create new agent
@@ -134,6 +138,7 @@ class AgentService:
 
         logger.info("register_new_agent", agent_id=agent_id, name=name)
         await self.repository.save(agent)
+        await self.repository.set_alive(agent_id, ALIVE_GRACE_TTL)
 
         # 创建 Auth0 M2M 凭证（异步，不阻塞注册）
         if self.auth0_client:
@@ -204,11 +209,13 @@ class AgentService:
         """
         if subnet_id:
             agents = await self.repository.find_by_subnet(subnet_id)
-            # Apply additional filters
             if skills:
                 agents = [a for a in agents if a.has_all_skills(skills)]
             if status:
                 agents = [a for a in agents if a.status.value == status]
+            if status == "online":
+                alive_ids = await self.repository.filter_alive([a.agent_id for a in agents])
+                agents = [a for a in agents if a.agent_id in alive_ids]
             return agents
 
         if skills:

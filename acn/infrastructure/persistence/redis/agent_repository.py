@@ -11,10 +11,6 @@ import redis.asyncio as redis  # type: ignore[import-untyped]
 from ....core.entities import Agent, AgentStatus, ClaimStatus
 from ....core.interfaces import IAgentRepository
 
-# TTL constants (seconds)
-ALIVE_GRACE_TTL = 1800   # 30 min — new registrations, no heartbeat yet
-ALIVE_RENEW_TTL = 3600   # 60 min — renewed on each heartbeat
-
 
 class RedisAgentRepository(IAgentRepository):
     """
@@ -143,8 +139,8 @@ class RedisAgentRepository(IAgentRepository):
         # Scan for all agent keys
         agents = []
         async for key in self.redis.scan_iter("acn:agents:*"):
-            # Skip index keys (by_api_key, by_owner, by_endpoint, unclaimed, etc.)
-            if ":by_" in key or ":subnets:" in key or key.endswith(":unclaimed"):
+            # Skip index keys and alive signal keys (string type, not hashes)
+            if ":by_" in key or ":subnets:" in key or key.endswith(":unclaimed") or key.endswith(":alive"):
                 continue
             agent_dict = await self.redis.hgetall(key)
             if agent_dict:
@@ -269,16 +265,15 @@ class RedisAgentRepository(IAgentRepository):
         count = 0
         async for key in self.redis.scan_iter("acn:agents:*"):
             # Skip index/alive/subnet keys — only process main agent hashes
-            key_str = key if isinstance(key, str) else key.decode()
-            if (":by_" in key_str or ":subnets:" in key_str
-                    or key_str.endswith(":unclaimed") or key_str.endswith(":alive")):
+            if (":by_" in key or ":subnets:" in key
+                    or key.endswith(":unclaimed") or key.endswith(":alive")):
                 continue
-            agent_id = key_str.removeprefix("acn:agents:")
-            current_status = await self.redis.hget(key_str, "status")
-            if current_status in ("online", b"online"):
+            agent_id = key.removeprefix("acn:agents:")
+            current_status = await self.redis.hget(key, "status")
+            if current_status == "online":
                 alive = await self.redis.exists(f"acn:agents:{agent_id}:alive")
                 if not alive:
-                    await self.redis.hset(key_str, "status", "offline")
+                    await self.redis.hset(key, "status", "offline")
                     count += 1
         return count
 
