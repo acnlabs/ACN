@@ -25,7 +25,6 @@ import asyncio
 import os
 import sys
 
-
 # ---------------------------------------------------------------------------
 # Dependency check
 # ---------------------------------------------------------------------------
@@ -158,16 +157,14 @@ async def main(args: argparse.Namespace) -> None:
 
     # ---- Wallet ----
     private_key: str = args.private_key or os.getenv("WALLET_PRIVATE_KEY", "")
-    wallet_generated = False
     if not private_key:
         account = Account.create()
         private_key = account.key.hex()
         wallet_address = account.address
-        wallet_generated = True
         _save_wallet(".env", private_key, wallet_address)
-        print(f"\nWallet generated and saved to .env")
+        print("\nWallet generated and saved to .env")
         print(f"  Address:     {wallet_address}")
-        print(f"  ⚠  Back up your private key!\n")
+        print("  ⚠  Back up your private key!\n")
     else:
         account = Account.from_key(private_key)
         wallet_address = account.address

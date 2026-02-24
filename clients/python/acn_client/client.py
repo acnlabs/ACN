@@ -476,9 +476,6 @@ class ACNClient:
                 "Install it with: pip install web3"
             ) from e
 
-        import json
-        import os
-
         # ---- Chain configuration ----
         chain_configs: dict[str, dict[str, Any]] = {
             "base": {
@@ -533,9 +530,24 @@ class ACNClient:
             {
                 "anonymous": False,
                 "inputs": [
-                    {"indexed": True, "internalType": "uint256", "name": "agentId", "type": "uint256"},
-                    {"indexed": False, "internalType": "string", "name": "agentURI", "type": "string"},
-                    {"indexed": True, "internalType": "address", "name": "owner", "type": "address"},
+                    {
+                        "indexed": True,
+                        "internalType": "uint256",
+                        "name": "agentId",
+                        "type": "uint256",
+                    },
+                    {
+                        "indexed": False,
+                        "internalType": "string",
+                        "name": "agentURI",
+                        "type": "string",
+                    },
+                    {
+                        "indexed": True,
+                        "internalType": "address",
+                        "name": "owner",
+                        "type": "address",
+                    },
                 ],
                 "name": "Registered",
                 "type": "event",
@@ -574,7 +586,7 @@ class ACNClient:
             json={"token_id": token_id, "chain": cfg["namespace"], "tx_hash": tx_hash},
         )
 
-        print(f"\nAgent registered on-chain!")
+        print("\nAgent registered on-chain!")
         print(f"  Token ID:         {token_id}")
         print(f"  Tx Hash:          {tx_hash}")
         print(f"  Chain:            {cfg['namespace']}")
