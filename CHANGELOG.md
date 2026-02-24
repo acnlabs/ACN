@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-24
+
+### Added
+- **ERC-8004 On-Chain Identity**: Full integration with the ERC-8004 Trustless Agents Standard
+  - Identity Registry: `totalSupply()` primary discovery + `getLogs()` batched fallback (2000 blocks/batch, compatible with public RPCs)
+  - Reputation Registry: `readAllFeedback` aggregation at application layer (anti-Sybil design)
+  - Validation Registry: experimental support, 503 until contract addresses are published
+  - ABIs: `IdentityRegistry.json`, `ReputationRegistry.json`, `ValidationRegistry.json`
+- **New API endpoints** (`/api/v1/onchain/*`):
+  - `POST /onchain/agents/{id}/bind` — verify tokenURI on-chain, persist ERC-8004 token binding
+  - `GET  /onchain/agents/{id}` — query stored on-chain identity
+  - `GET  /onchain/agents/{id}/reputation` — live on-chain reputation summary
+  - `GET  /onchain/agents/{id}/validation` — live validation summary (503 when unconfigured)
+  - `GET  /onchain/discover` — discover agents via ERC-8004 registry with Redis cache (5 min TTL)
+- **ERC-8004 Registration File** endpoint: `GET /agents/{id}/.well-known/agent-registration.json`
+  - `agentWallet` as top-level field (per ERC-8004 spec)
+  - `services` array with A2A agent card reference
+  - `registrations` block once token is bound
+- **Python SDK**: `register_onchain()` helper with auto wallet generation (`eth_account`) and `/bind` notification
+- **TypeScript SDK**: `registerOnchain()` using `viem`, wallet generation, event parsing
+- **`skills/acn/scripts/register_onchain.py`**: standalone CLI script (agentskills.io compatible)
+- **Redis reverse index**: `acn:agents:by_erc8004_id:{token_id}` → `agent_id` for fast duplicate detection
+
+### Changed
+- Agent entity gains `erc8004_agent_id`, `erc8004_chain`, `erc8004_tx_hash`, `erc8004_registered_at` fields
+- Redis persistence and serialization updated for new ERC-8004 fields
+- Python SDK dependency: added `web3>=7.0`
+- TypeScript SDK dependency: added `viem^2.0.0`
+
+## [0.2.0]
+
 ### Added
 - **A2A Server Integration**: ACN now exposes its infrastructure services via A2A protocol endpoints
   - `/a2a/jsonrpc` - JSON-RPC 2.0 endpoint for A2A communication

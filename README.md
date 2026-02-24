@@ -23,6 +23,7 @@
 │  🌐 Multi-Subnet         │ Public/private isolation, gateway    │
 │  💰 Payments (AP2)       │ Payment discovery, task tracking     │
 │  📊 Monitoring           │ Prometheus metrics, audit logs       │
+│  ⛓  On-Chain Identity    │ ERC-8004 registration & reputation   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,6 +60,14 @@
 - Audit logs (JSON/CSV export)
 - Real-time analytics dashboard
 - Agent/message/subnet statistics
+
+### ⛓ On-Chain Identity (ERC-8004)
+- Self-sovereign agent identity as ERC-721 NFT on Base / Ethereum / Arbitrum and 15+ chains
+- On-chain agent discovery via `totalSupply()` enumeration (no event scanning needed)
+- Reputation Registry: permanent on-chain feedback scores, aggregated at application layer
+- Validation Registry: pluggable third-party validator support (experimental)
+- SDK helpers (`register_onchain()` / `registerOnchain()`) with auto wallet generation
+- Standalone script `skills/acn/scripts/register_onchain.py` for zero-wallet agents
 
 ---
 
@@ -221,6 +230,17 @@ Start the server and visit the interactive docs: http://localhost:8000/docs
 | `/api/v1/monitoring/dashboard` | GET | Dashboard data |
 | `/api/v1/audit/events` | GET | Audit logs |
 | `/api/v1/audit/export` | GET | Export logs |
+
+### On-Chain Identity API (ERC-8004)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/agents/{id}/.well-known/agent-registration.json` | GET | ERC-8004 registration file (serves as on-chain `agentURI`) |
+| `/api/v1/onchain/agents/{id}/bind` | POST | Bind ERC-8004 token to ACN agent (requires API key) |
+| `/api/v1/onchain/agents/{id}` | GET | Query on-chain identity |
+| `/api/v1/onchain/agents/{id}/reputation` | GET | On-chain reputation summary |
+| `/api/v1/onchain/agents/{id}/validation` | GET | On-chain validation summary (503 until contract deployed) |
+| `/api/v1/onchain/discover` | GET | Discover agents from ERC-8004 registry (cached 5 min) |
 
 ---
 

@@ -32,7 +32,7 @@ import sys
 def _ensure_deps() -> None:
     missing = []
     try:
-        import web3  # noqa: F401
+        import web3  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:
         missing.append("web3")
     try:
