@@ -67,19 +67,19 @@ class BillingConfig:
 class BillingTransactionType(StrEnum):
     """Types of billing transactions"""
 
-    AGENT_CALL = "agent_call"           # User called an agent
-    NETWORK_FEE = "network_fee"         # Network fee collected
-    AGENT_INCOME = "agent_income"       # Agent income credited
-    REFUND = "refund"                   # Refund issued
+    AGENT_CALL = "agent_call"  # User called an agent
+    NETWORK_FEE = "network_fee"  # Network fee collected
+    AGENT_INCOME = "agent_income"  # Agent income credited
+    REFUND = "refund"  # Refund issued
 
 
 class BillingTransactionStatus(StrEnum):
     """Status of billing transactions"""
 
-    PENDING = "pending"         # Transaction created, not yet processed
-    COMPLETED = "completed"     # Successfully processed
-    FAILED = "failed"           # Processing failed
-    REFUNDED = "refunded"       # Transaction was refunded
+    PENDING = "pending"  # Transaction created, not yet processed
+    COMPLETED = "completed"  # Successfully processed
+    FAILED = "failed"  # Processing failed
+    REFUNDED = "refunded"  # Transaction was refunded
 
 
 class TokenUsage(BaseModel):
@@ -193,12 +193,22 @@ class BillingService:
             CostBreakdown with all fee details
         """
         # Calculate raw cost in USD using Decimal to avoid float rounding drift
-        d_input = Decimal(str(input_tokens)) / Decimal("1000000") * Decimal(str(pricing.input_price_per_million))
-        d_output = Decimal(str(output_tokens)) / Decimal("1000000") * Decimal(str(pricing.output_price_per_million))
+        d_input = (
+            Decimal(str(input_tokens))
+            / Decimal("1000000")
+            * Decimal(str(pricing.input_price_per_million))
+        )
+        d_output = (
+            Decimal(str(output_tokens))
+            / Decimal("1000000")
+            * Decimal(str(pricing.output_price_per_million))
+        )
         d_total_usd = d_input + d_output
 
         # Derive fee and income from total to guarantee fee + income == total (no rounding gap)
-        d_network_fee_usd = (d_total_usd * Decimal(str(BillingConfig.NETWORK_FEE_RATE))).quantize(Decimal("0.000001"))
+        d_network_fee_usd = (d_total_usd * Decimal(str(BillingConfig.NETWORK_FEE_RATE))).quantize(
+            Decimal("0.000001")
+        )
         d_agent_income_usd = d_total_usd - d_network_fee_usd
 
         d_credits_per_usd = Decimal(str(BillingConfig.CREDITS_PER_USD))
@@ -548,12 +558,17 @@ class BillingService:
         # In production, use httpx/aiohttp to send webhook
         # For now, just log to Redis
         webhook_key = f"{self._prefix}webhooks:pending"
-        await self.redis.lpush(webhook_key, json.dumps({
-            "event": "billing.transaction",
-            "transaction_id": transaction.transaction_id,
-            "status": transaction.status.value,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }))
+        await self.redis.lpush(
+            webhook_key,
+            json.dumps(
+                {
+                    "event": "billing.transaction",
+                    "transaction_id": transaction.transaction_id,
+                    "status": transaction.status.value,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            ),
+        )
 
 
 # =============================================================================

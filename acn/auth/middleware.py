@@ -46,6 +46,7 @@ _jwks_lock = asyncio.Lock()
 
 def _get_settings():
     from ..config import get_settings
+
     return get_settings()
 
 
@@ -89,6 +90,7 @@ async def _get_jwks(domain: str) -> dict:
 # ---------------------------------------------------------------------------
 # Core JWT verification
 # ---------------------------------------------------------------------------
+
 
 async def _verify_jwt(token: str) -> dict:
     """Verify an Auth0 JWT and return its payload."""
@@ -178,6 +180,7 @@ async def _verify_jwt(token: str) -> dict:
 # ---------------------------------------------------------------------------
 # FastAPI dependency functions (public API, matches previous interface)
 # ---------------------------------------------------------------------------
+
 
 async def verify_token(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),

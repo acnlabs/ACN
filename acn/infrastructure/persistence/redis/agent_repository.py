@@ -258,7 +258,7 @@ class RedisAgentRepository(IAgentRepository):
         for agent_id in agent_ids:
             pipe.exists(f"acn:agents:{agent_id}:alive")
         results = await pipe.execute()
-        return {aid for aid, alive in zip(agent_ids, results) if alive}
+        return {aid for aid, alive in zip(agent_ids, results, strict=True) if alive}
 
     async def mark_offline_stale(self) -> int:
         """Mark agents whose alive key has expired as offline. Returns count."""

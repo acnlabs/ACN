@@ -432,4 +432,3 @@ class ACNClient:
         )
         events: list[dict[str, Any]] = data.get("events", [])
         return events
-

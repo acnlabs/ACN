@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
 class ActivityEvent(BaseModel):
     """Activity event model"""
+
     event_id: str
     type: str
     agent_id: str = ""
@@ -31,6 +32,7 @@ class ActivityEvent(BaseModel):
 
 class ActivitiesResponse(BaseModel):
     """Activities list response"""
+
     activities: list[ActivityEvent]
     total: int
 

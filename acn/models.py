@@ -75,7 +75,12 @@ class AgentRegisterRequest(BaseModel):
     - Re-registration (same owner + endpoint): Updates existing agent (ID unchanged)
     """
 
-    owner: str = Field(..., min_length=1, max_length=128, description="Agent owner (system/user-{id}/provider-{id})")
+    owner: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="Agent owner (system/user-{id}/provider-{id})",
+    )
     name: str = Field(..., min_length=1, max_length=128, description="Agent name")
     endpoint: str = Field(..., max_length=512, description="Agent A2A endpoint URL")
     skills: list[str] = Field(default_factory=list, max_length=50, description="Agent skill IDs")
@@ -93,7 +98,9 @@ class AgentRegisterRequest(BaseModel):
     )
     # 向后兼容：单子网参数
     subnet_id: str | None = Field(
-        None, max_length=64, description="[Deprecated] Single subnet to join. Use subnet_ids instead."
+        None,
+        max_length=64,
+        description="[Deprecated] Single subnet to join. Use subnet_ids instead.",
     )
 
     @field_validator("endpoint")

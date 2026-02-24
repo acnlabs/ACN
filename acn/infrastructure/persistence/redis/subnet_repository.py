@@ -109,7 +109,10 @@ class RedisSubnetRepository(ISubnetRepository):
         try:
             return json.loads(raw) if raw else default
         except (json.JSONDecodeError, TypeError, ValueError):
-            logger.warning("subnet_repository: corrupted JSON field, using default", extra={"raw": str(raw)[:200]})
+            logger.warning(
+                "subnet_repository: corrupted JSON field, using default",
+                extra={"raw": str(raw)[:200]},
+            )
             return default
 
     @staticmethod
@@ -120,7 +123,10 @@ class RedisSubnetRepository(ISubnetRepository):
         try:
             return datetime.fromisoformat(raw)
         except (ValueError, TypeError):
-            logger.warning("subnet_repository: invalid datetime field, using default", extra={"raw": str(raw)[:50]})
+            logger.warning(
+                "subnet_repository: invalid datetime field, using default",
+                extra={"raw": str(raw)[:50]},
+            )
             return default
 
     def _dict_to_subnet(self, subnet_dict: dict) -> Subnet:
@@ -132,8 +138,12 @@ class RedisSubnetRepository(ISubnetRepository):
             "description": subnet_dict.get("description"),
             "is_private": subnet_dict.get("is_private") == "True",
             "security_config": self._safe_loads(subnet_dict.get("security_config", "{}"), {}),
-            "member_agent_ids": set(self._safe_loads(subnet_dict.get("member_agent_ids", "[]"), [])),
-            "created_at": self._safe_fromisoformat(subnet_dict.get("created_at"), datetime.now(UTC)),
+            "member_agent_ids": set(
+                self._safe_loads(subnet_dict.get("member_agent_ids", "[]"), [])
+            ),
+            "created_at": self._safe_fromisoformat(
+                subnet_dict.get("created_at"), datetime.now(UTC)
+            ),
             "metadata": self._safe_loads(subnet_dict.get("metadata", "{}"), {}),
         }
 

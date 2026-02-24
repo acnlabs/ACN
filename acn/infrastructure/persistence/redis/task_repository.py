@@ -504,7 +504,13 @@ class RedisTaskRepository(ITaskRepository):
 
         try:
             result = await script(
-                keys=[task_key, active_count_key, participations_key, user_task_key, participation_key],
+                keys=[
+                    task_key,
+                    active_count_key,
+                    participations_key,
+                    user_task_key,
+                    participation_key,
+                ],
                 args=[
                     max_completions if max_completions is not None else -1,
                     "true" if allow_repeat else "false",
@@ -551,7 +557,9 @@ class RedisTaskRepository(ITaskRepository):
             if "NOT_FOUND" in err:
                 raise ValueError("Participation not found") from e
             elif "CANNOT_CANCEL" in err:
-                raise ValueError("Participation cannot be cancelled (already completed or cancelled)") from e
+                raise ValueError(
+                    "Participation cannot be cancelled (already completed or cancelled)"
+                ) from e
             raise
 
     async def atomic_complete_participation(
@@ -645,6 +653,7 @@ class RedisTaskRepository(ITaskRepository):
                 return json.loads(raw) if raw else default
             except (json.JSONDecodeError, TypeError):
                 import logging as _logging
+
                 _logging.getLogger(__name__).warning(
                     "task_repository: corrupted JSON field, using default",
                     extra={"raw": raw[:200] if raw else None},
@@ -687,6 +696,7 @@ class RedisTaskRepository(ITaskRepository):
                     data[field_name] = datetime.fromisoformat(data[field_name])
                 except (ValueError, TypeError):
                     import logging as _logging
+
                     _logging.getLogger(__name__).warning(
                         "task_repository: invalid datetime field, discarding",
                         extra={"field": field_name, "value": data[field_name]},

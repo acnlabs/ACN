@@ -173,11 +173,7 @@ class TaskService:
             task.assigned_at = datetime.now(UTC)
 
         # 统一 escrow 锁定：human 和 agent 创建者都走 v2 escrow
-        if (
-            self.escrow
-            and reward_currency.lower() == "points"
-            and float(total_budget) > 0
-        ):
+        if self.escrow and reward_currency.lower() == "points" and float(total_budget) > 0:
             logger.info(
                 "escrow_lock_attempt",
                 creator_type=creator_type,
@@ -621,10 +617,7 @@ class TaskService:
         await self.task_pool.record_completion(task.task_id, p.participant_id)
 
         # Distribute reward
-        if (
-            task.reward_currency.lower() == "points"
-            and float(task.reward_amount) > 0
-        ):
+        if task.reward_currency.lower() == "points" and float(task.reward_amount) > 0:
             reward_result = await self._distribute_reward(
                 task=task,
                 amount=float(task.reward_amount),
@@ -697,10 +690,7 @@ class TaskService:
             await self.task_pool.record_completion(task_id, p.participant_id)
 
             # Distribute per-completion reward
-            if (
-                task.reward_currency.lower() == "points"
-                and float(task.reward_amount) > 0
-            ):
+            if task.reward_currency.lower() == "points" and float(task.reward_amount) > 0:
                 await self._distribute_reward(
                     task=task,
                     amount=float(task.reward_amount),
@@ -998,10 +988,7 @@ class TaskService:
                 logger.error("failed_to_cancel_payment", error=str(e))
 
         # 统一 escrow 退款：human 和 agent 创建者都走 escrow refund
-        if (
-            self.escrow
-            and task.reward_currency.lower() == "points"
-        ):
+        if self.escrow and task.reward_currency.lower() == "points":
             remaining = task.remaining_budget()
             if remaining > 0:
                 result = await self.escrow.refund(

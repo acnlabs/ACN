@@ -123,7 +123,7 @@ class MessageRouter:
         """Close all cached A2A clients and their underlying httpx connections"""
         for endpoint, client in self._clients.items():
             try:
-                if hasattr(client, 'httpx_client') and client.httpx_client:
+                if hasattr(client, "httpx_client") and client.httpx_client:
                     await client.httpx_client.aclose()
             except Exception as e:
                 logger.warning("failed_to_close_a2a_client", endpoint=endpoint, error=str(e))

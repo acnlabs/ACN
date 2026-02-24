@@ -195,4 +195,3 @@ class TestAgentEntity:
         assert agent.owner == "user-456"
         assert agent.status == AgentStatus.ONLINE
         assert agent.skills == ["task-planning"]
-

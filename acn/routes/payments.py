@@ -53,12 +53,14 @@ class CreatePaymentTaskRequest(BaseModel):
 
 class TokenPricingRequest(BaseModel):
     """Request to set token-based pricing for an agent"""
+
     input_price_per_million: float = Field(..., ge=0, description="USD per 1M input tokens")
     output_price_per_million: float = Field(..., ge=0, description="USD per 1M output tokens")
 
 
 class EstimateCostRequest(BaseModel):
     """Request to estimate cost for a service call"""
+
     agent_id: str
     estimated_input_tokens: int = Field(default=0, ge=0)
     estimated_output_tokens: int = Field(default=0, ge=0)
@@ -66,6 +68,7 @@ class EstimateCostRequest(BaseModel):
 
 class BillUsageRequest(BaseModel):
     """Request to bill token usage after a service call"""
+
     user_id: str = Field(..., description="User being charged")
     agent_id: str = Field(..., description="Agent that provided service")
     task_id: str | None = Field(None, description="Associated task ID")
@@ -105,7 +108,9 @@ async def set_payment_capability(
         return {"status": "registered", "agent_id": agent_id}
 
     except Exception as e:
-        logger.error("set_payment_capability_failed", agent_id=agent_id, error=str(e), exc_info=True)
+        logger.error(
+            "set_payment_capability_failed", agent_id=agent_id, error=str(e), exc_info=True
+        )
         raise HTTPException(status_code=500, detail="Failed to register payment capability") from e
 
 
@@ -290,10 +295,7 @@ async def get_token_pricing(
     """Get token-based pricing for an agent"""
     capability = await payment_discovery.get_agent_payment_capability(agent_id)
     if not capability or not capability.token_pricing:
-        raise HTTPException(
-            status_code=404,
-            detail="Token pricing not configured for this agent"
-        )
+        raise HTTPException(status_code=404, detail="Token pricing not configured for this agent")
 
     return {
         "agent_id": agent_id,
@@ -319,10 +321,7 @@ async def estimate_cost(
     """
     capability = await payment_discovery.get_agent_payment_capability(request.agent_id)
     if not capability or not capability.token_pricing:
-        raise HTTPException(
-            status_code=404,
-            detail="Token pricing not configured for this agent"
-        )
+        raise HTTPException(status_code=404, detail="Token pricing not configured for this agent")
 
     # Calculate cost breakdown
     breakdown = capability.token_pricing.calculate_cost_with_network_fee(
@@ -355,10 +354,7 @@ async def bill_usage(
     # Get agent's token pricing
     capability = await payment_discovery.get_agent_payment_capability(request.agent_id)
     if not capability or not capability.token_pricing:
-        raise HTTPException(
-            status_code=404,
-            detail="Token pricing not configured for this agent"
-        )
+        raise HTTPException(status_code=404, detail="Token pricing not configured for this agent")
 
     # Get agent owner
     agent = await registry.get_agent(request.agent_id)

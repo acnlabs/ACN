@@ -284,6 +284,7 @@ AgentApiKeyDep = Annotated[dict, Depends(verify_agent_api_key)]
 # Internal service token authentication
 # ---------------------------------------------------------------------------
 
+
 def verify_internal_token(
     x_internal_token: str = Header(..., alias="X-Internal-Token"),
 ) -> None:

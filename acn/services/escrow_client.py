@@ -103,9 +103,7 @@ class EscrowClient:
             )
 
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/v2/lock",
                     headers=self._get_headers(),
@@ -164,9 +162,7 @@ class EscrowClient:
     ) -> EscrowDetailResult:
         """v2: Agent accepts a task"""
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/v2/{escrow_id}/accept",
                     headers=self._get_headers(),
@@ -195,9 +191,7 @@ class EscrowClient:
     async def submit_v2(self, escrow_id: str) -> EscrowDetailResult:
         """v2: Agent submits deliverable"""
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/v2/{escrow_id}/submit",
                     headers=self._get_headers(),
@@ -223,9 +217,7 @@ class EscrowClient:
     async def get_by_task(self, task_id: str) -> EscrowDetailResult:
         """v2: Get escrow by task ID"""
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.get(
                     f"{self.backend_url}/api/labs/escrow/v2/task/{task_id}",
                     headers=self._get_headers(),
@@ -285,9 +277,7 @@ class EscrowClient:
             return EscrowDetailResult(success=True, escrow_id=escrow_id)
 
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/v2/{escrow_id}/release_partial",
                     headers=self._get_headers(),
@@ -360,9 +350,7 @@ class EscrowClient:
             )
 
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/lock",
                     headers=self._get_headers(),
@@ -438,9 +426,7 @@ class EscrowClient:
             )
 
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/release",
                     headers=self._get_headers(),
@@ -513,9 +499,7 @@ class EscrowClient:
             )
 
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/refund",
                     headers=self._get_headers(),
@@ -577,9 +561,7 @@ class EscrowClient:
             (is_sufficient, current_balance)
         """
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/check",
                     headers=self._get_headers(),
@@ -591,9 +573,7 @@ class EscrowClient:
 
                 if response.status_code == 200:
                     data = response.json()
-                    return data.get("sufficient", False), data.get(
-                        "current_balance", 0
-                    )
+                    return data.get("sufficient", False), data.get("current_balance", 0)
                 else:
                     return False, 0
 

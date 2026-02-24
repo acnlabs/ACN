@@ -816,7 +816,9 @@ class SubnetManager:
                     try:
                         subnet_data = json.loads(data)
                     except (json.JSONDecodeError, TypeError):
-                        logger.warning(f"subnet_manager: skipping corrupted subnet key during restore: {key}")
+                        logger.warning(
+                            f"subnet_manager: skipping corrupted subnet key during restore: {key}"
+                        )
                         continue
                     subnet_id = subnet_data["subnet_id"]
 

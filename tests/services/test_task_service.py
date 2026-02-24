@@ -124,7 +124,9 @@ class TestAcceptTaskMultiParticipant:
         assert call_kwargs.kwargs["task_id"] == "task-001"
         assert call_kwargs.kwargs["max_completions"] == 5
 
-    async def test_accept_single_participant_returns_none_pid(self, service, mock_repo, mock_task_pool):
+    async def test_accept_single_participant_returns_none_pid(
+        self, service, mock_repo, mock_task_pool
+    ):
         """accept_task on single-participant task returns pid=None"""
         task = _make_task(is_multi_participant=False, is_repeatable=False)
         # override __post_init__ side effect

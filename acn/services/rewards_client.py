@@ -66,9 +66,7 @@ class RewardsClient:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
-                response = await client.get(
-                    f"{self.backend_url}/api/rewards/config"
-                )
+                response = await client.get(f"{self.backend_url}/api/rewards/config")
 
                 if response.status_code == 200:
                     data = response.json()

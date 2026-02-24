@@ -78,7 +78,10 @@ class WalletClient:
 
     def _extract_error(self, response: httpx.Response) -> str:
         """Extract error detail from a non-2xx response."""
-        return self._parse_json(response).get("detail", response.text) or f"HTTP {response.status_code}"
+        return (
+            self._parse_json(response).get("detail", response.text)
+            or f"HTTP {response.status_code}"
+        )
 
     async def get_balance(self, agent_id: str) -> tuple[bool, float]:
         """

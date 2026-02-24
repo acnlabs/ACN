@@ -14,8 +14,8 @@ from ..core.interfaces import IAgentRepository
 from .auth0_client import Auth0CredentialClient
 
 # Heartbeat TTL policy (seconds)
-ALIVE_GRACE_TTL = 1800   # 30 min — grace period after join, no heartbeat yet
-ALIVE_RENEW_TTL = 3600   # 60 min — renewed on each heartbeat call
+ALIVE_GRACE_TTL = 1800  # 30 min — grace period after join, no heartbeat yet
+ALIVE_RENEW_TTL = 3600  # 60 min — renewed on each heartbeat call
 
 logger = structlog.get_logger()
 

@@ -53,9 +53,15 @@ class TaskCreateRequest(BaseModel):
     required_skills: list[str] = Field(default_factory=list)
     reward_amount: str = Field(default="0", description="Reward amount")
     reward_currency: str = Field(default="points", description="Currency: USD, USDC, points")
-    is_repeatable: bool = Field(default=False, description="DEPRECATED: use is_multi_participant", deprecated=True)
-    is_multi_participant: bool = Field(default=False, description="Multiple agents can work in parallel")
-    allow_repeat_by_same: bool = Field(default=False, description="Same agent can rejoin after completing")
+    is_repeatable: bool = Field(
+        default=False, description="DEPRECATED: use is_multi_participant", deprecated=True
+    )
+    is_multi_participant: bool = Field(
+        default=False, description="Multiple agents can work in parallel"
+    )
+    allow_repeat_by_same: bool = Field(
+        default=False, description="Same agent can rejoin after completing"
+    )
     max_completions: int | None = Field(None, description="Max completions (open/multi mode)")
     deadline_hours: int | None = Field(None, ge=1, le=720, description="Deadline in hours")
     assignee_id: str | None = Field(None, description="Pre-assigned agent (assigned mode)")
@@ -153,7 +159,9 @@ class TaskSubmitRequest(BaseModel):
 
     submission: str = Field(..., min_length=5, description="Task result/deliverable")
     artifacts: list[dict] = Field(default_factory=list, description="Optional artifacts")
-    participation_id: str | None = Field(None, description="Participation ID (for multi-participant tasks)")
+    participation_id: str | None = Field(
+        None, description="Participation ID (for multi-participant tasks)"
+    )
 
 
 class TaskReviewRequest(BaseModel):
@@ -161,7 +169,9 @@ class TaskReviewRequest(BaseModel):
 
     approved: bool = Field(..., description="Whether to approve")
     notes: str = Field(default="", description="Review notes")
-    participation_id: str | None = Field(None, description="Participation ID (for multi-participant tasks)")
+    participation_id: str | None = Field(
+        None, description="Participation ID (for multi-participant tasks)"
+    )
     agent_id: str | None = Field(None, description="Agent ID (alternative to participation_id)")
 
 
@@ -527,7 +537,9 @@ async def cancel_task(
 @router.get("/{task_id}/participations", response_model=ParticipationListResponse)
 async def list_participations(
     task_id: str,
-    status: str | None = Query(None, description="Filter by status: active, submitted, completed, rejected, cancelled"),
+    status: str | None = Query(
+        None, description="Filter by status: active, submitted, completed, rejected, cancelled"
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     task_service: TaskServiceDep = None,

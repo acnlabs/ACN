@@ -51,7 +51,9 @@ class Settings(BaseSettings):
     billing_webhook_url: str | None = None  # e.g., "https://your-backend.com/api/billing/webhook"
 
     # Auth0 (for JWT verification and Agent Card security scheme)
-    auth0_domain: str | None = None  # e.g., "your-tenant.auth0.com" or "https://your-tenant.auth0.com"
+    auth0_domain: str | None = (
+        None  # e.g., "your-tenant.auth0.com" or "https://your-tenant.auth0.com"
+    )
     auth0_audience: str | None = None  # e.g., "https://api.agentplanet.com"
 
     @field_validator("auth0_domain", mode="before")
@@ -103,9 +105,7 @@ class Settings(BaseSettings):
         errors: list[str] = []
 
         if not self.internal_api_token or len(self.internal_api_token) < 32:
-            errors.append(
-                "INTERNAL_API_TOKEN must be at least 32 characters in production."
-            )
+            errors.append("INTERNAL_API_TOKEN must be at least 32 characters in production.")
         elif self.internal_api_token == _DEV_INTERNAL_TOKEN:
             errors.append(
                 "INTERNAL_API_TOKEN must be overridden in production "
@@ -119,9 +119,7 @@ class Settings(BaseSettings):
             )
 
         if not self.auth0_domain or not self.auth0_audience:
-            errors.append(
-                "AUTH0_DOMAIN and AUTH0_AUDIENCE must be set in production."
-            )
+            errors.append("AUTH0_DOMAIN and AUTH0_AUDIENCE must be set in production.")
 
         if errors:
             raise ValueError(

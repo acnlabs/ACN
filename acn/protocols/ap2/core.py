@@ -56,7 +56,7 @@ ACN_TOKEN_PRICING_EXTENSION_URI = "https://agentplanet.com/acn/token-pricing/v1"
 # =============================================================================
 
 NETWORK_FEE_RATE = 0.15  # 15% network fee, deducted from agent income
-CREDITS_PER_USD = 10.0   # 1 USD = 10 platform credits
+CREDITS_PER_USD = 10.0  # 1 USD = 10 platform credits
 
 
 class SupportedPaymentMethod(StrEnum):
@@ -161,11 +161,7 @@ class TokenPricing(BaseModel):
         output_cost = (output_tokens / 1_000_000) * self.output_price_per_million
         return input_cost + output_cost
 
-    def calculate_cost_with_network_fee(
-        self,
-        input_tokens: int,
-        output_tokens: int
-    ) -> dict:
+    def calculate_cost_with_network_fee(self, input_tokens: int, output_tokens: int) -> dict:
         """
         Calculate cost breakdown including network fee.
 
@@ -275,19 +271,23 @@ class PaymentCapability(BaseModel):
             "default_currency": self.default_currency,
             "pricing": self.pricing,
         }
-        extensions.append({
-            "uri": AP2_EXTENSION_URI,
-            "description": "Supports AP2 payment protocol",
-            "params": ap2_params,
-        })
+        extensions.append(
+            {
+                "uri": AP2_EXTENSION_URI,
+                "description": "Supports AP2 payment protocol",
+                "params": ap2_params,
+            }
+        )
 
         # ACN Token Pricing extension (if configured)
         if self.token_pricing:
-            extensions.append({
-                "uri": ACN_TOKEN_PRICING_EXTENSION_URI,
-                "description": "Supports per-token pricing (OpenAI-style)",
-                "params": self.token_pricing.to_extension_params(),
-            })
+            extensions.append(
+                {
+                    "uri": ACN_TOKEN_PRICING_EXTENSION_URI,
+                    "description": "Supports per-token pricing (OpenAI-style)",
+                    "params": self.token_pricing.to_extension_params(),
+                }
+            )
 
         return {"extensions": extensions}
 
@@ -314,9 +314,7 @@ class PaymentCapability(BaseModel):
         Returns cost breakdown or None if pricing not available.
         """
         if self.token_pricing and (input_tokens > 0 or output_tokens > 0):
-            return self.token_pricing.calculate_cost_with_network_fee(
-                input_tokens, output_tokens
-            )
+            return self.token_pricing.calculate_cost_with_network_fee(input_tokens, output_tokens)
         elif skill and skill in self.pricing:
             price_usd = float(self.pricing[skill])
             network_fee = price_usd * NETWORK_FEE_RATE

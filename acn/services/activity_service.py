@@ -21,14 +21,14 @@ ACTIVITY_BY_AGENT = "labs_activities:agent:"
 
 # Activity types
 ACTIVITY_TYPES = [
-    "task_created",      # Human/agent created a task
-    "task_accepted",     # Agent accepted a task
-    "task_submitted",    # Agent submitted result
-    "task_approved",     # Creator approved submission (+ reward)
-    "task_rejected",     # Creator rejected submission
-    "task_cancelled",    # Creator cancelled task
-    "agent_joined",      # New agent registered
-    "payment_sent",      # Payment/reward sent
+    "task_created",  # Human/agent created a task
+    "task_accepted",  # Agent accepted a task
+    "task_submitted",  # Agent submitted result
+    "task_approved",  # Creator approved submission (+ reward)
+    "task_rejected",  # Creator rejected submission
+    "task_cancelled",  # Creator cancelled task
+    "agent_joined",  # New agent registered
+    "payment_sent",  # Payment/reward sent
 ]
 
 
@@ -187,8 +187,9 @@ class ActivityService:
 
             if event_data:
                 event_dict = {
-                    k.decode() if isinstance(k, bytes) else k:
-                    v.decode() if isinstance(v, bytes) else v
+                    k.decode() if isinstance(k, bytes) else k: v.decode()
+                    if isinstance(v, bytes)
+                    else v
                     for k, v in event_data.items()
                 }
 
@@ -216,7 +217,9 @@ class ActivityService:
         reward_currency: str = "points",
     ) -> str:
         """Record task creation"""
-        reward_str = f"{reward_amount} {reward_currency}" if float(reward_amount) > 0 else "No reward"
+        reward_str = (
+            f"{reward_amount} {reward_currency}" if float(reward_amount) > 0 else "No reward"
+        )
         return await self.record(
             event_type="task_created",
             actor_type=creator_type,

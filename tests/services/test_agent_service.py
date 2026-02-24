@@ -3,7 +3,6 @@
 Tests business logic with mocked repositories.
 """
 
-
 import pytest
 
 from acn.core.entities import AgentStatus
@@ -94,6 +93,7 @@ class TestAgentService:
         """Test searching agents by skills"""
         # Setup mock
         mock_agent_repository.find_by_skills.return_value = [sample_agent]
+        mock_agent_repository.filter_alive.return_value = {sample_agent.agent_id}
 
         service = AgentService(mock_agent_repository)
 
@@ -105,15 +105,14 @@ class TestAgentService:
         assert len(agents) == 1
         assert agents[0].agent_id == sample_agent.agent_id
 
-        mock_agent_repository.find_by_skills.assert_called_once_with(
-            ["task-planning"], "online"
-        )
+        mock_agent_repository.find_by_skills.assert_called_once_with(["task-planning"], "online")
 
     @pytest.mark.asyncio
     async def test_search_agents_by_subnet(self, mock_agent_repository, sample_agent):
         """Test searching agents by subnet"""
         # Setup mock
         mock_agent_repository.find_by_subnet.return_value = [sample_agent]
+        mock_agent_repository.filter_alive.return_value = {sample_agent.agent_id}
 
         service = AgentService(mock_agent_repository)
 
@@ -200,4 +199,3 @@ class TestAgentService:
                 sample_agent.agent_id,
                 "wrong-owner",  # Different owner
             )
-

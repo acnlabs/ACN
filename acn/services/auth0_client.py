@@ -59,9 +59,7 @@ class Auth0CredentialClient:
             Auth0CredentialResult 包含 client_id/secret
         """
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/agent-auth/credentials",
                     headers=self._get_headers(),
@@ -118,9 +116,7 @@ class Auth0CredentialClient:
     async def revoke_credentials(self, agent_id: str) -> bool:
         """吊销 Agent 的 Auth0 凭证"""
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout, trust_env=False
-            ) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.delete(
                     f"{self.backend_url}/api/agent-auth/credentials/{agent_id}",
                     headers=self._get_headers(),

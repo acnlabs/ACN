@@ -115,9 +115,7 @@ class AgentRegisterRequest(BaseModel):
     agent_card: dict[str, Any] | None = Field(
         None, description="Optional Agent Card (auto-generated if not provided)"
     )
-    subnet_ids: list[str] | None = Field(
-        None, description="Subnets to join (default: ['public'])"
-    )
+    subnet_ids: list[str] | None = Field(None, description="Subnets to join (default: ['public'])")
     # Backward compatibility fields (kept for migration)
     description: str | None = None
     metadata: dict[str, Any] | None = None

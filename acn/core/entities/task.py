@@ -173,8 +173,12 @@ class Participation:
 
         # Parse datetime fields
         datetime_fields = [
-            "joined_at", "submitted_at", "rejected_at",
-            "reject_response_deadline", "completed_at", "cancelled_at",
+            "joined_at",
+            "submitted_at",
+            "rejected_at",
+            "reject_response_deadline",
+            "completed_at",
+            "cancelled_at",
         ]
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
@@ -185,6 +189,7 @@ class Participation:
         # Parse list fields
         if isinstance(data.get("submission_artifacts"), str):
             import json
+
             data["submission_artifacts"] = json.loads(data["submission_artifacts"])
 
         return cls(**data)
