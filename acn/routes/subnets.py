@@ -141,7 +141,7 @@ async def get_subnet_agents(
         # Convert to AgentInfo
         from .registry import _agent_entity_to_info
 
-        agent_infos = [_agent_entity_to_info(a) for a in agents]
+        agent_infos = [_agent_entity_to_info(a, strip_sensitive=True) for a in agents]
 
         return {"subnet_id": subnet_id, "agents": agent_infos, "count": len(agent_infos)}
     except Exception as e:

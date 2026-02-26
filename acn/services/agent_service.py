@@ -202,17 +202,19 @@ class AgentService:
 
         Args:
             skills: Required skills (filters agents that have ALL skills)
-            status: Agent status filter
+            status: Agent status filter ("online" | "offline" | "all")
             subnet_id: Subnet filter
 
         Returns:
             List of matching agents
         """
+        status_all = status == "all"
+
         if subnet_id:
             agents = await self.repository.find_by_subnet(subnet_id)
             if skills:
                 agents = [a for a in agents if a.has_all_skills(skills)]
-            if status:
+            if not status_all and status:
                 agents = [a for a in agents if a.status.value == status]
             if status == "online":
                 alive_ids = await self.repository.filter_alive([a.agent_id for a in agents])
@@ -226,8 +228,10 @@ class AgentService:
                 return [a for a in candidates if a.agent_id in alive_ids]
             return candidates
 
-        # Return all agents matching status, filtered by alive key for online
+        # Return all agents; optionally filter by status
         all_agents = await self.repository.find_all()
+        if status_all:
+            return all_agents
         candidates = [a for a in all_agents if a.status.value == status]
         if status == "online":
             alive_ids = await self.repository.filter_alive([a.agent_id for a in candidates])

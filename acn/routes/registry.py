@@ -8,9 +8,11 @@ Supports two registration modes:
 3. Self-service: GET /me - agent gets own info via API key
 """
 
+from typing import Literal
+
 import structlog  # type: ignore[import-untyped]
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[import-untyped]
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..auth.middleware import require_permission
@@ -178,31 +180,34 @@ async def dev_register_agent(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-def _agent_entity_to_info(agent) -> AgentInfo:
-    """Convert Agent entity to AgentInfo model"""
+def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
+    """Convert Agent entity to AgentInfo model.
+
+    When strip_sensitive=True (e.g. public list), verification_code is omitted from metadata.
+    """
+    metadata = {
+        **agent.metadata,
+        "claim_status": agent.claim_status.value if agent.claim_status else None,
+        "referrer_id": agent.referrer_id,
+    }
+    if not strip_sensitive:
+        metadata["verification_code"] = agent.verification_code
     return AgentInfo(
         agent_id=agent.agent_id,
-        owner=agent.owner or "unowned",  # Handle None owner
+        owner=agent.owner or "unowned",
         name=agent.name,
         description=agent.description,
-        endpoint=agent.endpoint or "",  # Handle None endpoint
+        endpoint=agent.endpoint or "",
         skills=agent.skills,
         status=agent.status.value,
         subnet_ids=agent.subnet_ids,
         agent_card=agent.agent_card,
-        metadata={
-            **agent.metadata,
-            # Add claim info to metadata for API consumers
-            "claim_status": agent.claim_status.value if agent.claim_status else None,
-            "verification_code": agent.verification_code,
-            "referrer_id": agent.referrer_id,
-        },
+        metadata=metadata,
         registered_at=agent.registered_at,
         last_heartbeat=agent.last_heartbeat,
         wallet_address=agent.wallet_address,
         accepts_payment=agent.accepts_payment,
         payment_methods=agent.payment_methods,
-        # [REMOVED] Agent Wallet fields - 由 Backend 管理
     )
 
 
@@ -335,13 +340,10 @@ async def list_unclaimed_agents(
 
 @router.get("/{agent_id}", response_model=AgentInfo)
 async def get_agent(agent_id: str, agent_service: AgentServiceDep = None):
-    """Get agent information
-
-    Clean Architecture: Route → AgentService → Repository
-    """
+    """Get agent information (public discovery; verification_code not included)."""
     try:
         agent = await agent_service.get_agent(agent_id)
-        return _agent_entity_to_info(agent)
+        return _agent_entity_to_info(agent, strip_sensitive=True)
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
 
@@ -349,12 +351,15 @@ async def get_agent(agent_id: str, agent_service: AgentServiceDep = None):
 @router.get("", response_model=AgentSearchResponse)
 async def search_agents(
     skill: str | None = None,
-    status: str = "online",
+    status: Literal["online", "offline", "all"] = Query(
+        default="online",
+        description="Filter by status: online (recent heartbeat), offline, or all (all registered agents)",
+    ),
     owner: str | None = None,
     name: str | None = None,
     agent_service: AgentServiceDep = None,
 ):
-    """Search agents
+    """Search agents.
 
     Clean Architecture: Route → AgentService → Repository
     """
@@ -372,8 +377,8 @@ async def search_agents(
     if name:
         agents = [a for a in agents if name.lower() in a.name.lower()]
 
-    # Convert to AgentInfo
-    agent_infos = [_agent_entity_to_info(a) for a in agents]
+    # Convert to AgentInfo (public list: do not expose verification_code)
+    agent_infos = [_agent_entity_to_info(a, strip_sensitive=True) for a in agents]
 
     return AgentSearchResponse(
         agents=agent_infos,

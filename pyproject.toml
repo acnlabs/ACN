@@ -1,6 +1,6 @@
 [project]
 name = "acn"
-version = "0.3.0"
+version = "0.3.2"
 description = "Agent Collaboration Network - Open-source infrastructure for AI Agent registration and discovery"
 authors = [
     {name = "acnlabs", email = "team@acnlabs.dev"}

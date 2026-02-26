@@ -4,6 +4,7 @@ Concrete implementation using Redis for agent persistence.
 """
 
 import json
+import re
 from datetime import datetime
 
 import redis.asyncio as redis  # type: ignore[import-untyped]
@@ -140,15 +141,21 @@ class RedisAgentRepository(IAgentRepository):
 
         return await self.find_by_id(agent_id)
 
+    # Only keys acn:agents:{uuid} are agent hashes; others are indexes or sets
+    _AGENT_KEY_RE = re.compile(r"^acn:agents:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
     async def find_all(self) -> list[Agent]:
-        """Find all agents"""
-        # Scan for all agent keys
+        """Find all agents by scanning agent hash keys (acn:agents:{uuid})."""
         agents = []
         async for key in self.redis.scan_iter("acn:agents:*"):
-            # Skip index keys and alive signal keys (string type, not hashes)
-            if ":by_" in key or ":subnets:" in key or key.endswith(":unclaimed") or key.endswith(":alive"):
+            # Skip index/set keys: only process agent hash keys acn:agents:{uuid}
+            if not self._AGENT_KEY_RE.match(key):
                 continue
-            agent_dict = await self.redis.hgetall(key)
+            try:
+                agent_dict = await self.redis.hgetall(key)
+            except redis.ResponseError:
+                # Wrong key type (e.g. SET acn:agents:all)
+                continue
             if agent_dict:
                 agents.append(self._dict_to_agent(agent_dict))
         return agents
@@ -164,15 +171,16 @@ class RedisAgentRepository(IAgentRepository):
         return agents
 
     async def find_by_skills(self, skills: list[str], status: str = "online") -> list[Agent]:
-        """Find agents by skills"""
+        """Find agents by skills. status='all' returns agents with skills regardless of status."""
         all_agents = await self.find_all()
 
-        # Filter by skills and status
         matching_agents = []
         for agent in all_agents:
-            if agent.status.value == status and agent.has_all_skills(skills):
-                matching_agents.append(agent)
-
+            if not agent.has_all_skills(skills):
+                continue
+            if status != "all" and agent.status.value != status:
+                continue
+            matching_agents.append(agent)
         return matching_agents
 
     async def find_by_owner(self, owner: str) -> list[Agent]:

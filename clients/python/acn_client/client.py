@@ -137,7 +137,7 @@ class ACNClient:
         )
 
     async def get_agent(self, agent_id: str) -> AgentInfo:
-        """Get agent by ID"""
+        """Get agent by ID (public; metadata does not include verification_code)."""
         data = await self._request("GET", f"/api/v1/agents/{agent_id}")
         return AgentInfo.model_validate(data)
 
@@ -148,16 +148,18 @@ class ACNClient:
         owner: str | None = None,
         name: str | None = None,
     ) -> list[AgentInfo]:
-        """Search agents
+        """Search agents.
+
+        Public list responses do not include verification_code in metadata.
 
         Args:
             skills: Filter by agent skills
-            status: Filter by status (online, offline, all)
+            status: Filter by status (online, offline, or all for all registered)
             owner: Filter by owner user ID
             name: Filter by name (partial match)
         """
         params = {
-            "skills": ",".join(skills) if skills else None,
+            "skill": ",".join(skills) if skills else None,
             "status": status,
             "owner": owner,
             "name": name,

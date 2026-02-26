@@ -163,10 +163,10 @@ export class ACNClient {
     return this.get(`/api/v1/agents/${agentId}`);
   }
 
-  /** Search agents */
+  /** Search agents (status: online | offline | all; public list does not include verification_code) */
   async searchAgents(options?: AgentSearchOptions): Promise<AgentSearchResponse> {
     return this.get('/api/v1/agents', {
-      skills: options?.skills,
+      skill: options?.skills,
       status: options?.status,
     });
   }

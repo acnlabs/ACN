@@ -12,6 +12,9 @@
 /** Agent status */
 export type AgentStatus = 'online' | 'offline' | 'busy';
 
+/** Agent list filter status (includes "all" for discovery) */
+export type AgentSearchStatus = AgentStatus | 'all';
+
 /** Agent information */
 export interface AgentInfo {
   id: string;
@@ -60,7 +63,8 @@ export interface AgentSearchResponse {
 /** Agent search options */
 export interface AgentSearchOptions {
   skills?: string;
-  status?: AgentStatus;
+  /** online (default) | offline | all. Public list does not include verification_code. */
+  status?: AgentSearchStatus;
   subnet_id?: string;
 }
 
