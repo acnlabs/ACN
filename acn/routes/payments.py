@@ -16,6 +16,7 @@ from ..protocols.ap2 import (
 from ..services.billing_service import BillingTransactionStatus
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
+    AgentServiceDep,
     BillingServiceDep,
     InternalTokenDep,
     PaymentDiscoveryDep,
@@ -90,7 +91,7 @@ async def set_payment_capability(
     agent_id: str,
     request: PaymentCapabilityRequest,
     agent_info: AgentApiKeyDep,
-    registry: RegistryDep = None,
+    agent_service: AgentServiceDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """Set payment capability for agent (requires Agent API Key)
@@ -100,8 +101,12 @@ async def set_payment_capability(
     """
     if agent_info["agent_id"] != agent_id:
         raise HTTPException(status_code=403, detail="API key does not match agent_id")
-    agent = await registry.get_agent(agent_id)
-    if not agent:
+
+    from ..core.exceptions import AgentNotFoundException
+
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException:
         raise HTTPException(status_code=404, detail="Agent not found")
 
     try:
@@ -110,7 +115,7 @@ async def set_payment_capability(
         if request.wallet_address and "ethereum" not in wallet_addresses:
             wallet_addresses["ethereum"] = request.wallet_address
 
-        # Sync back legacy field
+        # Derive legacy single-address field
         if not request.wallet_address and wallet_addresses:
             legacy_addr = (
                 wallet_addresses.get("ethereum")
@@ -127,7 +132,7 @@ async def set_payment_capability(
         agent.token_pricing = request.token_pricing
         if request.supported_methods:
             agent.payment_methods = [m.value for m in request.supported_methods]
-        await registry.save(agent)
+        await agent_service.repository.save(agent)
 
         # Build TokenPricing for Redis discovery index
         token_pricing_obj = None
