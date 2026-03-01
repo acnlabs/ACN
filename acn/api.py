@@ -42,6 +42,13 @@ from .infrastructure.messaging import (
     SubnetManager,
     WebSocketManager,
 )
+from .infrastructure.persistence.postgres import (
+    PostgresAgentRepository,
+    PostgresSubnetRepository,
+    PostgresTaskRepository,
+    get_engine,
+    get_session_factory,
+)
 from .infrastructure.persistence.redis import RedisAgentRepository, RedisSubnetRepository
 from .infrastructure.persistence.redis.registry import AgentRegistry
 from .infrastructure.persistence.redis.task_repository import RedisTaskRepository
@@ -92,13 +99,25 @@ async def lifespan(app: FastAPI):
     )
 
     # Initialize Clean Architecture services
-    agent_repository = RedisAgentRepository(registry_instance.redis)
+    # Switch between PostgreSQL (durable) and Redis (fallback) based on DATABASE_URL
+    _pg_engine = None
+    if settings.database_url:
+        logger.info("persistence_postgres", database_url=settings.database_url[:30] + "...")
+        _pg_engine = get_engine(settings.database_url)
+        _pg_session = get_session_factory(_pg_engine)
+        agent_repository = PostgresAgentRepository(_pg_session, registry_instance.redis)
+        subnet_repository = PostgresSubnetRepository(_pg_session)
+        task_repository = PostgresTaskRepository(_pg_session, registry_instance.redis)
+    else:
+        logger.info("persistence_redis", reason="DATABASE_URL not set, using Redis fallback")
+        agent_repository = RedisAgentRepository(registry_instance.redis)
+        subnet_repository = RedisSubnetRepository(registry_instance.redis)
+        task_repository = RedisTaskRepository(registry_instance.redis)
+
     agent_service_instance = AgentService(
         agent_repository,
         auth0_client=auth0_credential_client,
     )
-
-    subnet_repository = RedisSubnetRepository(registry_instance.redis)
     subnet_service_instance = SubnetService(subnet_repository)
 
     router_instance = MessageRouter(registry_instance, registry_instance.redis)
@@ -145,8 +164,7 @@ async def lifespan(app: FastAPI):
         internal_token=settings.internal_api_token,
     )
 
-    # Initialize Task Pool and Service
-    task_repository = RedisTaskRepository(registry_instance.redis)
+    # Initialize Task Pool and Service (task_repository already set above)
     task_pool_instance = TaskPool(task_repository)
     task_service_instance = TaskService(
         repository=task_repository,
@@ -216,6 +234,8 @@ async def lifespan(app: FastAPI):
     logger.info("acn_stopping")
     await router_instance.close()
     await registry_instance.redis.close()
+    if _pg_engine is not None:
+        await _pg_engine.dispose()
     logger.info("acn_stopped")
 
 

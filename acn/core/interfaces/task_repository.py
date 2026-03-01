@@ -87,6 +87,14 @@ class ITaskRepository(ABC):
         pass
 
     @abstractmethod
+    async def add_application(self, task_id: str, participation: Participation) -> None:
+        """
+        Add an application (participation with status APPLIED) for an assigned task.
+        Saves the participation and adds it to task/user indices without incrementing active_count.
+        """
+        pass
+
+    @abstractmethod
     async def find_participation_by_id(self, participation_id: str) -> Participation | None:
         """Find participation by ID"""
         pass
@@ -193,5 +201,18 @@ class ITaskRepository(ABC):
 
         Returns:
             Number of participations cancelled
+        """
+        pass
+
+    @abstractmethod
+    async def decrement_active_count(self, task_id: str) -> int:
+        """
+        Decrement the active participant count for a task.
+
+        Used when an escrow/payment flow needs to release a slot without
+        going through atomic_cancel_participation (e.g., post-completion cleanup).
+
+        Returns:
+            New active count (>= 0)
         """
         pass

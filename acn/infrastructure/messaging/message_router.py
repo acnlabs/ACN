@@ -393,16 +393,12 @@ class MessageRouter:
         }
 
         score = datetime.now(UTC).timestamp()
+        _MAX_AGENT_HISTORY = 1000  # keep newest N messages per agent
 
-        # Store in both agents' history
-        await self.redis.zadd(
-            f"acn:messages:agent:{from_agent}",
-            {json.dumps(log_entry): score},
-        )
-        await self.redis.zadd(
-            f"acn:messages:agent:{to_agent}",
-            {json.dumps(log_entry): score},
-        )
+        # Store in both agents' history, then trim to cap (oldest removed first)
+        for agent_key in (f"acn:messages:agent:{from_agent}", f"acn:messages:agent:{to_agent}"):
+            await self.redis.zadd(agent_key, {json.dumps(log_entry): score})
+            await self.redis.zremrangebyrank(agent_key, 0, -(_MAX_AGENT_HISTORY + 1))
 
         # Global log with TTL
         await self.redis.setex(

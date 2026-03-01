@@ -405,6 +405,19 @@ class RedisTaskRepository(ITaskRepository):
 
         await self.redis.hset(key, mapping=clean)  # type: ignore[arg-type]
 
+    async def add_application(self, task_id: str, participation: Participation) -> None:
+        """Add an application (participation with status APPLIED) for an assigned task."""
+        await self.save_participation(participation)
+        participations_key = f"acn:task:{task_id}:participations"
+        await self.redis.zadd(
+            participations_key,
+            {participation.participation_id: participation.joined_at.timestamp()},
+        )
+        user_task_key = f"acn:user:{participation.participant_id}:task:{task_id}:participations"
+        await self.redis.sadd(user_task_key, participation.participation_id)
+        user_index_key = f"acn:user:{participation.participant_id}:all_participations"
+        await self.redis.lpush(user_index_key, participation.participation_id)
+
     async def find_participation_by_id(self, participation_id: str) -> Participation | None:
         """Find participation by ID"""
         key = f"acn:participation:{participation_id}"
@@ -450,6 +463,7 @@ class RedisTaskRepository(ITaskRepository):
             if not p:
                 continue
             if active_only and p.status not in (
+                ParticipationStatus.APPLIED,
                 ParticipationStatus.ACTIVE,
                 ParticipationStatus.SUBMITTED,
             ):

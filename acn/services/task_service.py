@@ -287,6 +287,38 @@ class TaskService:
         if task.is_multi_participant:
             return await self._join_task(task, agent_id, agent_name, agent_type)
 
+        # ---- Assigned mode, no assignee yet: create application (participation with APPLIED) ----
+        if task.mode == TaskMode.ASSIGNED and task.assignee_id is None:
+            # Check duplicate: user already applied?
+            existing = await self.task_pool.get_user_participation(
+                task_id, agent_id, active_only=True
+            )
+            if existing and existing.status == ParticipationStatus.APPLIED:
+                raise ValueError("You have already applied for this task")
+            participation = Participation(
+                participation_id=Participation.new_id(),
+                task_id=task_id,
+                participant_id=agent_id,
+                participant_name=agent_name,
+                participant_type=agent_type,
+                status=ParticipationStatus.APPLIED,
+            )
+            await self.repository.add_application(task_id, participation)
+            if self.activity:
+                await self.activity.record_task_accepted(
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    task_id=task_id,
+                    task_title=task.title,
+                )
+            logger.info(
+                "task_applied",
+                task_id=task_id,
+                participation_id=participation.participation_id,
+                agent_id=agent_id,
+            )
+            return task, participation.participation_id
+
         # ---- Single-participant path (original) ----
         # is_multi_participant is the single source of truth; is_repeatable is kept for API compat only
         if not task.is_multi_participant:
@@ -781,6 +813,102 @@ class TaskService:
             agent_id=canceller_id,
         )
 
+        return await self.get_task(task_id)
+
+    async def approve_applicant(
+        self,
+        task_id: str,
+        participation_id: str,
+        approver_id: str,
+    ) -> Task:
+        """Approve an applicant for an assigned task (creator only). Sets them as assignee."""
+        task = await self.get_task(task_id)
+        if task.creator_id != approver_id:
+            raise PermissionError("Only the task creator can approve applicants")
+        if task.mode != TaskMode.ASSIGNED or task.assignee_id:
+            raise ValueError("Task is not in assigned mode or already has an assignee")
+        p = await self.task_pool.get_participation(participation_id)
+        if not p or p.task_id != task_id:
+            raise ValueError("Participation not found")
+        if p.status != ParticipationStatus.APPLIED:
+            raise ValueError("Participation is not an application")
+
+        # Set task assignee and status
+        task.accept(p.participant_id, p.participant_name or p.participant_id)
+        await self.repository.save(task)
+
+        # Mark this participation as active (no longer applied)
+        p.status = ParticipationStatus.ACTIVE
+        await self.repository.save_participation(p)
+
+        # Escrow: set assignee + IN_PROGRESS
+        if self.escrow and task.reward_currency.lower() == "points":
+            try:
+                escrow_info = await self.escrow.get_by_task(task_id)
+                if escrow_info.success and escrow_info.escrow_id:
+                    await self.escrow.accept_v2(
+                        escrow_id=escrow_info.escrow_id,
+                        assignee_id=p.participant_id,
+                        assignee_type=p.participant_type or "agent",
+                    )
+                    logger.info(
+                        "escrow_accepted",
+                        task_id=task_id,
+                        escrow_id=escrow_info.escrow_id,
+                        agent_id=p.participant_id,
+                    )
+            except Exception as e:
+                logger.warning("escrow_accept_failed", task_id=task_id, error=str(e))
+
+        # Cancel other applied participations
+        others = await self.repository.find_participations_by_task(
+            task_id, status=ParticipationStatus.APPLIED.value, limit=100
+        )
+        for other in others:
+            if other.participation_id != participation_id:
+                other.cancel()
+                await self.repository.save_participation(other)
+
+        if self.activity:
+            await self.activity.record_task_accepted(
+                agent_id=p.participant_id,
+                agent_name=p.participant_name or p.participant_id,
+                task_id=task_id,
+                task_title=task.title,
+            )
+        logger.info(
+            "applicant_approved",
+            task_id=task_id,
+            participation_id=participation_id,
+            assignee_id=p.participant_id,
+        )
+        return await self.get_task(task_id)
+
+    async def reject_applicant(
+        self,
+        task_id: str,
+        participation_id: str,
+        approver_id: str,
+    ) -> Task:
+        """Reject an applicant for an assigned task (creator only)."""
+        task = await self.get_task(task_id)
+        if task.creator_id != approver_id:
+            raise PermissionError("Only the task creator can reject applicants")
+        if task.mode != TaskMode.ASSIGNED or task.assignee_id:
+            raise ValueError("Task is not in assigned mode or already has an assignee")
+        p = await self.task_pool.get_participation(participation_id)
+        if not p or p.task_id != task_id:
+            raise ValueError("Participation not found")
+        if p.status != ParticipationStatus.APPLIED:
+            raise ValueError("Participation is not an application")
+
+        p.cancel()
+        await self.repository.save_participation(p)
+        logger.info(
+            "applicant_rejected",
+            task_id=task_id,
+            participation_id=participation_id,
+        )
         return await self.get_task(task_id)
 
     # ========== Participation Queries ==========

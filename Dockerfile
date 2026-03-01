@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml README.md ./
 COPY acn/ ./acn/
 COPY skills/ ./skills/
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
 
 # Install Python dependencies
 RUN pip install --no-cache-dir .
@@ -32,5 +34,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-# Run application — use $PORT if set (Railway), otherwise default to 8000
-CMD ["sh", "-c", "uvicorn acn.api:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run application — if DATABASE_URL is set, run alembic migrations first
+CMD ["sh", "-c", "if [ -n \"$DATABASE_URL\" ]; then alembic upgrade head; fi && uvicorn acn.api:app --host 0.0.0.0 --port ${PORT:-8000}"]

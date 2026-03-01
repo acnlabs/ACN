@@ -604,6 +604,60 @@ async def cancel_participation(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@router.post("/{task_id}/participations/{participation_id}/approve", response_model=TaskResponse)
+async def approve_applicant(
+    task_id: str,
+    participation_id: str,
+    http_request: Request,
+    payload: dict = Depends(require_permission("acn:write")),
+    task_service: TaskServiceDep = None,
+):
+    """Approve an applicant for an assigned task (creator only). Sets them as assignee."""
+    token_owner = await get_subject()
+    approver_id = http_request.headers.get("x-creator-id") or token_owner
+
+    try:
+        task = await task_service.approve_applicant(
+            task_id=task_id,
+            participation_id=participation_id,
+            approver_id=approver_id,
+        )
+        return _task_to_response(task)
+    except TaskNotFoundException:
+        raise HTTPException(status_code=404, detail="Task not found") from None
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/{task_id}/participations/{participation_id}/reject", response_model=TaskResponse)
+async def reject_applicant(
+    task_id: str,
+    participation_id: str,
+    http_request: Request,
+    payload: dict = Depends(require_permission("acn:write")),
+    task_service: TaskServiceDep = None,
+):
+    """Reject an applicant for an assigned task (creator only)."""
+    token_owner = await get_subject()
+    approver_id = http_request.headers.get("x-creator-id") or token_owner
+
+    try:
+        task = await task_service.reject_applicant(
+            task_id=task_id,
+            participation_id=participation_id,
+            approver_id=approver_id,
+        )
+        return _task_to_response(task)
+    except TaskNotFoundException:
+        raise HTTPException(status_code=404, detail="Task not found") from None
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 # ========== Internal Endpoints ==========
 # For platform backend to access full task data including metadata
 

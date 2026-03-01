@@ -40,6 +40,7 @@ class TaskStatus(StrEnum):
 class ParticipationStatus(StrEnum):
     """Participation lifecycle status"""
 
+    APPLIED = "applied"  # Applied for assigned task, awaiting creator approval
     ACTIVE = "active"  # Participant is working on the task
     SUBMITTED = "submitted"  # Participant submitted, pending review
     COMPLETED = "completed"  # Approved and reward released

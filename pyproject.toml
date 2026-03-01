@@ -31,6 +31,11 @@ dependencies = [
     "ap2 @ git+https://github.com/google-agentic-commerce/AP2.git@61f5de49f47d0517182d664bd05b7df1ff1f4e40",
     # Storage
     "redis>=5.0.0",
+    # PostgreSQL (optional — only used when DATABASE_URL is set)
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "psycopg2-binary>=2.9",
+    "alembic>=1.13",
     # Data Validation
     "pydantic>=2.6.0",
     "pydantic-settings>=2.1.0",
