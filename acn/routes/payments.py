@@ -31,6 +31,15 @@ class PaymentCapabilityRequest(BaseModel):
     supported_methods: list[SupportedPaymentMethod]
     supported_networks: list[SupportedNetwork]
     wallet_address: str | None = None
+    wallet_addresses: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-network wallet addresses, e.g. {'ethereum': '0x...', 'base': '0x...'}",
+    )
+    accepts_payment: bool = True
+    token_pricing: dict | None = Field(
+        default=None,
+        description="Token-based pricing config, e.g. {'input_price_per_million': 2.5, 'output_price_per_million': 10.0, 'currency': 'USD'}",
+    )
     api_endpoint: str | None = None
     webhook_url: str | None = None
 
@@ -87,6 +96,7 @@ async def set_payment_capability(
     """Set payment capability for agent (requires Agent API Key)
 
     The authenticated agent must match the path `agent_id`.
+    Persists wallet_addresses and token_pricing to PostgreSQL and indexes in Redis.
     """
     if agent_info["agent_id"] != agent_id:
         raise HTTPException(status_code=403, detail="API key does not match agent_id")
@@ -95,11 +105,46 @@ async def set_payment_capability(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     try:
+        # Build wallet_addresses: merge request.wallet_addresses with legacy wallet_address
+        wallet_addresses = dict(request.wallet_addresses)
+        if request.wallet_address and "ethereum" not in wallet_addresses:
+            wallet_addresses["ethereum"] = request.wallet_address
+
+        # Sync back legacy field
+        if not request.wallet_address and wallet_addresses:
+            legacy_addr = (
+                wallet_addresses.get("ethereum")
+                or wallet_addresses.get("base")
+                or next(iter(wallet_addresses.values()), None)
+            )
+        else:
+            legacy_addr = request.wallet_address
+
+        # Persist payment fields to Agent entity and save to PG
+        agent.accepts_payment = request.accepts_payment
+        agent.wallet_address = legacy_addr
+        agent.wallet_addresses = wallet_addresses
+        agent.token_pricing = request.token_pricing
+        if request.supported_methods:
+            agent.payment_methods = [m.value for m in request.supported_methods]
+        await registry.save(agent)
+
+        # Build TokenPricing for Redis discovery index
+        token_pricing_obj = None
+        if request.token_pricing:
+            try:
+                token_pricing_obj = TokenPricing(**request.token_pricing)
+            except Exception:
+                pass
+
         capability = PaymentCapability(
             agent_id=agent_id,
+            accepts_payment=request.accepts_payment,
             supported_methods=request.supported_methods,
             supported_networks=request.supported_networks,
-            wallet_address=request.wallet_address,
+            wallet_address=legacy_addr,
+            wallet_addresses=wallet_addresses,
+            token_pricing=token_pricing_obj,
             api_endpoint=request.api_endpoint,
             webhook_url=request.webhook_url,
         )
@@ -107,6 +152,8 @@ async def set_payment_capability(
         await payment_discovery.register_capability(capability)
         return {"status": "registered", "agent_id": agent_id}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(
             "set_payment_capability_failed", agent_id=agent_id, error=str(e), exc_info=True
