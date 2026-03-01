@@ -189,7 +189,7 @@ async def verify_token(
     settings = _get_settings()
 
     if settings.dev_mode and credentials is None:
-        return {"sub": "dev@clients", "permissions": ["agent:admin"]}
+        return {"sub": "dev@clients", "permissions": ["acn:read", "acn:write", "acn:admin"]}
 
     if credentials is None:
         raise HTTPException(
