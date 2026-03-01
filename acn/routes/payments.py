@@ -154,7 +154,7 @@ async def set_payment_capability(
             webhook_url=request.webhook_url,
         )
 
-        await payment_discovery.index_payment_capability(capability)
+        await payment_discovery.index_payment_capability(agent_id, capability)
         return {"status": "registered", "agent_id": agent_id}
 
     except HTTPException:
@@ -172,7 +172,7 @@ async def get_payment_capability(
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """Get payment capability for agent"""
-    capability = await payment_discovery.get_capability(agent_id)
+    capability = await payment_discovery.get_agent_payment_capability(agent_id)
     if not capability:
         raise HTTPException(status_code=404, detail="Payment capability not found")
     return capability
