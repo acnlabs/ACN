@@ -206,6 +206,7 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
         registered_at=agent.registered_at,
         last_heartbeat=agent.last_heartbeat,
         wallet_address=agent.wallet_address,
+        wallet_addresses=agent.wallet_addresses or None,
         accepts_payment=agent.accepts_payment,
         payment_methods=agent.payment_methods,
     )

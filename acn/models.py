@@ -50,7 +50,11 @@ class AgentInfo(BaseModel):
     last_heartbeat: datetime | None = Field(None)
 
     # Payment capability (AP2 Protocol integration)
-    wallet_address: str | None = Field(None, description="Wallet address for crypto payments (AP2)")
+    wallet_address: str | None = Field(None, description="Primary wallet address for crypto payments (legacy)")
+    wallet_addresses: dict[str, str] | None = Field(
+        None,
+        description="Per-network wallet addresses, e.g. {'ethereum': '0x...', 'base': '0x...'}",
+    )
     accepts_payment: bool = Field(default=False, description="Whether this agent accepts payments")
     payment_methods: list[str] = Field(
         default_factory=list,
