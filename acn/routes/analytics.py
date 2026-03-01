@@ -5,10 +5,9 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from ..services.activity_service import ActivityService
 from .dependencies import (  # type: ignore[import-untyped]
+    ActivityServiceDep,
     AnalyticsDep,
-    RegistryDep,
     get_agent_service,
 )
 
@@ -87,7 +86,7 @@ async def list_activities(
     agent_id: str | None = None,
     agent_ids: str | None = None,  # Comma-separated list of agent IDs
     authorization: str | None = Header(None, alias="Authorization"),
-    registry: RegistryDep = None,
+    activity_service: ActivityServiceDep = None,
 ):
     """
     Get recent network activities.
@@ -127,9 +126,6 @@ async def list_activities(
                 status_code=403,
                 detail="API key does not match the requested agent_id(s)",
             )
-    # Create ActivityService with registry's redis
-    activity_service = ActivityService(redis=registry.redis)
-
     # Parse agent_ids if provided
     agent_id_list = None
     if agent_ids:

@@ -52,6 +52,7 @@ class RedisAgentRepository(IAgentRepository):
         agent_dict["skills"] = json.dumps(agent_dict.get("skills", []))
         agent_dict["subnet_ids"] = json.dumps(agent_dict.get("subnet_ids", ["public"]))
         agent_dict["payment_methods"] = json.dumps(agent_dict.get("payment_methods", []))
+        agent_dict["wallet_addresses"] = json.dumps(agent_dict.get("wallet_addresses", {}))
         agent_dict["metadata"] = json.dumps(agent_dict.get("metadata", {}))
         if agent_dict.get("token_pricing"):
             agent_dict["token_pricing"] = json.dumps(agent_dict["token_pricing"])
@@ -329,6 +330,7 @@ class RedisAgentRepository(IAgentRepository):
             ),
             # Payment
             "wallet_address": agent_dict.get("wallet_address"),
+            "wallet_addresses": json.loads(agent_dict.get("wallet_addresses", "{}")),
             "accepts_payment": agent_dict.get("accepts_payment", "false").lower() == "true",
             "payment_methods": json.loads(agent_dict.get("payment_methods", "[]")),
             "token_pricing": (

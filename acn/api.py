@@ -148,6 +148,8 @@ async def lifespan(app: FastAPI):
     webhook_config = create_webhook_config_from_settings(settings)
     webhook_service_instance = WebhookService(webhook_config)
     payment_discovery_instance = PaymentDiscoveryService(registry_instance.redis)
+    # Inject payment_discovery into AgentService so registration auto-syncs the index
+    agent_service_instance.payment_discovery = payment_discovery_instance
     payment_tasks_instance = PaymentTaskManager(
         redis=registry_instance.redis,
         discovery=payment_discovery_instance,
@@ -206,6 +208,7 @@ async def lifespan(app: FastAPI):
         payment_tasks=payment_tasks_instance,
         webhook_service=webhook_service_instance,
         billing_service=billing_service_instance,
+        activity_service=activity_service_instance,
     )
 
     # Mount A2A Protocol - Infrastructure Agent

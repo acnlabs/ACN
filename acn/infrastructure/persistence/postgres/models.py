@@ -122,8 +122,10 @@ class AgentModel(Base):
     verification_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
     referrer_id: Mapped[str | None] = mapped_column(String, nullable=True)
     wallet_address: Mapped[str | None] = mapped_column(String, nullable=True)
+    wallet_addresses: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     accepts_payment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     payment_methods: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    token_pricing: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     agent_card: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     agent_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     registered_at: Mapped[datetime] = mapped_column(
@@ -138,6 +140,7 @@ class AgentModel(Base):
         Index("ix_agents_owner_endpoint", "owner", "endpoint"),
         Index("ix_agents_api_key", "api_key", unique=True),
         Index("ix_agents_skills", "skills", postgresql_using="gin"),
+        Index("ix_agents_wallet_addresses", "wallet_addresses", postgresql_using="gin"),
     )
 
 

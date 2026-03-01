@@ -75,7 +75,8 @@ class Agent:
     agent_card: dict | None = None
 
     # Payment capabilities
-    wallet_address: str | None = None
+    wallet_address: str | None = None  # Legacy single-address field (backward compat)
+    wallet_addresses: dict[str, str] = field(default_factory=dict)  # Multi-chain: {network: address}
     accepts_payment: bool = False
     payment_methods: list[str] = field(default_factory=list)
 
@@ -101,6 +102,17 @@ class Agent:
         # Note: owner and endpoint are now optional
         if not self.subnet_ids:
             self.subnet_ids = ["public"]
+        # Backward compat: if legacy wallet_address is set but wallet_addresses is empty,
+        # auto-populate ethereum entry so multi-chain lookup works transparently
+        if self.wallet_address and not self.wallet_addresses:
+            self.wallet_addresses = {"ethereum": self.wallet_address}
+        # Keep wallet_address in sync with the primary address from wallet_addresses
+        if self.wallet_addresses and not self.wallet_address:
+            self.wallet_address = (
+                self.wallet_addresses.get("ethereum")
+                or self.wallet_addresses.get("base")
+                or next(iter(self.wallet_addresses.values()), None)
+            )
 
     @property
     def primary_subnet(self) -> str:
@@ -150,7 +162,7 @@ class Agent:
 
     def can_accept_payment(self) -> bool:
         """Check if agent can accept payments"""
-        return self.accepts_payment and bool(self.wallet_address)
+        return self.accepts_payment and bool(self.wallet_addresses or self.wallet_address)
 
     # ========== Ownership Methods ==========
 
@@ -235,6 +247,7 @@ class Agent:
             "agent_card": self.agent_card,
             # Payment
             "wallet_address": self.wallet_address,
+            "wallet_addresses": self.wallet_addresses,
             "accepts_payment": self.accepts_payment,
             "payment_methods": self.payment_methods,
             "token_pricing": self.token_pricing,

@@ -12,6 +12,13 @@ from ..config import Settings
 from ..core.entities import Agent, AgentStatus, ClaimStatus
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
+from ..protocols.ap2.core import (
+    PaymentCapability,
+    PaymentDiscoveryService,
+    SupportedNetwork,
+    SupportedPaymentMethod,
+    TokenPricing,
+)
 from .auth0_client import Auth0CredentialClient
 
 # Heartbeat TTL policy (seconds)
@@ -43,6 +50,7 @@ class AgentService:
         self,
         agent_repository: IAgentRepository,
         auth0_client: Auth0CredentialClient | None = None,
+        payment_discovery: PaymentDiscoveryService | None = None,
     ):
         """
         Initialize Agent Service
@@ -50,9 +58,11 @@ class AgentService:
         Args:
             agent_repository: Agent repository implementation
             auth0_client: Auth0 credential client for creating Agent M2M credentials
+            payment_discovery: Payment discovery service for auto-indexing payment capabilities
         """
         self.repository = agent_repository
         self.auth0_client = auth0_client
+        self.payment_discovery = payment_discovery
 
     async def register_agent(
         self,
@@ -109,6 +119,11 @@ class AgentService:
             # Update payment info
             if wallet_address:
                 existing_agent.wallet_address = wallet_address
+                # Keep wallet_addresses["ethereum"] in sync with the legacy single-address field
+                existing_agent.wallet_addresses = {
+                    **existing_agent.wallet_addresses,
+                    "ethereum": wallet_address,
+                }
             existing_agent.accepts_payment = accepts_payment
             if payment_methods:
                 existing_agent.payment_methods = payment_methods
@@ -118,6 +133,7 @@ class AgentService:
 
             await self.repository.save(existing_agent)
             await self.repository.set_alive(existing_agent.agent_id, ALIVE_RENEW_TTL)
+            await self._sync_payment_discovery(existing_agent)
             return existing_agent
 
         # Create new agent
@@ -140,6 +156,7 @@ class AgentService:
         logger.info("register_new_agent", agent_id=agent_id, name=name)
         await self.repository.save(agent)
         await self.repository.set_alive(agent_id, ALIVE_GRACE_TTL)
+        await self._sync_payment_discovery(agent)
 
         # 创建 Auth0 M2M 凭证（异步，不阻塞注册）
         if self.auth0_client:
@@ -379,6 +396,43 @@ class AgentService:
         await self.repository.save(agent)
         await self.repository.set_alive(agent_id, ALIVE_GRACE_TTL)
         return agent, api_key
+
+    async def _sync_payment_discovery(self, agent: Agent) -> None:
+        """Auto-sync agent payment capability to PaymentDiscovery index after save."""
+        if not self.payment_discovery or not agent.accepts_payment:
+            return
+        try:
+            valid_methods = []
+            for m in agent.payment_methods:
+                try:
+                    valid_methods.append(SupportedPaymentMethod(m))
+                except ValueError:
+                    pass
+            # Derive supported_networks from wallet_addresses keys
+            valid_networks = []
+            for net in agent.wallet_addresses:
+                try:
+                    valid_networks.append(SupportedNetwork(net))
+                except ValueError:
+                    pass
+            token_pricing = None
+            if agent.token_pricing:
+                try:
+                    token_pricing = TokenPricing(**agent.token_pricing)
+                except Exception:
+                    pass
+            capability = PaymentCapability(
+                accepts_payment=True,
+                payment_methods=valid_methods,
+                wallet_address=agent.wallet_address,
+                wallet_addresses=agent.wallet_addresses,
+                supported_networks=valid_networks,
+                token_pricing=token_pricing,
+            )
+            await self.payment_discovery.index_payment_capability(agent.agent_id, capability)
+            logger.info("payment_discovery_synced", agent_id=agent.agent_id)
+        except Exception:
+            logger.warning("payment_discovery_sync_failed", agent_id=agent.agent_id, exc_info=True)
 
     async def get_agent_by_api_key(self, api_key: str) -> Agent | None:
         """

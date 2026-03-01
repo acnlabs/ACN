@@ -227,7 +227,11 @@ class PaymentCapability(BaseModel):
     # Crypto wallet info
     wallet_address: str | None = Field(
         default=None,
-        description="Primary wallet address for crypto payments",
+        description="Primary wallet address for crypto payments (legacy, backward compat)",
+    )
+    wallet_addresses: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-network wallet addresses, key = SupportedNetwork value e.g. {'ethereum': '0x...', 'solana': 'So1...'}",
     )
     supported_networks: list[SupportedNetwork] = Field(
         default_factory=list,
@@ -267,6 +271,7 @@ class PaymentCapability(BaseModel):
             "accepts_payment": self.accepts_payment,
             "payment_methods": [m.value for m in self.payment_methods],
             "wallet_address": self.wallet_address,
+            "wallet_addresses": self.wallet_addresses,
             "supported_networks": [n.value for n in self.supported_networks],
             "default_currency": self.default_currency,
             "pricing": self.pricing,
@@ -579,6 +584,15 @@ class PaymentTaskManager:
             if capability.payment_methods:
                 payment_method = capability.payment_methods[0]
 
+        # Determine network and resolve the correct wallet address for that network
+        network = capability.supported_networks[0] if capability.supported_networks else None
+        if network and capability.wallet_addresses:
+            recipient_wallet = capability.wallet_addresses.get(
+                network.value, capability.wallet_address
+            )
+        else:
+            recipient_wallet = capability.wallet_address
+
         # Create task
         task = PaymentTask(
             buyer_agent=buyer_agent,
@@ -589,8 +603,8 @@ class PaymentTaskManager:
             amount=amount,
             currency=currency,
             payment_method=payment_method,
-            recipient_wallet=capability.wallet_address,
-            network=capability.supported_networks[0] if capability.supported_networks else None,
+            recipient_wallet=recipient_wallet,
+            network=network,
         )
 
         # Save task

@@ -23,6 +23,7 @@ from ..infrastructure.persistence.redis.registry import AgentRegistry
 from ..monitoring import Analytics, AuditLogger, MetricsCollector
 from ..protocols.ap2 import PaymentDiscoveryService, PaymentTaskManager, WebhookService
 from ..services import AgentService, BillingService, MessageService, SubnetService
+from ..services.activity_service import ActivityService
 
 settings = get_settings()
 
@@ -45,6 +46,7 @@ _payment_discovery: PaymentDiscoveryService | None = None
 _payment_tasks: PaymentTaskManager | None = None
 _webhook_service: WebhookService | None = None
 _billing_service: BillingService | None = None
+_activity_service: ActivityService | None = None
 
 
 def init_services(
@@ -63,6 +65,7 @@ def init_services(
     payment_tasks: PaymentTaskManager,
     webhook_service: WebhookService,
     billing_service: BillingService | None = None,
+    activity_service: ActivityService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -76,6 +79,7 @@ def init_services(
         _subnet_manager
     global _metrics, _audit, _analytics
     global _payment_discovery, _payment_tasks, _webhook_service, _billing_service
+    global _activity_service
 
     _registry = registry
     _agent_service = agent_service
@@ -92,6 +96,7 @@ def init_services(
     _payment_tasks = payment_tasks
     _webhook_service = webhook_service
     _billing_service = billing_service
+    _activity_service = activity_service
 
 
 # Dependency functions
@@ -200,6 +205,13 @@ def get_billing_service() -> BillingService:
     return _billing_service
 
 
+def get_activity_service() -> ActivityService:
+    """Get ActivityService instance"""
+    if _activity_service is None:
+        raise RuntimeError("ActivityService not initialized")
+    return _activity_service
+
+
 # Type aliases for cleaner dependency injection
 RegistryDep = Annotated[AgentRegistry, Depends(get_registry)]
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
@@ -216,6 +228,7 @@ PaymentDiscoveryDep = Annotated[PaymentDiscoveryService, Depends(get_payment_dis
 PaymentTasksDep = Annotated[PaymentTaskManager, Depends(get_payment_tasks)]
 WebhookServiceDep = Annotated[WebhookService, Depends(get_webhook_service)]
 BillingServiceDep = Annotated[BillingService, Depends(get_billing_service)]
+ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]

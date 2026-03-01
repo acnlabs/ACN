@@ -731,3 +731,74 @@ async def release_agent(
 
 
 # [DELETED] set_agent_owner_share endpoint - 不再支持 owner_share 分成机制
+
+
+class AgentWalletsResponse(BaseModel):
+    """Unified wallet view for an agent — aggregates all payment account info."""
+
+    agent_id: str
+    accepts_payment: bool
+    payment_methods: list[str]
+    wallet_addresses: dict[str, str] = Field(
+        description="Per-network wallet addresses, key = network name (ethereum/base/solana/...)"
+    )
+    platform_credits_id: str = Field(
+        description="Agent's platform credits account ID (same as agent_id)"
+    )
+    token_pricing: dict | None = Field(
+        default=None,
+        description="Token-based pricing config (input/output price per million tokens)",
+    )
+    pricing: dict = Field(
+        default_factory=dict,
+        description="Fixed pricing per skill (e.g. {'coding': '50.00'})",
+    )
+    payment_processor: str | None = Field(
+        default=None,
+        description="Traditional payment processor (e.g. 'stripe', 'paypal')",
+    )
+    erc8004: dict | None = Field(
+        default=None,
+        description="On-chain ERC-8004 identity info if registered",
+    )
+
+
+@router.get("/{agent_id}/wallets", response_model=AgentWalletsResponse)
+async def get_agent_wallets(
+    agent_id: str,
+    agent_service: AgentServiceDep = None,
+):
+    """
+    Get unified wallet and payment capability view for an agent.
+
+    Aggregates all payment account information: multi-chain crypto addresses,
+    platform credits, pricing, and on-chain identity. Use this as the single
+    source of truth for agent payment info (e.g. for AgentBooks economy faculty).
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    erc8004 = None
+    if agent.erc8004_agent_id:
+        erc8004 = {
+            "token_id": agent.erc8004_agent_id,
+            "chain": agent.erc8004_chain,
+            "tx_hash": agent.erc8004_tx_hash,
+            "registered_at": agent.erc8004_registered_at.isoformat()
+            if agent.erc8004_registered_at
+            else None,
+        }
+
+    return AgentWalletsResponse(
+        agent_id=agent.agent_id,
+        accepts_payment=agent.accepts_payment,
+        payment_methods=agent.payment_methods,
+        wallet_addresses=agent.wallet_addresses,
+        platform_credits_id=agent.agent_id,
+        token_pricing=agent.token_pricing,
+        pricing={},
+        payment_processor=None,
+        erc8004=erc8004,
+    )
