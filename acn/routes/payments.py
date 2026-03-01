@@ -125,7 +125,7 @@ async def set_payment_capability(
         else:
             legacy_addr = request.wallet_address
 
-        # Persist payment fields to Agent entity and save to PG
+        # Persist payment fields to Agent entity and save to PG (critical path)
         agent.accepts_payment = request.accepts_payment
         agent.wallet_address = legacy_addr
         agent.wallet_addresses = wallet_addresses
@@ -134,29 +134,6 @@ async def set_payment_capability(
             agent.payment_methods = [m.value for m in request.supported_methods]
         await agent_service.repository.save(agent)
 
-        # Build TokenPricing for Redis discovery index
-        token_pricing_obj = None
-        if request.token_pricing:
-            try:
-                token_pricing_obj = TokenPricing(**request.token_pricing)
-            except Exception:
-                pass
-
-        capability = PaymentCapability(
-            agent_id=agent_id,
-            accepts_payment=request.accepts_payment,
-            supported_methods=request.supported_methods,
-            supported_networks=request.supported_networks,
-            wallet_address=legacy_addr,
-            wallet_addresses=wallet_addresses,
-            token_pricing=token_pricing_obj,
-            api_endpoint=request.api_endpoint,
-            webhook_url=request.webhook_url,
-        )
-
-        await payment_discovery.index_payment_capability(agent_id, capability)
-        return {"status": "registered", "agent_id": agent_id}
-
     except HTTPException:
         raise
     except Exception as e:
@@ -164,6 +141,32 @@ async def set_payment_capability(
             "set_payment_capability_failed", agent_id=agent_id, error=str(e), exc_info=True
         )
         raise HTTPException(status_code=500, detail="Failed to register payment capability") from e
+
+    # Index into Redis discovery service (best-effort: PG is source of truth)
+    token_pricing_obj = None
+    if request.token_pricing:
+        try:
+            token_pricing_obj = TokenPricing(**request.token_pricing)
+        except Exception:
+            pass
+
+    capability = PaymentCapability(
+        agent_id=agent_id,
+        accepts_payment=request.accepts_payment,
+        supported_methods=request.supported_methods,
+        supported_networks=request.supported_networks,
+        wallet_address=legacy_addr,
+        wallet_addresses=wallet_addresses,
+        token_pricing=token_pricing_obj,
+        api_endpoint=request.api_endpoint,
+        webhook_url=request.webhook_url,
+    )
+    try:
+        await payment_discovery.index_payment_capability(agent_id, capability)
+    except Exception:
+        logger.warning("payment_discovery_index_failed", agent_id=agent_id, exc_info=True)
+
+    return {"status": "registered", "agent_id": agent_id}
 
 
 @router.get("/{agent_id}/payment-capability")
