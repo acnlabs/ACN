@@ -31,6 +31,7 @@ from ..protocols.ap2.core import (
 )
 
 if TYPE_CHECKING:
+    from ..core.interfaces.billing_repository import IBillingRepository
     from .agent_service import AgentService
 
 
@@ -165,10 +166,12 @@ class BillingService:
         redis: Redis,
         agent_service: AgentService | None = None,
         webhook_url: str | None = None,
+        repository: IBillingRepository | None = None,
     ):
         self.redis = redis
         self.agent_service = agent_service
         self.webhook_url = webhook_url
+        self._repository = repository
         self._prefix = "acn:billing:"
 
     # -------------------------------------------------------------------------
@@ -282,8 +285,9 @@ class BillingService:
         # Save transaction
         await self._save_transaction(transaction)
 
-        # Index for queries
-        await self._index_transaction(transaction)
+        # Index for queries (only needed for Redis backend)
+        if not self._repository:
+            await self._index_transaction(transaction)
 
         return transaction
 
@@ -414,6 +418,8 @@ class BillingService:
         transaction_id: str,
     ) -> BillingTransaction | None:
         """Get a transaction by ID"""
+        if self._repository:
+            return await self._repository.find_by_id(transaction_id)
         key = f"{self._prefix}tx:{transaction_id}"
         data = await self.redis.get(key)
         if data:
@@ -427,6 +433,8 @@ class BillingService:
         status: BillingTransactionStatus | None = None,
     ) -> list[BillingTransaction]:
         """Get transactions for a user"""
+        if self._repository:
+            return await self._repository.find_by_user(user_id, limit=limit, status=status)
         key = f"{self._prefix}by_user:{user_id}"
         tx_ids = await self.redis.lrange(key, 0, limit - 1)
 
@@ -444,6 +452,8 @@ class BillingService:
         limit: int = 50,
     ) -> list[BillingTransaction]:
         """Get transactions for an agent"""
+        if self._repository:
+            return await self._repository.find_by_agent(agent_id, limit=limit)
         key = f"{self._prefix}by_agent:{agent_id}"
         tx_ids = await self.redis.lrange(key, 0, limit - 1)
 
@@ -498,6 +508,12 @@ class BillingService:
 
     async def get_network_fee_stats(self) -> dict:
         """Get network fee statistics (for platform admin)"""
+        if self._repository:
+            total = await self._repository.get_total_network_fees()
+            return {
+                "total_network_fees_credits": total,
+                "fee_rate": BillingConfig.NETWORK_FEE_RATE,
+            }
         key = f"{self._prefix}network_fees:total"
         total = await self.redis.get(key)
 
@@ -511,7 +527,10 @@ class BillingService:
     # -------------------------------------------------------------------------
 
     async def _save_transaction(self, transaction: BillingTransaction):
-        """Save transaction to Redis"""
+        """Save transaction to repository (PG) or Redis fallback."""
+        if self._repository:
+            await self._repository.save(transaction)
+            return
         key = f"{self._prefix}tx:{transaction.transaction_id}"
         await self.redis.set(key, transaction.model_dump_json())
 
@@ -532,21 +551,21 @@ class BillingService:
 
     async def _record_network_fee(self, transaction_id: str, amount: float):
         """Record network fee for accounting"""
-        # Increment total network fees
+        if self._repository:
+            await self._repository.record_network_fee(transaction_id, amount)
+            return
         total_key = f"{self._prefix}network_fees:total"
         await self.redis.incrbyfloat(total_key, amount)
-
-        # Record individual fee
         fee_key = f"{self._prefix}network_fees:tx:{transaction_id}"
         await self.redis.set(fee_key, str(amount))
 
     async def _reverse_network_fee(self, transaction_id: str, amount: float):
         """Reverse network fee (for refunds)"""
-        # Decrement total network fees
+        if self._repository:
+            await self._repository.reverse_network_fee(transaction_id, amount)
+            return
         total_key = f"{self._prefix}network_fees:total"
         await self.redis.incrbyfloat(total_key, -amount)
-
-        # Mark fee as reversed
         fee_key = f"{self._prefix}network_fees:tx:{transaction_id}"
         await self.redis.set(fee_key, f"REVERSED:{amount}")
 

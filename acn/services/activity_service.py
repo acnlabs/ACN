@@ -5,10 +5,13 @@ Records and retrieves task lifecycle activities for the Labs activity feed.
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from redis.asyncio import Redis
+
+if TYPE_CHECKING:
+    from ..core.interfaces.activity_repository import IActivityRepository
 
 logger = structlog.get_logger()
 
@@ -39,16 +42,24 @@ class ActivityService:
     Activities represent task lifecycle events visible in the Labs feed.
     """
 
-    def __init__(self, redis: Redis, max_activities: int = 100):
+    def __init__(
+        self,
+        redis: Redis,
+        max_activities: int = 100,
+        repository: IActivityRepository | None = None,
+    ):
         """
         Initialize Activity Service
 
         Args:
             redis: Redis client
-            max_activities: Maximum activities to keep in list
+            max_activities: Maximum activities to keep in list (Redis only)
+            repository: Optional persistent repository; when provided, events are
+                        written to PostgreSQL in addition to Redis indexes.
         """
         self.redis = redis
         self.max_activities = max_activities
+        self._repository = repository
 
     async def record(
         self,
@@ -100,7 +111,22 @@ class ActivityService:
         if metadata:
             event_data["metadata"] = str(metadata)
 
-        # Store event
+        # Persist to PostgreSQL if repository is available
+        if self._repository:
+            await self._repository.save(
+                event_id=event_id,
+                event_type=event_type,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                actor_name=actor_name,
+                description=description,
+                timestamp=timestamp,
+                points=points,
+                task_id=task_id,
+                metadata=metadata,
+            )
+
+        # Store event in Redis (for real-time feed and short-term index)
         await self.redis.hset(event_key, mapping=event_data)
         await self.redis.expire(event_key, 86400 * 30)  # 30 days TTL
 
@@ -155,6 +181,18 @@ class ActivityService:
         Returns:
             List of activity events
         """
+        # Use PostgreSQL repository when available for persistent, unlimited queries
+        if self._repository:
+            if agent_ids:
+                return await self._repository.find_by_agents(agent_ids, limit=limit)
+            if user_id:
+                return await self._repository.find_by_user(user_id, limit=limit)
+            if task_id:
+                return await self._repository.find_by_task(task_id, limit=limit)
+            if agent_id:
+                return await self._repository.find_by_agent(agent_id, limit=limit)
+            return await self._repository.find_recent(limit=limit)
+
         event_ids: list = []
 
         # Handle multiple agent IDs - fetch and merge activities

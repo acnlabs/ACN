@@ -43,7 +43,9 @@ from .infrastructure.messaging import (
     WebSocketManager,
 )
 from .infrastructure.persistence.postgres import (
+    PostgresActivityRepository,
     PostgresAgentRepository,
+    PostgresBillingRepository,
     PostgresSubnetRepository,
     PostgresTaskRepository,
     get_engine,
@@ -101,6 +103,8 @@ async def lifespan(app: FastAPI):
     # Initialize Clean Architecture services
     # Switch between PostgreSQL (durable) and Redis (fallback) based on DATABASE_URL
     _pg_engine = None
+    _billing_repository = None
+    _activity_repository = None
     if settings.database_url:
         logger.info("persistence_postgres", database_url=settings.database_url[:30] + "...")
         _pg_engine = get_engine(settings.database_url)
@@ -108,6 +112,8 @@ async def lifespan(app: FastAPI):
         agent_repository = PostgresAgentRepository(_pg_session, registry_instance.redis)
         subnet_repository = PostgresSubnetRepository(_pg_session)
         task_repository = PostgresTaskRepository(_pg_session, registry_instance.redis)
+        _billing_repository = PostgresBillingRepository(_pg_session)
+        _activity_repository = PostgresActivityRepository(_pg_session)
     else:
         logger.info("persistence_redis", reason="DATABASE_URL not set, using Redis fallback")
         agent_repository = RedisAgentRepository(registry_instance.redis)
@@ -153,10 +159,14 @@ async def lifespan(app: FastAPI):
         redis=registry_instance.redis,
         agent_service=agent_service_instance,
         webhook_url=settings.billing_webhook_url,
+        repository=_billing_repository,
     )
 
     # Initialize Activity Service
-    activity_service_instance = ActivityService(redis=registry_instance.redis)
+    activity_service_instance = ActivityService(
+        redis=registry_instance.redis,
+        repository=_activity_repository,
+    )
 
     # Initialize Escrow Client (for Labs task budget management)
     escrow_client_instance = EscrowClient(
