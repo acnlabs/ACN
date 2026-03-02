@@ -14,6 +14,8 @@ hitting Auth0's endpoint on every request.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 from typing import Any
 
@@ -50,11 +52,32 @@ def _get_settings():
     return get_settings()
 
 
+def _load_jwks_from_env() -> dict | None:
+    """Load JWKS from AUTH0_JWKS environment variable if present.
+
+    This is the primary mechanism for environments where outbound DNS is
+    unreliable (e.g. Railway containers). The env var contains the raw JSON
+    string from https://<domain>/.well-known/jwks.json.
+    """
+    raw = os.environ.get("AUTH0_JWKS")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        logger.warning("auth0_jwks_env_parse_failed")
+        return None
+
+
 async def _get_jwks(domain: str) -> dict:
     """Return JWKS for *domain*, refreshing the cache when stale.
 
-    Uses an asyncio.Lock to ensure only one coroutine performs the network
-    fetch when the cache expires (prevents thundering herd).
+    Priority:
+    1. In-memory cache (if valid and not expired)
+    2. AUTH0_JWKS environment variable (pre-seeded, no network needed)
+    3. Network fetch from Auth0's JWKS endpoint
+
+    Uses an asyncio.Lock to prevent thundering herd on cache expiry.
     """
     now = time.monotonic()
     if (
@@ -74,28 +97,51 @@ async def _get_jwks(domain: str) -> dict:
         ):
             return _jwks_cache["keys"]
 
-        jwks_url = f"https://{domain}/.well-known/jwks.json"
-        # Use IPv6 local_address to avoid IPv4/IPv6 conflict in Railway containers
-        # (Railway's private network DNS returns IPv6, but the default httpx transport
-        # binds to 0.0.0.0 which is IPv4-only, causing [Errno -2] DNS failures)
-        try:
-            transport = httpx.AsyncHTTPTransport(local_address="::")
-            async with httpx.AsyncClient(timeout=10.0, transport=transport) as client:
-                resp = await client.get(jwks_url)
-                resp.raise_for_status()
-                jwks = resp.json()
-        except Exception:
-            # Fallback: try without custom transport (e.g. local dev environment)
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(jwks_url)
-                resp.raise_for_status()
-                jwks = resp.json()
+        # Try AUTH0_JWKS env var first (avoids network call entirely)
+        jwks = _load_jwks_from_env()
+        if jwks:
+            _jwks_cache["keys"] = jwks
+            _jwks_cache["domain"] = domain
+            # Set fetched_at far in the past so network refresh is attempted
+            # on the next expiry cycle when the network may be available
+            _jwks_cache["fetched_at"] = now
+            logger.info("jwks_loaded_from_env", domain=domain)
+            # Background: attempt a network refresh without blocking the request
+            asyncio.create_task(_refresh_jwks_from_network(domain))
+            return jwks
 
+        # No env var — fetch from network
+        jwks = await _fetch_jwks_from_network(domain)
         _jwks_cache["keys"] = jwks
         _jwks_cache["domain"] = domain
         _jwks_cache["fetched_at"] = now
         logger.info("jwks_cache_refreshed", domain=domain)
         return jwks
+
+
+async def _fetch_jwks_from_network(domain: str) -> dict:
+    """Fetch JWKS from Auth0's well-known endpoint."""
+    jwks_url = f"https://{domain}/.well-known/jwks.json"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(jwks_url)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _refresh_jwks_from_network(domain: str) -> None:
+    """Background task: silently refresh JWKS cache from network if available.
+
+    Does not raise — failure is expected when network is unavailable.
+    """
+    try:
+        jwks = await _fetch_jwks_from_network(domain)
+        async with _jwks_lock:
+            _jwks_cache["keys"] = jwks
+            _jwks_cache["domain"] = domain
+            _jwks_cache["fetched_at"] = time.monotonic()
+        logger.info("jwks_background_refresh_succeeded", domain=domain)
+    except Exception as e:
+        logger.debug("jwks_background_refresh_skipped", domain=domain, error=str(e))
 
 
 # ---------------------------------------------------------------------------
