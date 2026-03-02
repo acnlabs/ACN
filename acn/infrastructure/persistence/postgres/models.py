@@ -45,7 +45,7 @@ class TaskModel(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     reward_amount: Mapped[str] = mapped_column(String(64), nullable=False, default="0")
-    reward_currency: Mapped[str] = mapped_column(String(32), nullable=False, default="points")
+    reward_currency: Mapped[str] = mapped_column(String(32), nullable=False, default="ap_points")
     assignee_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     is_multi_participant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     max_completions: Mapped[int | None] = mapped_column(Integer, nullable=True)

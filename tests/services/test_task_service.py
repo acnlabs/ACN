@@ -35,7 +35,7 @@ def _make_task(**overrides) -> Task:
         "title": "Test Multi Task",
         "description": "A multi-participant task",
         "reward_amount": "50",
-        "reward_currency": "points",
+        "reward_currency": "ap_points",
         "is_multi_participant": True,
         "max_completions": 5,
     }

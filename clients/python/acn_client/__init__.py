@@ -18,6 +18,7 @@ from .models import (
     BroadcastRequest,
     BroadcastStrategy,
     MessageType,
+    ParticipationInfo,
     PaymentCapability,
     PaymentMethod,
     PaymentNetwork,
@@ -25,28 +26,45 @@ from .models import (
     PaymentTaskStatus,
     SendMessageRequest,
     SubnetInfo,
+    TaskAcceptRequest,
+    TaskAcceptResponse,
+    TaskCreateRequest,
+    TaskInfo,
+    TaskReviewRequest,
+    TaskSubmitRequest,
 )
 from .realtime import ACNRealtime
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"
 __all__ = [
     # Client
     "ACNClient",
     "ACNError",
     "ACNRealtime",
-    # Models
+    # Agent models
     "AgentInfo",
     "AgentRegisterRequest",
     "AgentSearchOptions",
     "AgentStatus",
+    # Communication models
     "BroadcastRequest",
     "BroadcastStrategy",
     "MessageType",
+    "SendMessageRequest",
+    # Subnet models
+    "SubnetInfo",
+    # Payment models
     "PaymentCapability",
     "PaymentMethod",
     "PaymentNetwork",
     "PaymentTask",
     "PaymentTaskStatus",
-    "SendMessageRequest",
-    "SubnetInfo",
+    # Task models
+    "TaskInfo",
+    "TaskCreateRequest",
+    "TaskAcceptRequest",
+    "TaskAcceptResponse",
+    "TaskSubmitRequest",
+    "TaskReviewRequest",
+    "ParticipationInfo",
 ]

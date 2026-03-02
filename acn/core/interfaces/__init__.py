@@ -5,6 +5,12 @@ Infrastructure layer implements these interfaces.
 """
 
 from .agent_repository import IAgentRepository
+from .escrow_provider import (
+    EscrowDetailResult,
+    EscrowResult,
+    IEscrowProvider,
+    ReleaseResult,
+)
 from .subnet_repository import ISubnetRepository
 from .task_repository import ITaskRepository
 
@@ -14,4 +20,8 @@ __all__ = [
     "IAgentRepository",
     "ISubnetRepository",
     "ITaskRepository",
+    "IEscrowProvider",
+    "ReleaseResult",
+    "EscrowResult",
+    "EscrowDetailResult",
 ]

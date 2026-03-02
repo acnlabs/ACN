@@ -244,6 +244,115 @@ class PaymentStats(BaseModel):
 
 
 # ============================================
+# Task Models
+# ============================================
+
+
+class TaskInfo(BaseModel):
+    """Task information — mirrors ACN server TaskResponse."""
+
+    task_id: str
+    mode: str
+    status: str
+    creator_type: str
+    creator_id: str
+    creator_name: str
+    title: str
+    description: str
+    task_type: str
+    required_skills: list[str] = Field(default_factory=list)
+    assignee_id: str | None = None
+    assignee_name: str | None = None
+    reward_amount: str = "0"
+    reward_currency: str = "ap_points"
+    reward_unit: str = "completion"
+    total_budget: str = "0"
+    released_amount: str = "0"
+    is_repeatable: bool = False
+    is_multi_participant: bool = False
+    allow_repeat_by_same: bool = False
+    active_participants_count: int = 0
+    completed_count: int = 0
+    max_completions: int | None = None
+    approval_type: str = "manual"
+    validator_id: str | None = None
+    created_at: str = ""
+    deadline: str | None = None
+    metadata: dict | None = None
+
+
+class TaskCreateRequest(BaseModel):
+    """Request to create a task."""
+
+    title: str = Field(..., min_length=3, max_length=200)
+    description: str = Field(..., min_length=10)
+    mode: str = Field(default="open", description="open or assigned")
+    task_type: str = Field(default="general")
+    required_skills: list[str] = Field(default_factory=list)
+    reward_amount: str = Field(default="0")
+    reward_currency: str = Field(default="ap_points")
+    is_multi_participant: bool = False
+    allow_repeat_by_same: bool = False
+    max_completions: int | None = None
+    deadline_hours: int | None = None
+    assignee_id: str | None = None
+    assignee_name: str | None = None
+    approval_type: str = Field(default="manual", description="manual, auto, or validator")
+    validator_id: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class TaskAcceptRequest(BaseModel):
+    """Request to accept/join a task."""
+
+    message: str = Field(default="", description="Optional message to creator")
+
+
+class TaskAcceptResponse(BaseModel):
+    """Response for accept/join — includes participation_id for multi-participant tasks."""
+
+    task: TaskInfo
+    participation_id: str | None = None
+
+
+class TaskSubmitRequest(BaseModel):
+    """Request to submit task result."""
+
+    submission: str = Field(..., min_length=5, description="Task result/deliverable")
+    artifacts: list[dict] = Field(default_factory=list)
+    participation_id: str | None = Field(None, description="Required for multi-participant tasks")
+
+
+class TaskReviewRequest(BaseModel):
+    """Request to approve or reject a submission."""
+
+    approved: bool = Field(..., description="True to approve, False to reject")
+    notes: str = Field(default="", description="Review notes")
+    participation_id: str | None = Field(None, description="Participation ID (multi-participant)")
+    agent_id: str | None = Field(None, description="Agent ID (alternative to participation_id)")
+
+
+class ParticipationInfo(BaseModel):
+    """Participation record for a task."""
+
+    participation_id: str
+    task_id: str
+    participant_id: str
+    participant_name: str
+    participant_type: str = "agent"
+    status: str
+    joined_at: str
+    submission: str | None = None
+    submitted_at: str | None = None
+    rejection_reason: str | None = None
+    rejected_at: str | None = None
+    review_notes: str | None = None
+    reviewed_by: str | None = None
+    completed_at: str | None = None
+    cancelled_at: str | None = None
+
+
+# ============================================
 # Monitoring Models
 # ============================================
 

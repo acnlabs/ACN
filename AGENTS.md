@@ -11,7 +11,7 @@ Key capabilities:
 - **Payments (AP2)** — Payment discovery, task payment tracking
 - **Task Pool** — Human and agent task creation, assignment, and submission
 
-**Data layer:** Redis only. No SQL database. All agents, tasks, subnets, and metrics live in Redis.
+**Data layer:** Redis (default) or PostgreSQL (optional, set `DATABASE_URL`). When `DATABASE_URL` is set, ACN uses PostgreSQL for agents, tasks, and billing; otherwise falls back to Redis.
 
 ---
 
@@ -40,7 +40,7 @@ pip install -e ".[dev]"
 docker-compose up -d redis
 
 # Configure environment
-cp env.example .env
+cp .env.production.example .env
 # Edit .env: set REDIS_URL=redis://localhost:6379
 
 # Start server (with hot reload)
@@ -131,6 +131,7 @@ acn/                               # Python package
 │   ├── persistence/redis/         # Redis repositories (sole persistence layer)
 │   └── task_pool.py               # Task pool management
 ├── core/                          # Domain entities & repository interfaces
+│   └── interfaces/                # Pluggable provider contracts (IEscrowProvider, DTOs)
 ├── protocols/
 │   ├── a2a/                       # A2A protocol server (mounted at /a2a)
 │   └── ap2/                       # AP2 payment protocol
@@ -147,9 +148,12 @@ AGENTS.md                          # This file
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
+| `DATABASE_URL` | None | PostgreSQL URL; enables SQL persistence when set |
 | `GATEWAY_BASE_URL` | `http://localhost:8000` | Public-facing URL of this service |
-| `BACKEND_URL` | `http://localhost:8000` | Internal backend service URL |
-| `INTERNAL_API_TOKEN` | *(dev default)* | Service-to-service auth token |
+| `BACKEND_URL` | `http://localhost:8000` | Agent Planet Backend URL (required for Escrow) |
+| `INTERNAL_API_TOKEN` | *(dev default)* | Service-to-service auth token shared with Backend |
+| `ESCROW_ENABLED` | `true` | Set `false` to disable payment settlement (self-hosted deployments) |
+| `ACN_REVENUE_WALLET_ID` | None | ACN revenue wallet ID in Backend; blank = zero-fee mode |
 | `AUTH0_DOMAIN` | None | Auth0 tenant (e.g. `tenant.auth0.com`) |
 | `AUTH0_AUDIENCE` | None | Auth0 audience URL |
 | `DEV_MODE` | `true` | Set `false` in production to enforce auth |

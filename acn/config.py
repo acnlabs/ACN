@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # Service
     service_name: str = "ACN"
-    service_version: str = "0.3.0"
+    service_version: str = "0.4.0"
     host: str = "0.0.0.0"
     port: int = 8000
 
@@ -36,6 +36,16 @@ class Settings(BaseSettings):
 
     # Backend URL (for escrow and other integrations)
     backend_url: str = "http://localhost:8000"
+
+    # Set to False to run ACN without payment settlement (e.g. self-hosted deployments
+    # that do not connect to Agent Planet's Backend). When disabled, tasks still work
+    # but Escrow lock/release calls are skipped entirely and a warning is logged.
+    escrow_enabled: bool = True
+
+    # ACN revenue wallet ID in Backend (wallet_type=PLATFORM, label=acn_revenue).
+    # Backend's release/release_partial endpoints split fees and credit this wallet.
+    # Must be pre-created in Backend's wallets table before enabling fee collection.
+    acn_revenue_wallet_id: str | None = None
 
     # Internal API Token (shared with Backend for service-to-service auth)
     internal_api_token: str = _DEV_INTERNAL_TOKEN

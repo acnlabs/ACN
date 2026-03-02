@@ -686,7 +686,6 @@ class RedisTaskRepository(ITaskRepository):
         data["is_repeatable"] = data.get("is_repeatable", "false").lower() == "true"
         data["is_multi_participant"] = data.get("is_multi_participant", "false").lower() == "true"
         data["allow_repeat_by_same"] = data.get("allow_repeat_by_same", "false").lower() == "true"
-        data["payment_released"] = data.get("payment_released", "false").lower() == "true"
 
         # Parse integers
         data["completed_count"] = int(data.get("completed_count", 0))

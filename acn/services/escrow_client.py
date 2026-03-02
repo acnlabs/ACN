@@ -1,51 +1,34 @@
 """
-Escrow Client
+Agent Planet Escrow Provider
 
-Calls Backend's Labs Escrow API for task budget management.
+Implements IEscrowProvider by calling Backend's Labs Escrow API.
 Supports both v1 (backward compat) and v2 (full lifecycle) endpoints.
+
+The 3-way fee split (agent / ACN / provider) is enforced atomically by the
+Backend's EscrowService.release() and EscrowService.release_partial() methods.
+ACN receives the breakdown in ReleaseResult and logs it for P&L tracking.
 """
 
 import httpx
 import structlog
-from pydantic import BaseModel
+
+from acn.core.interfaces.escrow_provider import (
+    EscrowDetailResult,
+    EscrowResult,
+    IEscrowProvider,
+    ReleaseResult,
+)
+from acn.protocols.ap2.core import AP_POINTS
 
 logger = structlog.get_logger()
 
 
-class EscrowResult(BaseModel):
-    """Escrow operation result"""
-
-    success: bool
-    message: str
-    balance_after: float | None = None
-    escrow_id: str | None = None
-    error: str | None = None
-
-
-class EscrowDetailResult(BaseModel):
-    """v2 Escrow detail result"""
-
-    success: bool
-    escrow_id: str | None = None
-    task_id: str | None = None
-    status: str | None = None
-    total_amount: float | None = None
-    released_amount: float | None = None
-    refunded_amount: float | None = None
-    auto_release_at: str | None = None
-    error: str | None = None
-
-
-class EscrowClient:
+class AgentPlanetEscrowProvider(IEscrowProvider):
     """
-    Client for Backend's Labs Escrow API
+    IEscrowProvider implementation backed by Agent Planet's Backend.
 
-    Handles:
-    - lock: Lock funds when task is created (v2: supports agent creators)
-    - release: Release reward to agent when task is approved
-    - refund: Refund remaining budget when task is cancelled
-    - accept: Agent accepts a task (v2)
-    - submit: Agent submits deliverable (v2)
+    Fee split ratios (ESCROW_FEE_RATE, ACN_REFERRAL_RATE) live in the
+    Backend's config — this client simply parses and surfaces ReleaseResult.
     """
 
     def __init__(
@@ -54,24 +37,23 @@ class EscrowClient:
         timeout: float = 30.0,
         internal_token: str | None = None,
     ):
-        """
-        Args:
-            backend_url: Backend API base URL (e.g., "http://localhost:8000")
-            timeout: Request timeout in seconds
-            internal_token: Internal API token for authentication
-        """
         self.backend_url = backend_url.rstrip("/")
         self.timeout = timeout
         self.internal_token = internal_token
 
+    @property
+    def supported_currencies(self) -> list[str]:
+        return [AP_POINTS]
+
     def _get_headers(self) -> dict:
-        """获取请求头（包含 Internal Token）"""
         headers = {"Content-Type": "application/json"}
         if self.internal_token:
             headers["X-Internal-Token"] = self.internal_token
         return headers
 
-    # ========== v2 Endpoints (推荐使用) ==========
+    # -------------------------------------------------------------------------
+    # v2 Lifecycle
+    # -------------------------------------------------------------------------
 
     async def lock_v2(
         self,
@@ -82,25 +64,8 @@ class EscrowClient:
         auto_release_days: int = 7,
         description: str | None = None,
     ) -> EscrowDetailResult:
-        """
-        v2: Lock funds for task (supports both human and agent creators)
-
-        Args:
-            task_id: Task ID
-            creator_id: Creator ID (user_id or agent_id)
-            creator_type: "human" | "agent"
-            amount: Amount to lock
-            auto_release_days: Days before auto-release
-            description: Optional description
-
-        Returns:
-            EscrowDetailResult
-        """
         if amount <= 0:
-            return EscrowDetailResult(
-                success=True,
-                message="No budget to lock",
-            )
+            return EscrowDetailResult(success=True)
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
@@ -142,17 +107,11 @@ class EscrowClient:
                         status_code=response.status_code,
                         error=error,
                     )
-                    return EscrowDetailResult(
-                        success=False,
-                        error=str(error),
-                    )
+                    return EscrowDetailResult(success=False, error=str(error))
 
         except httpx.RequestError as e:
             logger.error("escrow_lock_v2_error", task_id=task_id, error=str(e))
-            return EscrowDetailResult(
-                success=False,
-                error=str(e),
-            )
+            return EscrowDetailResult(success=False, error=str(e))
 
     async def accept_v2(
         self,
@@ -160,16 +119,12 @@ class EscrowClient:
         assignee_id: str,
         assignee_type: str = "agent",
     ) -> EscrowDetailResult:
-        """v2: Agent accepts a task"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/v2/{escrow_id}/accept",
                     headers=self._get_headers(),
-                    json={
-                        "assignee_id": assignee_id,
-                        "assignee_type": assignee_type,
-                    },
+                    json={"assignee_id": assignee_id, "assignee_type": assignee_type},
                 )
 
                 if response.status_code == 200:
@@ -189,7 +144,6 @@ class EscrowClient:
             return EscrowDetailResult(success=False, error=str(e))
 
     async def submit_v2(self, escrow_id: str) -> EscrowDetailResult:
-        """v2: Agent submits deliverable"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
@@ -215,7 +169,6 @@ class EscrowClient:
             return EscrowDetailResult(success=False, error=str(e))
 
     async def get_by_task(self, task_id: str) -> EscrowDetailResult:
-        """v2: Get escrow by task ID"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.get(
@@ -236,10 +189,7 @@ class EscrowClient:
                         auto_release_at=data.get("auto_release_at"),
                     )
                 elif response.status_code == 404:
-                    return EscrowDetailResult(
-                        success=False,
-                        error="Escrow not found",
-                    )
+                    return EscrowDetailResult(success=False, error="Escrow not found")
                 else:
                     return EscrowDetailResult(
                         success=False,
@@ -256,25 +206,15 @@ class EscrowClient:
         recipient_type: str = "agent",
         amount: float = 0,
         notes: str | None = None,
-    ) -> EscrowDetailResult:
+    ) -> ReleaseResult:
         """
-        v2: Release a partial amount from escrow pool (multi-participant mode).
+        Release a partial amount with atomic 3-way split enforced by Backend.
 
-        Unlike release() which releases all remaining funds, this releases
-        a specific amount to a specific recipient and keeps the escrow active.
-
-        Args:
-            escrow_id: Escrow ID
-            recipient_id: Recipient agent/user ID
-            recipient_type: "agent" or "human"
-            amount: Amount to release for this completion
-            notes: Optional notes
-
-        Returns:
-            EscrowDetailResult
+        Backend response (new contract):
+            {agent_amount, acn_amount, escrow_revenue_amount, receipt_id}
         """
         if amount <= 0:
-            return EscrowDetailResult(success=True, escrow_id=escrow_id)
+            return ReleaseResult(success=True)
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
@@ -291,19 +231,24 @@ class EscrowClient:
 
                 if response.status_code == 200:
                     data = response.json()
+                    result = ReleaseResult(
+                        success=True,
+                        agent_amount=data.get("agent_amount", 0.0),
+                        acn_amount=data.get("acn_amount", 0.0),
+                        provider_amount=data.get("escrow_revenue_amount", 0.0),
+                        proof=data.get("receipt_id"),
+                    )
                     logger.info(
                         "escrow_release_partial",
                         escrow_id=escrow_id,
                         recipient_id=recipient_id,
                         amount=amount,
+                        agent_amount=result.agent_amount,
+                        acn_amount=result.acn_amount,
+                        provider_amount=result.provider_amount,
+                        receipt_id=result.proof,
                     )
-                    return EscrowDetailResult(
-                        success=True,
-                        escrow_id=data.get("escrow_id"),
-                        status=data.get("status"),
-                        total_amount=data.get("total_amount"),
-                        released_amount=data.get("released_amount"),
-                    )
+                    return result
                 else:
                     error = self._extract_error(response)
                     logger.warning(
@@ -312,16 +257,15 @@ class EscrowClient:
                         status_code=response.status_code,
                         error=error,
                     )
-                    return EscrowDetailResult(
-                        success=False,
-                        error=str(error),
-                    )
+                    return ReleaseResult(success=False, error=str(error))
 
         except httpx.RequestError as e:
             logger.error("escrow_release_partial_error", escrow_id=escrow_id, error=str(e))
-            return EscrowDetailResult(success=False, error=str(e))
+            return ReleaseResult(success=False, error=str(e))
 
-    # ========== v1 Endpoints (ACN 兼容) ==========
+    # -------------------------------------------------------------------------
+    # v1 Compatibility
+    # -------------------------------------------------------------------------
 
     async def lock(
         self,
@@ -330,24 +274,8 @@ class EscrowClient:
         amount: float,
         description: str | None = None,
     ) -> EscrowResult:
-        """
-        v1: Lock funds for task (human creators only)
-
-        Args:
-            user_id: Task creator's user_id
-            task_id: Task ID
-            amount: Amount to lock (total_budget)
-            description: Optional description
-
-        Returns:
-            EscrowResult
-        """
         if amount <= 0:
-            return EscrowResult(
-                success=True,
-                message="No budget to lock",
-                balance_after=None,
-            )
+            return EscrowResult(success=True, message="No budget to lock")
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
@@ -405,25 +333,15 @@ class EscrowClient:
         task_id: str,
         amount: float,
         description: str | None = None,
-    ) -> EscrowResult:
+    ) -> ReleaseResult:
         """
-        v1: Release reward to agent owner
+        Release full reward with atomic 3-way split enforced by Backend.
 
-        Args:
-            creator_user_id: Task creator's user_id
-            agent_owner_user_id: Agent owner's user_id
-            task_id: Task ID
-            amount: Reward amount
-            description: Optional description
-
-        Returns:
-            EscrowResult
+        Backend response (new contract):
+            {agent_amount, acn_amount, escrow_revenue_amount, receipt_id}
         """
         if amount <= 0:
-            return EscrowResult(
-                success=True,
-                message="No reward to release",
-            )
+            return ReleaseResult(success=True)
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
@@ -441,17 +359,24 @@ class EscrowClient:
 
                 if response.status_code == 200:
                     data = response.json()
+                    result = ReleaseResult(
+                        success=True,
+                        agent_amount=data.get("agent_amount", 0.0),
+                        acn_amount=data.get("acn_amount", 0.0),
+                        provider_amount=data.get("escrow_revenue_amount", 0.0),
+                        proof=data.get("receipt_id"),
+                    )
                     logger.info(
                         "escrow_released",
                         task_id=task_id,
                         to_user=agent_owner_user_id,
                         amount=amount,
+                        agent_amount=result.agent_amount,
+                        acn_amount=result.acn_amount,
+                        provider_amount=result.provider_amount,
+                        receipt_id=result.proof,
                     )
-                    return EscrowResult(
-                        success=True,
-                        message=data.get("message", "Released"),
-                        balance_after=data.get("balance_after"),
-                    )
+                    return result
                 else:
                     error = self._extract_error(response)
                     logger.warning(
@@ -459,19 +384,11 @@ class EscrowClient:
                         task_id=task_id,
                         error=error,
                     )
-                    return EscrowResult(
-                        success=False,
-                        message="Failed to release reward",
-                        error=str(error),
-                    )
+                    return ReleaseResult(success=False, error=str(error))
 
         except httpx.RequestError as e:
             logger.error("escrow_release_error", task_id=task_id, error=str(e))
-            return EscrowResult(
-                success=False,
-                message="Escrow service unavailable",
-                error=str(e),
-            )
+            return ReleaseResult(success=False, error=str(e))
 
     async def refund(
         self,
@@ -480,23 +397,8 @@ class EscrowClient:
         amount: float,
         description: str | None = None,
     ) -> EscrowResult:
-        """
-        v1: Refund remaining budget to creator
-
-        Args:
-            user_id: Task creator's user_id
-            task_id: Task ID
-            amount: Amount to refund (remaining budget)
-            description: Optional description
-
-        Returns:
-            EscrowResult
-        """
         if amount <= 0:
-            return EscrowResult(
-                success=True,
-                message="No budget to refund",
-            )
+            return EscrowResult(success=True, message="No budget to refund")
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
@@ -550,25 +452,12 @@ class EscrowClient:
         user_id: str,
         amount: float,
     ) -> tuple[bool, float]:
-        """
-        Check if user has enough balance
-
-        Args:
-            user_id: User ID
-            amount: Required amount
-
-        Returns:
-            (is_sufficient, current_balance)
-        """
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/check",
                     headers=self._get_headers(),
-                    json={
-                        "user_id": user_id,
-                        "amount": amount,
-                    },
+                    json={"user_id": user_id, "amount": amount},
                 )
 
                 if response.status_code == 200:
@@ -580,12 +469,30 @@ class EscrowClient:
         except httpx.RequestError:
             return False, 0
 
-    # ========== Helpers ==========
+    # -------------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------------
 
     @staticmethod
     def _extract_error(response: httpx.Response) -> str:
-        """Extract error message from response"""
         try:
             return response.json().get("detail", response.text)
         except Exception:
             return response.text or f"HTTP {response.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility aliases
+# Keep EscrowClient pointing to AgentPlanetEscrowProvider so that any external
+# code that imports EscrowClient continues to work without modification.
+# ---------------------------------------------------------------------------
+EscrowClient = AgentPlanetEscrowProvider
+
+__all__ = [
+    "AgentPlanetEscrowProvider",
+    "EscrowClient",
+    # Re-export DTOs for backward compat (previously defined in this module)
+    "EscrowResult",
+    "EscrowDetailResult",
+    "ReleaseResult",
+]

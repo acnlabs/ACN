@@ -79,7 +79,7 @@ from .routes.dependencies import limiter
 from .services import AgentService, BillingService, MessageService, SubnetService, TaskService
 from .services.activity_service import ActivityService
 from .services.auth0_client import Auth0CredentialClient
-from .services.escrow_client import EscrowClient
+from .services.escrow_client import AgentPlanetEscrowProvider
 
 # Settings
 settings = get_settings()
@@ -171,10 +171,19 @@ async def lifespan(app: FastAPI):
     )
 
     # Initialize Escrow Client (for Labs task budget management)
-    escrow_client_instance = EscrowClient(
-        backend_url=settings.backend_url,
-        internal_token=settings.internal_api_token,
-    )
+    # When ESCROW_ENABLED=false, tasks still work but payment settlement is skipped.
+    if settings.escrow_enabled:
+        escrow_client_instance: AgentPlanetEscrowProvider | None = AgentPlanetEscrowProvider(
+            backend_url=settings.backend_url,
+            internal_token=settings.internal_api_token,
+        )
+    else:
+        escrow_client_instance = None
+        logger.warning(
+            "escrow_disabled",
+            escrow_enabled=False,
+            reason="ESCROW_ENABLED=false — tasks will run without payment settlement",
+        )
 
     # Initialize Task Pool and Service (task_repository already set above)
     task_pool_instance = TaskPool(task_repository)

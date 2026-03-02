@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-02
+
+### Added
+
+- **`IEscrowProvider` abstract interface** (`acn/core/interfaces/escrow_provider.py`):
+  - Defines the pluggable escrow contract for ACN — enables both off-chain (Agent Planet Backend) and on-chain (smart contract) implementations.
+  - Exports `EscrowResult`, `EscrowDetailResult`, and `ReleaseResult` as canonical DTOs, resolving previous layering violations where data models lived inside the service layer.
+- **`ReleaseResult` DTO** with 3-way split fields: `agent_amount`, `acn_amount`, `provider_amount`, `proof`.
+  - ACN reads and logs these values but never recomputes them — the provider (Backend) is the single source of truth for fee calculation.
+- **`AgentPlanetEscrowProvider`** (`acn/services/escrow_client.py`):
+  - Implements `IEscrowProvider`; renamed from `EscrowClient` (backward-compat alias `EscrowClient = AgentPlanetEscrowProvider` retained).
+  - Parses the Backend's `ReleaseBreakdownResponse` and maps it to `ReleaseResult`.
+  - Exposes `supported_currencies` property returning `[AP_POINTS]`.
+- **`AP_POINTS = "ap_points"` currency constant** (`protocols/ap2/core.py`):
+  - Namespaced identifier for Agent Planet Points, used as `reward_currency` in ACN tasks.
+  - Replaces the unnamespaced `"points"` string; backward-compat check retained for existing Redis data.
+- **`ESCROW_ENABLED` config flag** (`config.py`):
+  - Set `ESCROW_ENABLED=false` to run ACN without payment settlement (e.g. self-hosted deployments not connected to Agent Planet Backend).
+  - When disabled, tasks operate normally but all Escrow lock/release calls are skipped; a `warning` log is emitted at startup.
+- **`acn_revenue_wallet_id` config field** (`config.py`):
+  - Stores the ACN revenue wallet ID in Backend for P&L tracking. Optional — omitting it degrades to zero-fee mode for the ACN share.
+
+### Changed
+
+- **`TaskService.escrow_client`** type changed from `EscrowClient` to `IEscrowProvider` — decouples task logic from the concrete Agent Planet implementation.
+- **`reward_currency` checks** now accept both `ap_points` (new canonical form) and `points` (legacy) for backward compatibility with existing Redis task data.
+- **`_distribute_reward` return value** now exposes `ReleaseResult` fields (`agent_amount`, `acn_amount`, `provider_amount`, `proof`) directly; structured log fields updated accordingly.
+
+### Fixed
+
+- **`routes/tasks.py` / `routes/subnets.py`**: `await get_subject()` was called as a plain function (11 call sites), causing `AttributeError: 'Security' object has no attribute 'credentials'` on every authenticated task/subnet endpoint. Fixed by extracting `sub` from the already-resolved `payload` dict injected via `Depends(require_permission(...))`.
+- **`task_repository.py`**: Redis deserializer injected `payment_released` into the `Task` constructor, which does not define that field, causing `TypeError` on any task read-back. The stale field injection has been removed.
+
 ## [0.3.0] - 2026-02-24
 
 ### Added

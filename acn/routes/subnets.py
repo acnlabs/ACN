@@ -46,7 +46,7 @@ async def create_subnet(
     Clean Architecture: Route → SubnetService → Repository
     """
     # Extract owner from Auth0 token
-    owner = await get_subject()
+    owner = payload.get("sub", "dev@clients")
 
     try:
         # Use SubnetService
@@ -251,7 +251,7 @@ async def delete_subnet(
     Clean Architecture: Route → SubnetService → Repository
     """
     # Extract owner from Auth0 token
-    owner = await get_subject()
+    owner = payload.get("sub", "dev@clients")
 
     try:
         success = await subnet_service.delete_subnet(subnet_id, owner)

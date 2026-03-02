@@ -52,7 +52,7 @@ class TaskCreateRequest(BaseModel):
     task_type: str = Field(default="general", description="Task type category")
     required_skills: list[str] = Field(default_factory=list)
     reward_amount: str = Field(default="0", description="Reward amount")
-    reward_currency: str = Field(default="points", description="Currency: USD, USDC, points")
+    reward_currency: str = Field(default="ap_points", description="Currency: ap_points, USD, USDC, ETH")
     is_repeatable: bool = Field(
         default=False, description="DEPRECATED: use is_multi_participant", deprecated=True
     )
@@ -344,7 +344,7 @@ async def create_task(
     Requires authentication. The authenticated user becomes the creator.
     In dev mode, X-Creator-Id header can override the subject.
     """
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
 
     # Dev mode: allow X-Creator-Id header override
     creator_id_header = http_request.headers.get("x-creator-id")
@@ -406,7 +406,7 @@ async def accept_task(
     task_service: TaskServiceDep = None,
 ):
     """Accept/join a task. Returns participation_id for multi-participant tasks."""
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
 
     agent_id = http_request.headers.get("x-creator-id") or token_owner
     agent_name = http_request.headers.get("x-creator-name") or agent_id
@@ -439,7 +439,7 @@ async def submit_task(
     task_service: TaskServiceDep = None,
 ):
     """Submit task result"""
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
 
     # Dev mode: allow X-Creator-Id header override
     agent_id = http_request.headers.get("x-creator-id") or token_owner
@@ -471,7 +471,7 @@ async def review_task(
     task_service: TaskServiceDep = None,
 ):
     """Approve or reject task/participation submission"""
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
     reviewer_id = http_request.headers.get("x-creator-id") or token_owner
 
     try:
@@ -514,7 +514,7 @@ async def cancel_task(
     task_service: TaskServiceDep = None,
 ):
     """Cancel a task (only creator can cancel)"""
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
 
     try:
         task = await task_service.cancel_task(
@@ -568,7 +568,7 @@ async def get_my_participation(
     task_service: TaskServiceDep = None,
 ):
     """Get the current user's participation in a task"""
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
     agent_id = http_request.headers.get("x-creator-id") or token_owner
 
     p = await task_service.get_user_participation(task_id, agent_id)
@@ -586,7 +586,7 @@ async def cancel_participation(
     task_service: TaskServiceDep = None,
 ):
     """Cancel a participation (participant withdraws)"""
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
     agent_id = http_request.headers.get("x-creator-id") or token_owner
 
     try:
@@ -613,7 +613,7 @@ async def approve_applicant(
     task_service: TaskServiceDep = None,
 ):
     """Approve an applicant for an assigned task (creator only). Sets them as assignee."""
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
     approver_id = http_request.headers.get("x-creator-id") or token_owner
 
     try:
@@ -640,7 +640,7 @@ async def reject_applicant(
     task_service: TaskServiceDep = None,
 ):
     """Reject an applicant for an assigned task (creator only)."""
-    token_owner = await get_subject()
+    token_owner = payload.get("sub", "dev@clients")
     approver_id = http_request.headers.get("x-creator-id") or token_owner
 
     try:

@@ -56,7 +56,12 @@ ACN_TOKEN_PRICING_EXTENSION_URI = "https://agentplanet.com/acn/token-pricing/v1"
 # =============================================================================
 
 NETWORK_FEE_RATE = 0.15  # 15% network fee, deducted from agent income
-CREDITS_PER_USD = 10.0  # 1 USD = 10 platform credits
+CREDITS_PER_USD = 10.0  # 1 USD = 10 ap_points (Agent Planet Points)
+
+# Currency identifier for Agent Planet Points.
+# Used as reward_currency in ACN tasks. Namespaced to avoid collision with
+# other deployments' point systems (e.g. third-party ACN instances).
+AP_POINTS = "ap_points"
 
 
 class SupportedPaymentMethod(StrEnum):

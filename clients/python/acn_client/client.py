@@ -13,12 +13,16 @@ from .models import (
     AgentRegisterRequest,
     BroadcastRequest,
     DashboardData,
+    ParticipationInfo,
     PaymentCapability,
     PaymentStats,
     PaymentTask,
     SendMessageRequest,
     SubnetCreateRequest,
     SubnetInfo,
+    TaskAcceptResponse,
+    TaskCreateRequest,
+    TaskInfo,
 )
 
 
@@ -46,6 +50,7 @@ class ACNClient:
         base_url: str = "http://localhost:9000",
         timeout: float = 30.0,
         api_key: str | None = None,
+        bearer_token: str | None = None,
     ):
         """
         Initialize ACN Client
@@ -53,14 +58,19 @@ class ACNClient:
         Args:
             base_url: ACN server URL
             timeout: Request timeout in seconds
-            api_key: Optional API key for authentication
+            api_key: Optional API key (X-API-Key header)
+            bearer_token: Optional JWT Bearer token (Authorization: Bearer <token>).
+                Required for Task endpoints in production (Auth0 JWT).
+                In dev mode, Task endpoints work without a token.
         """
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-        headers = {}
+        headers: dict[str, str] = {}
         if api_key:
             headers["X-API-Key"] = api_key
+        if bearer_token:
+            headers["Authorization"] = f"Bearer {bearer_token}"
 
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -434,6 +444,316 @@ class ACNClient:
         )
         events: list[dict[str, Any]] = data.get("events", [])
         return events
+
+    # ============================================
+    # Task Management
+    # ============================================
+
+    async def list_tasks(
+        self,
+        status: str | None = None,
+        mode: str | None = None,
+        skills: list[str] | None = None,
+        creator_id: str | None = None,
+        assignee_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[TaskInfo]:
+        """List tasks with optional filters. Public endpoint — no auth required."""
+        data = await self._request(
+            "GET",
+            "/api/v1/tasks",
+            params={
+                "status": status,
+                "mode": mode,
+                "skills": ",".join(skills) if skills else None,
+                "creator_id": creator_id,
+                "assignee_id": assignee_id,
+                "limit": limit,
+                "offset": offset,
+            },
+        )
+        return [TaskInfo.model_validate(t) for t in data.get("tasks", [])]
+
+    async def get_task(self, task_id: str) -> TaskInfo:
+        """Get task details. Public endpoint — no auth required."""
+        data = await self._request("GET", f"/api/v1/tasks/{task_id}")
+        return TaskInfo.model_validate(data)
+
+    async def match_tasks(
+        self,
+        skills: list[str],
+        limit: int = 20,
+    ) -> list[TaskInfo]:
+        """Find open tasks matching given skills. Public endpoint — no auth required."""
+        data = await self._request(
+            "GET",
+            "/api/v1/tasks/match",
+            params={"skills": ",".join(skills), "limit": limit},
+        )
+        return [TaskInfo.model_validate(t) for t in data.get("tasks", [])]
+
+    async def create_task(
+        self,
+        request: TaskCreateRequest,
+        creator_id: str | None = None,
+        creator_name: str | None = None,
+        creator_type: str = "human",
+    ) -> TaskInfo:
+        """Create a new task. Requires bearer_token (or dev mode with creator_id header).
+
+        Args:
+            request: Task creation parameters.
+            creator_id: Override creator identity (dev mode / X-Creator-Id header).
+            creator_name: Optional display name for the creator.
+            creator_type: Creator type — "human" or "agent" (default: "human").
+        """
+        headers: dict[str, str] = {}
+        if creator_id:
+            headers["X-Creator-Id"] = creator_id
+        if creator_name:
+            headers["X-Creator-Name"] = creator_name
+        if creator_type != "human":
+            headers["X-Creator-Type"] = creator_type
+
+        response = await self._client.post(
+            "/api/v1/tasks",
+            json=request.model_dump(exclude_none=True),
+            headers=headers,
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                message = error.get("detail", response.text)
+            except Exception:
+                message = response.text
+            raise ACNError(response.status_code, message)
+        return TaskInfo.model_validate(response.json())
+
+    async def accept_task(
+        self,
+        task_id: str,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
+        agent_type: str = "agent",
+        message: str = "",
+    ) -> TaskAcceptResponse:
+        """Accept/join a task. Requires bearer_token (or dev mode with agent_id header).
+
+        Args:
+            task_id: Task to accept.
+            agent_id: Override agent identity (dev mode / X-Creator-Id header).
+            agent_name: Optional display name for the agent.
+            agent_type: Agent type — "agent" or "human" (default: "agent").
+            message: Optional message to the creator.
+        """
+        headers: dict[str, str] = {}
+        if agent_id:
+            headers["X-Creator-Id"] = agent_id
+        if agent_name:
+            headers["X-Creator-Name"] = agent_name
+        if agent_type != "agent":
+            headers["X-Creator-Type"] = agent_type
+
+        response = await self._client.post(
+            f"/api/v1/tasks/{task_id}/accept",
+            json={"message": message},
+            headers=headers,
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                msg = error.get("detail", response.text)
+            except Exception:
+                msg = response.text
+            raise ACNError(response.status_code, msg)
+        return TaskAcceptResponse.model_validate(response.json())
+
+    async def submit_task(
+        self,
+        task_id: str,
+        submission: str,
+        participation_id: str | None = None,
+        artifacts: list[dict] | None = None,
+        agent_id: str | None = None,
+    ) -> TaskInfo:
+        """Submit task result. Requires bearer_token (or dev mode with agent_id header)."""
+        headers: dict[str, str] = {}
+        if agent_id:
+            headers["X-Creator-Id"] = agent_id
+
+        body: dict[str, Any] = {"submission": submission, "artifacts": artifacts or []}
+        if participation_id:
+            body["participation_id"] = participation_id
+
+        response = await self._client.post(
+            f"/api/v1/tasks/{task_id}/submit",
+            json=body,
+            headers=headers,
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                msg = error.get("detail", response.text)
+            except Exception:
+                msg = response.text
+            raise ACNError(response.status_code, msg)
+        return TaskInfo.model_validate(response.json())
+
+    async def review_task(
+        self,
+        task_id: str,
+        approved: bool,
+        notes: str = "",
+        participation_id: str | None = None,
+        agent_id: str | None = None,
+        creator_id: str | None = None,
+    ) -> TaskInfo:
+        """Approve or reject a task submission. Requires bearer_token (or dev mode)."""
+        headers: dict[str, str] = {}
+        if creator_id:
+            headers["X-Creator-Id"] = creator_id
+
+        body: dict[str, Any] = {"approved": approved, "notes": notes}
+        if participation_id:
+            body["participation_id"] = participation_id
+        if agent_id:
+            body["agent_id"] = agent_id
+
+        response = await self._client.post(
+            f"/api/v1/tasks/{task_id}/review",
+            json=body,
+            headers=headers,
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                msg = error.get("detail", response.text)
+            except Exception:
+                msg = response.text
+            raise ACNError(response.status_code, msg)
+        return TaskInfo.model_validate(response.json())
+
+    async def cancel_task(self, task_id: str) -> TaskInfo:
+        """Cancel a task. Only the task creator (identified by JWT sub) can cancel."""
+        response = await self._client.post(
+            f"/api/v1/tasks/{task_id}/cancel",
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                msg = error.get("detail", response.text)
+            except Exception:
+                msg = response.text
+            raise ACNError(response.status_code, msg)
+        return TaskInfo.model_validate(response.json())
+
+    async def get_participations(self, task_id: str) -> list[ParticipationInfo]:
+        """Get all participation records for a task. Public endpoint."""
+        data = await self._request("GET", f"/api/v1/tasks/{task_id}/participations")
+        return [ParticipationInfo.model_validate(p) for p in data.get("participations", [])]
+
+    async def get_my_participation(
+        self, task_id: str, agent_id: str | None = None
+    ) -> ParticipationInfo | None:
+        """Get the current user's participation record for a task."""
+        headers: dict[str, str] = {}
+        if agent_id:
+            headers["X-Creator-Id"] = agent_id
+
+        response = await self._client.get(
+            f"/api/v1/tasks/{task_id}/participations/me",
+            headers=headers,
+        )
+        if response.status_code == 404 or response.status_code == 204:
+            return None
+        if not response.is_success:
+            try:
+                error = response.json()
+                msg = error.get("detail", response.text)
+            except Exception:
+                msg = response.text
+            raise ACNError(response.status_code, msg)
+        body = response.json()
+        return ParticipationInfo.model_validate(body) if body else None
+
+    async def approve_participation(
+        self,
+        task_id: str,
+        participation_id: str,
+        creator_id: str | None = None,
+    ) -> TaskInfo:
+        """Approve a specific participant for an assigned task (creator only).
+
+        Sets the participant as the task assignee.
+        """
+        headers: dict[str, str] = {}
+        if creator_id:
+            headers["X-Creator-Id"] = creator_id
+
+        response = await self._client.post(
+            f"/api/v1/tasks/{task_id}/participations/{participation_id}/approve",
+            headers=headers,
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                msg = error.get("detail", response.text)
+            except Exception:
+                msg = response.text
+            raise ACNError(response.status_code, msg)
+        return TaskInfo.model_validate(response.json())
+
+    async def reject_participation(
+        self,
+        task_id: str,
+        participation_id: str,
+        creator_id: str | None = None,
+    ) -> TaskInfo:
+        """Reject a specific participant's application for an assigned task (creator only)."""
+        headers: dict[str, str] = {}
+        if creator_id:
+            headers["X-Creator-Id"] = creator_id
+
+        response = await self._client.post(
+            f"/api/v1/tasks/{task_id}/participations/{participation_id}/reject",
+            headers=headers,
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                msg = error.get("detail", response.text)
+            except Exception:
+                msg = response.text
+            raise ACNError(response.status_code, msg)
+        return TaskInfo.model_validate(response.json())
+
+    async def cancel_participation(
+        self,
+        task_id: str,
+        participation_id: str,
+        agent_id: str | None = None,
+    ) -> TaskInfo:
+        """Withdraw from a task (participant cancels their own participation).
+
+        Requires bearer_token (or dev mode with agent_id header).
+        """
+        headers: dict[str, str] = {}
+        if agent_id:
+            headers["X-Creator-Id"] = agent_id
+
+        response = await self._client.post(
+            f"/api/v1/tasks/{task_id}/participations/{participation_id}/cancel",
+            headers=headers,
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                msg = error.get("detail", response.text)
+            except Exception:
+                msg = response.text
+            raise ACNError(response.status_code, msg)
+        return TaskInfo.model_validate(response.json())
 
     # -------------------------------------------------------------------------
     # ERC-8004 On-Chain Identity

@@ -9,12 +9,11 @@ from uuid import uuid4
 import structlog
 
 from ..core.entities import Participation, ParticipationStatus, Task, TaskMode, TaskStatus
-from ..core.interfaces import IAgentRepository, ITaskRepository
+from ..core.interfaces import IAgentRepository, IEscrowProvider, ITaskRepository
 from ..infrastructure.task_pool import TaskPool
 from ..protocols.ap2 import PaymentTaskManager, WebhookEventType, WebhookService
+from ..protocols.ap2.core import AP_POINTS
 from .activity_service import ActivityService
-from .escrow_client import EscrowClient
-from .wallet_client import WalletClient
 
 logger = structlog.get_logger()
 
@@ -43,9 +42,8 @@ class TaskService:
         payment_manager: PaymentTaskManager | None = None,
         webhook_service: WebhookService | None = None,
         activity_service: ActivityService | None = None,
-        escrow_client: EscrowClient | None = None,
+        escrow_client: IEscrowProvider | None = None,
         agent_repository: IAgentRepository | None = None,
-        wallet_client: WalletClient | None = None,
     ):
         """
         Initialize Task Service
@@ -58,7 +56,6 @@ class TaskService:
             activity_service: Activity service for recording events (optional)
             escrow_client: Labs escrow client for budget management (optional)
             agent_repository: Agent repository for looking up agent owners (optional)
-            wallet_client: Backend wallet client for agent balance (optional)
         """
         self.repository = repository
         self.task_pool = task_pool or TaskPool(repository)
@@ -67,7 +64,6 @@ class TaskService:
         self.activity = activity_service
         self.escrow = escrow_client
         self.agent_repository = agent_repository
-        self.wallet_client = wallet_client
 
     async def create_task(
         self,
@@ -173,7 +169,7 @@ class TaskService:
             task.assigned_at = datetime.now(UTC)
 
         # 统一 escrow 锁定：human 和 agent 创建者都走 v2 escrow
-        if self.escrow and reward_currency.lower() == "points" and float(total_budget) > 0:
+        if self.escrow and reward_currency.lower() in (AP_POINTS, "points") and float(total_budget) > 0:
             logger.info(
                 "escrow_lock_attempt",
                 creator_type=creator_type,
@@ -200,7 +196,7 @@ class TaskService:
             )
 
         # Create AP2 payment task if real currency
-        if reward_currency.lower() not in ["points", "0"] and float(reward_amount) > 0:
+        if reward_currency.lower() not in [AP_POINTS, "points", "0"] and float(reward_amount) > 0:
             if self.payment_manager:
                 try:
                     payment_task = await self.payment_manager.create_task(
@@ -330,7 +326,7 @@ class TaskService:
         await self.repository.save(task)
 
         # Update escrow: set assignee + IN_PROGRESS
-        if self.escrow and task.reward_currency.lower() == "points":
+        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
             try:
                 escrow_info = await self.escrow.get_by_task(task_id)
                 if escrow_info.success and escrow_info.escrow_id:
@@ -383,7 +379,7 @@ class TaskService:
         )
 
         # Activate escrow pool on first join (LOCKED -> ACTIVE)
-        if self.escrow and task.reward_currency.lower() == "points":
+        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
             try:
                 escrow_info = await self.escrow.get_by_task(task.task_id)
                 if escrow_info.success and escrow_info.escrow_id:
@@ -474,7 +470,7 @@ class TaskService:
         await self.repository.save(task)
 
         # Sync escrow status
-        if self.escrow and task.reward_currency.lower() == "points":
+        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
             try:
                 escrow_info = await self.escrow.get_by_task(task_id)
                 if escrow_info.success and escrow_info.escrow_id:
@@ -558,9 +554,9 @@ class TaskService:
         if task.assignee_id:
             await self.task_pool.record_completion(task.task_id, task.assignee_id)
 
-        # Distribute reward for points-based tasks (Agent + Owner split)
+        # Distribute reward for points-based tasks
         if (
-            task.reward_currency.lower() == "points"
+            task.reward_currency.lower() in (AP_POINTS, "points")
             and float(task.reward_amount) > 0
             and task.assignee_id
         ):
@@ -574,7 +570,8 @@ class TaskService:
                     "auto_reward_distributed",
                     task_id=task.task_id,
                     agent_amount=reward_result.get("agent_amount"),
-                    owner_amount=reward_result.get("owner_amount"),
+                    acn_amount=reward_result.get("acn_amount"),
+                    provider_amount=reward_result.get("provider_amount"),
                 )
             else:
                 logger.error(
@@ -649,7 +646,7 @@ class TaskService:
         await self.task_pool.record_completion(task.task_id, p.participant_id)
 
         # Distribute reward
-        if task.reward_currency.lower() == "points" and float(task.reward_amount) > 0:
+        if task.reward_currency.lower() in (AP_POINTS, "points") and float(task.reward_amount) > 0:
             reward_result = await self._distribute_reward(
                 task=task,
                 amount=float(task.reward_amount),
@@ -661,7 +658,9 @@ class TaskService:
                     "auto_reward_distributed_participation",
                     task_id=task.task_id,
                     participation_id=p.participation_id,
-                    amount=reward_result.get("agent_amount"),
+                    agent_amount=reward_result.get("agent_amount"),
+                    acn_amount=reward_result.get("acn_amount"),
+                    provider_amount=reward_result.get("provider_amount"),
                 )
 
         # Check if task is exhausted (all slots filled)
@@ -722,7 +721,7 @@ class TaskService:
             await self.task_pool.record_completion(task_id, p.participant_id)
 
             # Distribute per-completion reward
-            if task.reward_currency.lower() == "points" and float(task.reward_amount) > 0:
+            if task.reward_currency.lower() in (AP_POINTS, "points") and float(task.reward_amount) > 0:
                 await self._distribute_reward(
                     task=task,
                     amount=float(task.reward_amount),
@@ -842,7 +841,7 @@ class TaskService:
         await self.repository.save_participation(p)
 
         # Escrow: set assignee + IN_PROGRESS
-        if self.escrow and task.reward_currency.lower() == "points":
+        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
             try:
                 escrow_info = await self.escrow.get_by_task(task_id)
                 if escrow_info.success and escrow_info.escrow_id:
@@ -982,9 +981,9 @@ class TaskService:
             except Exception as e:
                 logger.error("failed_to_release_payment", error=str(e))
 
-        # Distribute reward for points-based tasks (Agent + Owner split)
+        # Distribute reward for points-based tasks
         if (
-            task.reward_currency.lower() == "points"
+            task.reward_currency.lower() in (AP_POINTS, "points")
             and float(task.reward_amount) > 0
             and task.assignee_id
         ):
@@ -998,7 +997,8 @@ class TaskService:
                     "reward_distributed",
                     task_id=task_id,
                     agent_amount=reward_result.get("agent_amount"),
-                    owner_amount=reward_result.get("owner_amount"),
+                    acn_amount=reward_result.get("acn_amount"),
+                    provider_amount=reward_result.get("provider_amount"),
                 )
             else:
                 logger.error(
@@ -1116,7 +1116,7 @@ class TaskService:
                 logger.error("failed_to_cancel_payment", error=str(e))
 
         # 统一 escrow 退款：human 和 agent 创建者都走 escrow refund
-        if self.escrow and task.reward_currency.lower() == "points":
+        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
             remaining = task.remaining_budget()
             if remaining > 0:
                 result = await self.escrow.refund(
@@ -1322,11 +1322,17 @@ class TaskService:
                             escrow_id=escrow_info.escrow_id,
                             recipient_id=recipient_id,
                             amount=amount,
+                            agent_amount=result.agent_amount,
+                            acn_amount=result.acn_amount,
+                            provider_amount=result.provider_amount,
+                            proof=result.proof,
                         )
                         return {
                             "success": True,
-                            "agent_amount": amount,
-                            "owner_amount": 0,
+                            "agent_amount": result.agent_amount,
+                            "acn_amount": result.acn_amount,
+                            "provider_amount": result.provider_amount,
+                            "proof": result.proof,
                             "via": "escrow_release_partial",
                         }
                     else:
@@ -1356,11 +1362,17 @@ class TaskService:
                         escrow_id=escrow_info.escrow_id,
                         recipient_id=recipient_id,
                         amount=amount,
+                        agent_amount=result.agent_amount,
+                        acn_amount=result.acn_amount,
+                        provider_amount=result.provider_amount,
+                        proof=result.proof,
                     )
                     return {
                         "success": True,
-                        "agent_amount": amount,
-                        "owner_amount": 0,
+                        "agent_amount": result.agent_amount,
+                        "acn_amount": result.acn_amount,
+                        "provider_amount": result.provider_amount,
+                        "proof": result.proof,
                         "via": "escrow_release",
                     }
                 else:
@@ -1386,8 +1398,10 @@ class TaskService:
                 if result.success:
                     return {
                         "success": True,
-                        "agent_amount": amount,
-                        "owner_amount": 0,
+                        "agent_amount": result.agent_amount,
+                        "acn_amount": result.acn_amount,
+                        "provider_amount": result.provider_amount,
+                        "proof": result.proof,
                         "via": "v1_escrow_release",
                     }
                 else:
