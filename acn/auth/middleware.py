@@ -75,10 +75,21 @@ async def _get_jwks(domain: str) -> dict:
             return _jwks_cache["keys"]
 
         jwks_url = f"https://{domain}/.well-known/jwks.json"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(jwks_url)
-            resp.raise_for_status()
-            jwks = resp.json()
+        # Use IPv6 local_address to avoid IPv4/IPv6 conflict in Railway containers
+        # (Railway's private network DNS returns IPv6, but the default httpx transport
+        # binds to 0.0.0.0 which is IPv4-only, causing [Errno -2] DNS failures)
+        try:
+            transport = httpx.AsyncHTTPTransport(local_address="::")
+            async with httpx.AsyncClient(timeout=10.0, transport=transport) as client:
+                resp = await client.get(jwks_url)
+                resp.raise_for_status()
+                jwks = resp.json()
+        except Exception:
+            # Fallback: try without custom transport (e.g. local dev environment)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(jwks_url)
+                resp.raise_for_status()
+                jwks = resp.json()
 
         _jwks_cache["keys"] = jwks
         _jwks_cache["domain"] = domain
