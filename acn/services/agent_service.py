@@ -353,12 +353,20 @@ class AgentService:
         referrer_id: str | None = None,
         metadata: dict | None = None,
         agent_card: dict | None = None,
+        wallet_addresses: dict[str, str] | None = None,
+        accepts_payment: bool = False,
+        payment_methods: list[str] | None = None,
+        token_pricing: dict | None = None,
     ) -> tuple[Agent, str]:
         """
         Autonomous agent joins ACN (self-registration)
 
         Unlike register_agent (platform-managed), this allows agents
         to self-register without an owner. Returns an API key for auth.
+
+        If payment info is provided at join time, the PaymentDiscovery index
+        is automatically populated (有则即时同步). Payment info can also be
+        set or updated later via POST /payments/{id}/payment-capability.
 
         Args:
             name: Agent name
@@ -368,6 +376,10 @@ class AgentService:
             referrer_id: ID of agent who referred this one
             metadata: Additional metadata
             agent_card: A2A Agent Card (v0.3.0) to store at registration time
+            wallet_addresses: Per-network wallet addresses (e.g. {"ethereum": "0x..."})
+            accepts_payment: Whether agent accepts payments
+            payment_methods: Accepted payment methods
+            token_pricing: Token-based pricing config
 
         Returns:
             Tuple of (Agent entity, API key)
@@ -390,11 +402,17 @@ class AgentService:
             verification_code=verification_code,
             referrer_id=referrer_id,
             agent_card=agent_card,
+            wallet_addresses=wallet_addresses or {},
+            accepts_payment=accepts_payment,
+            payment_methods=payment_methods or [],
+            token_pricing=token_pricing,
         )
 
         logger.info("agent_joined", agent_id=agent_id, name=name, referrer_id=referrer_id)
         await self.repository.save(agent)
         await self.repository.set_alive(agent_id, ALIVE_GRACE_TTL)
+        # Auto-sync payment discovery if payment info provided at join time
+        await self._sync_payment_discovery(agent)
         return agent, api_key
 
     async def _sync_payment_discovery(self, agent: Agent) -> None:

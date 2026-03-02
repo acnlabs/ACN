@@ -45,6 +45,24 @@ class AgentJoinRequest(BaseModel):
     endpoint: str | None = Field(None, description="A2A endpoint (optional for pull mode)")
     referrer_id: str | None = Field(None, description="Referrer agent ID")
     agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
+    # Payment capability (optional — can be set later via POST /payments/{id}/payment-capability)
+    wallet_addresses: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-network wallet addresses, e.g. {'ethereum': '0x...', 'base': '0x...'}",
+    )
+    wallet_address: str | None = Field(
+        default=None,
+        description="Legacy single wallet address (auto-mapped to wallet_addresses['ethereum'])",
+    )
+    accepts_payment: bool = Field(default=False, description="Whether agent accepts payments")
+    payment_methods: list[str] = Field(
+        default_factory=list,
+        description="Accepted payment methods, e.g. ['usdc', 'eth', 'platform_credits']",
+    )
+    token_pricing: dict | None = Field(
+        default=None,
+        description="Token-based pricing, e.g. {'input_price_per_million': 3.0, 'output_price_per_million': 15.0, 'currency': 'USD'}",
+    )
 
 
 class AgentJoinResponse(BaseModel):
@@ -573,6 +591,11 @@ async def join_agent(
         }
     """
     try:
+        # Merge legacy wallet_address into wallet_addresses["ethereum"]
+        wallet_addresses = dict(body.wallet_addresses)
+        if body.wallet_address and "ethereum" not in wallet_addresses:
+            wallet_addresses["ethereum"] = body.wallet_address
+
         agent, api_key = await agent_service.join_agent(
             name=body.name,
             description=body.description,
@@ -580,6 +603,10 @@ async def join_agent(
             endpoint=body.endpoint,
             referrer_id=body.referrer_id,
             agent_card=body.agent_card,
+            wallet_addresses=wallet_addresses,
+            accepts_payment=body.accepts_payment,
+            payment_methods=body.payment_methods,
+            token_pricing=body.token_pricing,
         )
 
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
