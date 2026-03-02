@@ -83,13 +83,12 @@ def service(mock_repo, mock_task_pool):
     svc = TaskService(
         repository=mock_repo,
         task_pool=mock_task_pool,
-        # Disable optional integrations (escrow, wallet, etc.)
+        # Disable optional integrations (escrow, etc.)
         payment_manager=None,
         webhook_service=None,
         activity_service=None,
         escrow_client=None,
         agent_repository=None,
-        wallet_client=None,
     )
     return svc
 

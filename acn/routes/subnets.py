@@ -6,7 +6,7 @@ Clean Architecture implementation: Route → Service → Repository
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException
 
-from ..auth.middleware import get_subject, require_permission
+from ..auth.middleware import require_permission
 from ..config import get_settings
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo

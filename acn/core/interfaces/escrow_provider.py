@@ -18,7 +18,6 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
 
-
 # =============================================================================
 # Return Types (migrated from services/escrow_client.py to avoid layer violation)
 # =============================================================================

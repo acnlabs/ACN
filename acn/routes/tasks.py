@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ..auth.middleware import get_subject, require_permission
+from ..auth.middleware import require_permission
 from ..core.entities import TaskMode, TaskStatus
 from ..services import TaskNotFoundException, TaskService
 from .dependencies import AgentApiKeyDep, InternalTokenDep  # type: ignore[import-untyped]
