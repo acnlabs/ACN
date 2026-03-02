@@ -107,7 +107,7 @@ async def set_payment_capability(
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=404, detail="Agent not found") from None
 
     try:
         # Build wallet_addresses: merge request.wallet_addresses with legacy wallet_address

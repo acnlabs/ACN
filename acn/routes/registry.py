@@ -779,7 +779,7 @@ async def get_agent_wallets(
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=404, detail="Agent not found") from None
 
     erc8004 = None
     if agent.erc8004_agent_id:
