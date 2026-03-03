@@ -196,7 +196,8 @@ Start the server and visit the interactive docs: http://localhost:8000/docs
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/agents/register` | POST | Register an agent |
+| `/api/v1/agents/join` | POST | Register or re-join (returns existing ID if already registered) |
+| `/api/v1/agents/register` | POST | Full registration with explicit agent ID |
 | `/api/v1/agents/{agent_id}` | GET | Get agent info |
 | `/api/v1/agents/{agent_id}/card` | GET | Get Agent Card |
 | `/api/v1/agents` | GET | Search agents |
