@@ -13,14 +13,14 @@ import json
 from datetime import UTC, datetime
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
 from ..core.exceptions import AgentNotFoundException
 from ..services.agent_service import AgentService
 from ..services.erc8004_client import ERC8004Client
-from .dependencies import AgentApiKeyDep, AgentServiceDep
+from .dependencies import AgentApiKeyDep, AgentServiceDep, limiter
 
 router = APIRouter(prefix="/api/v1/onchain", tags=["onchain"])
 logger = structlog.get_logger()
@@ -263,7 +263,9 @@ async def get_agent_validation(
 
 
 @router.get("/discover")
+@limiter.limit("20/minute")
 async def discover_onchain_agents(
+    request: Request,
     limit: int = 50,
     agent_service: AgentServiceDep = None,
     erc8004: ERC8004Client = Depends(get_erc8004_client),

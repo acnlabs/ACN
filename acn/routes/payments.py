@@ -1,7 +1,7 @@
 """Payment System API Routes"""
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..protocols.ap2 import (
@@ -22,6 +22,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     PaymentDiscoveryDep,
     PaymentTasksDep,
     RegistryDep,
+    limiter,
 )
 
 router = APIRouter(prefix="/api/v1/payments", tags=["payments"])
@@ -227,8 +228,8 @@ async def create_payment_task(
 
 
 @router.get("/tasks/{task_id}")
-async def get_payment_task(task_id: str, payment_tasks: PaymentTasksDep = None):
-    """Get payment task status"""
+async def get_payment_task(task_id: str, _: InternalTokenDep, payment_tasks: PaymentTasksDep = None):
+    """Get payment task status (internal only)"""
     task = await payment_tasks.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Payment task not found")
@@ -365,7 +366,9 @@ async def get_token_pricing(
 
 
 @router.post("/billing/estimate")
+@limiter.limit("30/minute")
 async def estimate_cost(
+    request: Request,
     request: EstimateCostRequest,
     payment_discovery: PaymentDiscoveryDep = None,
 ):

@@ -9,10 +9,15 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from fastapi import Request as _Request
+
 from ..auth.middleware import require_permission
+from ..config import get_settings
 from ..core.entities import TaskMode, TaskStatus
 from ..services import TaskNotFoundException, TaskService
-from .dependencies import AgentApiKeyDep, InternalTokenDep  # type: ignore[import-untyped]
+from .dependencies import AgentApiKeyDep, InternalTokenDep, limiter  # type: ignore[import-untyped]
+
+settings = get_settings()
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 logger = structlog.get_logger()
@@ -236,7 +241,9 @@ def _participation_to_response(p) -> ParticipationResponse:
 
 
 @router.get("", response_model=TaskListResponse)
+@limiter.limit("60/minute")
 async def list_tasks(
+    request: _Request,
     mode: str | None = Query(None, description="Filter by mode: open, assigned"),
     status: str | None = Query(None, description="Filter by status"),
     skills: str | None = Query(None, description="Filter by skills (comma-separated)"),
@@ -292,7 +299,9 @@ async def list_tasks(
 
 
 @router.get("/match")
+@limiter.limit("30/minute")
 async def match_tasks_for_agent(
+    request: _Request,
     skills: str = Query(..., description="Agent skills (comma-separated)"),
     limit: int = Query(20, ge=1, le=100),
     task_service: TaskServiceDep = None,
@@ -316,7 +325,9 @@ async def match_tasks_for_agent(
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
+@limiter.limit("120/minute")
 async def get_task(
+    request: _Request,
     task_id: str,
     task_service: TaskServiceDep = None,
 ):
@@ -334,7 +345,7 @@ async def get_task(
 @router.post("", response_model=TaskResponse)
 async def create_task(
     request: TaskCreateRequest,
-    http_request: Request,
+    request: Request,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
@@ -346,12 +357,12 @@ async def create_task(
     """
     token_owner = payload.get("sub", "dev@clients")
 
-    # Dev mode: allow X-Creator-Id header override
-    creator_id_header = http_request.headers.get("x-creator-id")
-    creator_name_header = http_request.headers.get("x-creator-name")
-    creator_type_header = http_request.headers.get("x-creator-type", "human")
+    # Dev mode only: allow X-Creator-Id header override
+    creator_id_header = request.headers.get("x-creator-id")
+    creator_name_header = request.headers.get("x-creator-name")
+    creator_type_header = request.headers.get("x-creator-type", "human")
 
-    if creator_id_header:
+    if creator_id_header and settings.dev_mode:
         token_owner = creator_id_header
 
     # Parse mode
@@ -400,7 +411,7 @@ async def create_task(
 @router.post("/{task_id}/accept", response_model=TaskAcceptResponse)
 async def accept_task(
     task_id: str,
-    http_request: Request,
+    request: Request,
     request: TaskAcceptRequest = None,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
@@ -408,9 +419,9 @@ async def accept_task(
     """Accept/join a task. Returns participation_id for multi-participant tasks."""
     token_owner = payload.get("sub", "dev@clients")
 
-    agent_id = http_request.headers.get("x-creator-id") or token_owner
-    agent_name = http_request.headers.get("x-creator-name") or agent_id
-    agent_type = http_request.headers.get("x-creator-type", "agent")
+    agent_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
+    agent_name = request.headers.get("x-creator-name") or agent_id
+    agent_type = request.headers.get("x-creator-type", "agent")
 
     try:
         task, participation_id = await task_service.accept_task(
@@ -433,7 +444,7 @@ async def accept_task(
 @router.post("/{task_id}/submit", response_model=TaskResponse)
 async def submit_task(
     task_id: str,
-    http_request: Request,
+    request: Request,
     request: TaskSubmitRequest,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
@@ -441,8 +452,8 @@ async def submit_task(
     """Submit task result"""
     token_owner = payload.get("sub", "dev@clients")
 
-    # Dev mode: allow X-Creator-Id header override
-    agent_id = http_request.headers.get("x-creator-id") or token_owner
+    # Dev mode only: allow X-Creator-Id header override
+    agent_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
 
     try:
         task = await task_service.submit_task(
@@ -465,14 +476,14 @@ async def submit_task(
 @router.post("/{task_id}/review", response_model=TaskResponse)
 async def review_task(
     task_id: str,
-    http_request: Request,
+    request: Request,
     request: TaskReviewRequest,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
     """Approve or reject task/participation submission"""
     token_owner = payload.get("sub", "dev@clients")
-    reviewer_id = http_request.headers.get("x-creator-id") or token_owner
+    reviewer_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
 
     try:
         # Multi-participant review (participation_id or agent_id provided)
@@ -535,7 +546,9 @@ async def cancel_task(
 
 
 @router.get("/{task_id}/participations", response_model=ParticipationListResponse)
+@limiter.limit("60/minute")
 async def list_participations(
+    request: _Request,
     task_id: str,
     status: str | None = Query(
         None, description="Filter by status: active, submitted, completed, rejected, cancelled"
@@ -563,13 +576,13 @@ async def list_participations(
 @router.get("/{task_id}/participations/me", response_model=ParticipationResponse | None)
 async def get_my_participation(
     task_id: str,
-    http_request: Request,
+    request: Request,
     payload: dict = Depends(require_permission("acn:read")),
     task_service: TaskServiceDep = None,
 ):
     """Get the current user's participation in a task"""
     token_owner = payload.get("sub", "dev@clients")
-    agent_id = http_request.headers.get("x-creator-id") or token_owner
+    agent_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
 
     p = await task_service.get_user_participation(task_id, agent_id)
     if not p:
@@ -581,13 +594,13 @@ async def get_my_participation(
 async def cancel_participation(
     task_id: str,
     participation_id: str,
-    http_request: Request,
+    request: Request,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
     """Cancel a participation (participant withdraws)"""
     token_owner = payload.get("sub", "dev@clients")
-    agent_id = http_request.headers.get("x-creator-id") or token_owner
+    agent_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
 
     try:
         task = await task_service.cancel_participation(
@@ -608,13 +621,13 @@ async def cancel_participation(
 async def approve_applicant(
     task_id: str,
     participation_id: str,
-    http_request: Request,
+    request: Request,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
     """Approve an applicant for an assigned task (creator only). Sets them as assignee."""
     token_owner = payload.get("sub", "dev@clients")
-    approver_id = http_request.headers.get("x-creator-id") or token_owner
+    approver_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
 
     try:
         task = await task_service.approve_applicant(
@@ -635,13 +648,13 @@ async def approve_applicant(
 async def reject_applicant(
     task_id: str,
     participation_id: str,
-    http_request: Request,
+    request: Request,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
     """Reject an applicant for an assigned task (creator only)."""
     token_owner = payload.get("sub", "dev@clients")
-    approver_id = http_request.headers.get("x-creator-id") or token_owner
+    approver_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
 
     try:
         task = await task_service.reject_applicant(

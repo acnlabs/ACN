@@ -7,7 +7,7 @@ import secrets
 import time
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from slowapi import Limiter  # type: ignore[import-untyped]
 from slowapi.util import get_remote_address  # type: ignore[import-untyped]
 
@@ -27,8 +27,20 @@ from ..services.activity_service import ActivityService
 
 settings = get_settings()
 
-# Shared rate limiter — single instance used by all routers
-limiter = Limiter(key_func=get_remote_address)
+
+def _get_real_ip(request: Request) -> str:
+    """Extract real client IP, respecting reverse proxy headers."""
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip
+    return get_remote_address(request)
+
+
+# Shared rate limiter — backed by Redis for consistency across multiple instances
+limiter = Limiter(key_func=_get_real_ip, storage_uri=settings.redis_url)
 
 # Global service instances (initialized in lifespan)
 _registry: AgentRegistry | None = None

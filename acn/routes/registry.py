@@ -358,7 +358,8 @@ async def list_unclaimed_agents(
 
 
 @router.get("/{agent_id}", response_model=AgentInfo)
-async def get_agent(agent_id: str, agent_service: AgentServiceDep = None):
+@limiter.limit("120/minute")
+async def get_agent(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
     """Get agent information (public discovery; verification_code not included)."""
     try:
         agent = await agent_service.get_agent(agent_id)
@@ -368,7 +369,9 @@ async def get_agent(agent_id: str, agent_service: AgentServiceDep = None):
 
 
 @router.get("", response_model=AgentSearchResponse)
+@limiter.limit("60/minute")
 async def search_agents(
+    request: Request,
     skill: str | None = None,
     status: Literal["online", "offline", "all"] = Query(
         default="online",

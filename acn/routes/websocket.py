@@ -1,5 +1,7 @@
 """WebSocket API Routes"""
 
+import json
+
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
@@ -19,24 +21,56 @@ logger = structlog.get_logger()
 async def websocket_endpoint(
     websocket: WebSocket,
     agent_id: str,
-    token: str = Query(..., description="Agent API key for authentication"),
+    token: str | None = Query(None, description="[Deprecated] Agent API key — use first-message auth instead"),
 ):
     """WebSocket endpoint for real-time communication.
 
-    Requires `?token=<API_KEY>` query parameter. The API key must belong to
-    the agent identified by `agent_id` to prevent connection hijacking.
+    Authentication options (in order of preference):
+    1. First-message auth (recommended): after connecting, send JSON:
+       {"type": "auth", "token": "<API_KEY>"}
+       Server responds with {"type": "auth_ok"} or closes with code 4401.
+    2. URL query param (deprecated): ?token=<API_KEY>
+       Still supported for backward compatibility, but the key appears in
+       server access logs. Migrate to first-message auth.
     """
     ws_manager = get_ws_manager()
     agent_service = get_agent_service()
 
-    # Validate API key; must accept before sending close frame (Starlette requirement)
-    agent = await agent_service.get_agent_by_api_key(token)
+    await websocket.accept()
+
+    # --- Resolve token ---
+    resolved_token = token  # may be None
+
+    if resolved_token is None:
+        # First-message auth: wait for {"type": "auth", "token": "..."}
+        try:
+            raw = await websocket.receive_text()
+            msg = json.loads(raw)
+            if msg.get("type") == "auth" and msg.get("token"):
+                resolved_token = msg["token"]
+            else:
+                await websocket.close(code=4401, reason="Unauthorized: expected auth message")
+                return
+        except Exception:
+            await websocket.close(code=4401, reason="Unauthorized: invalid auth message")
+            return
+    else:
+        logger.warning(
+            "websocket_token_in_url_deprecated",
+            agent_id=agent_id,
+            message="API key passed as URL param — migrate to first-message auth",
+        )
+
+    # Validate API key
+    agent = await agent_service.get_agent_by_api_key(resolved_token)
     if not agent or agent.agent_id != agent_id:
-        await websocket.accept()
         await websocket.close(code=4401, reason="Unauthorized: invalid API key")
         return
 
-    await websocket.accept()
+    # Notify client auth succeeded (first-message auth flow)
+    if token is None:
+        await websocket.send_text(json.dumps({"type": "auth_ok"}))
+
     logger.info("websocket_connected", agent_id=agent_id)
 
     try:

@@ -4,9 +4,10 @@ Clean Architecture implementation: Route → Service → Repository
 """
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ..auth.middleware import require_permission
+from ..auth.middleware import require_permission, verify_token
 from ..config import get_settings
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
@@ -15,6 +16,8 @@ from .dependencies import (  # type: ignore[import-untyped]
     AgentServiceDep,
     SubnetServiceDep,
 )
+
+_optional_bearer = HTTPBearer(auto_error=False)
 
 router = APIRouter(prefix="/api/v1/subnets", tags=["subnets"])
 logger = structlog.get_logger()
@@ -82,14 +85,32 @@ async def create_subnet(
 @router.get("")
 async def list_subnets(
     owner: str = None,
+    credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
 ):
     """List all subnets
 
     Clean Architecture: Route → SubnetService → Repository
+    When ?owner= is provided, authentication is required and the caller must
+    be the owner (or hold acn:admin permission).
     """
     try:
         if owner:
+            # Require auth when filtering by owner to prevent private subnet enumeration
+            if not credentials:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required when filtering by owner",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            payload = await verify_token(credentials)
+            requester = payload.get("sub", "")
+            permissions = payload.get("permissions", [])
+            if requester != owner and "acn:admin" not in permissions:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Cannot list subnets for another user",
+                )
             subnets = await subnet_service.list_subnets(owner=owner)
         else:
             subnets = await subnet_service.list_public_subnets()
@@ -98,6 +119,8 @@ async def list_subnets(
         subnet_infos = [_subnet_entity_to_info(s) for s in subnets]
 
         return {"subnets": subnet_infos, "count": len(subnet_infos)}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("list_subnets_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list subnets") from e
@@ -122,18 +145,38 @@ async def get_subnet(
 @router.get("/{subnet_id}/agents")
 async def get_subnet_agents(
     subnet_id: str,
+    credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
 ):
     """Get all agents in a subnet
 
     Clean Architecture: Route → Service → Repository
+    Private subnets require authentication; the caller must be the owner
+    or hold acn:admin permission.
     """
-    # Verify subnet exists
+    # Verify subnet exists and check privacy
     try:
-        await subnet_service.get_subnet(subnet_id)
+        subnet = await subnet_service.get_subnet(subnet_id)
     except SubnetNotFoundException as e:
         raise HTTPException(status_code=404, detail="Subnet not found") from e
+
+    # Enforce auth for private subnets
+    if getattr(subnet, "is_private", False):
+        if not credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required to view private subnet members",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        payload = await verify_token(credentials)
+        requester = payload.get("sub", "")
+        permissions = payload.get("permissions", [])
+        if requester != subnet.owner and "acn:admin" not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: private subnet",
+            )
 
     try:
         agents = await agent_service.search_agents(subnet_id=subnet_id)
@@ -144,6 +187,8 @@ async def get_subnet_agents(
         agent_infos = [_agent_entity_to_info(a, strip_sensitive=True) for a in agents]
 
         return {"subnet_id": subnet_id, "agents": agent_infos, "count": len(agent_infos)}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("get_subnet_agents_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve subnet agents") from e

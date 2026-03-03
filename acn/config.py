@@ -88,11 +88,11 @@ class Settings(BaseSettings):
     otel_enabled: bool = False  # Enable OpenTelemetry (requires opentelemetry-sdk)
 
     # Development mode (disables Auth0 requirement for some endpoints)
-    dev_mode: bool = True  # Set to False in production
+    dev_mode: bool = False  # Set to True for local development (DEV_MODE=true)
 
     # API docs (Swagger UI / ReDoc / openapi.json)
     # Independent of dev_mode — operators can expose docs on staging while using prod auth
-    enable_docs: bool = True  # Set to False on official hosted instances
+    enable_docs: bool = False  # Set to True for local development (ENABLE_DOCS=true)
 
     # WebSocket limits
     max_websocket_connections: int = 10_000
