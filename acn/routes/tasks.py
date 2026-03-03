@@ -732,7 +732,7 @@ async def agent_accept_task(
     """Accept a task (Agent API Key auth)"""
 
     try:
-        task = await task_service.accept_task(
+        task, _participation_id = await task_service.accept_task(
             task_id=task_id,
             agent_id=agent_info["agent_id"],
             agent_name=agent_info.get("name", "Agent"),
