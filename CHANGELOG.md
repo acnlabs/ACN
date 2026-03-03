@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-03-03
+
+### Fixed
+
+- **`auth/middleware.py`**: In `dev_mode`, any bearer token (including ACN API keys) was passed to `_verify_jwt()` which tried to decode it as a JWT against Auth0, causing `500 Authentication service error`. Fixed by returning a dev stub payload immediately when `dev_mode=True`, without calling Auth0. The token value is used as the `sub` claim so agents remain distinguishable.
+- **`routes/tasks.py` (`agent_accept_task`)**: `accept_task()` returns a `(task, participation_id)` tuple but the agent-specific route was assigning the whole tuple to `task`, causing `_task_to_response()` to fail with `500 Internal Server Error`. Fixed by unpacking correctly: `task, _participation_id = await ...`.
+
 ## [0.4.0] - 2026-03-02
 
 ### Added
