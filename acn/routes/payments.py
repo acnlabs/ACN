@@ -369,7 +369,7 @@ async def get_token_pricing(
 @limiter.limit("30/minute")
 async def estimate_cost(
     request: Request,
-    request: EstimateCostRequest,
+    body: EstimateCostRequest,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """
@@ -377,18 +377,18 @@ async def estimate_cost(
 
     Returns cost breakdown including network fee.
     """
-    capability = await payment_discovery.get_agent_payment_capability(request.agent_id)
+    capability = await payment_discovery.get_agent_payment_capability(body.agent_id)
     if not capability or not capability.token_pricing:
         raise HTTPException(status_code=404, detail="Token pricing not configured for this agent")
 
     # Calculate cost breakdown
     breakdown = capability.token_pricing.calculate_cost_with_network_fee(
-        request.estimated_input_tokens,
-        request.estimated_output_tokens,
+        body.estimated_input_tokens,
+        body.estimated_output_tokens,
     )
 
     return {
-        "agent_id": request.agent_id,
+        "agent_id": body.agent_id,
         "estimate": breakdown,
         "note": "Actual cost may vary based on actual token usage",
     }

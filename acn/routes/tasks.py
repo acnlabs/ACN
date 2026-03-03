@@ -7,9 +7,8 @@ from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
-
 from fastapi import Request as _Request
+from pydantic import BaseModel, Field
 
 from ..auth.middleware import require_permission
 from ..config import get_settings
@@ -344,7 +343,7 @@ async def get_task(
 
 @router.post("", response_model=TaskResponse)
 async def create_task(
-    request: TaskCreateRequest,
+    body: TaskCreateRequest,
     request: Request,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
@@ -367,39 +366,39 @@ async def create_task(
 
     # Parse mode
     try:
-        mode = TaskMode(request.mode)
+        mode = TaskMode(body.mode)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}") from None
+        raise HTTPException(status_code=400, detail=f"Invalid mode: {body.mode}") from None
 
     try:
         task = await task_service.create_task(
             creator_type=creator_type_header,
             creator_id=token_owner,
             creator_name=creator_name_header or token_owner,
-            title=request.title,
-            description=request.description,
+            title=body.title,
+            description=body.description,
             mode=mode,
-            task_type=request.task_type,
-            required_skills=request.required_skills,
-            reward_amount=request.reward_amount,
-            reward_currency=request.reward_currency,
-            is_repeatable=request.is_repeatable,
-            is_multi_participant=request.is_multi_participant,
-            allow_repeat_by_same=request.allow_repeat_by_same,
-            max_completions=request.max_completions,
-            deadline_hours=request.deadline_hours,
-            assignee_id=request.assignee_id,
-            assignee_name=request.assignee_name,
-            approval_type=request.approval_type,
-            validator_id=request.validator_id,
-            metadata=request.metadata,
+            task_type=body.task_type,
+            required_skills=body.required_skills,
+            reward_amount=body.reward_amount,
+            reward_currency=body.reward_currency,
+            is_repeatable=body.is_repeatable,
+            is_multi_participant=body.is_multi_participant,
+            allow_repeat_by_same=body.allow_repeat_by_same,
+            max_completions=body.max_completions,
+            deadline_hours=body.deadline_hours,
+            assignee_id=body.assignee_id,
+            assignee_name=body.assignee_name,
+            approval_type=body.approval_type,
+            validator_id=body.validator_id,
+            metadata=body.metadata,
         )
 
         logger.info(
             "task_created",
             task_id=task.task_id,
             creator=token_owner,
-            approval_type=request.approval_type,
+            approval_type=body.approval_type,
         )
         return _task_to_response(task)
 
@@ -412,7 +411,7 @@ async def create_task(
 async def accept_task(
     task_id: str,
     request: Request,
-    request: TaskAcceptRequest = None,
+    body: TaskAcceptRequest = None,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
@@ -445,7 +444,7 @@ async def accept_task(
 async def submit_task(
     task_id: str,
     request: Request,
-    request: TaskSubmitRequest,
+    body: TaskSubmitRequest,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
@@ -459,9 +458,9 @@ async def submit_task(
         task = await task_service.submit_task(
             task_id=task_id,
             agent_id=agent_id,
-            submission=request.submission,
-            artifacts=request.artifacts,
-            participation_id=request.participation_id,
+            submission=body.submission,
+            artifacts=body.artifacts,
+            participation_id=body.participation_id,
         )
         return _task_to_response(task)
 
@@ -477,7 +476,7 @@ async def submit_task(
 async def review_task(
     task_id: str,
     request: Request,
-    request: TaskReviewRequest,
+    body: TaskReviewRequest,
     payload: dict = Depends(require_permission("acn:write")),
     task_service: TaskServiceDep = None,
 ):
@@ -487,26 +486,26 @@ async def review_task(
 
     try:
         # Multi-participant review (participation_id or agent_id provided)
-        if request.participation_id or request.agent_id:
+        if body.participation_id or body.agent_id:
             task = await task_service.review_participation(
                 task_id=task_id,
                 approver_id=reviewer_id,
-                approved=request.approved,
-                participation_id=request.participation_id,
-                agent_id=request.agent_id,
-                notes=request.notes,
+                approved=body.approved,
+                participation_id=body.participation_id,
+                agent_id=body.agent_id,
+                notes=body.notes,
             )
-        elif request.approved:
+        elif body.approved:
             task = await task_service.complete_task(
                 task_id=task_id,
                 approver_id=reviewer_id,
-                notes=request.notes,
+                notes=body.notes,
             )
         else:
             task = await task_service.reject_task(
                 task_id=task_id,
                 reviewer_id=reviewer_id,
-                notes=request.notes,
+                notes=body.notes,
             )
         return _task_to_response(task)
 
