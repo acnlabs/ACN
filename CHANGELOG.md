@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.1] - 2026-03-03
 
+### Security
+
+- **Rate limiting** (`routes/dependencies.py`, `routes/tasks.py`, `routes/payments.py`, `routes/analytics.py`, `routes/onchain.py`, `routes/registry.py`):
+  - Added `@limiter.limit(...)` decorators to all public-facing endpoints.
+  - `Limiter` now uses a proxy-aware `_get_real_ip` key function that extracts the real client IP from `X-Forwarded-For` / `X-Real-IP` headers before falling back to `request.client.host`.
+  - `storage_uri=settings.redis_url` — rate limit state is now stored in Redis, making limits effective across multiple instances.
+- **WebSocket authentication** (`routes/websocket.py`): Moved agent authentication from URL query parameter (`?token=`) to first-message JSON payload (`{"token": "..."}`) to prevent credentials appearing in server logs and proxy access logs.
+- **`routes/tasks.py`**: Renamed Pydantic request body parameters from `request` to `body` in `create_task`, `accept_task`, `submit_task`, `review_task` and `estimate_cost` (in `routes/payments.py`) to resolve `SyntaxError: duplicate argument 'request'` introduced by the slowapi `request: Request` requirement.
+
 ### Fixed
 
 - **`auth/middleware.py`**: In `dev_mode`, any bearer token (including ACN API keys) was passed to `_verify_jwt()` which tried to decode it as a JWT against Auth0, causing `500 Authentication service error`. Fixed by returning a dev stub payload immediately when `dev_mode=True`, without calling Auth0. The token value is used as the `sub` claim so agents remain distinguishable.
