@@ -245,8 +245,14 @@ async def verify_token(
     """FastAPI dependency: verify Bearer token and return JWT payload."""
     settings = _get_settings()
 
-    if settings.dev_mode and credentials is None:
-        return {"sub": "dev@clients", "permissions": ["acn:read", "acn:write", "acn:admin"]}
+    if settings.dev_mode:
+        # In dev mode: accept any credential (API keys, stub tokens, etc.)
+        # as a convenience shortcut — no Auth0 verification.
+        sub = "dev@clients"
+        if credentials is not None:
+            # Use the token value as subject so agents remain distinguishable
+            sub = credentials.credentials
+        return {"sub": sub, "permissions": ["acn:read", "acn:write", "acn:admin"]}
 
     if credentials is None:
         raise HTTPException(
@@ -282,8 +288,10 @@ async def get_subject(
     """FastAPI dependency: return the 'sub' claim from the JWT."""
     settings = _get_settings()
 
-    if settings.dev_mode and credentials is None:
-        return "dev@clients"
+    if settings.dev_mode:
+        if credentials is None:
+            return "dev@clients"
+        return credentials.credentials
 
     payload = await verify_token(credentials)
     return payload.get("sub", "unknown")
