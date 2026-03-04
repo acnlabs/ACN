@@ -1,0 +1,58 @@
+name: Smoke Backend Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      acn_base_url:
+        description: "ACN base URL override"
+        required: false
+        type: string
+      backend_base_url:
+        description: "Backend base URL override"
+        required: false
+        type: string
+      timeout:
+        description: "HTTP timeout seconds"
+        required: false
+        default: "30"
+        type: string
+  schedule:
+    # Daily 02:10 UTC
+    - cron: "10 2 * * *"
+
+jobs:
+  smoke:
+    name: ACN -> Backend smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime deps
+        run: python -m pip install --upgrade pip requests
+
+      - name: Run smoke test
+        env:
+          ACN_BASE_URL_INPUT: ${{ github.event.inputs.acn_base_url }}
+          BACKEND_BASE_URL_INPUT: ${{ github.event.inputs.backend_base_url }}
+          TIMEOUT_INPUT: ${{ github.event.inputs.timeout }}
+          ACN_BASE_URL_DEFAULT: https://acn-production-9ae5.up.railway.app
+          BACKEND_BASE_URL_DEFAULT: https://agentplanet-backend-production.up.railway.app
+        run: |
+          ACN_BASE_URL="${ACN_BASE_URL_INPUT:-$ACN_BASE_URL_DEFAULT}"
+          BACKEND_BASE_URL="${BACKEND_BASE_URL_INPUT:-$BACKEND_BASE_URL_DEFAULT}"
+          TIMEOUT="${TIMEOUT_INPUT:-30}"
+          echo "Running smoke test against:"
+          echo "  ACN: $ACN_BASE_URL"
+          echo "  Backend: $BACKEND_BASE_URL"
+          python3 scripts/smoke_backend_integration.py \
+            --acn-base-url "$ACN_BASE_URL" \
+            --backend-base-url "$BACKEND_BASE_URL" \
+            --timeout "$TIMEOUT"
