@@ -146,7 +146,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize payment services
     webhook_config = create_webhook_config_from_settings(settings)
-    webhook_service_instance = WebhookService(webhook_config)
+    webhook_service_instance = WebhookService(registry_instance.redis, webhook_config)
     payment_discovery_instance = PaymentDiscoveryService(registry_instance.redis)
     # Inject payment_discovery into AgentService so registration auto-syncs the index
     agent_service_instance.payment_discovery = payment_discovery_instance

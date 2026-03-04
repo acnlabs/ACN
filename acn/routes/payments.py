@@ -154,7 +154,7 @@ async def set_payment_capability(
     capability = PaymentCapability(
         agent_id=agent_id,
         accepts_payment=request.accepts_payment,
-        supported_methods=request.supported_methods,
+        payment_methods=request.supported_methods,
         supported_networks=request.supported_networks,
         wallet_address=legacy_addr,
         wallet_addresses=wallet_addresses,
@@ -209,18 +209,18 @@ async def create_payment_task(
             detail="Authenticated agent does not match from_agent field",
         )
     try:
-        task_id = await payment_tasks.create_task(
-            from_agent=request.from_agent,
-            to_agent=request.to_agent,
-            amount=request.amount,
+        task = await payment_tasks.create_payment_task(
+            buyer_agent=request.from_agent,
+            seller_agent=request.to_agent,
+            task_description=request.description or f"Payment task: {request.from_agent} -> {request.to_agent}",
+            amount=str(request.amount),
             currency=request.currency,
             payment_method=request.payment_method,
-            network=request.network,
-            description=request.description,
+            task_type="payment",
             metadata=request.metadata,
         )
 
-        return {"task_id": task_id, "status": "created"}
+        return {"task_id": task.task_id, "status": "created"}
 
     except Exception as e:
         logger.error("create_payment_task_failed", error=str(e), exc_info=True)

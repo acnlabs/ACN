@@ -580,14 +580,26 @@ class PaymentTaskManager:
         if not capability or not capability.accepts_payment:
             raise ValueError(f"Agent {seller_agent} does not accept payments")
 
-        # Determine payment method
+        # Determine payment method.
+        # Be tolerant of mixed storage formats (enum values vs plain strings).
+        supported_methods: list[SupportedPaymentMethod] = []
+        for method in capability.payment_methods or []:
+            if isinstance(method, SupportedPaymentMethod):
+                supported_methods.append(method)
+                continue
+            try:
+                supported_methods.append(SupportedPaymentMethod(str(method)))
+            except ValueError:
+                # Ignore unknown legacy values instead of hard-failing here.
+                continue
+
         if payment_method:
-            if payment_method not in capability.payment_methods:
+            if payment_method not in supported_methods:
                 raise ValueError(f"Agent {seller_agent} does not accept {payment_method.value}")
         else:
             # Use first available method
-            if capability.payment_methods:
-                payment_method = capability.payment_methods[0]
+            if supported_methods:
+                payment_method = supported_methods[0]
 
         # Determine network and resolve the correct wallet address for that network
         network = capability.supported_networks[0] if capability.supported_networks else None
