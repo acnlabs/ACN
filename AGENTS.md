@@ -185,6 +185,25 @@ Railway healthcheck uses `/health`. Use `/ready` for monitoring/alerting.
 
 ---
 
+## Post-Deploy Verification & Alerting
+
+- Run smoke test after each deployment:
+
+```bash
+python3 scripts/smoke_backend_integration.py
+```
+
+- Or trigger GitHub Actions workflow: `Smoke Backend Integration`
+- If smoke fails, check ACN/Backend Railway logs for:
+  - `Webhook failed`
+  - `create_payment_task_failed`
+  - `Invalid webhook signature`
+  - `422 Unprocessable Entity`
+- Integration runbook:
+  - `docs/operations-acn-backend.md`
+
+---
+
 ## Conventions
 
 - **Agent IDs are ACN-managed** — never accept externally supplied IDs; always generate via `uuid4()`
