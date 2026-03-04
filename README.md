@@ -419,6 +419,7 @@ python3 scripts/smoke_backend_integration.py \
 - **[skills/acn/SKILL.md](skills/acn/SKILL.md)** - Agent-facing skill documentation (agentskills.io format)
 - **[API Reference](docs/api.md)** - Complete REST API documentation
 - **[Architecture](docs/architecture.md)** - System design and data models
+- **[ACN-Backend Operations](docs/operations-acn-backend.md)** - Railway variables, smoke checks, and alerting runbook
 - **[Federation Design](docs/federation.md)** - Future roadmap for interconnected ACN instances
 
 ---
