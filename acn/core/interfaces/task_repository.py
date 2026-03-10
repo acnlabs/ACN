@@ -31,7 +31,7 @@ class ITaskRepository(ABC):
     async def find_open_tasks(
         self,
         mode: TaskMode | None = None,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         task_type: str | None = None,
         limit: int = 50,
         offset: int = 0,

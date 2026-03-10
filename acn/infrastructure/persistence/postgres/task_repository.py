@@ -72,7 +72,7 @@ class PostgresTaskRepository(ITaskRepository):
             title=row.title,
             description=row.description or "",
             task_type=meta.get("task_type", "general"),
-            required_skills=list(row.required_skills or []),
+            required_tags=list(row.required_tags or []),
             assignee_id=row.assignee_id,
             assignee_name=meta.get("assignee_name"),
             assigned_at=meta.get("assigned_at")
@@ -141,7 +141,7 @@ class PostgresTaskRepository(ITaskRepository):
             is_multi_participant=task.is_multi_participant,
             max_completions=task.max_completions,
             completed_count=task.completed_count,
-            required_skills=task.required_skills or None,
+            required_tags=task.required_tags or None,
             created_at=_tz(task.created_at) or datetime.now(UTC),
             deadline=_tz(task.deadline),
             task_metadata=extra_meta,
@@ -219,7 +219,7 @@ class PostgresTaskRepository(ITaskRepository):
                         is_multi_participant=model.is_multi_participant,
                         max_completions=model.max_completions,
                         completed_count=model.completed_count,
-                        required_skills=model.required_skills,
+                        required_tags=model.required_tags,
                         deadline=model.deadline,
                         task_metadata=model.task_metadata,
                     )
@@ -239,7 +239,7 @@ class PostgresTaskRepository(ITaskRepository):
     async def find_open_tasks(
         self,
         mode: TaskMode | None = None,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         task_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -249,9 +249,9 @@ class PostgresTaskRepository(ITaskRepository):
             if mode:
                 stmt = stmt.where(TaskModel.mode == mode.value)
             if skills:
-                # PostgreSQL ARRAY containment: required_skills @> ARRAY[skill1, skill2]
+                # PostgreSQL ARRAY containment: required_tags @> ARRAY[skill1, skill2]
                 stmt = stmt.where(
-                    TaskModel.required_skills.contains(cast(skills, ARRAY(String)))
+                    TaskModel.required_tags.contains(cast(skills, ARRAY(String)))
                 )
             if task_type:
                 # task_type is stored in JSONB metadata column

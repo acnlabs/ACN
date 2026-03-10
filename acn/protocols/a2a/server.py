@@ -290,7 +290,7 @@ class ACNAgentExecutor(AgentExecutor):
         # Extract broadcast parameters
         params = self._extract_data_from_message(message)
         target_agents = params.get("target_agents", [])
-        target_skills = params.get("target_skills")
+        target_tags = params.get("target_tags")
         strategy = params.get("strategy", "parallel")
         broadcast_message_text = params.get("message", "")
 
@@ -305,11 +305,11 @@ class ACNAgentExecutor(AgentExecutor):
 
         try:
             # Execute broadcast
-            if target_skills:
+            if target_tags:
                 # Broadcast by skill
-                result = await self.broadcast.send_by_skill(
+                result = await self.broadcast.send_by_tag(
                     from_agent=from_agent,
-                    skills=target_skills,
+                    tags=target_tags,
                     message=broadcast_msg,
                     strategy=BroadcastStrategy(strategy),
                 )
@@ -363,13 +363,13 @@ class ACNAgentExecutor(AgentExecutor):
         await self._send_status(event_queue, context, TaskState.working, "Discovering agents")
 
         params = self._extract_data_from_message(message)
-        skills = params.get("skills", [])
+        tags = params.get("tags", [])
         status = params.get("status", "online")
 
         try:
             # Search agents
             agents = await self.registry.search_agents(
-                skills=skills,
+                tags=tags,
                 status=status,
             )
 
@@ -385,7 +385,7 @@ class ACNAgentExecutor(AgentExecutor):
                                     "agent_id": agent.agent_id,
                                     "name": agent.name,
                                     "endpoint": agent.endpoint,
-                                    "skills": agent.skills,
+                                    "tags": agent.tags,
                                     "status": agent.status,
                                 }
                                 for agent in agents
@@ -621,7 +621,7 @@ def create_a2a_app(
         ),
         default_input_modes=["text", "application/json"],
         default_output_modes=["text", "application/json"],
-        skills=[
+        tags=[
             AgentSkill(
                 id="acn:broadcast",
                 name="Multi-Agent Broadcasting",

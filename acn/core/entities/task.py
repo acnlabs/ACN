@@ -226,7 +226,7 @@ class Task:
     title: str
     description: str
     task_type: str = "general"  # coding, review, research, design, etc.
-    required_skills: list[str] = field(default_factory=list)
+    required_tags: list[str] = field(default_factory=list)
 
     # Status
     status: TaskStatus = TaskStatus.OPEN
@@ -507,11 +507,11 @@ class Task:
             return False
         return datetime.now(UTC) > self.deadline
 
-    def matches_skills(self, agent_skills: list[str]) -> bool:
-        """Check if agent has required skills"""
-        if not self.required_skills:
+    def matches_tags(self, agent_tags: list[str]) -> bool:
+        """Check if agent has all required tags"""
+        if not self.required_tags:
             return True
-        return all(skill in agent_skills for skill in self.required_skills)
+        return all(tag in agent_tags for tag in self.required_tags)
 
     # ========== Serialization ==========
 
@@ -526,7 +526,7 @@ class Task:
             "title": self.title,
             "description": self.description,
             "task_type": self.task_type,
-            "required_skills": self.required_skills,
+            "required_tags": self.required_tags,
             "status": self.status.value,
             "assignee_id": self.assignee_id,
             "assignee_name": self.assignee_name,

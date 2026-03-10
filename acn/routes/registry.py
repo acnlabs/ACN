@@ -8,12 +8,13 @@ Supports two registration modes:
 3. Self-service: GET /me - agent gets own info via API key
 """
 
+import re
 from typing import Literal
 
 import structlog  # type: ignore[import-untyped]
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[import-untyped]
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import require_permission
 from ..config import Settings, get_settings
@@ -39,12 +40,37 @@ settings = get_settings()
 class AgentJoinRequest(BaseModel):
     """Request for autonomous agent to join ACN"""
 
-    name: str = Field(..., min_length=1, max_length=100, description="Agent name")
-    description: str | None = Field(None, max_length=500, description="Agent description")
-    skills: list[str] = Field(default_factory=list, description="Agent skills")
-    endpoint: str | None = Field(None, description="A2A endpoint (optional for pull mode)")
+    name: str = Field(..., min_length=2, max_length=100, description="Agent name")
+    description: str = Field(..., min_length=10, max_length=500, description="What this agent does (required)")
+    tags: list[str] = Field(..., min_length=1, max_length=20, description="At least one capability tag (e.g. ['coding', 'search'])")
+    endpoint: str = Field(..., max_length=500, description="Agent A2A endpoint URL (must be http/https)")
     referrer_id: str | None = Field(None, description="Referrer agent ID")
     agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Name cannot be blank")
+        # Reject auto-generated names: ends with 8+ digit numeric suffix (e.g. agent-1772498556)
+        if re.search(r"[-_]\d{8,}$", v):
+            raise ValueError(
+                "Name looks auto-generated (ends with a long numeric suffix). "
+                "Please use a descriptive human-readable name."
+            )
+        # Must contain at least one letter (Latin or CJK)
+        if not re.search(r"[a-zA-Z\u4e00-\u9fff]", v):
+            raise ValueError("Name must contain at least one letter.")
+        return v
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r"^https?://", v, re.IGNORECASE):
+            raise ValueError("Endpoint must be an http:// or https:// URL.")
+        return v
     # Payment capability (optional — can be set later via POST /payments/{id}/payment-capability)
     wallet_addresses: dict[str, str] = Field(
         default_factory=dict,
@@ -127,7 +153,7 @@ class AgentMeResponse(BaseModel):
     agent_id: str
     name: str
     description: str | None = None
-    skills: list[str] = []
+    tags: list[str] = []
     status: str
     claim_status: str
     owner: str | None = None
@@ -179,7 +205,7 @@ async def dev_register_agent(
             owner=request.owner,
             name=request.name,
             endpoint=request.endpoint,
-            skills=request.skills,
+            tags=request.tags,
             subnet_ids=subnet_ids,
             agent_card=request.agent_card,
         )
@@ -216,7 +242,7 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
         name=agent.name,
         description=agent.description,
         endpoint=agent.endpoint or "",
-        skills=agent.skills,
+        tags=agent.tags,
         status=agent.status.value,
         subnet_ids=agent.subnet_ids,
         agent_card=agent.agent_card,
@@ -269,7 +295,7 @@ async def register_agent(
             owner=request.owner,
             name=request.name,
             endpoint=request.endpoint,
-            skills=request.skills,
+            tags=request.tags,
             subnet_ids=subnet_ids,
             description=getattr(request, "description", None),
             metadata=getattr(request, "metadata", {}),
@@ -325,7 +351,7 @@ async def get_my_agent(
         agent_id=agent.agent_id,
         name=agent.name,
         description=agent.description,
-        skills=agent.skills or [],
+        tags=agent.tags or [],
         status=agent.status.value,
         claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
         owner=agent.owner,
@@ -372,7 +398,8 @@ async def get_agent(request: Request, agent_id: str, agent_service: AgentService
 @limiter.limit("60/minute")
 async def search_agents(
     request: Request,
-    skill: str | None = None,
+    tag: str | None = None,
+    skill: str | None = None,  # Deprecated alias for `tag` — kept for backward compat
     status: Literal["online", "offline", "all"] = Query(
         default="online",
         description="Filter by status: online (recent heartbeat), offline, or all (all registered agents)",
@@ -385,11 +412,12 @@ async def search_agents(
 
     Clean Architecture: Route → AgentService → Repository
     """
-    skill_list = skill.split(",") if skill else None
+    tag_param = tag or skill  # accept both; `tag` takes precedence
+    tag_list = tag_param.split(",") if tag_param else None
 
     # Search using AgentService
     agents = await agent_service.search_agents(
-        skills=skill_list,
+        tags=tag_list,
         status=status,
     )
 
@@ -452,14 +480,14 @@ async def get_agent_card(agent_id: str, agent_service: AgentServiceDep = None):
             capabilities=AgentCapabilities(streaming=False),
             default_input_modes=["text", "application/json"],
             default_output_modes=["text", "application/json"],
-            skills=[
+            tags=[
                 AgentSkill(
                     id=skill,
                     name=skill.replace("-", " ").replace("_", " ").title(),
                     description=f"Capability: {skill}",
                     tags=[skill],
                 )
-                for skill in agent.skills
+                for skill in agent.tags
             ],
         )
 
@@ -500,6 +528,47 @@ async def get_agent_endpoint(agent_id: str, agent_service: AgentServiceDep = Non
         return {"agent_id": agent_id, "endpoint": agent.endpoint}
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
+
+
+@router.delete("")
+async def admin_bulk_delete_agents(
+    _: InternalTokenDep,
+    agent_service: AgentServiceDep = None,
+    name_prefix: str | None = None,
+    owner: str | None = None,
+    dry_run: bool = True,
+):
+    """Admin: bulk delete agents by name prefix or owner (requires X-Internal-Token).
+
+    Use dry_run=true (default) to preview which agents would be deleted.
+    Set dry_run=false to actually delete.
+    """
+    agents = await agent_service.search_agents(tags=None, status="all")
+
+    # Apply filters
+    targets = agents
+    if name_prefix:
+        targets = [a for a in targets if a.name.startswith(name_prefix)]
+    if owner is not None:
+        targets = [a for a in targets if (a.owner or "unowned") == owner]
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "would_delete": len(targets),
+            "agents": [{"agent_id": a.agent_id, "name": a.name, "owner": a.owner} for a in targets],
+        }
+
+    deleted, failed = [], []
+    for a in targets:
+        try:
+            await agent_service.repository.delete(a.agent_id)
+            deleted.append(a.agent_id)
+            logger.info("admin_bulk_delete", agent_id=a.agent_id, name=a.name)
+        except Exception as exc:
+            failed.append({"agent_id": a.agent_id, "error": str(exc)})
+
+    return {"dry_run": False, "deleted": len(deleted), "failed": len(failed), "failed_details": failed}
 
 
 @router.delete("/{agent_id}")
@@ -566,7 +635,7 @@ async def _grant_referral_reward(referrer_id: str, new_agent_id: str) -> None:
 
 
 @router.post("/join", response_model=AgentJoinResponse)
-@limiter.limit("10/minute")
+@limiter.limit("5/minute;50/day")
 async def join_agent(
     request: Request,
     body: AgentJoinRequest,
@@ -579,6 +648,9 @@ async def join_agent(
     No authentication required. Returns an API key for future requests.
     The agent will be in "unclaimed" status until a human claims it.
 
+    Rate limits: 5/minute, 50/day per IP.
+    Agents without an endpoint are limited more strictly (pull-mode only).
+
     If a referrer_id is provided and valid, the referrer will receive
     a referral bonus (managed by Backend's Rewards API).
 
@@ -587,7 +659,7 @@ async def join_agent(
         {
             "name": "MyAgent",
             "description": "An autonomous coding agent",
-            "skills": ["coding", "review"],
+            "tags": ["coding", "review"],
             "endpoint": "https://my-agent.example.com/a2a",
             "agent_card": { "name": "MyAgent", "version": "1.0.0", ... },
             "referrer_id": "optional-referrer-agent-id"
@@ -602,7 +674,7 @@ async def join_agent(
         agent, api_key = await agent_service.join_agent(
             name=body.name,
             description=body.description,
-            skills=body.skills,
+            tags=body.tags,
             endpoint=body.endpoint,
             referrer_id=body.referrer_id,
             agent_card=body.agent_card,

@@ -83,10 +83,10 @@ class BroadcastService:
             )
         )
 
-        # Broadcast to agents by skill
-        result = await broadcast.send_by_skill(
+        # Broadcast to agents by tag
+        result = await broadcast.send_by_tag(
             from_agent="taskmaster",
-            skills=["frontend"],
+            tags=["frontend"],
             message=A2AMessage.text("前端任务更新")
         )
     """
@@ -181,20 +181,20 @@ class BroadcastService:
 
         return result
 
-    async def send_by_skill(
+    async def send_by_tag(
         self,
         from_agent: str,
-        skills: list[str],
+        tags: list[str],
         message: Message,
         status_filter: str | None = "online",
         strategy: BroadcastStrategy = BroadcastStrategy.PARALLEL,
     ) -> BroadcastResult:
         """
-        Broadcast to all agents with specific skills
+        Broadcast to all agents with specific tags
 
         Args:
             from_agent: Source agent/service ID
-            skills: Required skills
+            tags: Required tags
             message: A2A message to broadcast
             status_filter: Filter by status (None for all)
             strategy: Delivery strategy
@@ -202,14 +202,14 @@ class BroadcastService:
         Returns:
             BroadcastResult
         """
-        # Discover agents with skills
+        # Discover agents with tags
         agents = await self.registry.search_agents(
-            skills=skills,
+            tags=tags,
             status=status_filter,
         )
 
         if not agents:
-            logger.warning(f"No agents found with skills: {skills}")
+            logger.warning(f"No agents found with tags: {tags}")
             return BroadcastResult(
                 broadcast_id=uuid4().hex[:12],
                 total=0,
@@ -220,7 +220,7 @@ class BroadcastService:
 
         to_agents = [agent.agent_id for agent in agents]
 
-        logger.info(f"Found {len(to_agents)} agents with skills {skills}: {to_agents}")
+        logger.info(f"Found {len(to_agents)} agents with tags {tags}: {to_agents}")
 
         return await self.send(
             from_agent=from_agent,

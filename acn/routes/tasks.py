@@ -54,7 +54,7 @@ class TaskCreateRequest(BaseModel):
     description: str = Field(..., min_length=10)
     mode: str = Field(default="open", description="Task mode: open or assigned")
     task_type: str = Field(default="general", description="Task type category")
-    required_skills: list[str] = Field(default_factory=list)
+    required_tags: list[str] = Field(default_factory=list)
     reward_amount: str = Field(default="0", description="Reward amount")
     reward_currency: str = Field(default="ap_points", description="Currency: ap_points, USD, USDC, ETH")
     is_repeatable: bool = Field(
@@ -89,7 +89,7 @@ class TaskResponse(BaseModel):
     title: str
     description: str
     task_type: str
-    required_skills: list[str]
+    required_tags: list[str]
     assignee_id: str | None = None
     assignee_name: str | None = None
     reward_amount: str
@@ -193,7 +193,7 @@ def _task_to_response(task) -> TaskResponse:
         title=task.title,
         description=task.description,
         task_type=task.task_type,
-        required_skills=task.required_skills,
+        required_tags=task.required_tags,
         assignee_id=task.assignee_id,
         assignee_name=task.assignee_name,
         reward_amount=task.reward_amount,
@@ -245,7 +245,7 @@ async def list_tasks(
     request: _Request,
     mode: str | None = Query(None, description="Filter by mode: open, assigned"),
     status: str | None = Query(None, description="Filter by status"),
-    skills: str | None = Query(None, description="Filter by skills (comma-separated)"),
+    tags: str | None = Query(None, description="Filter by capability tags (comma-separated)"),
     creator_id: str | None = Query(None, description="Filter by creator"),
     assignee_id: str | None = Query(None, description="Filter by assignee"),
     limit: int = Query(20, ge=1, le=100),
@@ -273,15 +273,15 @@ async def list_tasks(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid status: {status}") from None
 
-    # Parse skills
-    skill_list = skills.split(",") if skills else None
+    # Parse tags
+    tag_list = skills.split(",") if skills else None
 
     tasks = await task_service.list_tasks(
         mode=task_mode,
         status=task_status,
         creator_id=creator_id,
         assignee_id=assignee_id,
-        skills=skill_list,
+        tags=tag_list,
         limit=limit + 1,  # Get one extra to check has_more
         offset=offset,
     )
@@ -301,21 +301,21 @@ async def list_tasks(
 @limiter.limit("30/minute")
 async def match_tasks_for_agent(
     request: _Request,
-    skills: str = Query(..., description="Agent skills (comma-separated)"),
+    tags: str = Query(..., description="Agent capability tags (comma-separated)"),
     limit: int = Query(20, ge=1, le=100),
     task_service: TaskServiceDep = None,
 ):
     """
-    Find tasks matching agent's skills
+    Find tasks matching agent's tags
 
-    Returns open tasks that the agent can work on based on their skills.
+    Returns open tasks that the agent can work on based on their tags.
     """
-    skill_list = [s.strip() for s in skills.split(",") if s.strip()]
+    tag_list = [s.strip() for s in skills.split(",") if s.strip()]
 
-    if not skill_list:
+    if not tag_list:
         raise HTTPException(status_code=400, detail="At least one skill is required") from None
 
-    tasks = await task_service.get_tasks_for_agent(skill_list, limit)
+    tasks = await task_service.get_tasks_for_agent(tag_list, limit)
 
     return TaskListResponse(
         tasks=[_task_to_response(t) for t in tasks],
@@ -379,7 +379,7 @@ async def create_task(
             description=body.description,
             mode=mode,
             task_type=body.task_type,
-            required_skills=body.required_skills,
+            required_tags=body.required_tags,
             reward_amount=body.reward_amount,
             reward_currency=body.reward_currency,
             is_repeatable=body.is_repeatable,
@@ -724,7 +724,7 @@ async def agent_create_task(
         description=request.description,
         mode=mode,
         task_type=request.task_type,
-        required_skills=request.required_skills,
+        required_tags=request.required_tags,
         reward_amount=request.reward_amount,
         reward_currency=request.reward_currency,
         is_repeatable=request.is_repeatable,

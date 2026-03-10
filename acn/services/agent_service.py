@@ -69,7 +69,7 @@ class AgentService:
         owner: str,
         name: str,
         endpoint: str,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         subnet_ids: list[str] | None = None,
         description: str | None = None,
         metadata: dict | None = None,
@@ -88,7 +88,7 @@ class AgentService:
             owner: Agent owner identifier
             name: Agent name
             endpoint: Agent A2A endpoint URL
-            skills: List of skill IDs
+            tags: List of capability tag IDs
             subnet_ids: Subnets to join
             description: Agent description
             metadata: Additional metadata
@@ -107,7 +107,7 @@ class AgentService:
             logger.info("update_existing_agent", agent_id=existing_agent.agent_id)
             existing_agent.name = name
             existing_agent.description = description
-            existing_agent.skills = skills or []
+            existing_agent.tags = tags or []
             existing_agent.metadata = metadata or {}
             if agent_card is not None:
                 existing_agent.agent_card = agent_card
@@ -144,7 +144,7 @@ class AgentService:
             name=name,
             endpoint=endpoint,
             description=description,
-            skills=skills or [],
+            tags=tags or [],
             subnet_ids=subnet_ids or ["public"],
             metadata=metadata or {},
             agent_card=agent_card,
@@ -210,7 +210,7 @@ class AgentService:
 
     async def search_agents(
         self,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         status: str = "online",
         subnet_id: str | None = None,
     ) -> list[Agent]:
@@ -218,7 +218,7 @@ class AgentService:
         Search for agents
 
         Args:
-            skills: Required skills (filters agents that have ALL skills)
+            tags: Required tags (filters agents that have ALL tags)
             status: Agent status filter ("online" | "offline" | "all")
             subnet_id: Subnet filter
 
@@ -229,8 +229,8 @@ class AgentService:
 
         if subnet_id:
             agents = await self.repository.find_by_subnet(subnet_id)
-            if skills:
-                agents = [a for a in agents if a.has_all_skills(skills)]
+            if tags:
+                agents = [a for a in agents if a.has_all_tags(tags)]
             if not status_all and status:
                 agents = [a for a in agents if a.status.value == status]
             if status == "online":
@@ -238,8 +238,8 @@ class AgentService:
                 agents = [a for a in agents if a.agent_id in alive_ids]
             return agents
 
-        if skills:
-            candidates = await self.repository.find_by_skills(skills, status)
+        if tags:
+            candidates = await self.repository.find_by_tags(tags, status)
             if status == "online":
                 alive_ids = await self.repository.filter_alive([a.agent_id for a in candidates])
                 return [a for a in candidates if a.agent_id in alive_ids]
@@ -347,9 +347,9 @@ class AgentService:
     async def join_agent(
         self,
         name: str,
-        description: str | None = None,
-        skills: list[str] | None = None,
-        endpoint: str | None = None,
+        description: str,
+        tags: list[str],
+        endpoint: str,
         referrer_id: str | None = None,
         metadata: dict | None = None,
         agent_card: dict | None = None,
@@ -371,7 +371,7 @@ class AgentService:
         Args:
             name: Agent name
             description: Agent description
-            skills: List of skill IDs
+            tags: List of capability tag IDs
             endpoint: A2A endpoint URL (optional for pull mode)
             referrer_id: ID of agent who referred this one
             metadata: Additional metadata
@@ -394,7 +394,7 @@ class AgentService:
             owner=None,  # No owner initially
             endpoint=endpoint,
             description=description,
-            skills=skills or [],
+            tags=tags or [],
             subnet_ids=["public"],
             metadata=metadata or {},
             api_key=api_key,

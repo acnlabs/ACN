@@ -85,7 +85,7 @@ class Analytics:
             "total": len(agent_keys),
             "by_status": {"active": 0, "inactive": 0, "unknown": 0},
             "by_subnet": {},
-            "by_skill": {},
+            "by_tag": {},
             "recent_registrations": [],
         }
 
@@ -111,15 +111,16 @@ class Analytics:
                 subnet = agent.get("subnet_id", "public")
                 stats["by_subnet"][subnet] = stats["by_subnet"].get(subnet, 0) + 1
 
-                # Count by skill (from skills JSON)
-                skills_str = agent.get("skills", "[]")
+                # Count by tag (from tags JSON; read "tags" then fall back to legacy "skills")
+                # Read: support both new "tags" and legacy "skills" key
+                tags_str = agent.get("tags") or agent.get("skills", "[]")
                 try:
-                    skills = json.loads(skills_str)
-                    for skill in skills:
-                        skill_name = (
-                            skill.get("name", skill) if isinstance(skill, dict) else str(skill)
+                    tags = json.loads(tags_str)
+                    for tag in tags:
+                        tag_name = (
+                            tag.get("name", tag) if isinstance(tag, dict) else str(tag)
                         )
-                        stats["by_skill"][skill_name] = stats["by_skill"].get(skill_name, 0) + 1
+                        stats["by_tag"][tag_name] = stats["by_tag"].get(tag_name, 0) + 1
                 except (json.JSONDecodeError, TypeError):
                     pass
 

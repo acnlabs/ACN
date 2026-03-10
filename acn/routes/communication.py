@@ -35,12 +35,12 @@ class BroadcastRequest(BaseModel):
     message: dict  # A2A Message dict
     strategy: str = "parallel"
     target_subnet: str | None = None
-    target_skills: list[str] | None = None
+    target_tags: list[str] | None = None
 
 
-class BroadcastBySkillRequest(BaseModel):
+class BroadcastByTagRequest(BaseModel):
     from_agent: str
-    skills: list[str]
+    tags: list[str]
     message: dict  # A2A Message dict
     limit: int | None = None
 
@@ -146,7 +146,7 @@ async def broadcast_message(
             from_agent_id=body.from_agent,
             message=message,
             subnet_id=body.target_subnet,
-            skills=body.target_skills,
+            tags=body.target_tags,
             strategy=body.strategy,
         )
 
@@ -186,16 +186,16 @@ async def broadcast_message(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post("/broadcast-by-skill")
+@router.post("/broadcast-by-tag")
 @limiter.limit("10/minute")
-async def broadcast_by_skill(
+async def broadcast_by_tag(
     request: Request,
-    body: BroadcastBySkillRequest,
+    body: BroadcastByTagRequest,
     agent_info: AgentApiKeyDep,
     message_service: MessageServiceDep = None,
     metrics: MetricsDep = None,
 ):
-    """Broadcast to agents with specific skills (requires Agent API Key, 10/min per IP)
+    """Broadcast to agents with specific tags (requires Agent API Key, 10/min per IP)
 
     The authenticated agent must match the `from_agent` field to prevent spoofing.
     Clean Architecture: Route → MessageService → Repository
@@ -214,7 +214,7 @@ async def broadcast_by_skill(
         responses = await message_service.broadcast_message(
             from_agent_id=body.from_agent,
             message=message,
-            skills=body.skills,
+            tags=body.tags,
             strategy="parallel",
         )
 
@@ -223,33 +223,33 @@ async def broadcast_by_skill(
 
         success_count = len([r for r in responses if r.get("status") == "success"])
         await metrics.record_broadcast(
-            message_type="skill_broadcast",
+            message_type="tag_broadcast",
             target_count=len(responses),
             success=True,
         )
 
         logger.info(
-            "skill_broadcast_completed",
+            "tag_broadcast_completed",
             from_agent=body.from_agent,
-            skills=body.skills,
+            tags=body.tags,
             target_count=len(responses),
         )
 
         return {
             "status": "broadcasted",
             "from_agent": body.from_agent,
-            "skills": body.skills,
+            "tags": body.tags,
             "responses": responses,
             "total": len(responses),
             "successful": success_count,
         }
 
     except AgentNotFoundException as e:
-        logger.error("skill_broadcast_failed", error=str(e))
+        logger.error("tag_broadcast_failed", error=str(e))
         raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
-        logger.error("skill_broadcast_failed", error=str(e))
+        logger.error("tag_broadcast_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

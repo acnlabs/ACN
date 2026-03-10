@@ -58,7 +58,7 @@ class PostgresAgentRepository(IAgentRepository):
             status=AgentStatus(row.status),
             # Prefer dedicated SQL column; fall back to JSONB for rows saved before this fix
             description=row.description or meta.get("description"),
-            skills=list(row.skills or []),
+            tags=list(row.tags or []),
             subnet_ids=list(row.subnet_ids or ["public"]),
             metadata=meta.get("extra_metadata", {}),
             registered_at=row.registered_at,
@@ -101,7 +101,7 @@ class PostgresAgentRepository(IAgentRepository):
             endpoint=agent.endpoint,
             status=agent.status.value,
             description=agent.description,
-            skills=agent.skills or None,
+            tags=agent.tags or None,
             subnet_ids=agent.subnet_ids or None,
             api_key=agent.api_key,
             auth0_client_id=agent.auth0_client_id,
@@ -139,7 +139,7 @@ class PostgresAgentRepository(IAgentRepository):
                         endpoint=model.endpoint,
                         status=model.status,
                         description=model.description,
-                        skills=model.skills,
+                        tags=model.tags,
                         subnet_ids=model.subnet_ids,
                         api_key=model.api_key,
                         auth0_client_id=model.auth0_client_id,
@@ -193,12 +193,12 @@ class PostgresAgentRepository(IAgentRepository):
             )
             return [self._model_to_agent(r) for r in result.scalars().all()]
 
-    async def find_by_skills(self, skills: list[str], status: str = "online") -> list[Agent]:
+    async def find_by_tags(self, tags: list[str], status: str = "online") -> list[Agent]:
         async with self._session_factory() as session:
             stmt = select(AgentModel).where(AgentModel.status == status)
-            if skills:
+            if tags:
                 stmt = stmt.where(
-                    AgentModel.skills.contains(cast(skills, ARRAY(String)))
+                    AgentModel.tags.contains(cast(tags, ARRAY(String)))
                 )
             result = await session.execute(stmt)
             return [self._model_to_agent(r) for r in result.scalars().all()]

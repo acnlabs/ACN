@@ -55,10 +55,10 @@ class MessageRouter:
             message=Message(role="user", parts=[TextPart(text="Generate login page")])
         )
 
-        # Route with skill-based discovery
-        response = await router.route_by_skill(
+        # Route with tag-based discovery
+        response = await router.route_by_tag(
             from_agent="taskmaster",
-            skills=["frontend", "react"],
+            tags=["frontend", "react"],
             message=Message(role="user", parts=[TextPart(text="Implement UI")])
         )
     """
@@ -202,19 +202,19 @@ class MessageRouter:
             )
             raise
 
-    async def route_by_skill(
+    async def route_by_tag(
         self,
         from_agent: str,
-        skills: list[str],
+        tags: list[str],
         message: Message,
         prefer_online: bool = True,
     ) -> Any:
         """
-        Discover agent by skills and route message
+        Discover agent by tags and route message
 
         Args:
             from_agent: Source agent/service ID
-            skills: Required skills for target agent
+            tags: Required tags for target agent
             message: A2A Message object
             prefer_online: Prefer online agents
 
@@ -224,26 +224,26 @@ class MessageRouter:
         Raises:
             ValueError: If no suitable agent found
         """
-        # Discover agents with required skills
+        # Discover agents with required tags
         status = "online" if prefer_online else None
         agents = await self.registry.search_agents(
-            skills=skills,
+            tags=tags,
             status=status,
         )
 
         if not agents:
             # Fallback: try without status filter
             if prefer_online:
-                agents = await self.registry.search_agents(skills=skills)
+                agents = await self.registry.search_agents(tags=tags)
 
             if not agents:
-                raise ValueError(f"No agents found with skills: {skills}")
+                raise ValueError(f"No agents found with tags: {tags}")
 
         # Select best agent (simple: first match)
-        # TODO: Add load balancing, skill scoring
+        # TODO: Add load balancing, tag scoring
         target_agent = agents[0]
 
-        logger.info(f"Discovered agent {target_agent.agent_id} for skills {skills}")
+        logger.info(f"Discovered agent {target_agent.agent_id} for tags {tags}")
 
         return await self.route(
             from_agent=from_agent,

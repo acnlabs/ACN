@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     # WebSocket limits
     max_websocket_connections: int = 10_000
 
+    # Anti-spam / join controls
+    # Max registrations from one IP per day (endpoint-less agents are cheaper to spam)
+    join_daily_limit_no_endpoint: int = 5   # IP/day — agents without an A2A endpoint
+    join_daily_limit_with_endpoint: int = 20  # IP/day — agents with a real endpoint
+
     # Labs features (experimental)
     labs_onboarding_enabled: bool = True  # Agent self-onboarding experiment
 

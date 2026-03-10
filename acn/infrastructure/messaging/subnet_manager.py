@@ -496,12 +496,15 @@ class SubnetManager:
             "connection_type": "gateway",
         }
 
+        # Read: support both new "tags" and legacy "skills" key from gateway payload
+        _agent_tags = agent_data.get("tags") or agent_data.get("skills", [])
+
         # Register in ACN (auto-generates Agent Card if not provided)
         await self.registry.register_agent(
             agent_id=connection.agent_id,
             name=agent_data.get("name", connection.agent_id),
             endpoint=gateway_endpoint,
-            skills=agent_data.get("skills", []),
+            tags=_agent_tags,
             agent_card=agent_data.get("agent_card"),  # May be None, will be auto-generated
             subnet_id=connection.subnet_id,
             description=agent_data.get("description", ""),
@@ -513,7 +516,7 @@ class SubnetManager:
             agent_id=connection.agent_id,
             name=agent_data.get("name", connection.agent_id),
             description=agent_data.get("description", ""),
-            skills=agent_data.get("skills", []),
+            tags=_agent_tags,  # AgentInfo.tags field (not renamed)
             endpoint=gateway_endpoint,
             status="online",
             subnet_id=connection.subnet_id,

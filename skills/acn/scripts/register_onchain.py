@@ -3,19 +3,26 @@
 
 Supports two scenarios:
   Scenario 1 — Zero-wallet agent (auto-generate):
-    python scripts/register_onchain.py --acn-api-key acn_xxx --chain base
+    python scripts/register_onchain.py --acn-api-key <your-acn-api-key> --chain base
 
-  Scenario 2 — Existing wallet:
-    python scripts/register_onchain.py --acn-api-key acn_xxx \\
-        --private-key 0x1234... --chain base
+  Scenario 2 — Existing wallet (use env var to avoid shell history exposure):
+    WALLET_PRIVATE_KEY=<your-hex-key> python scripts/register_onchain.py \
+        --acn-api-key <your-acn-api-key> --chain base
 
-Dependencies (auto-installed if missing):
+Dependencies (install before running):
   pip install web3 httpx
 
-Env vars (alternative to CLI flags):
+Env vars (preferred over CLI flags for sensitive values):
   ACN_API_URL        ACN server base URL (default: https://acn-production.up.railway.app)
   ACN_API_KEY        ACN API key
-  WALLET_PRIVATE_KEY Ethereum private key (hex)
+  WALLET_PRIVATE_KEY Ethereum private key (hex) — use this instead of --private-key
+                     to keep the key out of shell history and process listings
+
+Security notes:
+  - Never pass --private-key on the command line in shared or logged environments.
+  - The generated .env file contains your private key in plaintext; restrict its
+    permissions (chmod 600 .env) and never commit it to version control.
+  - Verify the ACN API URL before running to avoid sending your key to a wrong server.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ import sys
 # ---------------------------------------------------------------------------
 
 def _ensure_deps() -> None:
+    """Verify required dependencies are installed; exit with instructions if not."""
     missing = []
     try:
         import web3  # type: ignore[import-untyped]  # noqa: F401
@@ -40,9 +48,13 @@ def _ensure_deps() -> None:
     except ImportError:
         missing.append("httpx")
     if missing:
-        print(f"Installing missing dependencies: {', '.join(missing)} ...")
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", *missing, "-q"])
+        print(
+            f"Missing required dependencies: {', '.join(missing)}\n"
+            f"Install them with:\n"
+            f"  pip install {' '.join(missing)}\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +98,11 @@ IDENTITY_ABI = [
 
 
 def _save_wallet(path: str, private_key: str, address: str) -> None:
-    """Append wallet credentials to a .env file (skips existing keys)."""
+    """Append wallet credentials to a .env file (skips existing keys).
+
+    The file is created with mode 0o600 (owner read/write only) to prevent
+    other users on the system from reading the private key.
+    """
     keys_to_add = {"WALLET_PRIVATE_KEY": private_key, "WALLET_ADDRESS": address}
     existing: set[str] = set()
     if os.path.exists(path):
@@ -94,7 +110,9 @@ def _save_wallet(path: str, private_key: str, address: str) -> None:
             for line in f:
                 if "=" in line:
                     existing.add(line.split("=")[0].strip())
-    with open(path, "a") as f:
+    # Open with O_CREAT | O_WRONLY | O_APPEND and mode 0o600
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as f:
         for key, value in keys_to_add.items():
             if key not in existing:
                 f.write(f"{key}={value}\n")
@@ -140,14 +158,19 @@ async def _bind_to_acn(
 
 
 async def main(args: argparse.Namespace) -> None:
-    _ensure_deps()
-
     from eth_account import Account  # type: ignore[import-untyped]
     from web3 import Web3  # type: ignore[import-untyped]
 
     acn_url = args.acn_url.rstrip("/")
     api_key = args.acn_api_key
     chain = args.chain
+
+    if args.private_key:
+        print(
+            "⚠  Warning: passing --private-key on the command line exposes your key in "
+            "shell history and process listings. Prefer the WALLET_PRIVATE_KEY env var.",
+            file=sys.stderr,
+        )
 
     if chain not in CHAIN_CONFIGS:
         print(f"Error: unsupported chain '{chain}'. Use: {', '.join(CHAIN_CONFIGS)}")
@@ -266,6 +289,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
+    _ensure_deps()
     parser = _build_parser()
     args = parser.parse_args()
     asyncio.run(main(args))

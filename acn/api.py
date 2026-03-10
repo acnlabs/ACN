@@ -426,7 +426,7 @@ async def get_acn_agent_card():
             default_output_modes=["text", "application/json"],
             security_schemes=security_schemes,
             security=security,
-            skills=[
+            tags=[
                 AgentSkill(
                     id="acn:discovery",
                     name="Agent Discovery",

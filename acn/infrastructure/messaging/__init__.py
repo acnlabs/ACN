@@ -21,7 +21,7 @@ Architecture:
     │  ┌─────────────┐  ┌────────────────────────┐   │
     │  │MessageRouter│  │ BroadcastService       │   │
     │  │ - route()   │  │ - send()               │   │
-    │  │ - stream()  │  │ - send_by_skill()      │   │
+    │  │ - stream()  │  │ - send_by_tag()      │   │
     │  └──────┬──────┘  └───────────┬────────────┘   │
     │         │                     │                 │
     │         └──────────┬──────────┘                 │

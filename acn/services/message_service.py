@@ -96,10 +96,10 @@ class MessageService:
 
         return response
 
-    async def send_message_by_skill(
+    async def send_message_by_tag(
         self,
         from_agent_id: str,
-        skills: list[str],
+        tags: list[str],
         message: Message,
         **kwargs: Any,
     ) -> dict:
@@ -108,7 +108,7 @@ class MessageService:
 
         Args:
             from_agent_id: Sender agent ID
-            skills: Required skills
+            tags: Required tags
             message: A2A Message object
             **kwargs: Additional routing parameters
 
@@ -124,15 +124,15 @@ class MessageService:
             raise AgentNotFoundException(f"Sender agent {from_agent_id} not found")
 
         logger.info(
-            "routing_message_by_skill",
+            "routing_message_by_tag",
             from_agent=from_agent_id,
-            skills=skills,
+            tags=tags,
         )
 
-        # Route by skill
-        response = await self.router.route_by_skill(
+        # Route by tag
+        response = await self.router.route_by_tag(
             from_agent=from_agent_id,
-            skills=skills,
+            tags=tags,
             message=message,
             **kwargs,
         )
@@ -144,7 +144,7 @@ class MessageService:
         from_agent_id: str,
         message: Message,
         subnet_id: str | None = None,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         strategy: str = "parallel",
         **kwargs: Any,
     ) -> list[dict]:
@@ -174,7 +174,7 @@ class MessageService:
         if subnet_id:
             agents = await self.agent_repository.find_by_subnet(subnet_id)
         elif skills:
-            agents = await self.agent_repository.find_by_skills(skills)
+            agents = await self.agent_repository.find_by_tags(skills)
         else:
             agents = await self.agent_repository.find_all()
 
@@ -186,7 +186,7 @@ class MessageService:
                 "broadcast_no_targets",
                 from_agent=from_agent_id,
                 subnet_id=subnet_id,
-                skills=skills,
+                tags=tags,
             )
             return []
 

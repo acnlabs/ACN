@@ -6,7 +6,7 @@ Design decisions:
 - tasks.active_participants_count NOT stored here; Redis counter is authoritative
 - agents.api_key stored as plain text (encryption at-rest is Railway's responsibility)
 - JSONB used for flexible metadata/config fields
-- ARRAY types for skills/subnet_ids (supports @> containment queries)
+- ARRAY types for tags/subnet_ids (supports @> containment queries)
 """
 
 from datetime import UTC, datetime
@@ -50,7 +50,7 @@ class TaskModel(Base):
     is_multi_participant: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     max_completions: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    required_skills: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    required_tags: Mapped[list[str] | None] = mapped_column("required_skills", ARRAY(String), nullable=True)  # DB column: "required_skills" (backward compat)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -113,7 +113,7 @@ class AgentModel(Base):
     endpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="online")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    skills: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    tags: Mapped[list[str] | None] = mapped_column("skills", ARRAY(String), nullable=True)  # DB column: "skills" (backward compat)
     subnet_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     api_key: Mapped[str | None] = mapped_column(String, nullable=True)
     auth0_client_id: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -139,7 +139,7 @@ class AgentModel(Base):
     __table_args__ = (
         Index("ix_agents_owner_endpoint", "owner", "endpoint"),
         Index("ix_agents_api_key", "api_key", unique=True),
-        Index("ix_agents_skills", "skills", postgresql_using="gin"),
+        Index("ix_agents_tags", "skills", postgresql_using="gin"),  # DB column: "skills" (backward compat)
         Index("ix_agents_wallet_addresses", "wallet_addresses", postgresql_using="gin"),
     )
 

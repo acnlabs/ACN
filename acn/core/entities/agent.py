@@ -47,7 +47,7 @@ class Agent:
 
     status: AgentStatus = AgentStatus.ONLINE
     description: str | None = None
-    skills: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     subnet_ids: list[str] = field(default_factory=lambda: ["public"])
     metadata: dict = field(default_factory=dict)
     registered_at: datetime = field(default_factory=datetime.now)
@@ -152,13 +152,13 @@ class Agent:
         """Mark agent as online"""
         self.status = AgentStatus.ONLINE
 
-    def has_skill(self, skill_id: str) -> bool:
-        """Check if agent has a specific skill"""
-        return skill_id in self.skills
+    def has_tag(self, tag_id: str) -> bool:
+        """Check if agent has a specific tag"""
+        return tag_id in self.tags
 
-    def has_all_skills(self, skill_ids: list[str]) -> bool:
-        """Check if agent has all specified skills"""
-        return all(skill in self.skills for skill in skill_ids)
+    def has_all_tags(self, tag_ids: list[str]) -> bool:
+        """Check if agent has all specified tags"""
+        return all(tag in self.tags for tag in tag_ids)
 
     def can_accept_payment(self) -> bool:
         """Check if agent can accept payments"""
@@ -227,7 +227,7 @@ class Agent:
             "endpoint": self.endpoint,
             "status": self.status.value,
             "description": self.description,
-            "skills": self.skills,
+            "tags": self.tags,
             "subnet_ids": self.subnet_ids,
             "metadata": self.metadata,
             "registered_at": self.registered_at.isoformat(),

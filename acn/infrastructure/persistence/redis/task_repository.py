@@ -153,7 +153,7 @@ class RedisTaskRepository(ITaskRepository):
     - acn:tasks:open → SortedSet (task_ids by created_at timestamp)
     - acn:tasks:by_mode:{mode} → Set (task_ids)
     - acn:tasks:by_status:{status} → Set (task_ids)
-    - acn:tasks:by_skill:{skill} → Set (task_ids)
+    - acn:tasks:by_tag:{tag} → Set (task_ids)
     - acn:tasks:by_creator:{creator_id} → Set (task_ids)
     - acn:tasks:by_assignee:{assignee_id} → Set (task_ids)
     - acn:task:completions:{task_id} → Set (agent_ids who completed)
@@ -205,7 +205,7 @@ class RedisTaskRepository(ITaskRepository):
         task_dict = task.to_dict()
 
         # Convert lists/dicts to JSON strings for Redis
-        task_dict["required_skills"] = json.dumps(task_dict.get("required_skills", []))
+        task_dict["required_tags"] = json.dumps(task_dict.get("required_tags", []))
         task_dict["submission_artifacts"] = json.dumps(task_dict.get("submission_artifacts", []))
         task_dict["metadata"] = json.dumps(task_dict.get("metadata", {}))
 
@@ -241,13 +241,13 @@ class RedisTaskRepository(ITaskRepository):
             if existing and existing.status != task.status:
                 pipe.srem(f"acn:tasks:by_status:{existing.status.value}", task.task_id)
 
-            # 4. Skill indices
-            for skill in task.required_skills:
-                pipe.sadd(f"acn:tasks:by_skill:{skill}", task.task_id)
+            # 4. Tag indices
+            for skill in task.required_tags:
+                pipe.sadd(f"acn:tasks:by_tag:{skill}", task.task_id)
             if existing:
-                for old_skill in existing.required_skills:
-                    if old_skill not in task.required_skills:
-                        pipe.srem(f"acn:tasks:by_skill:{old_skill}", task.task_id)
+                for old_skill in existing.required_tags:
+                    if old_skill not in task.required_tags:
+                        pipe.srem(f"acn:tasks:by_tag:{old_skill}", task.task_id)
 
             # 5. Creator index
             pipe.sadd(f"acn:tasks:by_creator:{task.creator_id}", task.task_id)
@@ -273,7 +273,7 @@ class RedisTaskRepository(ITaskRepository):
     async def find_open_tasks(
         self,
         mode: TaskMode | None = None,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         task_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -292,7 +292,7 @@ class RedisTaskRepository(ITaskRepository):
             # Apply filters
             if mode and task.mode != mode:
                 continue
-            if skills and not task.matches_skills(skills):
+            if skills and not task.matches_tags(skills):
                 continue
             if task_type and task.task_type != task_type:
                 continue
@@ -359,8 +359,8 @@ class RedisTaskRepository(ITaskRepository):
         if task.assignee_id:
             await self.redis.srem(f"acn:tasks:by_assignee:{task.assignee_id}", task_id)
 
-        for skill in task.required_skills:
-            await self.redis.srem(f"acn:tasks:by_skill:{skill}", task_id)
+        for skill in task.required_tags:
+            await self.redis.srem(f"acn:tasks:by_tag:{skill}", task_id)
 
         # Remove completions
         await self.redis.delete(f"acn:task:completions:{task_id}")
@@ -674,7 +674,7 @@ class RedisTaskRepository(ITaskRepository):
                 )
                 return default
 
-        data["required_skills"] = _safe_loads(data.get("required_skills", ""), [])
+        data["required_tags"] = _safe_loads(data.get("required_tags", ""), [])
         data["submission_artifacts"] = _safe_loads(data.get("submission_artifacts", ""), [])
         data["metadata"] = _safe_loads(data.get("metadata", ""), {})
 

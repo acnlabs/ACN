@@ -133,7 +133,7 @@ class AuditLogger:
             event_type=AuditEventType.AGENT_REGISTERED,
             actor_id="admin",
             target_id="cursor-agent",
-            details={"skills": ["code", "test"]}
+            details={"tags": ["code", "test"]}
         )
 
         # Query recent events
@@ -268,7 +268,7 @@ class AuditLogger:
         self,
         agent_id: str,
         subnet_id: str = "public",
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         source_ip: str | None = None,
     ) -> str:
         """Log agent registration"""
@@ -277,7 +277,7 @@ class AuditLogger:
             target_id=agent_id,
             target_type="agent",
             subnet_id=subnet_id,
-            details={"skills": skills or []},
+            details={"tags": tags or []},
             source_ip=source_ip,
         )
 

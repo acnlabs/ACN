@@ -74,7 +74,7 @@ class TaskService:
         description: str,
         mode: TaskMode = TaskMode.OPEN,
         task_type: str = "general",
-        required_skills: list[str] | None = None,
+        required_tags: list[str] | None = None,
         reward_amount: str = "0",
         reward_currency: str = "USD",
         is_repeatable: bool = False,
@@ -99,7 +99,7 @@ class TaskService:
             description: Task description
             mode: Task mode (open/assigned)
             task_type: Task type category
-            required_skills: Skills needed to complete
+            required_tags: Tags needed to complete
             reward_amount: Reward amount (string for precision)
             reward_currency: Reward currency (USD, USDC, points, etc.)
             is_repeatable: Can be completed multiple times (open mode only)
@@ -146,7 +146,7 @@ class TaskService:
             title=title,
             description=description,
             task_type=task_type,
-            required_skills=required_skills or [],
+            required_tags=required_tags or [],
             reward_amount=reward_amount,
             reward_currency=reward_currency,
             reward_unit="completion",  # Default for now
@@ -1164,7 +1164,7 @@ class TaskService:
         status: TaskStatus | None = None,
         creator_id: str | None = None,
         assignee_id: str | None = None,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Task]:
@@ -1176,7 +1176,7 @@ class TaskService:
             status: Filter by status
             creator_id: Filter by creator
             assignee_id: Filter by assignee
-            skills: Filter by skills
+            tags: Filter by agent tags
             limit: Maximum tasks to return
             offset: Pagination offset
 
@@ -1193,7 +1193,7 @@ class TaskService:
         else:
             tasks = await self.task_pool.get_open_tasks(
                 mode=mode,
-                skills=skills,
+                tags=tags,
                 limit=limit,
                 offset=offset,
             )
@@ -1202,20 +1202,20 @@ class TaskService:
 
     async def get_tasks_for_agent(
         self,
-        agent_skills: list[str],
+        agent_tags: list[str],
         limit: int = 20,
     ) -> list[Task]:
         """
         Get tasks suitable for an agent
 
         Args:
-            agent_skills: Agent's skill list
+            agent_tags: Agent's tag list
             limit: Maximum tasks to return
 
         Returns:
             List of matching tasks
         """
-        return await self.task_pool.find_tasks_for_agent(agent_skills, limit)
+        return await self.task_pool.find_tasks_for_agent(agent_tags, limit)
 
     async def _notify_webhook(self, event: WebhookEventType, task: Task) -> None:
         """Send webhook notification"""

@@ -77,12 +77,12 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_skills(self, skills: list[str], status: str = "online") -> list[Agent]:
+    async def find_by_tags(self, tags: list[str], status: str = "online") -> list[Agent]:
         """
-        Find agents by skills
+        Find agents by tags
 
         Args:
-            skills: List of required skill IDs
+            tags: List of required tag IDs
             status: Agent status filter
 
         Returns:

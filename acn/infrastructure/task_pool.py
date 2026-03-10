@@ -18,7 +18,7 @@ class TaskPool:
 
     The Task Pool provides a simplified interface for:
     - Agents to discover available tasks (pull model)
-    - Filtering tasks by skills, mode, type
+    - Filtering tasks by tags, mode, type
     - Tracking task completions
 
     This is a "pull" model where agents actively query for tasks.
@@ -83,7 +83,7 @@ class TaskPool:
     async def get_open_tasks(
         self,
         mode: TaskMode | None = None,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         task_type: str | None = None,
         limit: int = 20,
         offset: int = 0,
@@ -93,7 +93,7 @@ class TaskPool:
 
         Args:
             mode: Filter by task mode (open/assigned)
-            skills: Filter by agent's skills (returns tasks the agent can do)
+            tags: Filter by agent's tags (returns tasks the agent can do)
             task_type: Filter by task type
             limit: Maximum number of tasks to return
             offset: Pagination offset
@@ -103,7 +103,7 @@ class TaskPool:
         """
         return await self.repository.find_open_tasks(
             mode=mode,
-            skills=skills,
+            tags=tags,
             task_type=task_type,
             limit=limit,
             offset=offset,
@@ -111,24 +111,24 @@ class TaskPool:
 
     async def find_tasks_for_agent(
         self,
-        agent_skills: list[str],
+        agent_tags: list[str],
         limit: int = 20,
     ) -> list[Task]:
         """
-        Find tasks suitable for an agent based on their skills
+        Find tasks suitable for an agent based on their tags
 
         Args:
-            agent_skills: Agent's skill list
+            agent_tags: Agent's tag list
             limit: Maximum number of tasks to return
 
         Returns:
             List of matching tasks
         """
-        # Get all open tasks and filter by skills
+        # Get all open tasks and filter by tags
         tasks = await self.repository.find_open_tasks(limit=limit * 2)  # Get more to filter
 
         # Filter to tasks the agent can do
-        matching_tasks = [task for task in tasks if task.matches_skills(agent_skills)][:limit]
+        matching_tasks = [task for task in tasks if task.matches_tags(agent_tags)][:limit]
 
         return matching_tasks
 

@@ -39,7 +39,7 @@ class AgentRegistry:
         owner: str,
         name: str,
         endpoint: str,
-        skills: list[str],
+        tags: list[str],
         agent_card: dict | None = None,
         subnet_ids: list[str] | None = None,
         description: str = "",
@@ -61,7 +61,7 @@ class AgentRegistry:
             owner: Agent owner (system/user-{id}/provider-{id})
             name: Agent name
             endpoint: Agent A2A endpoint URL
-            skills: List of skill IDs
+            tags: List of tag IDs
             agent_card: Optional A2A Agent Card (auto-generated if not provided)
             subnet_ids: Subnets to join (default: ["public"]). Agent can belong to multiple subnets.
             description: Agent description
@@ -93,7 +93,7 @@ class AgentRegistry:
 
         # Generate Agent Card if not provided
         if not agent_card:
-            agent_card = self._generate_agent_card(name, endpoint, skills, description)
+            agent_card = self._generate_agent_card(name, endpoint, tags, description)
 
         # Validate Agent Card
         self._validate_agent_card(agent_card)
@@ -105,7 +105,7 @@ class AgentRegistry:
             "name": name,
             "description": description,
             "endpoint": endpoint,
-            "skills": json.dumps(skills),
+            "tags": json.dumps(tags),  # Backward compat: was "skills"
             "status": "online",
             "subnet_ids": json.dumps(subnet_ids),
             "metadata": json.dumps(metadata or {}),
@@ -123,11 +123,12 @@ class AgentRegistry:
 
         # Clean up old indexes if updating
         if is_update:
-            # Remove from old skill indexes
-            old_skills = json.loads(existing_agent.get("skills", "[]"))
-            for skill in old_skills:
-                if skill not in skills:
-                    await self.redis.srem(f"acn:skills:{skill}", agent_id)
+            # Remove from old tag indexes
+            # Read: support both new "tags" and legacy "skills" key
+            old_tags = json.loads(existing_agent.get("tags") or existing_agent.get("skills", "[]"))
+            for tag in old_tags:
+                if tag not in tags:
+                    await self.redis.srem(f"acn:tags:{tag}", agent_id)
 
             # Remove from old subnet indexes
             old_subnets = json.loads(existing_agent.get("subnet_ids", '["public"]'))
@@ -138,8 +139,8 @@ class AgentRegistry:
         # Update indexes (idempotent - sadd won't duplicate)
         await self.redis.sadd(f"acn:owners:{owner}:agents", agent_id)
 
-        for skill in skills:
-            await self.redis.sadd(f"acn:skills:{skill}", agent_id)
+        for tag in tags:
+            await self.redis.sadd(f"acn:tags:{tag}", agent_id)
 
         for subnet_id in subnet_ids:
             await self.redis.sadd(f"acn:subnets:{subnet_id}:agents", agent_id)
@@ -243,7 +244,8 @@ class AgentRegistry:
             name=data["name"],
             description=data.get("description", ""),
             endpoint=data["endpoint"],
-            skills=json.loads(data["skills"]),
+            # Read: support both new "tags" and legacy "skills" key
+            tags=json.loads(data.get("tags") or data.get("skills", "[]")),
             status=data["status"],
             subnet_ids=subnet_ids,
             agent_card=agent_card,
@@ -278,16 +280,16 @@ class AgentRegistry:
 
     async def search_agents(
         self,
-        skills: list[str] | None = None,
+        tags: list[str] | None = None,
         status: str = "online",
         owner: str | None = None,
         name: str | None = None,
     ) -> list[AgentInfo]:
         """
-        Search Agents by skills, status, owner, and name
+        Search Agents by tags, status, owner, and name
 
         Args:
-            skills: Optional list of required skills
+            tags: Optional list of required tags
             status: Agent status filter (default: "online")
             owner: Optional owner filter (e.g., "system", "user-123")
             name: Optional name filter (partial match)
@@ -298,10 +300,10 @@ class AgentRegistry:
         # Build candidate set based on filters
         candidate_sets = []
 
-        if skills:
-            # Get agents with all required skills (intersection)
-            skill_agents = await self.redis.sinter(*[f"acn:skills:{skill}" for skill in skills])
-            candidate_sets.append(skill_agents)
+        if tags:
+            # Get agents with all required tags (intersection)
+            tag_agents = await self.redis.sinter(*[f"acn:tags:{tag}" for tag in tags])
+            candidate_sets.append(tag_agents)
 
         if owner:
             # Get agents by owner
@@ -349,10 +351,11 @@ class AgentRegistry:
         if not data:
             return False
 
-        # Remove from skill indexes
-        skills = json.loads(data.get("skills", "[]"))
-        for skill in skills:
-            await self.redis.srem(f"acn:skills:{skill}", agent_id)
+        # Remove from tag indexes
+        # Read: support both new "tags" and legacy "skills" key
+        tags = json.loads(data.get("tags") or data.get("skills", "[]"))
+        for tag in tags:
+            await self.redis.srem(f"acn:tags:{tag}", agent_id)
 
         # Remove from all subnet indexes (支持多子网)
         if data.get("subnet_ids"):
@@ -444,7 +447,7 @@ class AgentRegistry:
         return None
 
     def _generate_agent_card(
-        self, name: str, endpoint: str, skills: list[str], description: str = ""
+        self, name: str, endpoint: str, tags: list[str], description: str = ""
     ) -> dict:
         """Generate an A2A v0.3.0 compliant Agent Card"""
         card = AgentCard(
@@ -455,14 +458,14 @@ class AgentRegistry:
             capabilities=AgentCapabilities(streaming=False),
             default_input_modes=["text", "application/json"],
             default_output_modes=["text", "application/json"],
-            skills=[
+            tags=[
                 AgentSkill(
-                    id=skill,
-                    name=skill.replace("-", " ").replace("_", " ").title(),
-                    description=f"Capability: {skill}",
-                    tags=[skill],
+                    id=tag,
+                    name=tag.replace("-", " ").replace("_", " ").title(),
+                    description=f"Capability: {tag}",
+                    tags=[tag],
                 )
-                for skill in skills
+                for tag in tags
             ],
         )
         return card.model_dump(exclude_none=True)

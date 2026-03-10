@@ -30,7 +30,7 @@ class AgentInfo(BaseModel):
     name: str = Field(..., description="Agent name")
     description: str | None = Field(None, description="Agent description")
     endpoint: str = Field(..., description="Agent A2A endpoint URL")
-    skills: list[str] = Field(default_factory=list, description="Agent skill IDs")
+    tags: list[str] = Field(default_factory=list, description="Agent capability tags (e.g. ['coding', 'search'])")
     status: AgentStatus = Field(default=AgentStatus.ONLINE, description="Agent status")
     # 支持多子网归属
     subnet_ids: list[str] = Field(
@@ -93,12 +93,12 @@ class AgentRegisterRequest(BaseModel):
     )
     name: str = Field(..., min_length=1, max_length=128, description="Agent name")
     endpoint: str = Field(..., max_length=512, description="Agent A2A endpoint URL")
-    skills: list[str] = Field(default_factory=list, max_length=50, description="Agent skill IDs")
+    tags: list[str] = Field(default_factory=list, max_length=50, description="Agent capability tags")
     agent_card: dict | None = Field(
         None,
         description=(
             "Optional A2A Agent Card as a plain dict (NOT a file path). "
-            "Example: {'name': 'MyAgent', 'url': 'https://...', 'skills': [...]}. "
+            "Example: {'name': 'MyAgent', 'url': 'https://...', 'tags': [...]}. "
             "Auto-generated on demand if omitted."
         ),
     )
@@ -120,12 +120,12 @@ class AgentRegisterRequest(BaseModel):
             raise ValueError("endpoint must start with http:// or https://")
         return v
 
-    @field_validator("skills", mode="before")
+    @field_validator("tags", mode="before")
     @classmethod
-    def skills_items_max_length(cls, v: list) -> list:
+    def tags_items_max_length(cls, v: list) -> list:
         for s in v:
             if isinstance(s, str) and len(s) > 64:
-                raise ValueError(f"each skill ID must be ≤ 64 characters, got: {s[:70]!r}")
+                raise ValueError(f"each tag must be ≤ 64 characters, got: {s[:70]!r}")
         return v
 
     def get_subnet_ids(self) -> list[str]:
@@ -151,7 +151,7 @@ class AgentRegisterResponse(BaseModel):
 class AgentSearchRequest(BaseModel):
     """Request to search agents"""
 
-    skills: list[str] | None = Field(None, max_length=20, description="Required skills")
+    tags: list[str] | None = Field(None, max_length=20, description="Required capability tags")
     status: AgentStatus = Field(default=AgentStatus.ONLINE, description="Agent status filter")
 
 
@@ -316,8 +316,8 @@ class ExternalAgentJoinRequest(BaseModel):
 
     name: str = Field(..., description="Agent name", min_length=1, max_length=100)
     description: str | None = Field(None, description="Agent description", max_length=500)
-    skills: list[str] = Field(
-        default_factory=list, description="Agent skills (e.g., ['coding', 'review'])"
+    tags: list[str] = Field(
+        default_factory=list, description="Agent capability tags (e.g., ['coding', 'review'])"
     )
     mode: str = Field(
         default="pull", description="Communication mode: 'pull' (polling) or 'push' (A2A endpoint)"

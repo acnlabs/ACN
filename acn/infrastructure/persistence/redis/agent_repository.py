@@ -49,7 +49,7 @@ class RedisAgentRepository(IAgentRepository):
         agent_dict = agent.to_dict()
 
         # Convert lists/dicts to JSON strings for Redis
-        agent_dict["skills"] = json.dumps(agent_dict.get("skills", []))
+        agent_dict["tags"] = json.dumps(agent_dict.get("tags", []))
         agent_dict["subnet_ids"] = json.dumps(agent_dict.get("subnet_ids", ["public"]))
         agent_dict["payment_methods"] = json.dumps(agent_dict.get("payment_methods", []))
         agent_dict["wallet_addresses"] = json.dumps(agent_dict.get("wallet_addresses", {}))
@@ -171,13 +171,13 @@ class RedisAgentRepository(IAgentRepository):
                 agents.append(agent)
         return agents
 
-    async def find_by_skills(self, skills: list[str], status: str = "online") -> list[Agent]:
-        """Find agents by skills. status='all' returns agents with skills regardless of status."""
+    async def find_by_tags(self, tags: list[str], status: str = "online") -> list[Agent]:
+        """Find agents by tags. status='all' returns agents with tags regardless of status."""
         all_agents = await self.find_all()
 
         matching_agents = []
         for agent in all_agents:
-            if not agent.has_all_skills(skills):
+            if not agent.has_all_tags(tags):
                 continue
             if status != "all" and agent.status.value != status:
                 continue
@@ -304,7 +304,8 @@ class RedisAgentRepository(IAgentRepository):
             "endpoint": agent_dict.get("endpoint"),
             "status": AgentStatus(agent_dict["status"]),
             "description": agent_dict.get("description"),
-            "skills": json.loads(agent_dict.get("skills", "[]")),
+            # Read: support both new "tags" and legacy "skills" key
+            "tags": json.loads(agent_dict.get("tags") or agent_dict.get("skills", "[]")),
             "subnet_ids": json.loads(agent_dict.get("subnet_ids", '["public"]')),
             "metadata": json.loads(agent_dict.get("metadata", "{}")),
             "registered_at": datetime.fromisoformat(agent_dict["registered_at"]),
