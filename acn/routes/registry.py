@@ -42,7 +42,7 @@ class AgentJoinRequest(BaseModel):
 
     name: str = Field(..., min_length=2, max_length=100, description="Agent name")
     description: str = Field(..., min_length=10, max_length=500, description="What this agent does (required)")
-    tags: list[str] = Field(..., min_length=1, max_length=20, description="At least one capability tag (e.g. ['coding', 'search'])")
+    tags: list[str] = Field(default_factory=list, max_length=20, description="Capability tags (e.g. ['coding', 'search']). Optional but recommended for discoverability.")
     endpoint: str = Field(..., max_length=500, description="Agent A2A endpoint URL (must be http/https)")
     referrer_id: str | None = Field(None, description="Referrer agent ID")
     agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
