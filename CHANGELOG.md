@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-10
+
+### Breaking Changes
+
+- **`skills` → `tags` rename** (API + internals): The `skills` field has been renamed to `tags` across all layers — agent entity, models, services, repositories, messaging, and task layers — to align with A2A protocol semantics (`AgentSkill` = full capability object; `tags` = short capability labels).
+  - `POST /join` and `POST /register`: request body field `skills` → `tags`
+  - `GET /agents`: response field `skills` → `tags`
+  - `POST /broadcast-by-skill` route renamed to `POST /broadcast-by-tag`
+  - Backward compatibility: `GET /search?skill=` still accepted as deprecated alias for `tag=`; Redis deserialization reads both `"tags"` and legacy `"skills"` keys; Postgres `required_tags` maps to existing column `required_skills` (no migration needed)
+
+### Added
+
+- **Admin bulk delete endpoint** `DELETE /api/v1/agents` (requires `X-Internal-Token`):
+  - Filter by `name_prefix` and/or `owner`
+  - `dry_run=true` (default) previews targets without deleting
+  - `dry_run=false` performs actual deletion
+- **`scripts/cleanup_test_agents.py`**: One-shot script to purge unowned test agents from production using the admin bulk delete endpoint.
+- **`join_daily_limit_no_endpoint` / `join_daily_limit_with_endpoint`** config keys for future per-endpoint-mode rate limiting.
+
+### Changed
+
+- **`POST /join` hardened**:
+  - `name`: min_length 2, must contain at least one letter, rejects auto-generated numeric suffixes (e.g. `agent-1772498556`)
+  - `description`: now **required**, min_length 10
+  - `endpoint`: now **required**, must be a valid `http://` or `https://` URL
+  - `tags`: optional (recommended for discoverability), max 20 items
+  - Rate limit tightened: `10/minute` → `5/minute; 50/day`
+- Removed redundant `agent_inactivity_expire_days` config key (inactivity logic is handled separately via Redis TTL)
+
+### Fixed
+
+- `AgentInfo.tags` description had unescaped double quotes causing a latent syntax issue in `models.py`
+
 ## [0.4.1] - 2026-03-03
 
 ### Security
