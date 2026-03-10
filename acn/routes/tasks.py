@@ -274,7 +274,7 @@ async def list_tasks(
             raise HTTPException(status_code=400, detail=f"Invalid status: {status}") from None
 
     # Parse tags
-    tag_list = skills.split(",") if skills else None
+    tag_list = tags.split(",") if tags else None
 
     tasks = await task_service.list_tasks(
         mode=task_mode,
@@ -310,10 +310,10 @@ async def match_tasks_for_agent(
 
     Returns open tasks that the agent can work on based on their tags.
     """
-    tag_list = [s.strip() for s in skills.split(",") if s.strip()]
+    tag_list = [s.strip() for s in tags.split(",") if s.strip()]
 
     if not tag_list:
-        raise HTTPException(status_code=400, detail="At least one skill is required") from None
+        raise HTTPException(status_code=400, detail="At least one tag is required") from None
 
     tasks = await task_service.get_tasks_for_agent(tag_list, limit)
 

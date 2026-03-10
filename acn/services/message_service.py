@@ -155,7 +155,7 @@ class MessageService:
             from_agent_id: Sender agent ID
             message: A2A Message object
             subnet_id: Optional subnet filter
-            skills: Optional skill filter
+            tags: Optional tag filter
             strategy: Broadcast strategy (parallel/sequential/best_effort)
             **kwargs: Additional parameters
 
@@ -173,8 +173,8 @@ class MessageService:
         # Find target agents
         if subnet_id:
             agents = await self.agent_repository.find_by_subnet(subnet_id)
-        elif skills:
-            agents = await self.agent_repository.find_by_tags(skills)
+        elif tags:
+            agents = await self.agent_repository.find_by_tags(tags)
         else:
             agents = await self.agent_repository.find_all()
 

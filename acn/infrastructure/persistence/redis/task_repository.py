@@ -292,7 +292,7 @@ class RedisTaskRepository(ITaskRepository):
             # Apply filters
             if mode and task.mode != mode:
                 continue
-            if skills and not task.matches_tags(skills):
+            if tags and not task.matches_tags(tags):
                 continue
             if task_type and task.task_type != task_type:
                 continue
