@@ -248,10 +248,10 @@ class PostgresTaskRepository(ITaskRepository):
             stmt = select(TaskModel).where(TaskModel.status == TaskStatus.OPEN.value)
             if mode:
                 stmt = stmt.where(TaskModel.mode == mode.value)
-            if skills:
-                # PostgreSQL ARRAY containment: required_tags @> ARRAY[skill1, skill2]
+            if tags:
+                # PostgreSQL ARRAY containment: required_tags @> ARRAY[tag1, tag2]
                 stmt = stmt.where(
-                    TaskModel.required_tags.contains(cast(skills, ARRAY(String)))
+                    TaskModel.required_tags.contains(cast(tags, ARRAY(String)))
                 )
             if task_type:
                 # task_type is stored in JSONB metadata column
