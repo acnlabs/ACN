@@ -25,14 +25,14 @@ class TestAgentService:
             owner="user-123",
             name="Test Agent",
             endpoint="https://agent.example.com",
-            skills=["task-planning"],
+            tags=["task-planning"],
         )
 
         # Verify agent created
         assert agent.owner == "user-123"
         assert agent.name == "Test Agent"
         assert agent.endpoint == "https://agent.example.com"
-        assert agent.skills == ["task-planning"]
+        assert agent.tags == ["task-planning"]
         assert agent.status == AgentStatus.ONLINE
 
         # Verify repository called
@@ -50,13 +50,13 @@ class TestAgentService:
             owner=sample_agent.owner,
             name="Updated Name",
             endpoint=sample_agent.endpoint,
-            skills=["new-skill"],
+            tags=["new-skill"],
         )
 
         # Verify agent updated
         assert agent.agent_id == sample_agent.agent_id  # Same ID
         assert agent.name == "Updated Name"  # Updated
-        assert agent.skills == ["new-skill"]  # Updated
+        assert agent.tags == ["new-skill"]  # Updated
         assert agent.status == AgentStatus.ONLINE
 
         # Verify repository save called
@@ -92,20 +92,20 @@ class TestAgentService:
     async def test_search_agents_by_skills(self, mock_agent_repository, sample_agent):
         """Test searching agents by skills"""
         # Setup mock
-        mock_agent_repository.find_by_skills.return_value = [sample_agent]
+        mock_agent_repository.find_by_tags.return_value = [sample_agent]
         mock_agent_repository.filter_alive.return_value = {sample_agent.agent_id}
 
         service = AgentService(mock_agent_repository)
 
         agents = await service.search_agents(
-            skills=["task-planning"],
+            tags=["task-planning"],
             status="online",
         )
 
         assert len(agents) == 1
         assert agents[0].agent_id == sample_agent.agent_id
 
-        mock_agent_repository.find_by_skills.assert_called_once_with(["task-planning"], "online")
+        mock_agent_repository.find_by_tags.assert_called_once_with(["task-planning"], "online")
 
     @pytest.mark.asyncio
     async def test_search_agents_by_subnet(self, mock_agent_repository, sample_agent):

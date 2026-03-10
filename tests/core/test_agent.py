@@ -78,25 +78,25 @@ class TestAgentEntity:
             owner="user-456",
             name="Test Agent",
             endpoint="https://agent.example.com",
-            skills=["task-planning", "code-generation"],
+            tags=["task-planning", "code-generation"],
         )
 
-        assert agent.has_skill("task-planning") is True
-        assert agent.has_skill("code-generation") is True
-        assert agent.has_skill("data-analysis") is False
+        assert agent.has_tag("task-planning") is True
+        assert agent.has_tag("code-generation") is True
+        assert agent.has_tag("data-analysis") is False
 
     def test_has_all_skills(self):
-        """Test checking multiple skills"""
+        """Test checking multiple tags"""
         agent = Agent(
             agent_id="agent-123",
             owner="user-456",
             name="Test Agent",
             endpoint="https://agent.example.com",
-            skills=["task-planning", "code-generation", "data-analysis"],
+            tags=["task-planning", "code-generation", "data-analysis"],
         )
 
-        assert agent.has_all_skills(["task-planning", "code-generation"]) is True
-        assert agent.has_all_skills(["task-planning", "missing-skill"]) is False
+        assert agent.has_all_tags(["task-planning", "code-generation"]) is True
+        assert agent.has_all_tags(["task-planning", "missing-skill"]) is False
 
     def test_subnet_management(self):
         """Test subnet add/remove"""
@@ -159,7 +159,7 @@ class TestAgentEntity:
             owner="user-456",
             name="Test Agent",
             endpoint="https://agent.example.com",
-            skills=["task-planning"],
+            tags=["task-planning"],
             subnet_ids=["public"],
         )
 
@@ -168,7 +168,7 @@ class TestAgentEntity:
         assert data["agent_id"] == "agent-123"
         assert data["owner"] == "user-456"
         assert data["name"] == "Test Agent"
-        assert data["skills"] == ["task-planning"]
+        assert data["tags"] == ["task-planning"]
         assert data["subnet_ids"] == ["public"]
 
     def test_from_dict(self):
@@ -179,7 +179,7 @@ class TestAgentEntity:
             "name": "Test Agent",
             "endpoint": "https://agent.example.com",
             "status": "online",
-            "skills": ["task-planning"],
+            "tags": ["task-planning"],
             "subnet_ids": ["public"],
             "metadata": {},
             "registered_at": "2024-01-01T12:00:00",
@@ -194,4 +194,4 @@ class TestAgentEntity:
         assert agent.agent_id == "agent-123"
         assert agent.owner == "user-456"
         assert agent.status == AgentStatus.ONLINE
-        assert agent.skills == ["task-planning"]
+        assert agent.tags == ["task-planning"]

@@ -56,7 +56,7 @@ def sample_agent() -> Agent:
         name="Test Agent",
         endpoint="https://agent.example.com",
         description="A test agent",
-        skills=["task-planning", "code-generation"],
+        tags=["task-planning", "code-generation"],
         subnet_ids=["public"],
         status=AgentStatus.ONLINE,
         metadata={"version": "1.0.0"},
