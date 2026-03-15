@@ -16,7 +16,7 @@ from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[i
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
-from ..auth.middleware import require_permission
+from ..auth.middleware import require_permission, verify_token
 from ..config import Settings, get_settings
 from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
@@ -685,6 +685,7 @@ async def join_agent(
         )
 
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
+        frontend_url = (settings.frontend_base_url or base_url).rstrip("/")
 
         logger.info("agent_joined", agent_id=agent.agent_id, name=agent.name)
 
@@ -702,7 +703,7 @@ async def join_agent(
             status=agent.status.value,
             claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
             verification_code=agent.verification_code or "",
-            claim_url=f"{base_url}/claim/{agent.agent_id}",
+            claim_url=f"{frontend_url}/claim/{agent.agent_id}",
             tasks_endpoint=f"{base_url}/api/v1/tasks",
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
             agent_card_url=f"{base_url}/api/v1/agents/{agent.agent_id}/.well-known/agent-card.json",
@@ -716,7 +717,7 @@ async def join_agent(
 async def claim_agent(
     agent_id: str,
     request: AgentClaimRequest,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(verify_token),
     agent_service: AgentServiceDep = None,
 ):
     """
