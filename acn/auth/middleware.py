@@ -121,7 +121,9 @@ async def _get_jwks(domain: str) -> dict:
 
 async def _fetch_jwks_from_network(domain: str) -> dict:
     """Fetch JWKS from Auth0's well-known endpoint."""
-    jwks_url = f"https://{domain}/.well-known/jwks.json"
+    # domain may already include the scheme (e.g. "https://tenant.auth0.com")
+    bare = domain.removeprefix("https://").removeprefix("http://").rstrip("/")
+    jwks_url = f"https://{bare}/.well-known/jwks.json"
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(jwks_url)
         resp.raise_for_status()
@@ -203,12 +205,13 @@ async def _verify_jwt(token: str) -> dict:
                 detail="Unable to find appropriate signing key.",
             )
 
+        bare_domain = settings.auth0_domain.removeprefix("https://").removeprefix("http://").rstrip("/")
         payload = jwt.decode(
             token,
             rsa_key,
             algorithms=["RS256"],
             audience=settings.auth0_audience,
-            issuer=f"https://{settings.auth0_domain}/",
+            issuer=f"https://{bare_domain}/",
         )
         return payload
 
