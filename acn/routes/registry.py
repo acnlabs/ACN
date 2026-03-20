@@ -479,6 +479,20 @@ async def proxy_post(request: Request, agent_id: str, agent_service: AgentServic
     return await _proxy_to_agent(request, agent_id, "POST", "", agent_service)
 
 
+@router.put("/{agent_id}")
+@limiter.limit("60/minute")
+async def proxy_put(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
+    """Proxy PUT to agent's real endpoint."""
+    return await _proxy_to_agent(request, agent_id, "PUT", "", agent_service)
+
+
+@router.patch("/{agent_id}")
+@limiter.limit("60/minute")
+async def proxy_patch(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
+    """Proxy PATCH to agent's real endpoint."""
+    return await _proxy_to_agent(request, agent_id, "PATCH", "", agent_service)
+
+
 @router.get("", response_model=AgentSearchResponse)
 @limiter.limit("60/minute")
 async def search_agents(
