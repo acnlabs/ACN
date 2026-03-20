@@ -702,6 +702,38 @@ async def unregister_agent(
 # ============================================================================
 
 
+async def _grant_register_reward(agent_id: str) -> None:
+    """Background task: grant register_agent reward to a newly joined agent."""
+    try:
+        rewards_client = RewardsClient(
+            backend_url=settings.backend_url,
+            internal_token=settings.internal_api_token,
+        )
+        result = await rewards_client.grant_register_bonus(agent_id=agent_id)
+        if result.success:
+            logger.info("register_reward_granted", agent_id=agent_id, amount=result.amount)
+        else:
+            logger.warning("register_reward_failed", agent_id=agent_id, error=result.error)
+    except Exception as e:
+        logger.error("register_reward_error", agent_id=agent_id, error=str(e))
+
+
+async def _grant_claim_reward(agent_id: str, user_id: str) -> None:
+    """Background task: grant claim_agent reward to the user who claimed."""
+    try:
+        rewards_client = RewardsClient(
+            backend_url=settings.backend_url,
+            internal_token=settings.internal_api_token,
+        )
+        result = await rewards_client.grant_claim_bonus(agent_id=agent_id, user_id=user_id)
+        if result.success:
+            logger.info("claim_reward_granted", agent_id=agent_id, user_id=user_id, amount=result.amount)
+        else:
+            logger.warning("claim_reward_failed", agent_id=agent_id, user_id=user_id, error=result.error)
+    except Exception as e:
+        logger.error("claim_reward_error", agent_id=agent_id, user_id=user_id, error=str(e))
+
+
 async def _grant_referral_reward(referrer_id: str, new_agent_id: str) -> None:
     """Background task to grant referral reward"""
     try:
@@ -810,6 +842,9 @@ async def join_agent(
 
         logger.info("agent_joined", agent_id=agent.agent_id, name=agent.name, referrer_id=referrer_id)
 
+        # Grant register_agent reward in background
+        background_tasks.add_task(_grant_register_reward, agent_id=agent.agent_id)
+
         # Grant referral reward and increment referral count (if referrer provided)
         if referrer_id:
             background_tasks.add_task(
@@ -845,6 +880,7 @@ async def join_agent(
 async def claim_agent(
     agent_id: str,
     request: AgentClaimRequest,
+    background_tasks: BackgroundTasks,
     payload: dict = Depends(verify_token),
     agent_service: AgentServiceDep = None,
 ):
@@ -863,6 +899,13 @@ async def claim_agent(
         )
 
         logger.info("agent_claimed", agent_id=agent_id, owner=token_owner)
+
+        # Grant claim_agent reward to the user who claimed
+        background_tasks.add_task(
+            _grant_claim_reward,
+            agent_id=agent_id,
+            user_id=token_owner,
+        )
 
         return AgentClaimResponse(
             success=True,

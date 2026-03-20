@@ -6,20 +6,78 @@ Clean Architecture implementation: Route → TaskService → Repository
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi import Request as _Request
 from pydantic import BaseModel, Field
 
-from ..auth.middleware import require_permission
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
 from ..config import get_settings
 from ..core.entities import TaskMode, TaskStatus
 from ..services import TaskNotFoundException, TaskService
-from .dependencies import AgentApiKeyDep, InternalTokenDep, limiter  # type: ignore[import-untyped]
+from .dependencies import AgentApiKeyDep, InternalTokenDep, get_agent_service, limiter  # type: ignore[import-untyped]
 
 settings = get_settings()
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 logger = structlog.get_logger()
+
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+# ========== Task Write Auth Dependency ==========
+# Accepts three authentication paths:
+#   1. X-Internal-Token header  → trusted Backend service call
+#   2. Bearer acn_xxx           → agent API key (direct agent access)
+#   3. Bearer <JWT>             → Auth0 JWT with acn:write permission
+
+
+def require_task_write_auth():
+    """Factory for task write endpoints: accepts internal token, agent API key, or JWT."""
+    from ..services.agent_service import AgentService
+
+    async def checker(
+        request: Request,
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+        x_internal_token: str | None = Header(default=None),
+        agent_service: AgentService = Depends(get_agent_service),
+    ) -> dict:
+        s = settings
+
+        # Dev mode: accept anything
+        if s.dev_mode:
+            sub = credentials.credentials if credentials else "dev@clients"
+            return {"sub": sub, "type": "dev", "permissions": ["acn:read", "acn:write", "acn:admin"]}
+
+        # 1. Internal token: trusted backend service call
+        if x_internal_token and x_internal_token == s.internal_api_token:
+            return {
+                "sub": "backend@internal",
+                "type": "internal",
+                "permissions": ["acn:read", "acn:write", "acn:admin"],
+            }
+
+        # 2. Agent API key (starts with "acn_")
+        if credentials and credentials.credentials.startswith("acn_"):
+            agent = await agent_service.get_agent_by_api_key(credentials.credentials)
+            if not agent:
+                raise HTTPException(status_code=401, detail="Invalid agent API key")
+            return {
+                "sub": agent.agent_id,
+                "type": "agent",
+                "agent_name": agent.name,
+                "permissions": ["acn:read", "acn:write"],
+            }
+
+        # 3. Auth0 JWT with acn:write
+        payload = await verify_token(credentials)
+        perms: list[str] = payload.get("permissions", [])
+        if "acn:write" not in perms:
+            raise HTTPException(status_code=403, detail="Missing required permission: acn:write")
+        return {**payload, "type": "jwt"}
+
+    return checker
 
 
 # ========== Dependency ==========
@@ -42,6 +100,33 @@ def get_task_service() -> TaskService:
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+
+
+def _resolve_actor(payload: dict, request: Request) -> tuple[str, str, str]:
+    """Return (actor_id, actor_name, actor_type) from auth payload + request headers.
+
+    Priority:
+    - agent auth: identity comes from the API key directly
+    - internal/dev: X-Creator-* headers override
+    - jwt: sub from token
+    """
+    auth_type = payload.get("type", "jwt")
+    token_owner = payload.get("sub", "dev@clients")
+
+    if auth_type == "agent":
+        actor_id = token_owner
+        actor_name = request.headers.get("x-creator-name") or payload.get("agent_name", actor_id)
+        actor_type = "agent"
+    elif auth_type in ("internal", "dev") and request.headers.get("x-creator-id"):
+        actor_id = request.headers.get("x-creator-id", token_owner)
+        actor_name = request.headers.get("x-creator-name") or actor_id
+        actor_type = request.headers.get("x-creator-type", "agent")
+    else:
+        actor_id = token_owner
+        actor_name = request.headers.get("x-creator-name") or actor_id
+        actor_type = request.headers.get("x-creator-type", "agent")
+
+    return actor_id, actor_name, actor_type
 
 
 # ========== Request/Response Models ==========
@@ -345,23 +430,31 @@ async def get_task(
 async def create_task(
     body: TaskCreateRequest,
     request: Request,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """
-    Create a new task
+    Create a new task.
 
-    Requires authentication. The authenticated user becomes the creator.
-    In dev mode, X-Creator-Id header can override the subject.
+    Accepts three auth methods:
+    - X-Internal-Token header: trusted Backend→ACN service call (X-Creator-* headers used)
+    - Bearer acn_xxx: agent direct call (agent becomes creator automatically)
+    - Bearer <JWT>: Auth0 user with acn:write permission
     """
+    auth_type = payload.get("type", "jwt")
     token_owner = payload.get("sub", "dev@clients")
 
-    # Dev mode only: allow X-Creator-Id header override
     creator_id_header = request.headers.get("x-creator-id")
     creator_name_header = request.headers.get("x-creator-name")
     creator_type_header = request.headers.get("x-creator-type", "human")
 
-    if creator_id_header and settings.dev_mode:
+    if auth_type == "agent":
+        # Agent direct call: agent itself is the creator
+        token_owner = payload["sub"]
+        creator_type_header = "agent"
+        creator_name_header = creator_name_header or payload.get("agent_name", token_owner)
+    elif creator_id_header and (settings.dev_mode or auth_type in ("internal", "dev")):
+        # Internal/dev: allow X-Creator-Id override
         token_owner = creator_id_header
 
     # Parse mode
@@ -412,15 +505,11 @@ async def accept_task(
     task_id: str,
     request: Request,
     body: TaskAcceptRequest = None,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """Accept/join a task. Returns participation_id for multi-participant tasks."""
-    token_owner = payload.get("sub", "dev@clients")
-
-    agent_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
-    agent_name = request.headers.get("x-creator-name") or agent_id
-    agent_type = request.headers.get("x-creator-type", "agent")
+    agent_id, agent_name, agent_type = _resolve_actor(payload, request)
 
     try:
         task, participation_id = await task_service.accept_task(
@@ -445,14 +534,11 @@ async def submit_task(
     task_id: str,
     request: Request,
     body: TaskSubmitRequest,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """Submit task result"""
-    token_owner = payload.get("sub", "dev@clients")
-
-    # Dev mode only: allow X-Creator-Id header override
-    agent_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
+    agent_id, _, _ = _resolve_actor(payload, request)
 
     try:
         task = await task_service.submit_task(
@@ -477,12 +563,11 @@ async def review_task(
     task_id: str,
     request: Request,
     body: TaskReviewRequest,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """Approve or reject task/participation submission"""
-    token_owner = payload.get("sub", "dev@clients")
-    reviewer_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
+    reviewer_id, _, _ = _resolve_actor(payload, request)
 
     try:
         # Multi-participant review (participation_id or agent_id provided)
@@ -520,16 +605,17 @@ async def review_task(
 @router.post("/{task_id}/cancel", response_model=TaskResponse)
 async def cancel_task(
     task_id: str,
-    payload: dict = Depends(require_permission("acn:write")),
+    request: Request,
+    payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """Cancel a task (only creator can cancel)"""
-    token_owner = payload.get("sub", "dev@clients")
+    canceller_id, _, _ = _resolve_actor(payload, request)
 
     try:
         task = await task_service.cancel_task(
             task_id=task_id,
-            canceller_id=token_owner,
+            canceller_id=canceller_id,
         )
         return _task_to_response(task)
 
@@ -581,7 +667,7 @@ async def get_my_participation(
 ):
     """Get the current user's participation in a task"""
     token_owner = payload.get("sub", "dev@clients")
-    agent_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
+    agent_id = (request.headers.get("x-creator-id") if (settings.dev_mode or token_owner == "backend@internal") else None) or token_owner
 
     p = await task_service.get_user_participation(task_id, agent_id)
     if not p:
@@ -594,12 +680,11 @@ async def cancel_participation(
     task_id: str,
     participation_id: str,
     request: Request,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """Cancel a participation (participant withdraws)"""
-    token_owner = payload.get("sub", "dev@clients")
-    agent_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
+    agent_id, _, _ = _resolve_actor(payload, request)
 
     try:
         task = await task_service.cancel_participation(
@@ -621,12 +706,11 @@ async def approve_applicant(
     task_id: str,
     participation_id: str,
     request: Request,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """Approve an applicant for an assigned task (creator only). Sets them as assignee."""
-    token_owner = payload.get("sub", "dev@clients")
-    approver_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
+    approver_id, _, _ = _resolve_actor(payload, request)
 
     try:
         task = await task_service.approve_applicant(
@@ -648,12 +732,11 @@ async def reject_applicant(
     task_id: str,
     participation_id: str,
     request: Request,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """Reject an applicant for an assigned task (creator only)."""
-    token_owner = payload.get("sub", "dev@clients")
-    approver_id = (request.headers.get("x-creator-id") if settings.dev_mode else None) or token_owner
+    approver_id, _, _ = _resolve_actor(payload, request)
 
     try:
         task = await task_service.reject_applicant(

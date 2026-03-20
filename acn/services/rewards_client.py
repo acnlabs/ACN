@@ -41,15 +41,23 @@ class RewardsClient:
     - grant: Grant a reward to an agent or user
     """
 
-    def __init__(self, backend_url: str, timeout: float = 30.0):
+    def __init__(self, backend_url: str, internal_token: str | None = None, timeout: float = 30.0):
         """
         Args:
             backend_url: Backend API base URL (e.g., "http://localhost:8000")
+            internal_token: X-Internal-Token for Backend service auth
             timeout: Request timeout in seconds
         """
         self.backend_url = backend_url.rstrip("/")
+        self.internal_token = internal_token
         self.timeout = timeout
         self._config_cache: RewardConfig | None = None
+
+    @property
+    def _auth_headers(self) -> dict:
+        if self.internal_token:
+            return {"X-Internal-Token": self.internal_token}
+        return {}
 
     async def get_config(self, force_refresh: bool = False) -> RewardConfig:
         """
@@ -66,7 +74,10 @@ class RewardsClient:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
-                response = await client.get(f"{self.backend_url}/api/rewards/config")
+                response = await client.get(
+                    f"{self.backend_url}/api/rewards/config",
+                    headers=self._auth_headers,
+                )
 
                 if response.status_code == 200:
                     data = response.json()
@@ -125,6 +136,7 @@ class RewardsClient:
                 response = await client.post(
                     f"{self.backend_url}/api/rewards/grant",
                     json=payload,
+                    headers=self._auth_headers,
                 )
 
                 if response.status_code == 200:
@@ -174,6 +186,26 @@ class RewardsClient:
                 message="Failed to grant reward",
                 error=str(e),
             )
+
+    async def grant_register_bonus(self, agent_id: str) -> RewardResult:
+        """Grant register_agent reward to a newly joined agent."""
+        return await self.grant(
+            recipient_type="agent",
+            recipient_id=agent_id,
+            reward_type="register_agent",
+            reason="Agent registered on ACN",
+            source_id=agent_id,
+        )
+
+    async def grant_claim_bonus(self, agent_id: str, user_id: str) -> RewardResult:
+        """Grant claim_agent reward to the user who claimed the agent."""
+        return await self.grant(
+            recipient_type="user",
+            recipient_id=user_id,
+            reward_type="claim_agent",
+            reason=f"Claimed agent {agent_id}",
+            source_id=agent_id,
+        )
 
     async def grant_referral_bonus(
         self,

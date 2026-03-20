@@ -718,4 +718,11 @@ class RedisTaskRepository(ITaskRepository):
             else:
                 data.pop(field_name, None)
 
+        # Strip unknown fields to survive schema drift (e.g. old Redis entries
+        # may contain fields that were later renamed or removed, such as
+        # 'required_skills' which was superseded by 'required_tags').
+        import dataclasses as _dc
+        valid_fields = {f.name for f in _dc.fields(Task)}
+        data = {k: v for k, v in data.items() if k in valid_fields}
+
         return Task(**data)

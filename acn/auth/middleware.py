@@ -21,7 +21,7 @@ from typing import Any
 
 import httpx
 import structlog
-from fastapi import HTTPException, Security, status
+from fastapi import Header, HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
@@ -285,6 +285,48 @@ def require_permission(permission: str):
     return permission_checker
 
 
+def require_internal_or_permission(permission: str):
+    """FastAPI dependency factory: accept either a valid internal token (for
+    Backend-to-ACN service calls) or a JWT with the required permission.
+
+    When authenticated via internal token the payload is synthetic — it grants
+    all permissions and sets sub to 'backend@internal'.  The actual creator
+    identity should be passed via X-Creator-Id / X-Creator-Name / X-Creator-Type
+    request headers and read by the endpoint handler.
+    """
+    async def checker(
+        credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
+        x_internal_token: str | None = Header(default=None),
+    ) -> dict:
+        settings = _get_settings()
+
+        # Dev mode: accept anything
+        if settings.dev_mode:
+            sub = "dev@clients"
+            if credentials is not None:
+                sub = credentials.credentials
+            return {"sub": sub, "permissions": ["acn:read", "acn:write", "acn:admin"]}
+
+        # Internal token: trusted backend service call
+        if x_internal_token and x_internal_token == settings.internal_api_token:
+            return {
+                "sub": "backend@internal",
+                "permissions": ["acn:read", "acn:write", "acn:admin"],
+            }
+
+        # Otherwise require standard JWT + permission
+        payload = await verify_token(credentials)
+        permissions: list[str] = payload.get("permissions", [])
+        if permission not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing required permission: {permission}",
+            )
+        return payload
+
+    return checker
+
+
 async def get_subject(
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
 ) -> str:
@@ -303,5 +345,6 @@ async def get_subject(
 __all__ = [
     "verify_token",
     "require_permission",
+    "require_internal_or_permission",
     "get_subject",
 ]

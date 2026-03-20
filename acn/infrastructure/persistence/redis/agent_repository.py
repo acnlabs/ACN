@@ -61,10 +61,15 @@ class RedisAgentRepository(IAgentRepository):
 
         # Filter out None values (Redis doesn't accept None)
         # Also convert booleans to strings for Redis compatibility
+        # Track which keys were explicitly set to None — these must be deleted from the hash
+        nullable_fields = {"verification_code", "owner", "endpoint", "referrer_id"}
         clean_dict = {}
+        fields_to_delete = []
         for k, v in agent_dict.items():
             if v is None:
-                continue  # Skip None values
+                if k in nullable_fields:
+                    fields_to_delete.append(k)
+                # else: skip (never set, no need to delete)
             elif isinstance(v, bool):
                 clean_dict[k] = "true" if v else "false"
             else:
@@ -72,6 +77,10 @@ class RedisAgentRepository(IAgentRepository):
 
         # Save to Redis hash
         await self.redis.hset(agent_key, mapping=clean_dict)  # type: ignore[arg-type]
+
+        # Explicitly delete fields that were cleared (set to None) to avoid stale cache
+        if fields_to_delete:
+            await self.redis.hdel(agent_key, *fields_to_delete)
 
         # ===== Update Indices =====
 

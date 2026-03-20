@@ -119,7 +119,7 @@ class AgentModel(Base):
     auth0_client_id: Mapped[str | None] = mapped_column(String, nullable=True)
     auth0_token_endpoint: Mapped[str | None] = mapped_column(String, nullable=True)
     claim_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    verification_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    verification_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     referrer_id: Mapped[str | None] = mapped_column(String, nullable=True)
     wallet_address: Mapped[str | None] = mapped_column(String, nullable=True)
     wallet_addresses: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

@@ -34,8 +34,8 @@ def generate_api_key() -> str:
 
 
 def generate_verification_code() -> str:
-    """Generate a short verification code for human claim"""
-    return f"acn-{secrets.token_hex(2).upper()}"
+    """Generate a cryptographically secure one-time claim token (256-bit entropy)"""
+    return secrets.token_urlsafe(32)
 
 
 class AgentService:
@@ -490,12 +490,14 @@ class AgentService:
         if agent.claim_status == ClaimStatus.CLAIMED:
             raise ValueError(f"Agent {agent_id} is already claimed")
 
-        # Verify code if agent has one
-        if agent.verification_code and verification_code:
-            if agent.verification_code != verification_code:
-                raise ValueError("Invalid verification code")
+        # Claim token is always required — prevents unauthorized claim of any unclaimed agent
+        if not verification_code:
+            raise ValueError("Claim token is required")
+        if not secrets.compare_digest(agent.verification_code or "", verification_code):
+            raise ValueError("Invalid claim token")
 
         agent.claim(owner)
+        agent.verification_code = None  # One-time use: invalidate after claim
         await self.repository.save(agent)
 
         logger.info("agent_claimed", agent_id=agent_id, owner=owner)
