@@ -193,6 +193,7 @@ class TaskResponse(BaseModel):
     created_at: str
     deadline: str | None = None
     ui_spec: dict | None = None
+    metadata: dict = Field(default_factory=dict)
 
 
 class ParticipationResponse(BaseModel):
@@ -297,6 +298,7 @@ def _task_to_response(task) -> TaskResponse:
         created_at=task.created_at.isoformat(),
         deadline=task.deadline.isoformat() if task.deadline else None,
         ui_spec=ui_spec,
+        metadata=task.metadata or {},
     )
 
 
