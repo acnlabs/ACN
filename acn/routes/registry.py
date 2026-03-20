@@ -409,20 +409,13 @@ async def get_agent(request: Request, agent_id: str, agent_service: AgentService
         raise HTTPException(status_code=404, detail="Agent not found") from e
 
 
-@router.post("/{agent_id}")
-@limiter.limit("60/minute")
-async def proxy_a2a_message(
+async def _proxy_to_agent(
     request: Request,
     agent_id: str,
-    agent_service: AgentServiceDep = None,
-):
-    """Proxy A2A protocol messages to the agent's real endpoint.
-
-    ACN exposes its own canonical address as every agent's public endpoint,
-    so external callers route all A2A traffic here. This handler transparently
-    forwards the request body to the agent's registered backend URL and streams
-    the response back — making ACN a proper A2A reverse proxy.
-    """
+    method: str,
+    agent_service,
+) -> Response:
+    """Generic reverse proxy: forward any HTTP method to the agent's real endpoint."""
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
@@ -433,7 +426,6 @@ async def proxy_a2a_message(
         raise HTTPException(status_code=503, detail="Agent has no registered endpoint")
 
     body = await request.body()
-    # Forward all headers except hop-by-hop ones
     forward_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() not in ("host", "content-length", "transfer-encoding", "connection")
@@ -441,14 +433,13 @@ async def proxy_a2a_message(
 
     try:
         client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
-        req = client.build_request("POST", real_endpoint, content=body, headers=forward_headers)
+        req = client.build_request(method, real_endpoint, content=body, headers=forward_headers)
         resp = await client.send(req, stream=True)
 
         content_type = resp.headers.get("content-type", "application/json")
 
-        # SSE streaming: forward chunks as they arrive
         if "text/event-stream" in content_type:
-            async def stream_sse():
+            async def _stream():
                 try:
                     async for chunk in resp.aiter_bytes():
                         yield chunk
@@ -456,24 +447,44 @@ async def proxy_a2a_message(
                     await resp.aclose()
                     await client.aclose()
 
-            return StreamingResponse(
-                stream_sse(),
-                status_code=resp.status_code,
-                media_type=content_type,
-            )
+            return StreamingResponse(_stream(), status_code=resp.status_code, media_type=content_type)
 
-        # Regular response: read full body then close
         content = await resp.aread()
         await resp.aclose()
         await client.aclose()
-        return Response(
-            content=content,
-            status_code=resp.status_code,
-            media_type=content_type,
-        )
+        return Response(content=content, status_code=resp.status_code, media_type=content_type)
+
     except httpx.RequestError as e:
-        logger.error("a2a_proxy_error", agent_id=agent_id, endpoint=real_endpoint, error=str(e))
+        logger.error("a2a_proxy_error", agent_id=agent_id, method=method, endpoint=real_endpoint, error=str(e))
         raise HTTPException(status_code=502, detail="Failed to reach agent endpoint")
+
+
+@router.post("/{agent_id}")
+@limiter.limit("60/minute")
+async def proxy_post(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
+    """Proxy POST — A2A JSON-RPC (message/send, message/stream, tasks/*)."""
+    return await _proxy_to_agent(request, agent_id, "POST", agent_service)
+
+
+@router.put("/{agent_id}")
+@limiter.limit("60/minute")
+async def proxy_put(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
+    """Proxy PUT to agent's real endpoint."""
+    return await _proxy_to_agent(request, agent_id, "PUT", agent_service)
+
+
+@router.patch("/{agent_id}")
+@limiter.limit("60/minute")
+async def proxy_patch(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
+    """Proxy PATCH to agent's real endpoint."""
+    return await _proxy_to_agent(request, agent_id, "PATCH", agent_service)
+
+
+@router.delete("/{agent_id}")
+@limiter.limit("60/minute")
+async def proxy_delete(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
+    """Proxy DELETE to agent's real endpoint."""
+    return await _proxy_to_agent(request, agent_id, "DELETE", agent_service)
 
 
 @router.get("", response_model=AgentSearchResponse)
