@@ -15,6 +15,7 @@ import httpx
 import structlog  # type: ignore[import-untyped]
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[import-untyped]
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import require_permission, verify_token
@@ -439,12 +440,36 @@ async def proxy_a2a_message(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            resp = await client.post(real_endpoint, content=body, headers=forward_headers)
+        client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
+        req = client.build_request("POST", real_endpoint, content=body, headers=forward_headers)
+        resp = await client.send(req, stream=True)
+
+        content_type = resp.headers.get("content-type", "application/json")
+
+        # SSE streaming: forward chunks as they arrive
+        if "text/event-stream" in content_type:
+            async def stream_sse():
+                try:
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+                finally:
+                    await resp.aclose()
+                    await client.aclose()
+
+            return StreamingResponse(
+                stream_sse(),
+                status_code=resp.status_code,
+                media_type=content_type,
+            )
+
+        # Regular response: read full body then close
+        content = await resp.aread()
+        await resp.aclose()
+        await client.aclose()
         return Response(
-            content=resp.content,
+            content=content,
             status_code=resp.status_code,
-            media_type=resp.headers.get("content-type", "application/json"),
+            media_type=content_type,
         )
     except httpx.RequestError as e:
         logger.error("a2a_proxy_error", agent_id=agent_id, endpoint=real_endpoint, error=str(e))
