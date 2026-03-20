@@ -413,9 +413,14 @@ async def _proxy_to_agent(
     request: Request,
     agent_id: str,
     method: str,
+    rest_path: str,
     agent_service,
 ) -> Response:
-    """Generic reverse proxy: forward any HTTP method to the agent's real endpoint."""
+    """Generic reverse proxy: forward any HTTP method + optional sub-path to the agent's real endpoint.
+
+    root POST  /{agent_id}          → {real_endpoint}               (A2A JSON-RPC)
+    sub-path   /{agent_id}/foo/bar  → {real_endpoint}/foo/bar       (REST pass-through)
+    """
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
@@ -425,6 +430,10 @@ async def _proxy_to_agent(
     if not real_endpoint:
         raise HTTPException(status_code=503, detail="Agent has no registered endpoint")
 
+    target_url = real_endpoint.rstrip("/")
+    if rest_path:
+        target_url = f"{target_url}/{rest_path.lstrip('/')}"
+
     body = await request.body()
     forward_headers = {
         k: v for k, v in request.headers.items()
@@ -433,7 +442,7 @@ async def _proxy_to_agent(
 
     try:
         client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
-        req = client.build_request(method, real_endpoint, content=body, headers=forward_headers)
+        req = client.build_request(method, target_url, content=body, headers=forward_headers)
         resp = await client.send(req, stream=True)
 
         content_type = resp.headers.get("content-type", "application/json")
@@ -455,36 +464,19 @@ async def _proxy_to_agent(
         return Response(content=content, status_code=resp.status_code, media_type=content_type)
 
     except httpx.RequestError as e:
-        logger.error("a2a_proxy_error", agent_id=agent_id, method=method, endpoint=real_endpoint, error=str(e))
+        logger.error(
+            "a2a_proxy_error",
+            agent_id=agent_id, method=method,
+            target=target_url, error=str(e),
+        )
         raise HTTPException(status_code=502, detail="Failed to reach agent endpoint")
 
 
 @router.post("/{agent_id}")
 @limiter.limit("60/minute")
 async def proxy_post(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
-    """Proxy POST — A2A JSON-RPC (message/send, message/stream, tasks/*)."""
-    return await _proxy_to_agent(request, agent_id, "POST", agent_service)
-
-
-@router.put("/{agent_id}")
-@limiter.limit("60/minute")
-async def proxy_put(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
-    """Proxy PUT to agent's real endpoint."""
-    return await _proxy_to_agent(request, agent_id, "PUT", agent_service)
-
-
-@router.patch("/{agent_id}")
-@limiter.limit("60/minute")
-async def proxy_patch(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
-    """Proxy PATCH to agent's real endpoint."""
-    return await _proxy_to_agent(request, agent_id, "PATCH", agent_service)
-
-
-@router.delete("/{agent_id}")
-@limiter.limit("60/minute")
-async def proxy_delete(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
-    """Proxy DELETE to agent's real endpoint."""
-    return await _proxy_to_agent(request, agent_id, "DELETE", agent_service)
+    """Proxy POST to agent's real endpoint — A2A JSON-RPC (message/send, message/stream, tasks/*)."""
+    return await _proxy_to_agent(request, agent_id, "POST", "", agent_service)
 
 
 @router.get("", response_model=AgentSearchResponse)
@@ -1028,3 +1020,26 @@ async def get_agent_wallets(
         payment_processor=None,
         erc8004=erc8004,
     )
+
+
+# ── Catch-all proxy ───────────────────────────────────────────────────────────
+# Must be registered LAST so all ACN-native sub-routes (heartbeat, claim,
+# transfer, wallets, .well-known/*, etc.) take precedence.
+# Proxies any unmatched sub-path + HTTP method to the agent's real endpoint.
+
+@router.api_route("/{agent_id}/{rest_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@limiter.limit("60/minute")
+async def proxy_subpath(
+    request: Request,
+    agent_id: str,
+    rest_path: str,
+    agent_service: AgentServiceDep = None,
+):
+    """Catch-all reverse proxy for agent sub-paths.
+
+    Any request to /{agent_id}/{rest_path} that is not handled by an
+    ACN-native route is transparently forwarded to the agent's real
+    endpoint at {real_endpoint}/{rest_path}, preserving method, headers,
+    and body.  SSE streaming is supported for text/event-stream responses.
+    """
+    return await _proxy_to_agent(request, agent_id, request.method, rest_path, agent_service)
