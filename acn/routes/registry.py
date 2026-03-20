@@ -11,9 +11,10 @@ Supports two registration modes:
 import re
 from typing import Literal
 
+import httpx
 import structlog  # type: ignore[import-untyped]
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[import-untyped]
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import require_permission, verify_token
@@ -405,6 +406,49 @@ async def get_agent(request: Request, agent_id: str, agent_service: AgentService
         return _agent_entity_to_info(agent, strip_sensitive=True)
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
+
+
+@router.post("/{agent_id}")
+@limiter.limit("60/minute")
+async def proxy_a2a_message(
+    request: Request,
+    agent_id: str,
+    agent_service: AgentServiceDep = None,
+):
+    """Proxy A2A protocol messages to the agent's real endpoint.
+
+    ACN exposes its own canonical address as every agent's public endpoint,
+    so external callers route all A2A traffic here. This handler transparently
+    forwards the request body to the agent's registered backend URL and streams
+    the response back — making ACN a proper A2A reverse proxy.
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+
+    real_endpoint = agent.endpoint
+    if not real_endpoint:
+        raise HTTPException(status_code=503, detail="Agent has no registered endpoint")
+
+    body = await request.body()
+    # Forward all headers except hop-by-hop ones
+    forward_headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in ("host", "content-length", "transfer-encoding", "connection")
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.post(real_endpoint, content=body, headers=forward_headers)
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type=resp.headers.get("content-type", "application/json"),
+        )
+    except httpx.RequestError as e:
+        logger.error("a2a_proxy_error", agent_id=agent_id, endpoint=real_endpoint, error=str(e))
+        raise HTTPException(status_code=502, detail="Failed to reach agent endpoint")
 
 
 @router.get("", response_model=AgentSearchResponse)
