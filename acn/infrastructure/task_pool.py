@@ -6,7 +6,7 @@ Provides simplified interface for agents to discover and work on tasks.
 
 import structlog
 
-from ..core.entities import Participation, Task, TaskMode
+from ..core.entities import Participation, Task
 from ..core.interfaces import ITaskRepository
 
 logger = structlog.get_logger()
@@ -48,7 +48,7 @@ class TaskPool:
         logger.info(
             "task_added_to_pool",
             task_id=task.task_id,
-            mode=task.mode.value,
+            max_participants=task.max_participants,
             title=task.title,
         )
         return task
@@ -82,7 +82,7 @@ class TaskPool:
 
     async def get_open_tasks(
         self,
-        mode: TaskMode | None = None,
+        mode: str | None = None,
         tags: list[str] | None = None,
         task_type: str | None = None,
         limit: int = 20,
@@ -286,14 +286,6 @@ class TaskPool:
         """
         open_count = await self.count_open()
 
-        # Get counts by mode
-        open_mode_tasks = await self.repository.find_open_tasks(mode=TaskMode.OPEN, limit=1000)
-        assigned_mode_tasks = await self.repository.find_open_tasks(
-            mode=TaskMode.ASSIGNED, limit=1000
-        )
-
         return {
             "total_open": open_count,
-            "open_mode_count": len(open_mode_tasks),
-            "assigned_mode_count": len(assigned_mode_tasks),
         }

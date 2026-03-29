@@ -12,7 +12,7 @@ from sqlalchemy import String, cast, delete, func, select, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ....core.entities import Participation, Task, TaskMode, TaskStatus
+from ....core.entities import Participation, Task, TaskStatus
 from ....core.entities.task import ParticipationStatus
 from ....core.interfaces import ITaskRepository
 from .models import ParticipationModel, TaskModel
@@ -62,9 +62,22 @@ class PostgresTaskRepository(ITaskRepository):
 
     def _model_to_task(self, row: TaskModel, active_count: int = 0) -> Task:
         meta = row.task_metadata or {}
+        # Compat reads: derive new boolean fields from old DB columns when JSONB fields absent
+        require_join_approval = meta.get(
+            "require_join_approval",
+            row.mode == "assigned",  # legacy: assigned mode implied join approval
+        )
+        auto_approve = meta.get(
+            "auto_approve",
+            meta.get("approval_type") == "auto",  # legacy: approval_type=="auto"
+        )
+        use_escrow = meta.get("use_escrow", False)
+        # max_participants maps to max_completions DB column (renamed, semantics preserved)
+        max_participants = row.max_completions
+        if max_participants is None and not row.is_multi_participant:
+            max_participants = 1  # legacy single-participant tasks
         return Task(
             task_id=row.task_id,
-            mode=TaskMode(row.mode),
             status=TaskStatus(row.status),
             creator_id=row.creator_id,
             creator_type=row.creator_type,
@@ -75,6 +88,7 @@ class PostgresTaskRepository(ITaskRepository):
             required_tags=list(row.required_tags or []),
             assignee_id=row.assignee_id,
             assignee_name=meta.get("assignee_name"),
+            assignee_type=meta.get("assignee_type"),
             assigned_at=meta.get("assigned_at")
             and datetime.fromisoformat(meta["assigned_at"]),
             submission=meta.get("submission"),
@@ -83,30 +97,30 @@ class PostgresTaskRepository(ITaskRepository):
             and datetime.fromisoformat(meta["submitted_at"]),
             review_notes=meta.get("review_notes"),
             reviewed_by=meta.get("reviewed_by"),
-            reward_amount=row.reward_amount,
+            reward=row.reward_amount,  # DB column reward_amount maps to reward
             reward_currency=row.reward_currency,
             payment_task_id=meta.get("payment_task_id"),
-            reward_unit=meta.get("reward_unit", "completion"),
             total_budget=meta.get("total_budget", "0"),
             released_amount=meta.get("released_amount", "0"),
-            is_multi_participant=row.is_multi_participant,
+            max_total_budget=meta.get("max_total_budget"),
+            max_participants=max_participants,
+            require_join_approval=require_join_approval,
+            auto_approve=auto_approve,
             allow_repeat_by_same=meta.get("allow_repeat_by_same", False),
-            is_repeatable=row.is_multi_participant,
+            use_escrow=use_escrow,
+            group_id=meta.get("group_id"),
             completed_count=row.completed_count,
-            max_completions=row.max_completions,
             active_participants_count=active_count,
             created_at=row.created_at,
             deadline=row.deadline,
             completed_at=meta.get("completed_at")
             and datetime.fromisoformat(meta["completed_at"]),
-            approval_type=meta.get("approval_type", "manual"),
-            validator_id=meta.get("validator_id"),
             metadata=meta.get("extra_metadata", {}),
         )
 
     def _task_to_model(self, task: Task) -> TaskModel:
         """Convert Task entity → ORM model (upsert-safe)."""
-        # Overflow fields not in dedicated columns go into metadata JSONB
+        # New boolean fields stored in JSONB; DB columns kept for indexing compat
         extra_meta: dict = {
             "creator_name": task.creator_name,
             "task_type": task.task_type,
@@ -116,30 +130,39 @@ class PostgresTaskRepository(ITaskRepository):
             "review_notes": task.review_notes,
             "reviewed_by": task.reviewed_by,
             "payment_task_id": task.payment_task_id,
-            "reward_unit": task.reward_unit,
             "total_budget": task.total_budget,
             "released_amount": task.released_amount,
             "allow_repeat_by_same": task.allow_repeat_by_same,
             "assignee_name": task.assignee_name,
+            "assignee_type": task.assignee_type,
             "assigned_at": task.assigned_at.isoformat() if task.assigned_at else None,
             "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-            "approval_type": task.approval_type,
-            "validator_id": task.validator_id,
+            # New orthogonal boolean fields
+            "require_join_approval": task.require_join_approval,
+            "auto_approve": task.auto_approve,
+            "use_escrow": task.use_escrow,
+            "group_id": task.group_id,
             "extra_metadata": task.metadata,
         }
+        if task.max_total_budget is not None:
+            extra_meta["max_total_budget"] = task.max_total_budget
+        # DB mode column: keep writing for legacy index; "assigned" if require_join_approval
+        db_mode = "assigned" if task.require_join_approval else "open"
+        # DB is_multi_participant: True when max_participants != 1
+        db_is_multi = task.max_participants is None or task.max_participants > 1
         return TaskModel(
             task_id=task.task_id,
-            mode=task.mode.value,
+            mode=db_mode,
             status=task.status.value,
             creator_id=task.creator_id,
             creator_type=task.creator_type,
             title=task.title,
             description=task.description,
-            reward_amount=task.reward_amount,
+            reward_amount=task.reward,  # DB column reward_amount stores reward
             reward_currency=task.reward_currency,
             assignee_id=task.assignee_id,
-            is_multi_participant=task.is_multi_participant,
-            max_completions=task.max_completions,
+            is_multi_participant=db_is_multi,
+            max_completions=task.max_participants,  # DB column max_completions stores max_participants
             completed_count=task.completed_count,
             required_tags=task.required_tags or None,
             created_at=_tz(task.created_at) or datetime.now(UTC),
@@ -238,7 +261,7 @@ class PostgresTaskRepository(ITaskRepository):
 
     async def find_open_tasks(
         self,
-        mode: TaskMode | None = None,
+        mode: str | None = None,
         tags: list[str] | None = None,
         task_type: str | None = None,
         limit: int = 50,
@@ -247,7 +270,7 @@ class PostgresTaskRepository(ITaskRepository):
         async with self._session_factory() as session:
             stmt = select(TaskModel).where(TaskModel.status == TaskStatus.OPEN.value)
             if mode:
-                stmt = stmt.where(TaskModel.mode == mode.value)
+                stmt = stmt.where(TaskModel.mode == mode)
             if tags:
                 # PostgreSQL ARRAY containment: required_tags @> ARRAY[tag1, tag2]
                 stmt = stmt.where(
@@ -305,6 +328,17 @@ class PostgresTaskRepository(ITaskRepository):
                 select(TaskModel)
                 .where(TaskModel.status == status.value)
                 .order_by(TaskModel.created_at.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+        return await self._rows_to_tasks(rows)
+
+    async def find_by_group(self, group_id: str, limit: int = 100) -> list[Task]:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(TaskModel)
+                .where(TaskModel.task_metadata["group_id"].astext == group_id)
+                .order_by(TaskModel.created_at.asc())
                 .limit(limit)
             )
             rows = result.scalars().all()

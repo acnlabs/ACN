@@ -8,13 +8,13 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi import Request as _Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
 from ..config import get_settings
-from ..core.entities import TaskMode, TaskStatus
+from ..core.entities import TaskStatus
 from ..services import TaskNotFoundException, TaskService
 from .dependencies import AgentApiKeyDep, InternalTokenDep, get_agent_service, limiter  # type: ignore[import-untyped]
 
@@ -133,40 +133,66 @@ def _resolve_actor(payload: dict, request: Request) -> tuple[str, str, str]:
 
 
 class TaskCreateRequest(BaseModel):
-    """Request to create a task"""
+    """
+    Request to create a task.
 
+    Three-layer design for agent-first composability:
+    - Layer 1 (required): title, description, deadline_hours, reward
+    - Layer 2 (common options): max_participants, auto_approve, task_type, required_tags, reward_currency
+    - Layer 3 (advanced): require_join_approval, allow_repeat_by_same, max_total_budget
+    - Escrow: use_escrow (opt-in, Labs sets True when reward > 0)
+    - Extension: metadata
+    """
+
+    # ── Layer 1: Required ────────────────────────────────
     title: str = Field(..., min_length=3, max_length=200)
     description: str = Field(..., min_length=10)
-    mode: str = Field(default="open", description="Task mode: open or assigned")
+    deadline_hours: int = Field(..., ge=1, le=2160, description="Deadline in hours (1h to 90 days)")
+    reward: str = Field(..., description="Reward per completion (numeric string, e.g. '50' or '0')")
+
+    # ── Layer 2: Common options ───────────────────────────
+    max_participants: int | None = Field(default=1, description="1=single, N=fixed multi, None=unlimited bounty")
+    auto_approve: bool = Field(default=False, description="True: submissions auto-complete without review")
     task_type: str = Field(default="general", description="Task type category")
     required_tags: list[str] = Field(default_factory=list)
-    reward_amount: str = Field(default="0", description="Reward amount")
     reward_currency: str = Field(default="ap_points", description="Currency: ap_points, USD, USDC, ETH")
-    is_repeatable: bool = Field(
-        default=False, description="DEPRECATED: use is_multi_participant", deprecated=True
-    )
-    is_multi_participant: bool = Field(
-        default=False, description="Multiple agents can work in parallel"
-    )
-    allow_repeat_by_same: bool = Field(
-        default=False, description="Same agent can rejoin after completing"
-    )
-    max_completions: int | None = Field(None, description="Max completions (open/multi mode)")
-    deadline_hours: int | None = Field(None, ge=1, le=720, description="Deadline in hours")
-    assignee_id: str | None = Field(None, description="Pre-assigned agent (assigned mode)")
-    assignee_name: str | None = Field(None)
-    approval_type: str = Field(
-        default="manual", description="Approval type: manual, auto, validator"
-    )
-    validator_id: str | None = Field(None, description="Validator ID for validator approval type")
-    metadata: dict = Field(default_factory=dict)
+
+    # ── Layer 3: Advanced options ─────────────────────────
+    require_join_approval: bool = Field(default=False, description="True: agents must apply and be approved to join")
+    allow_repeat_by_same: bool = Field(default=False, description="True: same agent can complete again after finishing")
+    max_total_budget: str | None = Field(default=None, description="Budget cap for bounty tasks (max_participants=None only)")
+
+    # ── Escrow: opt-in ────────────────────────────────────
+    use_escrow: bool = Field(default=False, description="True: lock reward in escrow at creation. Labs sets this when reward > 0.")
+
+    # ── Collaboration ─────────────────────────────────────
+    group_id: str | None = Field(default=None, description="Link related subtasks into a collaborative group")
+
+    # ── Extension ─────────────────────────────────────────
+    metadata: dict = Field(default_factory=dict, description="Extensible metadata (escrow_config, webhook, etc.)")
+
+    @model_validator(mode="after")
+    def validate_budget_rules(self) -> "TaskCreateRequest":
+        try:
+            float(self.reward)
+        except (ValueError, TypeError):
+            raise ValueError("reward must be a valid numeric string (e.g. '50' or '0')")
+        if self.max_total_budget is not None and self.max_participants is not None:
+            raise ValueError("max_total_budget is only valid when max_participants=None (unlimited/bounty mode)")
+        if self.max_total_budget is not None:
+            try:
+                float(self.max_total_budget)
+            except (ValueError, TypeError):
+                raise ValueError("max_total_budget must be a valid numeric string")
+        if self.max_participants is not None and self.max_participants < 1:
+            raise ValueError("max_participants must be >= 1")
+        return self
 
 
 class TaskResponse(BaseModel):
     """Task response model"""
 
     task_id: str
-    mode: str
     status: str
     creator_type: str
     creator_id: str
@@ -177,22 +203,22 @@ class TaskResponse(BaseModel):
     required_tags: list[str]
     assignee_id: str | None = None
     assignee_name: str | None = None
-    reward_amount: str
+    assignee_type: str | None = None
+    reward: str
     reward_currency: str
-    reward_unit: str = "completion"
     total_budget: str = "0"
     released_amount: str = "0"
-    is_repeatable: bool
-    is_multi_participant: bool = False
+    max_participants: int | None = 1
+    max_total_budget: str | None = None
+    require_join_approval: bool = False
+    auto_approve: bool = False
     allow_repeat_by_same: bool = False
+    use_escrow: bool = False
     active_participants_count: int = 0
     completed_count: int
-    max_completions: int | None = None
-    approval_type: str = "manual"
-    validator_id: str | None = None
     created_at: str
     deadline: str | None = None
-    ui_spec: dict | None = None
+    group_id: str | None = None
     metadata: dict = Field(default_factory=dict)
 
 
@@ -267,11 +293,8 @@ class TaskReviewRequest(BaseModel):
 
 def _task_to_response(task) -> TaskResponse:
     """Convert Task entity to response model."""
-    ui_spec = task.metadata.get("ui_spec") if task.metadata else None
-
     return TaskResponse(
         task_id=task.task_id,
-        mode=task.mode.value,
         status=task.status.value,
         creator_type=task.creator_type,
         creator_id=task.creator_id,
@@ -282,22 +305,22 @@ def _task_to_response(task) -> TaskResponse:
         required_tags=task.required_tags,
         assignee_id=task.assignee_id,
         assignee_name=task.assignee_name,
-        reward_amount=task.reward_amount,
+        assignee_type=task.assignee_type,
+        reward=task.reward,
         reward_currency=task.reward_currency,
-        reward_unit=task.reward_unit,
         total_budget=task.total_budget,
         released_amount=task.released_amount,
-        is_repeatable=task.is_repeatable,
-        is_multi_participant=task.is_multi_participant,
+        max_participants=task.max_participants,
+        max_total_budget=task.max_total_budget,
+        require_join_approval=task.require_join_approval,
+        auto_approve=task.auto_approve,
         allow_repeat_by_same=task.allow_repeat_by_same,
+        use_escrow=task.use_escrow,
         active_participants_count=task.active_participants_count,
         completed_count=task.completed_count,
-        max_completions=task.max_completions,
-        approval_type=task.approval_type,
-        validator_id=task.validator_id,
         created_at=task.created_at.isoformat(),
         deadline=task.deadline.isoformat() if task.deadline else None,
-        ui_spec=ui_spec,
+        group_id=task.group_id,
         metadata=task.metadata or {},
     )
 
@@ -335,6 +358,7 @@ async def list_tasks(
     tags: str | None = Query(None, description="Filter by capability tags (comma-separated)"),
     creator_id: str | None = Query(None, description="Filter by creator"),
     assignee_id: str | None = Query(None, description="Filter by assignee"),
+    group_id: str | None = Query(None, description="Filter by collaboration group"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     task_service: TaskServiceDep = None,
@@ -344,13 +368,8 @@ async def list_tasks(
 
     Public endpoint - no authentication required.
     """
-    # Parse mode
-    task_mode = None
-    if mode:
-        try:
-            task_mode = TaskMode(mode)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}") from None
+    # mode filter passed through as-is (string); repository handles DB column match
+    task_mode = mode or None
 
     # Parse status
     task_status = None
@@ -369,6 +388,7 @@ async def list_tasks(
         creator_id=creator_id,
         assignee_id=assignee_id,
         tags=tag_list,
+        group_id=group_id,
         limit=limit + 1,  # Get one extra to check has_more
         offset=offset,
     )
@@ -459,12 +479,6 @@ async def create_task(
         # Internal/dev: allow X-Creator-Id override
         token_owner = creator_id_header
 
-    # Parse mode
-    try:
-        mode = TaskMode(body.mode)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {body.mode}") from None
-
     try:
         task = await task_service.create_task(
             creator_type=creator_type_header,
@@ -472,20 +486,18 @@ async def create_task(
             creator_name=creator_name_header or token_owner,
             title=body.title,
             description=body.description,
-            mode=mode,
             task_type=body.task_type,
             required_tags=body.required_tags,
-            reward_amount=body.reward_amount,
+            reward=body.reward,
             reward_currency=body.reward_currency,
-            is_repeatable=body.is_repeatable,
-            is_multi_participant=body.is_multi_participant,
+            max_participants=body.max_participants,
+            auto_approve=body.auto_approve,
+            require_join_approval=body.require_join_approval,
             allow_repeat_by_same=body.allow_repeat_by_same,
-            max_completions=body.max_completions,
+            max_total_budget=body.max_total_budget,
+            use_escrow=body.use_escrow,
+            group_id=body.group_id,
             deadline_hours=body.deadline_hours,
-            assignee_id=body.assignee_id,
-            assignee_name=body.assignee_name,
-            approval_type=body.approval_type,
-            validator_id=body.validator_id,
             metadata=body.metadata,
         )
 
@@ -493,7 +505,7 @@ async def create_task(
             "task_created",
             task_id=task.task_id,
             creator=token_owner,
-            approval_type=body.approval_type,
+            auto_approve=body.auto_approve,
         )
         return _task_to_response(task)
 
@@ -796,23 +808,23 @@ async def agent_create_task(
     For autonomous agents to create tasks using their API key.
     """
 
-    try:
-        mode = TaskMode(request.mode)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid mode: {request.mode}") from None
-
     task = await task_service.create_task(
         creator_type="agent",
         creator_id=agent_info["agent_id"],
         creator_name=agent_info.get("name", "Agent"),
         title=request.title,
         description=request.description,
-        mode=mode,
         task_type=request.task_type,
         required_tags=request.required_tags,
-        reward_amount=request.reward_amount,
+        reward=request.reward,
         reward_currency=request.reward_currency,
-        is_repeatable=request.is_repeatable,
+        max_participants=request.max_participants,
+        auto_approve=request.auto_approve,
+        require_join_approval=request.require_join_approval,
+        allow_repeat_by_same=request.allow_repeat_by_same,
+        max_total_budget=request.max_total_budget,
+        use_escrow=request.use_escrow,
+        group_id=request.group_id,
         deadline_hours=request.deadline_hours,
         metadata=request.metadata,
     )

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import structlog
 
-from ..core.entities import Participation, ParticipationStatus, Task, TaskMode, TaskStatus
+from ..core.entities import Participation, ParticipationStatus, Task, TaskStatus
 from ..core.interfaces import IAgentRepository, IEscrowProvider, ITaskRepository
 from ..infrastructure.task_pool import TaskPool
 from ..protocols.ap2 import PaymentTaskManager, WebhookEventType, WebhookService
@@ -72,24 +72,22 @@ class TaskService:
         creator_name: str,
         title: str,
         description: str,
-        mode: TaskMode = TaskMode.OPEN,
         task_type: str = "general",
         required_tags: list[str] | None = None,
-        reward_amount: str = "0",
-        reward_currency: str = "USD",
-        is_repeatable: bool = False,
-        is_multi_participant: bool = False,
+        reward: str = "0",
+        reward_currency: str = "ap_points",
+        max_participants: int | None = 1,
+        auto_approve: bool = False,
+        require_join_approval: bool = False,
         allow_repeat_by_same: bool = False,
-        max_completions: int | None = None,
+        max_total_budget: str | None = None,
+        use_escrow: bool = False,
+        group_id: str | None = None,
         deadline_hours: int | None = None,
-        assignee_id: str | None = None,
-        assignee_name: str | None = None,
-        approval_type: str = "manual",
-        validator_id: str | None = None,
         metadata: dict | None = None,
     ) -> Task:
         """
-        Create a new task
+        Create a new task.
 
         Args:
             creator_type: "human" or "agent"
@@ -97,17 +95,18 @@ class TaskService:
             creator_name: Creator display name
             title: Task title
             description: Task description
-            mode: Task mode (open/assigned)
             task_type: Task type category
             required_tags: Tags needed to complete
-            reward_amount: Reward amount (string for precision)
-            reward_currency: Reward currency (USD, USDC, points, etc.)
-            is_repeatable: Can be completed multiple times (open mode only)
-            max_completions: Maximum completions (None = unlimited)
+            reward: Reward per completion (numeric string)
+            reward_currency: Currency (ap_points, USD, USDC, ETH)
+            max_participants: 1=single, N=fixed multi, None=unlimited bounty
+            auto_approve: True → submissions auto-complete without review
+            require_join_approval: True → agents must apply and be approved to join
+            allow_repeat_by_same: True → same agent can complete again
+            max_total_budget: Budget cap for bounty tasks (max_participants=None)
+            use_escrow: True → lock budget in escrow at creation
             deadline_hours: Deadline in hours from now
-            assignee_id: Pre-assigned agent ID (assigned mode)
-            assignee_name: Pre-assigned agent name
-            metadata: Additional metadata
+            metadata: Extensible metadata
 
         Returns:
             Created task
@@ -119,27 +118,18 @@ class TaskService:
         if deadline_hours:
             deadline = datetime.now(UTC) + timedelta(hours=deadline_hours)
 
-        # Calculate total budget
-        # - Multi-participant with max: budget = reward_amount × max_completions
-        # - Multi-participant unlimited (max_completions=None): budget = reward_amount
-        #   (per-completion payouts via release_partial; creator balance checked each time)
-        # - Single completion: budget = reward_amount
-        reward_float = float(reward_amount) if reward_amount else 0
-        if (is_repeatable or is_multi_participant) and max_completions:
-            total_budget = str(reward_float * max_completions)
+        # Calculate total_budget
+        reward_float = float(reward) if reward else 0
+        if max_participants is not None and max_participants > 1:
+            total_budget = str(reward_float * max_participants)
+        elif max_participants is None:
+            # Bounty: use explicit cap or fall back to single reward amount
+            total_budget = max_total_budget or str(reward_float)
         else:
             total_budget = str(reward_float)
-            # For single-participant open tasks, enforce max_completions = 1
-            if mode == TaskMode.OPEN and not is_repeatable and not is_multi_participant:
-                max_completions = 1
 
-        # Create task entity
-        # Note: __post_init__ handles backward compat sync:
-        #   is_repeatable=True → is_multi_participant=True
-        #   is_multi_participant=True → is_repeatable=True (for old API consumers)
         task = Task(
             task_id=task_id,
-            mode=mode,
             creator_type=creator_type,
             creator_id=creator_id,
             creator_name=creator_name,
@@ -147,29 +137,23 @@ class TaskService:
             description=description,
             task_type=task_type,
             required_tags=required_tags or [],
-            reward_amount=reward_amount,
+            reward=reward,
             reward_currency=reward_currency,
-            reward_unit="completion",  # Default for now
             total_budget=total_budget,
             released_amount="0",
-            is_multi_participant=is_multi_participant or is_repeatable,
+            max_total_budget=max_total_budget,
+            max_participants=max_participants,
+            auto_approve=auto_approve,
+            require_join_approval=require_join_approval,
             allow_repeat_by_same=allow_repeat_by_same,
-            is_repeatable=is_repeatable,
-            max_completions=max_completions,
+            use_escrow=use_escrow,
+            group_id=group_id,
             deadline=deadline,
-            approval_type=approval_type,
-            validator_id=validator_id,
             metadata=metadata or {},
         )
 
-        # For assigned mode, set assignee if provided
-        if mode == TaskMode.ASSIGNED and assignee_id:
-            task.assignee_id = assignee_id
-            task.assignee_name = assignee_name
-            task.assigned_at = datetime.now(UTC)
-
-        # 统一 escrow 锁定：human 和 agent 创建者都走 v2 escrow
-        if self.escrow and reward_currency.lower() in (AP_POINTS, "points") and float(total_budget) > 0:
+        # Escrow lock: explicit opt-in only
+        if self.escrow and use_escrow and float(total_budget) > 0:
             logger.info(
                 "escrow_lock_attempt",
                 creator_type=creator_type,
@@ -177,12 +161,15 @@ class TaskService:
                 task_id=task_id,
                 amount=float(total_budget),
             )
+            escrow_config = metadata.get("escrow_config") if metadata else None
             result = await self.escrow.lock_v2(
                 task_id=task_id,
                 creator_id=creator_id,
                 creator_type=creator_type,
                 amount=float(total_budget),
+                currency=reward_currency,
                 description=f"Escrow for task: {title}",
+                escrow_config=escrow_config,
             )
             if not result.success:
                 raise ValueError(f"Failed to lock budget: {result.error}")
@@ -196,13 +183,13 @@ class TaskService:
             )
 
         # Create AP2 payment task if real currency
-        if reward_currency.lower() not in [AP_POINTS, "points", "0"] and float(reward_amount) > 0:
+        if reward_currency.lower() not in [AP_POINTS, "points", "0"] and float(reward) > 0:
             if self.payment_manager:
                 try:
                     payment_task = await self.payment_manager.create_task(
                         buyer_agent=creator_id,
                         description=f"Payment for task: {title}",
-                        amount=reward_amount,
+                        amount=reward,
                         currency=reward_currency,
                     )
                     task.payment_task_id = payment_task.task_id
@@ -213,15 +200,10 @@ class TaskService:
                     )
                 except Exception as e:
                     logger.error("failed_to_create_payment_task", error=str(e))
-                    # Continue without payment - task creator can add later
 
-        # Save to repository and add to pool
         await self.task_pool.add(task)
-
-        # Send webhook notification
         await self._notify_webhook(WebhookEventType.TASK_CREATED, task)
 
-        # Record activity
         if self.activity:
             await self.activity.record_task_created(
                 creator_type=creator_type,
@@ -229,14 +211,14 @@ class TaskService:
                 creator_name=creator_name,
                 task_id=task_id,
                 task_title=title,
-                reward_amount=reward_amount,
+                reward=reward,
                 reward_currency=reward_currency,
             )
 
         logger.info(
             "task_created",
             task_id=task_id,
-            mode=mode.value,
+            max_participants=max_participants,
             title=title,
             creator_id=creator_id,
         )
@@ -280,12 +262,11 @@ class TaskService:
         task = await self.get_task(task_id)
 
         # ---- Multi-participant path ----
-        if task.is_multi_participant:
+        if task._is_multi():
             return await self._join_task(task, agent_id, agent_name, agent_type)
 
-        # ---- Assigned mode, no assignee yet: create application (participation with APPLIED) ----
-        if task.mode == TaskMode.ASSIGNED and task.assignee_id is None:
-            # Check duplicate: user already applied?
+        # ---- Join-approval path: agent must apply and be approved ----
+        if task.require_join_approval and task.assignee_id is None:
             existing = await self.task_pool.get_user_participation(
                 task_id, agent_id, active_only=True
             )
@@ -315,9 +296,8 @@ class TaskService:
             )
             return task, participation.participation_id
 
-        # ---- Single-participant path (original) ----
-        # is_multi_participant is the single source of truth; is_repeatable is kept for API compat only
-        if not task.is_multi_participant:
+        # ---- Single-participant direct-accept path ----
+        if not task._is_multi():
             has_completed = await self.task_pool.has_agent_completed(task_id, agent_id)
             if has_completed:
                 raise ValueError("You have already completed this task")
@@ -374,7 +354,7 @@ class TaskService:
         pid = await self.task_pool.join_task(
             task_id=task.task_id,
             participation=participation,
-            max_completions=task.max_completions,
+            max_completions=task.max_participants,
             allow_repeat=task.allow_repeat_by_same,
         )
 
@@ -437,7 +417,7 @@ class TaskService:
         task = await self.get_task(task_id)
 
         # ---- Multi-participant path ----
-        if task.is_multi_participant:
+        if task._is_multi():
             p = await self._resolve_participation(task_id, agent_id, participation_id)
             p.submit(submission, artifacts)
             await self.repository.save_participation(p)
@@ -451,7 +431,7 @@ class TaskService:
                 )
 
             # Auto-approval for participation
-            if task.approval_type == "auto":
+            if task.auto_approve:
                 await self._auto_complete_participation(task, p)
 
             logger.info(
@@ -503,18 +483,12 @@ class TaskService:
             "task_submitted",
             task_id=task_id,
             agent_id=agent_id,
-            approval_type=task.approval_type,
+            auto_approve=task.auto_approve,
         )
 
-        if task.approval_type == "auto":
+        if task.auto_approve:
             logger.info("auto_approving_task", task_id=task_id)
             task = await self._auto_complete_task(task)
-        elif task.approval_type == "validator" and task.validator_id:
-            logger.info(
-                "validator_approval_pending",
-                task_id=task_id,
-                validator_id=task.validator_id,
-            )
 
         return task
 
@@ -557,12 +531,12 @@ class TaskService:
         # Distribute reward for points-based tasks
         if (
             task.reward_currency.lower() in (AP_POINTS, "points")
-            and float(task.reward_amount) > 0
+            and float(task.reward) > 0
             and task.assignee_id
         ):
             reward_result = await self._distribute_reward(
                 task=task,
-                amount=float(task.reward_amount),
+                amount=float(task.reward),
                 description=f"Auto-reward for task: {task.title}",
             )
             if reward_result["success"]:
@@ -593,7 +567,7 @@ class TaskService:
                 agent_name=task.assignee_name or task.assignee_id,
                 task_id=task.task_id,
                 task_title=task.title,
-                reward_amount=task.reward_amount,
+                reward=task.reward,
                 reward_currency=task.reward_currency,
             )
 
@@ -617,7 +591,7 @@ class TaskService:
         Returns:
             True if task was finalized as COMPLETED
         """
-        if not task.max_completions or new_count < task.max_completions:
+        if not task.max_participants or new_count < task.max_participants:
             return False
 
         await self.task_pool.batch_cancel_participations(task.task_id)
@@ -646,10 +620,10 @@ class TaskService:
         await self.task_pool.record_completion(task.task_id, p.participant_id)
 
         # Distribute reward
-        if task.reward_currency.lower() in (AP_POINTS, "points") and float(task.reward_amount) > 0:
+        if task.reward_currency.lower() in (AP_POINTS, "points") and float(task.reward) > 0:
             reward_result = await self._distribute_reward(
                 task=task,
-                amount=float(task.reward_amount),
+                amount=float(task.reward),
                 description=f"Auto-reward for task: {task.title} (participation {p.participation_id})",
                 participant_id=p.participant_id,
             )
@@ -689,7 +663,7 @@ class TaskService:
         if task.creator_id != approver_id:
             raise PermissionError("Only the task creator can review")
 
-        if not task.is_multi_participant:
+        if not task._is_multi():
             # Delegate to single-participant flow
             if approved:
                 return await self.complete_task(task_id, approver_id, notes)
@@ -721,10 +695,10 @@ class TaskService:
             await self.task_pool.record_completion(task_id, p.participant_id)
 
             # Distribute per-completion reward
-            if task.reward_currency.lower() in (AP_POINTS, "points") and float(task.reward_amount) > 0:
+            if task.reward_currency.lower() in (AP_POINTS, "points") and float(task.reward) > 0:
                 await self._distribute_reward(
                     task=task,
-                    amount=float(task.reward_amount),
+                    amount=float(task.reward),
                     description=f"Reward for task: {task.title} (participation {p.participation_id})",
                     participant_id=p.participant_id,
                 )
@@ -738,7 +712,7 @@ class TaskService:
                     agent_name=p.participant_name,
                     task_id=task_id,
                     task_title=task.title,
-                    reward_amount=task.reward_amount,
+                    reward=task.reward,
                     reward_currency=task.reward_currency,
                 )
 
@@ -824,8 +798,8 @@ class TaskService:
         task = await self.get_task(task_id)
         if task.creator_id != approver_id:
             raise PermissionError("Only the task creator can approve applicants")
-        if task.mode != TaskMode.ASSIGNED or task.assignee_id:
-            raise ValueError("Task is not in assigned mode or already has an assignee")
+        if not task.require_join_approval or task.assignee_id:
+            raise ValueError("Task does not require join approval or already has an assignee")
         p = await self.task_pool.get_participation(participation_id)
         if not p or p.task_id != task_id:
             raise ValueError("Participation not found")
@@ -893,8 +867,8 @@ class TaskService:
         task = await self.get_task(task_id)
         if task.creator_id != approver_id:
             raise PermissionError("Only the task creator can reject applicants")
-        if task.mode != TaskMode.ASSIGNED or task.assignee_id:
-            raise ValueError("Task is not in assigned mode or already has an assignee")
+        if not task.require_join_approval or task.assignee_id:
+            raise ValueError("Task does not require join approval or already has an assignee")
         p = await self.task_pool.get_participation(participation_id)
         if not p or p.task_id != task_id:
             raise ValueError("Participation not found")
@@ -984,12 +958,12 @@ class TaskService:
         # Distribute reward for points-based tasks
         if (
             task.reward_currency.lower() in (AP_POINTS, "points")
-            and float(task.reward_amount) > 0
+            and float(task.reward) > 0
             and task.assignee_id
         ):
             reward_result = await self._distribute_reward(
                 task=task,
-                amount=float(task.reward_amount),
+                amount=float(task.reward),
                 description=f"Reward for task: {task.title}",
             )
             if reward_result["success"]:
@@ -1020,7 +994,7 @@ class TaskService:
                 agent_name=task.assignee_name or task.assignee_id,
                 task_id=task_id,
                 task_title=task.title,
-                reward_amount=task.reward_amount,
+                reward=task.reward,
                 reward_currency=task.reward_currency,
             )
 
@@ -1094,7 +1068,7 @@ class TaskService:
             raise PermissionError("Only the creator can cancel a task")
 
         # Batch cancel all active participations for multi-participant tasks
-        if task.is_multi_participant:
+        if task._is_multi():
             cancelled_count = await self.task_pool.batch_cancel_participations(task_id)
             logger.info(
                 "participations_cancelled_on_task_cancel",
@@ -1160,11 +1134,12 @@ class TaskService:
 
     async def list_tasks(
         self,
-        mode: TaskMode | None = None,
+        mode: str | None = None,
         status: TaskStatus | None = None,
         creator_id: str | None = None,
         assignee_id: str | None = None,
         tags: list[str] | None = None,
+        group_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Task]:
@@ -1177,6 +1152,7 @@ class TaskService:
             creator_id: Filter by creator
             assignee_id: Filter by assignee
             tags: Filter by agent tags
+            group_id: Filter by collaboration group
             limit: Maximum tasks to return
             offset: Pagination offset
 
@@ -1184,7 +1160,9 @@ class TaskService:
             List of tasks
         """
         # Use different repository methods based on filters
-        if creator_id:
+        if group_id:
+            tasks = await self.repository.find_by_group(group_id, limit)
+        elif creator_id:
             tasks = await self.repository.find_by_creator(creator_id, limit)
         elif assignee_id:
             tasks = await self.repository.find_by_assignee(assignee_id, limit)
@@ -1227,12 +1205,12 @@ class TaskService:
                 event=event,
                 task_id=task.task_id,
                 data={
-                    "mode": task.mode.value,
                     "status": task.status.value,
                     "creator_id": task.creator_id,
                     "assignee_id": task.assignee_id,
-                    "reward_amount": task.reward_amount,
+                    "reward": task.reward,
                     "reward_currency": task.reward_currency,
+                    "max_participants": task.max_participants,
                 },
             )
         except Exception as e:
@@ -1278,12 +1256,17 @@ class TaskService:
         if not recipient_id:
             return {"success": False, "error": "No assignee"}
 
-        if not self.escrow:
-            logger.error("escrow_client_not_configured_for_reward")
-            return {"success": False, "error": "Escrow client not configured"}
+        # Escrow is opt-in: skip if task doesn't use escrow or client not configured
+        if not self.escrow or not task.use_escrow:
+            logger.info(
+                "escrow_skipped_for_reward",
+                task_id=task.task_id,
+                use_escrow=task.use_escrow,
+                has_escrow_client=bool(self.escrow),
+            )
+            return {"success": True, "via": "off_chain"}
 
         try:
-            # 尝试通过 v2 escrow 查找对应的 escrow 记录
             escrow_info = await self.escrow.get_by_task(task.task_id)
 
             if escrow_info.success and escrow_info.escrow_id:
@@ -1292,7 +1275,7 @@ class TaskService:
                     task_id=task.task_id,
                     escrow_id=escrow_info.escrow_id,
                     recipient_id=recipient_id,
-                    is_multi=task.is_multi_participant,
+                    is_multi=task._is_multi(),
                 )
 
                 # Ensure escrow is activated
@@ -1304,7 +1287,7 @@ class TaskService:
                     )
 
                 # Multi-participant: use release_partial for per-completion payouts
-                if task.is_multi_participant:
+                if task._is_multi():
                     result = await self.escrow.release_partial(
                         escrow_id=escrow_info.escrow_id,
                         recipient_id=recipient_id,

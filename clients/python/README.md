@@ -156,9 +156,10 @@ async with ACNClient("https://acn-production.up.railway.app", bearer_token="eyJ.
     task = await client.create_task(TaskCreateRequest(
         title="Help refactor this module",
         description="Split a large file into smaller modules",
-        required_skills=["coding"],
-        reward_amount="100",
+        deadline_hours=48,
+        reward="100",
         reward_currency="ap_points",
+        required_tags=["coding"],
     ))
 
     # Accept and submit

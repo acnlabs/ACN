@@ -9,42 +9,25 @@ from enum import StrEnum
 from uuid import uuid4
 
 
-class TaskMode(StrEnum):
-    """Task mode"""
-
-    OPEN = "open"  # Open task, any agent can complete
-    ASSIGNED = "assigned"  # Assigned to specific agent
-
-
-class ApprovalType(StrEnum):
-    """Task approval type"""
-
-    MANUAL = "manual"  # Human review required (default)
-    AUTO = "auto"  # Auto-approve on submission
-    VALIDATOR = "validator"  # Use platform validator (future)
-    WEBHOOK = "webhook"  # Call external webhook (future)
-
-
 class TaskStatus(StrEnum):
     """Task status"""
 
-    OPEN = "open"  # Task is open for acceptance
-    ASSIGNED = "assigned"  # Task assigned to an agent
+    OPEN = "open"          # Task is open for acceptance
     IN_PROGRESS = "in_progress"  # Agent is working on it
-    SUBMITTED = "submitted"  # Result submitted, pending review
-    COMPLETED = "completed"  # Approved and done
-    REJECTED = "rejected"  # Submission rejected
-    CANCELLED = "cancelled"  # Cancelled by creator
+    SUBMITTED = "submitted"      # Result submitted, pending review
+    COMPLETED = "completed"      # Approved and done
+    REJECTED = "rejected"        # Submission rejected
+    CANCELLED = "cancelled"      # Cancelled by creator
 
 
 class ParticipationStatus(StrEnum):
     """Participation lifecycle status"""
 
-    APPLIED = "applied"  # Applied for assigned task, awaiting creator approval
-    ACTIVE = "active"  # Participant is working on the task
+    APPLIED = "applied"      # Applied for task with join approval, awaiting creator approval
+    ACTIVE = "active"        # Participant is working on the task
     SUBMITTED = "submitted"  # Participant submitted, pending review
     COMPLETED = "completed"  # Approved and reward released
-    REJECTED = "rejected"  # Submission rejected by creator
+    REJECTED = "rejected"    # Submission rejected by creator
     CANCELLED = "cancelled"  # Participant withdrew or timed out
 
 
@@ -207,15 +190,13 @@ class Task:
     Task Domain Entity
 
     Represents a task in the ACN Task Pool.
-    Supports two modes:
-    - OPEN: Available to all agents, can be repeatable
-    - ASSIGNED: Assigned to a specific agent
-
-    Integrates with AP2 for payment handling.
+    Uses orthogonal boolean fields for maximum composability:
+    - require_join_approval: whether agents need approval to join
+    - auto_approve: whether submissions are auto-approved
+    - max_participants: 1=single, N=fixed multi, None=unlimited (bounty)
     """
 
     task_id: str
-    mode: TaskMode
 
     # Creator info
     creator_type: str  # "human" or "agent"
@@ -225,18 +206,19 @@ class Task:
     # Task content
     title: str
     description: str
-    task_type: str = "general"  # coding, review, research, design, etc.
+    task_type: str = "general"
     required_tags: list[str] = field(default_factory=list)
 
     # Status
     status: TaskStatus = TaskStatus.OPEN
 
-    # Assignment (for ASSIGNED mode or after acceptance in OPEN mode)
+    # Assignment (set when an agent accepts a single-participant task)
     assignee_id: str | None = None
     assignee_name: str | None = None
+    assignee_type: str | None = None  # "agent" | "human"
     assigned_at: datetime | None = None
 
-    # Submission
+    # Submission (single-participant path)
     submission: str | None = None
     submission_artifacts: list[dict] = field(default_factory=list)
     submitted_at: datetime | None = None
@@ -245,42 +227,42 @@ class Task:
     review_notes: str | None = None
     reviewed_by: str | None = None
 
-    # Reward (AP2 integration)
-    reward_amount: str = "0"  # String for precision (e.g., "100.50")
-    reward_currency: str = "USD"  # USD, USDC, ETH, points, etc.
-    payment_task_id: str | None = None  # Reference to AP2 PaymentTask
+    # Reward
+    reward: str = "0"   # Per-completion reward amount (string for precision)
+    reward_currency: str = "ap_points"
+    payment_task_id: str | None = None
 
-    # Budget model (supports completion/token/hour/milestone modes)
-    reward_unit: str = "completion"  # completion, token, hour, milestone
-    total_budget: str = "0"  # Total escrowed amount = reward_amount × max_units
-    released_amount: str = "0"  # Amount released to agents so far
+    # Budget
+    total_budget: str = "0"      # Total locked budget
+    released_amount: str = "0"   # Amount released to agents so far
+    max_total_budget: str | None = None  # Budget cap for bounty tasks (max_participants=None)
 
-    # Multi-participant support
-    is_multi_participant: bool = False  # Multiple agents can work in parallel
-    allow_repeat_by_same: bool = False  # Same agent can complete again after finishing
+    # Participation control (orthogonal boolean fields)
+    max_participants: int | None = 1    # 1=single, N=fixed multi, None=unlimited
+    require_join_approval: bool = False  # True: agents must apply and be approved to join
+    auto_approve: bool = False           # True: submissions auto-complete without review
+    allow_repeat_by_same: bool = False   # True: same agent can complete again after finishing
 
-    # DEPRECATED — kept for API backward compatibility only.
-    # Internal logic should use is_multi_participant exclusively.
-    # __post_init__ ensures is_multi_participant=True → is_repeatable=True for serialization.
-    is_repeatable: bool = False
-    completed_count: int = 0  # Number of completions
-    max_completions: int | None = None  # Max completions (None = unlimited, not recommended)
-    active_participants_count: int = 0  # Number of currently active participations
+    # Escrow
+    use_escrow: bool = False  # True: budget locked in escrow at creation time
+
+    # Collaboration
+    group_id: str | None = None  # Link related subtasks into a collaborative group
+
+    # Progress
+    completed_count: int = 0
+    active_participants_count: int = 0
 
     # Timestamps
     created_at: datetime = field(default_factory=datetime.now)
     deadline: datetime | None = None
     completed_at: datetime | None = None
 
-    # Approval settings
-    approval_type: str = "manual"  # manual, auto, validator, webhook
-    validator_id: str | None = None  # For validator type: invite_agent, daily_checkin, etc.
-
-    # Metadata
+    # Metadata (extensible for future features)
     metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
-        """Validate invariants and sync backward-compat flags"""
+        """Validate invariants"""
         if not self.task_id:
             raise ValueError("task_id cannot be empty")
         if not self.title:
@@ -288,22 +270,17 @@ class Task:
         if not self.creator_id:
             raise ValueError("creator_id cannot be empty")
 
-        # Backward compat: is_repeatable=True from old API consumers → enable is_multi_participant
-        if self.is_repeatable and not self.is_multi_participant:
-            self.is_multi_participant = True
-        # Forward sync: keep is_repeatable=True for serialization when is_multi_participant is set
-        # (old API consumers expect this field; internal logic uses is_multi_participant only)
-        if self.is_multi_participant:
-            self.is_repeatable = True
+    # ========== Helpers ==========
+
+    def _is_multi(self) -> bool:
+        """True if multiple agents can participate (max_participants != 1)"""
+        return self.max_participants is None or self.max_participants > 1
 
     # ========== Status Transitions ==========
 
     def can_be_accepted(self) -> bool:
         """
-        Check if task can be accepted.
-
-        For multi-participant tasks, delegates to can_join().
-        For single-participant tasks, checks status and completion state.
+        Check if task can be accepted by an agent.
 
         NOTE: This is a fast-fail pre-filter for better error messages.
         The Lua scripts in TaskRepository are the atomic source of truth
@@ -311,13 +288,10 @@ class Task:
         """
         if self.status != TaskStatus.OPEN:
             return False
-        if self.is_multi_participant:
+        if self._is_multi():
             return self._has_capacity()
-        # Single-participant: open tasks need no prior completion
-        if self.mode == TaskMode.OPEN:
-            return self.completed_count == 0
-        # Assigned tasks: just need OPEN status (checked above)
-        return True
+        # Single-participant: only accept if not yet completed
+        return self.completed_count == 0
 
     def can_join(self) -> bool:
         """
@@ -327,21 +301,21 @@ class Task:
         The Lua scripts in TaskRepository perform the same checks atomically
         and are the single source of truth under concurrent access.
         """
-        if not self.is_multi_participant:
+        if not self._is_multi():
             return False
         if self.status != TaskStatus.OPEN:
             return False
         return self._has_capacity()
 
     def _has_capacity(self) -> bool:
-        """Check capacity: completed + active < max (if max is set)"""
-        if self.max_completions is not None:
-            return (self.completed_count + self.active_participants_count) < self.max_completions
+        """Check capacity: completed + active < max_participants (if max is set)"""
+        if self.max_participants is not None:
+            return (self.completed_count + self.active_participants_count) < self.max_participants
         return True
 
     def accept(self, agent_id: str, agent_name: str) -> None:
         """
-        Accept the task
+        Accept the task (single-participant path).
 
         Args:
             agent_id: ID of accepting agent
@@ -355,12 +329,13 @@ class Task:
 
         self.assignee_id = agent_id
         self.assignee_name = agent_name
+        self.assignee_type = "agent"
         self.assigned_at = datetime.now(UTC)
         self.status = TaskStatus.IN_PROGRESS
 
     def submit(self, submission: str, artifacts: list[dict] | None = None) -> None:
         """
-        Submit task result
+        Submit task result (single-participant path).
 
         Args:
             submission: Result/deliverable
@@ -379,7 +354,7 @@ class Task:
 
     def complete(self, reviewer_id: str | None = None, notes: str | None = None) -> None:
         """
-        Mark task as completed
+        Mark task as completed (single-participant path).
 
         Args:
             reviewer_id: ID of reviewer
@@ -391,7 +366,6 @@ class Task:
         if self.status != TaskStatus.SUBMITTED:
             raise ValueError(f"Cannot complete in status: {self.status}")
 
-        # Check budget before releasing reward
         if float(self.total_budget) > 0 and not self.can_release_reward():
             raise ValueError("Insufficient budget to release reward")
 
@@ -400,35 +374,32 @@ class Task:
         self.completed_at = datetime.now(UTC)
         self.completed_count += 1
 
-        # Release reward from budget
         if float(self.total_budget) > 0:
             self.release_reward()
 
         self.status = TaskStatus.COMPLETED
 
-        # For multi-participant tasks, reset to open after completion
-        # (single-participant repeatable tasks go through this same path via is_multi_participant)
-        if self.is_multi_participant and self.mode == TaskMode.OPEN:
-            # Check max completions
-            if self.max_completions is None or self.completed_count < self.max_completions:
+        # Multi-participant tasks reset to OPEN after each completion
+        if self._is_multi():
+            if self.max_participants is None or self.completed_count < self.max_participants:
                 self._reset_for_next_completion()
 
     def _reset_for_next_completion(self) -> None:
-        """Reset task state for next completion (repeatable tasks)"""
+        """Reset task state for next completion (multi-participant tasks)"""
         self.status = TaskStatus.OPEN
         self.assignee_id = None
         self.assignee_name = None
+        self.assignee_type = None
         self.assigned_at = None
         self.submission = None
         self.submission_artifacts = []
         self.submitted_at = None
         self.review_notes = None
         self.reviewed_by = None
-        # Keep completed_at as last completion time
 
     def reject(self, reviewer_id: str | None = None, notes: str | None = None) -> None:
         """
-        Reject submission
+        Reject submission (single-participant path).
 
         Args:
             reviewer_id: ID of reviewer
@@ -445,29 +416,16 @@ class Task:
         self.status = TaskStatus.REJECTED
 
     def cancel(self) -> None:
-        """
-        Cancel the task
-
-        Raises:
-            ValueError: If task is already completed
-        """
+        """Cancel the task"""
         if self.status == TaskStatus.COMPLETED:
             raise ValueError("Cannot cancel completed task")
-
         self.status = TaskStatus.CANCELLED
 
     def reopen(self) -> None:
-        """
-        Reopen a rejected/cancelled task
-
-        Raises:
-            ValueError: If task is completed
-        """
+        """Reopen a rejected/cancelled task"""
         if self.status == TaskStatus.COMPLETED:
             raise ValueError("Cannot reopen completed task")
-
         self.status = TaskStatus.OPEN
-        # Don't clear assignee for ASSIGNED mode tasks
 
     # ========== Queries ==========
 
@@ -493,11 +451,11 @@ class Task:
 
     def can_release_reward(self) -> bool:
         """Check if there's enough budget to release reward"""
-        return self.remaining_budget() >= float(self.reward_amount)
+        return self.remaining_budget() >= float(self.reward)
 
     def release_reward(self) -> None:
         """Release reward for one completion, updating released_amount"""
-        reward = float(self.reward_amount)
+        reward = float(self.reward)
         released = float(self.released_amount)
         self.released_amount = str(released + reward)
 
@@ -519,7 +477,6 @@ class Task:
         """Convert to dictionary for serialization"""
         return {
             "task_id": self.task_id,
-            "mode": self.mode.value,
             "creator_type": self.creator_type,
             "creator_id": self.creator_id,
             "creator_name": self.creator_name,
@@ -530,29 +487,30 @@ class Task:
             "status": self.status.value,
             "assignee_id": self.assignee_id,
             "assignee_name": self.assignee_name,
+            "assignee_type": self.assignee_type,
             "assigned_at": self.assigned_at.isoformat() if self.assigned_at else None,
             "submission": self.submission,
             "submission_artifacts": self.submission_artifacts,
             "submitted_at": self.submitted_at.isoformat() if self.submitted_at else None,
             "review_notes": self.review_notes,
             "reviewed_by": self.reviewed_by,
-            "reward_amount": self.reward_amount,
+            "reward": self.reward,
             "reward_currency": self.reward_currency,
             "payment_task_id": self.payment_task_id,
-            "reward_unit": self.reward_unit,
             "total_budget": self.total_budget,
             "released_amount": self.released_amount,
-            "is_multi_participant": self.is_multi_participant,
+            "max_total_budget": self.max_total_budget,
+            "max_participants": self.max_participants,
+            "require_join_approval": self.require_join_approval,
+            "auto_approve": self.auto_approve,
             "allow_repeat_by_same": self.allow_repeat_by_same,
-            "is_repeatable": self.is_repeatable,  # backward compat
+            "use_escrow": self.use_escrow,
+            "group_id": self.group_id,
             "completed_count": self.completed_count,
-            "max_completions": self.max_completions,
             "active_participants_count": self.active_participants_count,
             "created_at": self.created_at.isoformat(),
             "deadline": self.deadline.isoformat() if self.deadline else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "approval_type": self.approval_type,
-            "validator_id": self.validator_id,
             "metadata": self.metadata,
         }
 
@@ -561,9 +519,7 @@ class Task:
         """Create Task from dictionary"""
         data = data.copy()
 
-        # Parse enums
-        if isinstance(data.get("mode"), str):
-            data["mode"] = TaskMode(data["mode"])
+        # Parse status enum
         if isinstance(data.get("status"), str):
             data["status"] = TaskStatus(data["status"])
 
@@ -578,5 +534,13 @@ class Task:
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
                 data[field_name] = datetime.fromisoformat(data[field_name])
+
+        # Strip removed fields that may come from old serialized data
+        for old_field in (
+            "mode", "approval_type", "validator_id", "reward_unit",
+            "is_multi_participant", "is_repeatable", "max_completions",
+            "reward_amount", "ui_spec",
+        ):
+            data.pop(old_field, None)
 
         return cls(**data)

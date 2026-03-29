@@ -13,7 +13,6 @@ from acn.core.entities.task import (
     Participation,
     ParticipationStatus,
     Task,
-    TaskMode,
     TaskStatus,
 )
 from acn.core.interfaces.task_repository import ITaskRepository
@@ -28,16 +27,14 @@ from acn.services.task_service import TaskService
 def _make_task(**overrides) -> Task:
     defaults = {
         "task_id": "task-001",
-        "mode": TaskMode.OPEN,
         "creator_type": "human",
         "creator_id": "creator-001",
         "creator_name": "Alice",
         "title": "Test Multi Task",
         "description": "A multi-participant task",
-        "reward_amount": "50",
+        "reward": "50",
         "reward_currency": "ap_points",
-        "is_multi_participant": True,
-        "max_completions": 5,
+        "max_participants": 5,
     }
     defaults.update(overrides)
     return Task(**defaults)
@@ -83,7 +80,6 @@ def service(mock_repo, mock_task_pool):
     svc = TaskService(
         repository=mock_repo,
         task_pool=mock_task_pool,
-        # Disable optional integrations (escrow, etc.)
         payment_manager=None,
         webhook_service=None,
         activity_service=None,
@@ -103,10 +99,9 @@ class TestAcceptTaskMultiParticipant:
 
     async def test_join_creates_participation(self, service, mock_repo, mock_task_pool):
         """accept_task on multi-participant task creates participation"""
-        task = _make_task()
+        task = _make_task()  # max_participants=5 → _is_multi() = True
         mock_repo.find_by_id.return_value = task
         mock_task_pool.join_task.return_value = "part-new-001"
-        # After join, return updated task
         updated_task = _make_task(active_participants_count=1)
         mock_repo.find_by_id.side_effect = [task, updated_task]
 
@@ -121,16 +116,13 @@ class TestAcceptTaskMultiParticipant:
         mock_task_pool.join_task.assert_awaited_once()
         call_kwargs = mock_task_pool.join_task.call_args
         assert call_kwargs.kwargs["task_id"] == "task-001"
-        assert call_kwargs.kwargs["max_completions"] == 5
+        assert call_kwargs.kwargs["max_completions"] == 5  # passed as max_participants
 
     async def test_accept_single_participant_returns_none_pid(
         self, service, mock_repo, mock_task_pool
     ):
         """accept_task on single-participant task returns pid=None"""
-        task = _make_task(is_multi_participant=False, is_repeatable=False)
-        # override __post_init__ side effect
-        task.is_multi_participant = False
-        task.is_repeatable = False
+        task = _make_task(max_participants=1)  # single-participant
         mock_repo.find_by_id.return_value = task
         mock_repo.save.return_value = None
         mock_task_pool.has_agent_completed.return_value = False
@@ -155,7 +147,7 @@ class TestSubmitTaskMultiParticipant:
 
     async def test_submit_with_explicit_participation_id(self, service, mock_repo, mock_task_pool):
         """submit_task with participation_id resolves and submits"""
-        task = _make_task(approval_type="manual")
+        task = _make_task(auto_approve=False)
         p = _make_participation()
         mock_repo.find_by_id.return_value = task
         mock_task_pool.get_participation.return_value = p
@@ -167,14 +159,13 @@ class TestSubmitTaskMultiParticipant:
             participation_id="part-001",
         )
 
-        # Participation should have been submitted
         assert p.status == ParticipationStatus.SUBMITTED
         assert p.submission == "Here is my work"
         mock_repo.save_participation.assert_awaited_once_with(p)
 
     async def test_submit_auto_find_participation(self, service, mock_repo, mock_task_pool):
         """submit_task without participation_id auto-finds active participation"""
-        task = _make_task(approval_type="manual")
+        task = _make_task(auto_approve=False)
         p = _make_participation()
         mock_repo.find_by_id.return_value = task
         mock_task_pool.get_user_participation.return_value = p
@@ -204,8 +195,8 @@ class TestSubmitTaskMultiParticipant:
             )
 
     async def test_submit_auto_approval(self, service, mock_repo, mock_task_pool):
-        """submit_task with auto-approval triggers _auto_complete_participation"""
-        task = _make_task(approval_type="auto")
+        """submit_task with auto_approve=True triggers _auto_complete_participation"""
+        task = _make_task(auto_approve=True)
         p = _make_participation()
         mock_repo.find_by_id.return_value = task
         mock_task_pool.get_participation.return_value = p
@@ -283,8 +274,8 @@ class TestReviewParticipation:
             )
 
     async def test_approve_exhausts_task(self, service, mock_repo, mock_task_pool):
-        """When max_completions reached, task is COMPLETED and remaining are cancelled"""
-        task = _make_task(max_completions=3)
+        """When max_participants reached, task is COMPLETED and remaining are cancelled"""
+        task = _make_task(max_participants=3)
         p = _make_participation(status=ParticipationStatus.SUBMITTED)
         mock_repo.find_by_id.return_value = task
         mock_task_pool.get_participation.return_value = p
@@ -307,15 +298,12 @@ class TestReviewParticipation:
 
     async def test_review_delegates_to_single_participant(self, service, mock_repo, mock_task_pool):
         """For single-participant task, review_participation delegates to complete_task"""
-        task = _make_task(is_multi_participant=False, is_repeatable=False)
-        task.is_multi_participant = False
-        task.is_repeatable = False
+        task = _make_task(max_participants=1)  # single-participant
         task.status = TaskStatus.SUBMITTED
         mock_repo.find_by_id.return_value = task
         mock_repo.save.return_value = None
         mock_task_pool.record_completion.return_value = None
 
-        # This should internally call complete_task instead of working with participations
         await service.review_participation(
             task_id="task-001",
             approver_id="creator-001",

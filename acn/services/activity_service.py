@@ -253,12 +253,12 @@ class ActivityService:
         creator_name: str,
         task_id: str,
         task_title: str,
-        reward_amount: str = "0",
+        reward: str = "0",
         reward_currency: str = "points",
     ) -> str:
         """Record task creation"""
         reward_str = (
-            f"{reward_amount} {reward_currency}" if float(reward_amount) > 0 else "No reward"
+            f"{reward} {reward_currency}" if float(reward) > 0 else "No reward"
         )
         return await self.record(
             event_type="task_created",
@@ -312,11 +312,11 @@ class ActivityService:
         agent_name: str,
         task_id: str,
         task_title: str,
-        reward_amount: str = "0",
+        reward: str = "0",
         reward_currency: str = "points",
     ) -> str:
         """Record task approval (with reward)"""
-        reward_int = int(float(reward_amount)) if reward_amount else 0
+        reward_int = int(float(reward)) if reward else 0
         return await self.record(
             event_type="task_approved",
             actor_type=approver_type,
@@ -325,7 +325,7 @@ class ActivityService:
             description=f"Approved {agent_name}'s submission: {task_title}",
             points=reward_int if reward_currency == "points" else None,
             task_id=task_id,
-            metadata={"agent_id": agent_id, "reward": f"{reward_amount} {reward_currency}"},
+            metadata={"agent_id": agent_id, "reward": f"{reward} {reward_currency}"},
         )
 
     async def record_task_rejected(

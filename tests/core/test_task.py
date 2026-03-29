@@ -1,7 +1,7 @@
 """Unit Tests for Task & Participation Entities
 
 Tests pure business logic for multi-participant task support,
-including Participation lifecycle, Task.can_join(), and backward compatibility.
+including Participation lifecycle, Task.can_join(), and orthogonal boolean fields.
 """
 
 from datetime import datetime
@@ -12,7 +12,6 @@ from acn.core.entities.task import (
     Participation,
     ParticipationStatus,
     Task,
-    TaskMode,
     TaskStatus,
 )
 
@@ -25,13 +24,12 @@ def _make_task(**overrides) -> Task:
     """Factory for a minimal valid Task"""
     defaults = {
         "task_id": "task-001",
-        "mode": TaskMode.OPEN,
         "creator_type": "human",
         "creator_id": "creator-001",
         "creator_name": "Alice",
         "title": "Test Task",
         "description": "A test task",
-        "reward_amount": "100",
+        "reward": "100",
     }
     defaults.update(overrides)
     return Task(**defaults)
@@ -253,69 +251,64 @@ class TestParticipation:
 
 
 class TestTaskMultiParticipant:
-    """Test Task multi-participant support"""
+    """Test Task multi-participant support via max_participants field"""
 
-    # ── Backward Compatibility ──
+    # ── _is_multi() ──
 
-    def test_is_repeatable_implies_is_multi_participant(self):
-        """is_repeatable=True should auto-set is_multi_participant=True"""
-        t = _make_task(is_repeatable=True)
-        assert t.is_multi_participant is True
-        assert t.is_repeatable is True
-
-    def test_is_multi_participant_implies_is_repeatable(self):
-        """is_multi_participant=True should auto-set is_repeatable=True"""
-        t = _make_task(is_multi_participant=True)
-        assert t.is_repeatable is True
-
-    def test_neither_flag_set(self):
-        """Default: both flags are False"""
+    def test_single_participant_not_multi(self):
+        """Default task (max_participants=1) is not multi"""
         t = _make_task()
-        assert t.is_multi_participant is False
-        assert t.is_repeatable is False
+        assert t._is_multi() is False
+
+    def test_fixed_multi_participant(self):
+        """max_participants > 1 is multi"""
+        t = _make_task(max_participants=5)
+        assert t._is_multi() is True
+
+    def test_unlimited_bounty_is_multi(self):
+        """max_participants=None (bounty) is multi"""
+        t = _make_task(max_participants=None)
+        assert t._is_multi() is True
 
     # ── can_join() ──
 
-    def test_can_join_multi_participant_open(self):
+    def test_can_join_multi_open(self):
         """Multi-participant OPEN task allows joining"""
-        t = _make_task(is_multi_participant=True, max_completions=10)
+        t = _make_task(max_participants=10)
         assert t.can_join() is True
 
-    def test_can_join_not_multi_participant(self):
+    def test_can_join_not_multi(self):
         """Single-participant task cannot be joined"""
-        t = _make_task(is_multi_participant=False)
+        t = _make_task(max_participants=1)
         assert t.can_join() is False
 
     def test_can_join_non_open_status(self):
         """Cannot join a task that's not OPEN"""
-        t = _make_task(is_multi_participant=True, status=TaskStatus.CANCELLED)
+        t = _make_task(max_participants=5, status=TaskStatus.CANCELLED)
         assert t.can_join() is False
 
     def test_can_join_at_capacity(self):
-        """Cannot join when completed + active >= max_completions"""
+        """Cannot join when completed + active >= max_participants"""
         t = _make_task(
-            is_multi_participant=True,
-            max_completions=5,
+            max_participants=5,
             completed_count=3,
             active_participants_count=2,
         )
         assert t.can_join() is False
 
     def test_can_join_under_capacity(self):
-        """Can join when completed + active < max_completions"""
+        """Can join when completed + active < max_participants"""
         t = _make_task(
-            is_multi_participant=True,
-            max_completions=5,
+            max_participants=5,
             completed_count=2,
             active_participants_count=1,
         )
         assert t.can_join() is True
 
     def test_can_join_unlimited(self):
-        """Can always join when max_completions is None (unlimited)"""
+        """Can always join when max_participants is None (unlimited/bounty)"""
         t = _make_task(
-            is_multi_participant=True,
-            max_completions=None,
+            max_participants=None,
             completed_count=999,
             active_participants_count=100,
         )
@@ -325,8 +318,8 @@ class TestTaskMultiParticipant:
 
     def test_can_be_accepted_delegates_to_can_join(self):
         """For multi-participant tasks, can_be_accepted() uses can_join()"""
-        t = _make_task(is_multi_participant=True, max_completions=10)
-        assert t.can_be_accepted() is True  # same as can_join()
+        t = _make_task(max_participants=10)
+        assert t.can_be_accepted() is True
 
         t.status = TaskStatus.CANCELLED
         assert t.can_be_accepted() is False
@@ -334,23 +327,54 @@ class TestTaskMultiParticipant:
     # ── to_dict() includes new fields ──
 
     def test_to_dict_multi_participant_fields(self):
-        """to_dict() includes multi-participant fields"""
+        """to_dict() includes orthogonal participation control fields"""
         t = _make_task(
-            is_multi_participant=True,
+            max_participants=10,
             allow_repeat_by_same=True,
             active_participants_count=3,
-            max_completions=10,
             completed_count=2,
         )
         d = t.to_dict()
 
-        assert d["is_multi_participant"] is True
+        assert d["max_participants"] == 10
         assert d["allow_repeat_by_same"] is True
         assert d["active_participants_count"] == 3
-        assert d["max_completions"] == 10
         assert d["completed_count"] == 2
-        # backward compat
-        assert d["is_repeatable"] is True
+
+
+# ============================================================================
+# Task Entity — Orthogonal Boolean Fields
+# ============================================================================
+
+
+class TestTaskOrthogonalFields:
+    """Test the new orthogonal boolean field design"""
+
+    def test_default_values(self):
+        """Verify sensible defaults for all boolean fields"""
+        t = _make_task()
+        assert t.require_join_approval is False
+        assert t.auto_approve is False
+        assert t.allow_repeat_by_same is False
+        assert t.use_escrow is False
+        assert t.max_participants == 1
+
+    def test_bounty_preset_equivalent(self):
+        """Bounty: max_participants=None, auto_approve=True"""
+        t = _make_task(max_participants=None, auto_approve=True)
+        assert t._is_multi() is True
+        assert t.auto_approve is True
+
+    def test_join_approval_single(self):
+        """Single task with join approval"""
+        t = _make_task(require_join_approval=True)
+        assert t.require_join_approval is True
+        assert t._is_multi() is False  # still single participant
+
+    def test_use_escrow_flag(self):
+        """use_escrow is stored and retrievable"""
+        t = _make_task(use_escrow=True)
+        assert t.use_escrow is True
 
 
 # ============================================================================
@@ -365,7 +389,6 @@ class TestTaskBasic:
         t = _make_task()
         assert t.task_id == "task-001"
         assert t.status == TaskStatus.OPEN
-        assert t.mode == TaskMode.OPEN
 
     def test_validation_empty_id(self):
         with pytest.raises(ValueError, match="task_id cannot be empty"):
@@ -423,14 +446,16 @@ class TestTaskBasic:
     def test_from_dict_round_trip(self):
         """Task dict → from_dict → to_dict round trip"""
         original = _make_task(
-            is_multi_participant=True,
+            max_participants=5,
             allow_repeat_by_same=True,
-            max_completions=5,
+            auto_approve=True,
+            use_escrow=True,
         )
         d = original.to_dict()
         restored = Task.from_dict(d)
 
         assert restored.task_id == original.task_id
-        assert restored.is_multi_participant is True
+        assert restored.max_participants == 5
         assert restored.allow_repeat_by_same is True
-        assert restored.max_completions == 5
+        assert restored.auto_approve is True
+        assert restored.use_escrow is True

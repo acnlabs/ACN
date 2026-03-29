@@ -61,25 +61,31 @@ class AgentPlanetEscrowProvider(IEscrowProvider):
         creator_id: str,
         creator_type: str,
         amount: float,
+        currency: str = "points",
         auto_release_days: int = 7,
         description: str | None = None,
+        escrow_config: dict | None = None,
     ) -> EscrowDetailResult:
         if amount <= 0:
             return EscrowDetailResult(success=True)
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
+                body: dict = {
+                    "task_id": task_id,
+                    "creator_id": creator_id,
+                    "creator_type": creator_type,
+                    "amount": amount,
+                    "currency": currency,
+                    "auto_release_days": auto_release_days,
+                    "description": description,
+                }
+                if escrow_config:
+                    body["escrow_config"] = escrow_config
                 response = await client.post(
                     f"{self.backend_url}/api/labs/escrow/v2/lock",
                     headers=self._get_headers(),
-                    json={
-                        "task_id": task_id,
-                        "creator_id": creator_id,
-                        "creator_type": creator_type,
-                        "amount": amount,
-                        "auto_release_days": auto_release_days,
-                        "description": description,
-                    },
+                    json=body,
                 )
 
                 if response.status_code == 200:

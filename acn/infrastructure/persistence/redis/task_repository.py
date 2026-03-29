@@ -9,7 +9,7 @@ from typing import Any
 
 import redis.asyncio as redis  # type: ignore[import-untyped]
 
-from ....core.entities import Participation, ParticipationStatus, Task, TaskMode, TaskStatus
+from ....core.entities import Participation, ParticipationStatus, Task, TaskStatus
 from ....core.interfaces import ITaskRepository
 
 # ============================================================================
@@ -231,10 +231,9 @@ class RedisTaskRepository(ITaskRepository):
             else:
                 pipe.zrem("acn:tasks:open", task.task_id)
 
-            # 2. Mode index
-            pipe.sadd(f"acn:tasks:by_mode:{task.mode.value}", task.task_id)
-            if existing and existing.mode != task.mode:
-                pipe.srem(f"acn:tasks:by_mode:{existing.mode.value}", task.task_id)
+            # 2. Mode index (legacy — computed from require_join_approval)
+            db_mode = "assigned" if task.require_join_approval else "open"
+            pipe.sadd(f"acn:tasks:by_mode:{db_mode}", task.task_id)
 
             # 3. Status index
             pipe.sadd(f"acn:tasks:by_status:{task.status.value}", task.task_id)
@@ -272,14 +271,13 @@ class RedisTaskRepository(ITaskRepository):
 
     async def find_open_tasks(
         self,
-        mode: TaskMode | None = None,
+        mode: str | None = None,
         tags: list[str] | None = None,
         task_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Task]:
         """Find open tasks with optional filters"""
-        # Get open task IDs (sorted by created_at, newest first)
         task_ids = await self.redis.zrevrange("acn:tasks:open", offset, offset + limit - 1)
 
         tasks = []
@@ -290,8 +288,10 @@ class RedisTaskRepository(ITaskRepository):
                 continue
 
             # Apply filters
-            if mode and task.mode != mode:
-                continue
+            if mode:
+                task_mode = "assigned" if task.require_join_approval else "open"
+                if task_mode != mode:
+                    continue
             if tags and not task.matches_tags(tags):
                 continue
             if task_type and task.task_type != task_type:
@@ -340,6 +340,19 @@ class RedisTaskRepository(ITaskRepository):
 
         return tasks
 
+    async def find_by_group(self, group_id: str, limit: int = 100) -> list[Task]:
+        """Find tasks by collaboration group_id (scan-based, suitable for small data sets)"""
+        all_task_ids = await self.redis.zrange("acn:tasks:open", 0, -1)
+        tasks = []
+        for task_id in all_task_ids[:limit * 5]:  # over-fetch to account for filtering
+            task_id = task_id.decode() if isinstance(task_id, bytes) else task_id
+            task = await self.find_by_id(task_id)
+            if task and task.group_id == group_id:
+                tasks.append(task)
+                if len(tasks) >= limit:
+                    break
+        return tasks
+
     async def delete(self, task_id: str) -> bool:
         """Delete a task"""
         task = await self.find_by_id(task_id)
@@ -352,7 +365,8 @@ class RedisTaskRepository(ITaskRepository):
 
         # Remove from indices
         await self.redis.zrem("acn:tasks:open", task_id)
-        await self.redis.srem(f"acn:tasks:by_mode:{task.mode.value}", task_id)
+        _mode = "assigned" if task.require_join_approval else "open"
+        await self.redis.srem(f"acn:tasks:by_mode:{_mode}", task_id)
         await self.redis.srem(f"acn:tasks:by_status:{task.status.value}", task_id)
         await self.redis.srem(f"acn:tasks:by_creator:{task.creator_id}", task_id)
 
@@ -678,22 +692,31 @@ class RedisTaskRepository(ITaskRepository):
         data["submission_artifacts"] = _safe_loads(data.get("submission_artifacts", ""), [])
         data["metadata"] = _safe_loads(data.get("metadata", ""), {})
 
-        # Parse enums
-        data["mode"] = TaskMode(data["mode"])
+        # Parse status enum
         data["status"] = TaskStatus(data["status"])
 
-        # Parse booleans
-        data["is_repeatable"] = data.get("is_repeatable", "false").lower() == "true"
-        data["is_multi_participant"] = data.get("is_multi_participant", "false").lower() == "true"
-        data["allow_repeat_by_same"] = data.get("allow_repeat_by_same", "false").lower() == "true"
+        # Parse booleans (new fields; compat with legacy string values)
+        def _bool(val: str, default: bool = False) -> bool:
+            return val.lower() == "true" if val else default
+
+        data["require_join_approval"] = _bool(
+            data.get("require_join_approval", ""),
+            # compat: old Redis may have mode="assigned" instead
+            data.get("mode", "open") == "assigned",
+        )
+        data["auto_approve"] = _bool(data.get("auto_approve", ""))
+        data["allow_repeat_by_same"] = _bool(data.get("allow_repeat_by_same", ""))
+        data["use_escrow"] = _bool(data.get("use_escrow", ""))
+        data["group_id"] = data.get("group_id") or None
 
         # Parse integers
         data["completed_count"] = int(data.get("completed_count", 0))
         data["active_participants_count"] = int(data.get("active_participants_count", 0))
-        if data.get("max_completions"):
-            data["max_completions"] = int(data["max_completions"])
-        else:
-            data["max_completions"] = None
+        # max_participants (new name); compat: fall back to max_completions
+        raw_max = data.get("max_participants") or data.get("max_completions")
+        data["max_participants"] = int(raw_max) if raw_max else (
+            None if _bool(data.get("is_multi_participant", "")) else 1
+        )
 
         # Parse datetime fields
         datetime_fields = [

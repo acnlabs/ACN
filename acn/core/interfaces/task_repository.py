@@ -5,7 +5,7 @@ Defines contract for task persistence operations.
 
 from abc import ABC, abstractmethod
 
-from ..entities import Participation, Task, TaskMode, TaskStatus
+from ..entities import Participation, Task, TaskStatus
 
 
 class ITaskRepository(ABC):
@@ -30,7 +30,7 @@ class ITaskRepository(ABC):
     @abstractmethod
     async def find_open_tasks(
         self,
-        mode: TaskMode | None = None,
+        mode: str | None = None,
         tags: list[str] | None = None,
         task_type: str | None = None,
         limit: int = 50,
@@ -52,6 +52,11 @@ class ITaskRepository(ABC):
     @abstractmethod
     async def find_by_status(self, status: TaskStatus, limit: int = 50) -> list[Task]:
         """Find tasks by status"""
+        pass
+
+    @abstractmethod
+    async def find_by_group(self, group_id: str, limit: int = 100) -> list[Task]:
+        """Find all tasks belonging to a collaboration group"""
         pass
 
     @abstractmethod

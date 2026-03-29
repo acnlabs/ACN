@@ -252,7 +252,6 @@ class TaskInfo(BaseModel):
     """Task information — mirrors ACN server TaskResponse."""
 
     task_id: str
-    mode: str
     status: str
     creator_type: str
     creator_id: str
@@ -260,45 +259,65 @@ class TaskInfo(BaseModel):
     title: str
     description: str
     task_type: str
-    required_skills: list[str] = Field(default_factory=list)
+    required_tags: list[str] = Field(default_factory=list)
     assignee_id: str | None = None
     assignee_name: str | None = None
-    reward_amount: str = "0"
+    assignee_type: str | None = None
+    reward: str = "0"
     reward_currency: str = "ap_points"
-    reward_unit: str = "completion"
     total_budget: str = "0"
     released_amount: str = "0"
-    is_repeatable: bool = False
-    is_multi_participant: bool = False
+    max_participants: int | None = 1
+    max_total_budget: str | None = None
+    require_join_approval: bool = False
+    auto_approve: bool = False
     allow_repeat_by_same: bool = False
+    use_escrow: bool = False
     active_participants_count: int = 0
     completed_count: int = 0
-    max_completions: int | None = None
-    approval_type: str = "manual"
-    validator_id: str | None = None
+    group_id: str | None = None
     created_at: str = ""
     deadline: str | None = None
     metadata: dict | None = None
 
 
 class TaskCreateRequest(BaseModel):
-    """Request to create a task."""
+    """Request to create a task.
 
+    Three-layer design:
+    - Layer 1 (required): title, description, deadline_hours, reward
+    - Layer 2 (common): max_participants, auto_approve, task_type, required_tags, reward_currency
+    - Layer 3 (advanced): require_join_approval, allow_repeat_by_same, max_total_budget
+    - Escrow: use_escrow
+    - Collaboration: group_id
+    - Extension: metadata
+    """
+
+    # ── Layer 1: Required ────────────────────────────────
     title: str = Field(..., min_length=3, max_length=200)
     description: str = Field(..., min_length=10)
-    mode: str = Field(default="open", description="open or assigned")
+    deadline_hours: int = Field(..., ge=1, le=2160, description="Deadline in hours (1–2160)")
+    reward: str = Field(..., description="Reward per completion, e.g. '50' or '0'")
+
+    # ── Layer 2: Common options ───────────────────────────
+    max_participants: int | None = Field(default=1, description="1=single, N=multi, None=unlimited")
+    auto_approve: bool = Field(default=False)
     task_type: str = Field(default="general")
-    required_skills: list[str] = Field(default_factory=list)
-    reward_amount: str = Field(default="0")
+    required_tags: list[str] = Field(default_factory=list)
     reward_currency: str = Field(default="ap_points")
-    is_multi_participant: bool = False
-    allow_repeat_by_same: bool = False
-    max_completions: int | None = None
-    deadline_hours: int | None = None
-    assignee_id: str | None = None
-    assignee_name: str | None = None
-    approval_type: str = Field(default="manual", description="manual, auto, or validator")
-    validator_id: str | None = None
+
+    # ── Layer 3: Advanced ─────────────────────────────────
+    require_join_approval: bool = Field(default=False)
+    allow_repeat_by_same: bool = Field(default=False)
+    max_total_budget: str | None = Field(default=None)
+
+    # ── Escrow ────────────────────────────────────────────
+    use_escrow: bool = Field(default=False)
+
+    # ── Collaboration ─────────────────────────────────────
+    group_id: str | None = Field(default=None, description="Link subtasks into a group")
+
+    # ── Extension ─────────────────────────────────────────
     metadata: dict = Field(default_factory=dict)
 
 
