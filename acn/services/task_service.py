@@ -261,6 +261,9 @@ class TaskService:
         """
         task = await self.get_task(task_id)
 
+        if task.creator_id == agent_id:
+            raise PermissionError("Creator cannot accept their own task")
+
         # ---- Multi-participant path ----
         if task._is_multi():
             return await self._join_task(task, agent_id, agent_name, agent_type)
