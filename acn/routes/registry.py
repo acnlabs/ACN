@@ -534,15 +534,18 @@ async def join_agent_internal(
     body: AgentJoinRequest,
     background_tasks: BackgroundTasks,
     ref: str | None = Query(None),
-    agent_service: AgentServiceDep = None,
 ):
     """Internal join endpoint — no rate limit, requires X-Internal-Token."""
-    from ..config import settings as _s
     token = request.headers.get("X-Internal-Token", "")
-    if not token or token != _s.internal_api_token:
+    if not token or token != settings.internal_api_token:
         raise HTTPException(status_code=401, detail="Internal token required")
-    # Delegate to shared implementation
-    return await _join_agent_impl(body, background_tasks, ref, agent_service)
+    # Get agent service manually to avoid FastAPI Depends() injection edge cases
+    from .dependencies import get_agent_service as _get_svc
+    try:
+        agent_svc = _get_svc()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Service unavailable: {e}") from e
+    return await _join_agent_impl(body, background_tasks, ref, agent_svc)
 
 
 @router.post("/join", response_model=AgentJoinResponse)
