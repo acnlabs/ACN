@@ -419,7 +419,10 @@ class TaskService:
         # ---- Multi-participant path ----
         if task._is_multi():
             p = await self._resolve_participation(task_id, agent_id, participation_id)
-            p.submit(submission, artifacts)
+            if p.status == ParticipationStatus.REJECTED:
+                p.resubmit(submission, artifacts)
+            else:
+                p.submit(submission, artifacts)
             await self.repository.save_participation(p)
 
             if self.activity:
@@ -446,7 +449,10 @@ class TaskService:
         if task.assignee_id != agent_id:
             raise PermissionError("Only the assigned agent can submit")
 
-        task.submit(submission, artifacts)
+        if task.status == TaskStatus.REJECTED:
+            task.resubmit(submission, artifacts)
+        else:
+            task.submit(submission, artifacts)
         await self.repository.save(task)
 
         # Sync escrow status

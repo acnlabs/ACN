@@ -181,6 +181,8 @@ class ITaskRepository(ABC):
         self,
         participation_id: str,
         task_id: str,
+        reviewer_id: str | None = None,
+        notes: str | None = None,
     ) -> int:
         """
         Atomically mark participation as completed, increment completed_count,

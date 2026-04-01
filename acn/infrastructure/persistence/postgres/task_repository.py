@@ -577,6 +577,8 @@ class PostgresTaskRepository(ITaskRepository):
         self,
         participation_id: str,
         task_id: str,
+        reviewer_id: str | None = None,
+        notes: str | None = None,
     ) -> int:
         now_iso = datetime.now(UTC).isoformat()
         async with self._session_factory() as session:

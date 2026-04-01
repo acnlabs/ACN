@@ -415,6 +415,22 @@ class Task:
         self.review_notes = notes
         self.status = TaskStatus.REJECTED
 
+    def resubmit(self, submission: str, artifacts: list[dict] | None = None) -> None:
+        """
+        Resubmit after rejection (single-participant path).
+
+        Raises:
+            ValueError: If task is not in rejected status
+        """
+        if self.status != TaskStatus.REJECTED:
+            raise ValueError(f"Cannot resubmit in status: {self.status}")
+        self.submission = submission
+        self.submission_artifacts = artifacts or []
+        self.submitted_at = datetime.now(UTC)
+        self.review_notes = None
+        self.reviewed_by = None
+        self.status = TaskStatus.SUBMITTED
+
     def cancel(self) -> None:
         """Cancel the task"""
         if self.status == TaskStatus.COMPLETED:
