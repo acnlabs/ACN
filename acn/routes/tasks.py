@@ -539,6 +539,8 @@ async def accept_task(
 
     except TaskNotFoundException:
         raise HTTPException(status_code=404, detail="Task not found") from None
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -850,6 +852,8 @@ async def agent_accept_task(
 
     except TaskNotFoundException:
         raise HTTPException(status_code=404, detail="Task not found") from None
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
