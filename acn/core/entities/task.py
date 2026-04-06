@@ -555,7 +555,7 @@ class Task:
         for old_field in (
             "mode", "approval_type", "validator_id", "reward_unit",
             "is_multi_participant", "is_repeatable", "max_completions",
-            "reward_amount", "ui_spec",
+            "reward_amount",
         ):
             data.pop(old_field, None)
 

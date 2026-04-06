@@ -168,6 +168,16 @@ class TaskCreateRequest(BaseModel):
     # ── Collaboration ─────────────────────────────────────
     group_id: str | None = Field(default=None, description="Link related subtasks into a collaborative group")
 
+    # ── A2UI: Declarative interactive UI ─────────────────────────────────────
+    ui_spec: dict | None = Field(
+        default=None,
+        description=(
+            "A2UI v1: Declarative interactive UI spec rendered in the Operations tab. "
+            "Merged into metadata.ui_spec on creation. No external backend required — "
+            "the platform handles page:complete / task:submit / task:complete natively."
+        ),
+    )
+
     # ── Extension ─────────────────────────────────────────
     metadata: dict = Field(default_factory=dict, description="Extensible metadata (escrow_config, webhook, etc.)")
 
@@ -220,6 +230,11 @@ class TaskResponse(BaseModel):
     deadline: str | None = None
     group_id: str | None = None
     metadata: dict = Field(default_factory=dict)
+    ui_spec: dict | None = Field(default=None, description="A2UI: Declarative interactive UI spec (if provided by creator)")
+    # Submission fields — included for single-participant tasks so the
+    # frontend DeliverablesPanel can display the submitted content.
+    submission: str | None = None
+    submission_artifacts: list[dict] = Field(default_factory=list)
 
 
 class ParticipationResponse(BaseModel):
@@ -322,6 +337,9 @@ def _task_to_response(task) -> TaskResponse:
         deadline=task.deadline.isoformat() if task.deadline else None,
         group_id=task.group_id,
         metadata=task.metadata or {},
+        ui_spec=(task.metadata or {}).get("ui_spec"),
+        submission=task.submission,
+        submission_artifacts=task.submission_artifacts or [],
     )
 
 
@@ -479,6 +497,11 @@ async def create_task(
         # Internal/dev: allow X-Creator-Id override
         token_owner = creator_id_header
 
+    # Merge ui_spec into metadata so it's stored and returned transparently
+    merged_metadata = dict(body.metadata)
+    if body.ui_spec is not None:
+        merged_metadata["ui_spec"] = body.ui_spec
+
     try:
         task = await task_service.create_task(
             creator_type=creator_type_header,
@@ -498,7 +521,7 @@ async def create_task(
             use_escrow=body.use_escrow,
             group_id=body.group_id,
             deadline_hours=body.deadline_hours,
-            metadata=body.metadata,
+            metadata=merged_metadata,
         )
 
         logger.info(
