@@ -9,7 +9,7 @@ from uuid import uuid4
 import structlog
 
 from ..core.entities import Participation, ParticipationStatus, Task, TaskStatus
-from ..core.interfaces import IAgentRepository, IEscrowProvider, ITaskRepository
+from ..core.interfaces import IAgentRepository, IEscrowProvider, ISubnetRepository, ITaskRepository
 from ..infrastructure.task_pool import TaskPool
 from ..protocols.ap2 import PaymentTaskManager, WebhookEventType, WebhookService
 from ..protocols.ap2.core import AP_POINTS
@@ -44,6 +44,7 @@ class TaskService:
         activity_service: ActivityService | None = None,
         escrow_client: IEscrowProvider | None = None,
         agent_repository: IAgentRepository | None = None,
+        subnet_repository: ISubnetRepository | None = None,
     ):
         """
         Initialize Task Service
@@ -56,6 +57,7 @@ class TaskService:
             activity_service: Activity service for recording events (optional)
             escrow_client: Labs escrow client for budget management (optional)
             agent_repository: Agent repository for looking up agent owners (optional)
+            subnet_repository: Subnet repository for visibility/access control (optional)
         """
         self.repository = repository
         self.task_pool = task_pool or TaskPool(repository)
@@ -64,6 +66,7 @@ class TaskService:
         self.activity = activity_service
         self.escrow = escrow_client
         self.agent_repository = agent_repository
+        self.subnet_repository = subnet_repository
 
     async def create_task(
         self,
@@ -85,6 +88,7 @@ class TaskService:
         group_id: str | None = None,
         deadline_hours: int | None = None,
         metadata: dict | None = None,
+        subnet_id: str | None = None,
     ) -> Task:
         """
         Create a new task.
@@ -150,6 +154,7 @@ class TaskService:
             group_id=group_id,
             deadline=deadline,
             metadata=metadata or {},
+            subnet_id=subnet_id,
         )
 
         # Escrow lock: explicit opt-in only
@@ -263,6 +268,16 @@ class TaskService:
 
         if task.creator_id == agent_id:
             raise PermissionError("Creator cannot accept their own task")
+
+        # ---- Subnet access control ----
+        if task.subnet_id:
+            if not self.subnet_repository:
+                raise PermissionError("Subnet access control not configured")
+            subnet = await self.subnet_repository.find_by_id(task.subnet_id)
+            if not subnet:
+                raise PermissionError("Task subnet not found or deleted")
+            if agent_id not in (subnet.member_agent_ids or set()):
+                raise PermissionError("Agent is not a member of the task's subnet")
 
         # ---- Multi-participant path ----
         if task._is_multi():
@@ -1151,6 +1166,7 @@ class TaskService:
         group_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        requesting_agent_id: str | None = None,
     ) -> list[Task]:
         """
         List tasks with filters
@@ -1183,6 +1199,7 @@ class TaskService:
                 tags=tags,
                 limit=limit,
                 offset=offset,
+                requesting_agent_id=requesting_agent_id,
             )
 
         return tasks
@@ -1203,6 +1220,15 @@ class TaskService:
             List of matching tasks
         """
         return await self.task_pool.find_tasks_for_agent(agent_tags, limit)
+
+    async def is_subnet_member(self, subnet_id: str, agent_id: str) -> bool:
+        """Check whether an agent is a member of the given subnet."""
+        if not self.subnet_repository:
+            return False
+        subnet = await self.subnet_repository.find_by_id(subnet_id)
+        if not subnet:
+            return False
+        return agent_id in (subnet.member_agent_ids or set())
 
     async def _notify_webhook(self, event: WebhookEventType, task: Task) -> None:
         """Send webhook notification"""

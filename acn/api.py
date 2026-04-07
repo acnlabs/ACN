@@ -195,6 +195,7 @@ async def lifespan(app: FastAPI):
         activity_service=activity_service_instance,
         escrow_client=escrow_client_instance,
         agent_repository=agent_repository,
+        subnet_repository=subnet_repository,
     )
 
     # Set task service for routes

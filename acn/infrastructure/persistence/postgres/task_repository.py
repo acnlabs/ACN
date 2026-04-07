@@ -116,6 +116,7 @@ class PostgresTaskRepository(ITaskRepository):
             completed_at=meta.get("completed_at")
             and datetime.fromisoformat(meta["completed_at"]),
             metadata=meta.get("extra_metadata", {}),
+            subnet_id=row.subnet_id,
         )
 
     def _task_to_model(self, task: Task) -> TaskModel:
@@ -168,6 +169,7 @@ class PostgresTaskRepository(ITaskRepository):
             created_at=_tz(task.created_at) or datetime.now(UTC),
             deadline=_tz(task.deadline),
             task_metadata=extra_meta,
+            subnet_id=task.subnet_id,
         )
 
     # ---- Participation mapping -----------------------------------------------
@@ -245,6 +247,7 @@ class PostgresTaskRepository(ITaskRepository):
                         required_tags=model.required_tags,
                         deadline=model.deadline,
                         task_metadata=model.task_metadata,
+                        subnet_id=model.subnet_id,
                     )
                 )
             else:
@@ -266,7 +269,10 @@ class PostgresTaskRepository(ITaskRepository):
         task_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        requesting_agent_id: str | None = None,
     ) -> list[Task]:
+        from sqlalchemy import or_, and_
+
         async with self._session_factory() as session:
             stmt = select(TaskModel).where(TaskModel.status == TaskStatus.OPEN.value)
             if mode:
@@ -281,6 +287,26 @@ class PostgresTaskRepository(ITaskRepository):
                 stmt = stmt.where(
                     TaskModel.task_metadata["task_type"].astext == task_type
                 )
+            # Subnet visibility: NULL=public (anyone), non-NULL=private (subnet members only)
+            if requesting_agent_id:
+                # Fetch subnets the agent belongs to, then filter
+                from .subnet_repository import PostgresSubnetRepository
+                subnet_repo = PostgresSubnetRepository(self._session_factory)
+                agent_subnets = await subnet_repo.list_subnets_for_agent(requesting_agent_id)
+                agent_subnet_ids = [s.subnet_id for s in agent_subnets]
+                if agent_subnet_ids:
+                    stmt = stmt.where(
+                        or_(
+                            TaskModel.subnet_id.is_(None),
+                            TaskModel.subnet_id.in_(agent_subnet_ids),
+                        )
+                    )
+                else:
+                    # Agent not in any subnet — only public tasks
+                    stmt = stmt.where(TaskModel.subnet_id.is_(None))
+            else:
+                # Anonymous caller — only public tasks
+                stmt = stmt.where(TaskModel.subnet_id.is_(None))
             stmt = stmt.order_by(TaskModel.created_at.desc()).limit(limit).offset(offset)
             result = await session.execute(stmt)
             rows = result.scalars().all()

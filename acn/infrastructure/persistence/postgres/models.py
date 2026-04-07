@@ -56,6 +56,7 @@ class TaskModel(Base):
     )
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     task_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    subnet_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
 
     __table_args__ = (
         Index("ix_tasks_mode", "mode"),

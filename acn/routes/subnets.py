@@ -7,7 +7,7 @@ import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ..auth.middleware import require_permission, verify_token
+from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
 from ..config import get_settings
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
@@ -41,7 +41,7 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
 @router.post("", response_model=SubnetCreateResponse)
 async def create_subnet(
     request: SubnetCreateRequest,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(require_internal_or_permission("acn:write")),
     subnet_service: SubnetServiceDep = None,
 ):
     """Create a new subnet
@@ -313,3 +313,56 @@ async def delete_subnet(
     except Exception as e:
         logger.error("delete_subnet_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to delete subnet") from e
+
+
+# =============================================================================
+# Internal Admin Endpoints (Backend service → ACN, requires X-Internal-Token)
+# =============================================================================
+
+
+@router.post("/{subnet_id}/members/{agent_id}", tags=["subnets-internal"])
+async def admin_add_subnet_member(
+    subnet_id: str,
+    agent_id: str,
+    payload: dict = Depends(require_internal_or_permission("acn:admin")),
+    subnet_service: SubnetServiceDep = None,
+):
+    """Add an agent to a subnet's member list (internal service call).
+
+    Called by the Platform Backend when a WorkspaceMember is added.
+    Requires X-Internal-Token header or acn:admin JWT permission.
+    Returns 404 silently if the subnet does not exist (best-effort).
+    """
+    try:
+        await subnet_service.add_member(subnet_id, agent_id)
+        logger.info("admin_subnet_member_added", subnet_id=subnet_id, agent_id=agent_id)
+        return {"status": "added", "subnet_id": subnet_id, "agent_id": agent_id}
+    except SubnetNotFoundException:
+        raise HTTPException(status_code=404, detail="Subnet not found")
+    except Exception as e:
+        logger.error("admin_add_subnet_member_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to add subnet member") from e
+
+
+@router.delete("/{subnet_id}/members/{agent_id}", tags=["subnets-internal"])
+async def admin_remove_subnet_member(
+    subnet_id: str,
+    agent_id: str,
+    payload: dict = Depends(require_internal_or_permission("acn:admin")),
+    subnet_service: SubnetServiceDep = None,
+):
+    """Remove an agent from a subnet's member list (internal service call).
+
+    Called by the Platform Backend when a WorkspaceMember is removed.
+    Requires X-Internal-Token header or acn:admin JWT permission.
+    Returns 404 silently if the subnet does not exist (best-effort).
+    """
+    try:
+        await subnet_service.remove_member(subnet_id, agent_id)
+        logger.info("admin_subnet_member_removed", subnet_id=subnet_id, agent_id=agent_id)
+        return {"status": "removed", "subnet_id": subnet_id, "agent_id": agent_id}
+    except SubnetNotFoundException:
+        raise HTTPException(status_code=404, detail="Subnet not found")
+    except Exception as e:
+        logger.error("admin_remove_subnet_member_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to remove subnet member") from e

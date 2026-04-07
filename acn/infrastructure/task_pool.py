@@ -87,6 +87,7 @@ class TaskPool:
         task_type: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        requesting_agent_id: str | None = None,
     ) -> list[Task]:
         """
         Get open tasks from the pool
@@ -107,6 +108,7 @@ class TaskPool:
             task_type=task_type,
             limit=limit,
             offset=offset,
+            requesting_agent_id=requesting_agent_id,
         )
 
     async def find_tasks_for_agent(

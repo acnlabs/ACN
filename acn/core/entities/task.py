@@ -249,6 +249,9 @@ class Task:
     # Collaboration
     group_id: str | None = None  # Link related subtasks into a collaborative group
 
+    # Visibility — NULL means public; set to an ACN Subnet ID to restrict to members only
+    subnet_id: str | None = None
+
     # Progress
     completed_count: int = 0
     active_participants_count: int = 0
@@ -528,6 +531,7 @@ class Task:
             "deadline": self.deadline.isoformat() if self.deadline else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "metadata": self.metadata,
+            "subnet_id": self.subnet_id,
         }
 
     @classmethod

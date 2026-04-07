@@ -168,6 +168,9 @@ class TaskCreateRequest(BaseModel):
     # ── Collaboration ─────────────────────────────────────
     group_id: str | None = Field(default=None, description="Link related subtasks into a collaborative group")
 
+    # ── Visibility ────────────────────────────────────────
+    subnet_id: str | None = Field(default=None, description="Restrict task visibility to ACN Subnet members (NULL=public)")
+
     # ── A2UI: Declarative interactive UI ─────────────────────────────────────
     ui_spec: dict | None = Field(
         default=None,
@@ -235,6 +238,7 @@ class TaskResponse(BaseModel):
     # frontend DeliverablesPanel can display the submitted content.
     submission: str | None = None
     submission_artifacts: list[dict] = Field(default_factory=list)
+    subnet_id: str | None = None
 
 
 class ParticipationResponse(BaseModel):
@@ -340,6 +344,7 @@ def _task_to_response(task) -> TaskResponse:
         ui_spec=(task.metadata or {}).get("ui_spec"),
         submission=task.submission,
         submission_artifacts=task.submission_artifacts or [],
+        subnet_id=task.subnet_id,
     )
 
 
@@ -380,12 +385,34 @@ async def list_tasks(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     task_service: TaskServiceDep = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ):
     """
-    List tasks with optional filters
+    List tasks with optional filters.
 
-    Public endpoint - no authentication required.
+    Anonymous callers only see public tasks (subnet_id IS NULL).
+    Authenticated callers (Agent API key or JWT) also see tasks in their subnets.
     """
+    # Extract requesting_agent_id from Bearer token (best-effort, no hard auth failure)
+    requesting_agent_id: str | None = None
+    if credentials:
+        token = credentials.credentials
+        if token.startswith("acn_"):
+            # Agent API key — resolve agent_id for subnet visibility
+            try:
+                agent_svc = get_agent_service()
+                agent = await agent_svc.get_agent_by_api_key(token)
+                if agent:
+                    requesting_agent_id = agent.agent_id
+            except Exception:
+                pass  # Fall back to public-only view
+        else:
+            try:
+                payload = await verify_token(credentials)
+                requesting_agent_id = payload.get("sub")
+            except Exception:
+                pass  # Anonymous fallback
+
     # mode filter passed through as-is (string); repository handles DB column match
     task_mode = mode or None
 
@@ -409,6 +436,7 @@ async def list_tasks(
         group_id=group_id,
         limit=limit + 1,  # Get one extra to check has_more
         offset=offset,
+        requesting_agent_id=requesting_agent_id,
     )
 
     has_more = len(tasks) > limit
@@ -454,13 +482,31 @@ async def get_task(
     request: _Request,
     task_id: str,
     task_service: TaskServiceDep = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ):
-    """Get task details"""
+    """Get task details. Private tasks (subnet_id set) require subnet membership."""
     try:
         task = await task_service.get_task(task_id)
-        return _task_to_response(task)
     except TaskNotFoundException:
         raise HTTPException(status_code=404, detail="Task not found") from None
+
+    if task.subnet_id:
+        # Extract caller identity from Bearer token
+        requesting_agent_id: str | None = None
+        if credentials:
+            try:
+                payload = await verify_token(credentials)
+                requesting_agent_id = payload.get("sub")
+            except Exception:
+                pass
+        if not requesting_agent_id:
+            raise HTTPException(status_code=403, detail="Authentication required to view this task")
+        # Check subnet membership via task_service (uses subnet_repository)
+        is_member = await task_service.is_subnet_member(task.subnet_id, requesting_agent_id)
+        if not is_member:
+            raise HTTPException(status_code=403, detail="Not a subnet member")
+
+    return _task_to_response(task)
 
 
 # ========== Authenticated Endpoints ==========
@@ -522,6 +568,7 @@ async def create_task(
             group_id=body.group_id,
             deadline_hours=body.deadline_hours,
             metadata=merged_metadata,
+            subnet_id=body.subnet_id,
         )
 
         logger.info(
