@@ -259,9 +259,11 @@ class SubnetCreateRequest(BaseModel):
     subnet_id: str = Field(..., min_length=1, max_length=64, description="Unique subnet identifier")
     name: str = Field(..., min_length=1, max_length=128, description="Subnet name")
     description: str | None = Field(None, max_length=500, description="Subnet description")
+    is_private: bool = Field(False, description="Whether this is a private subnet")
     security_schemes: dict[str, dict] | None = Field(
         None, description="Security schemes (A2A format). None = public subnet"
     )
+    security_config: dict | None = Field(None, description="Alias for security_schemes (deprecated)")
     default_security: list[str] | None = Field(
         None, max_length=10, description="Required security schemes. None = use first available"
     )

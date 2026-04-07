@@ -53,14 +53,17 @@ async def create_subnet(
 
     try:
         # Use SubnetService
+        security_cfg = request.security_config or (
+            {k: v for k, v in (request.security_schemes or {}).items()} if request.security_schemes else {}
+        )
         subnet = await subnet_service.create_subnet(
             subnet_id=request.subnet_id
             or f"subnet-{owner}-{request.name.lower().replace(' ', '-')}",
             name=request.name,
             owner=owner,
             description=request.description,
-            is_private=request.is_private or False,
-            security_config=request.security_config or {},
+            is_private=request.is_private,
+            security_config=security_cfg,
             metadata={},
         )
 
