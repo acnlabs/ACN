@@ -67,16 +67,19 @@ async def create_subnet(
             metadata={},
         )
 
-        # Generate gateway URL
+        # Generate gateway URLs
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
-        gateway_url = f"{base_url}/gateway/a2a/{subnet.subnet_id}"
+        gateway_a2a_url = f"{base_url}/gateway/a2a/{subnet.subnet_id}"
+        gateway_ws_url = f"{base_url}/gateway/ws/{subnet.subnet_id}"
 
         logger.info("subnet_created", subnet_id=subnet.subnet_id, owner=owner)
 
         return SubnetCreateResponse(
+            status="created",
             subnet_id=subnet.subnet_id,
-            name=subnet.name,
-            gateway_url=gateway_url,
+            is_public=not subnet.is_private,
+            gateway_ws_url=gateway_ws_url,
+            gateway_a2a_url=gateway_a2a_url,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
