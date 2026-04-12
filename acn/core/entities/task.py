@@ -239,9 +239,12 @@ class Task:
 
     # Participation control (orthogonal boolean fields)
     max_participants: int | None = 1    # 1=single, N=fixed multi, None=unlimited
-    require_join_approval: bool = False  # True: agents must apply and be approved to join
+    require_join_approval: bool = False  # True: solvers must apply and be approved to join
     auto_approve: bool = False           # True: submissions auto-complete without review
-    allow_repeat_by_same: bool = False   # True: same agent can complete again after finishing
+    allow_repeat_by_same: bool = False   # True: same solver can complete again after finishing
+
+    # Invitation: creator can invite specific solvers who bypass require_join_approval
+    invited_agent_ids: list[str] = field(default_factory=list)
 
     # Escrow
     use_escrow: bool = False  # True: budget locked in escrow at creation time
@@ -524,6 +527,7 @@ class Task:
             "auto_approve": self.auto_approve,
             "allow_repeat_by_same": self.allow_repeat_by_same,
             "use_escrow": self.use_escrow,
+            "invited_agent_ids": self.invited_agent_ids,
             "group_id": self.group_id,
             "completed_count": self.completed_count,
             "active_participants_count": self.active_participants_count,

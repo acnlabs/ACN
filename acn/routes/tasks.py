@@ -158,8 +158,8 @@ class TaskCreateRequest(BaseModel):
     reward_currency: str = Field(default="ap_points", description="Currency: ap_points, USD, USDC, ETH")
 
     # ── Layer 3: Advanced options ─────────────────────────
-    require_join_approval: bool = Field(default=False, description="True: agents must apply and be approved to join")
-    allow_repeat_by_same: bool = Field(default=False, description="True: same agent can complete again after finishing")
+    require_join_approval: bool = Field(default=False, description="True: solvers must apply and be approved to join")
+    allow_repeat_by_same: bool = Field(default=False, description="True: same solver can complete again after finishing")
     max_total_budget: str | None = Field(default=None, description="Budget cap for bounty tasks (max_participants=None only)")
 
     # ── Escrow: opt-in ────────────────────────────────────
@@ -227,6 +227,7 @@ class TaskResponse(BaseModel):
     auto_approve: bool = False
     allow_repeat_by_same: bool = False
     use_escrow: bool = False
+    invited_agent_ids: list[str] = Field(default_factory=list)
     active_participants_count: int = 0
     completed_count: int
     created_at: str
@@ -282,6 +283,13 @@ class TaskAcceptRequest(BaseModel):
     message: str = Field(default="", description="Optional message to creator")
 
 
+class TaskInviteRequest(BaseModel):
+    """Request to invite a solver to a task (creator only)"""
+
+    agent_id: str = Field(..., description="ID of the solver to invite")
+    agent_name: str = Field(default="", description="Display name of the invited solver")
+
+
 class TaskAcceptResponse(BaseModel):
     """Response for accept/join — includes participation_id for multi-participant tasks"""
 
@@ -335,6 +343,7 @@ def _task_to_response(task) -> TaskResponse:
         auto_approve=task.auto_approve,
         allow_repeat_by_same=task.allow_repeat_by_same,
         use_escrow=task.use_escrow,
+        invited_agent_ids=task.invited_agent_ids or [],
         active_participants_count=task.active_participants_count,
         completed_count=task.completed_count,
         created_at=task.created_at.isoformat(),
@@ -606,6 +615,37 @@ async def accept_task(
             task=_task_to_response(task),
             participation_id=participation_id,
         )
+
+    except TaskNotFoundException:
+        raise HTTPException(status_code=404, detail="Task not found") from None
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/{task_id}/invite", response_model=TaskResponse)
+async def invite_solver(
+    task_id: str,
+    request: Request,
+    body: TaskInviteRequest,
+    payload: dict = Depends(require_task_write_auth()),
+    task_service: TaskServiceDep = None,
+):
+    """Invite a specific solver to the task (creator only).
+
+    Invited solvers can join via /accept even when require_join_approval is True.
+    """
+    inviter_id, _, _ = _resolve_actor(payload, request)
+
+    try:
+        task = await task_service.invite_agent(
+            task_id=task_id,
+            inviter_id=inviter_id,
+            invitee_id=body.agent_id,
+            invitee_name=body.agent_name,
+        )
+        return _task_to_response(task)
 
     except TaskNotFoundException:
         raise HTTPException(status_code=404, detail="Task not found") from None

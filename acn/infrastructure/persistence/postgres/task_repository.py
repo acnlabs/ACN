@@ -115,6 +115,7 @@ class PostgresTaskRepository(ITaskRepository):
             deadline=row.deadline,
             completed_at=meta.get("completed_at")
             and datetime.fromisoformat(meta["completed_at"]),
+            invited_agent_ids=meta.get("invited_agent_ids", []),
             metadata=meta.get("extra_metadata", {}),
             subnet_id=row.subnet_id,
         )
@@ -143,6 +144,7 @@ class PostgresTaskRepository(ITaskRepository):
             "auto_approve": task.auto_approve,
             "use_escrow": task.use_escrow,
             "group_id": task.group_id,
+            "invited_agent_ids": task.invited_agent_ids,
             "extra_metadata": task.metadata,
         }
         if task.max_total_budget is not None:

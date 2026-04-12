@@ -207,6 +207,7 @@ class RedisTaskRepository(ITaskRepository):
         # Convert lists/dicts to JSON strings for Redis
         task_dict["required_tags"] = json.dumps(task_dict.get("required_tags", []))
         task_dict["submission_artifacts"] = json.dumps(task_dict.get("submission_artifacts", []))
+        task_dict["invited_agent_ids"] = json.dumps(task_dict.get("invited_agent_ids", []))
         task_dict["metadata"] = json.dumps(task_dict.get("metadata", {}))
 
         # Filter out None values and convert booleans
@@ -690,6 +691,7 @@ class RedisTaskRepository(ITaskRepository):
 
         data["required_tags"] = _safe_loads(data.get("required_tags", ""), [])
         data["submission_artifacts"] = _safe_loads(data.get("submission_artifacts", ""), [])
+        data["invited_agent_ids"] = _safe_loads(data.get("invited_agent_ids", ""), [])
         data["metadata"] = _safe_loads(data.get("metadata", ""), {})
 
         # Parse status enum

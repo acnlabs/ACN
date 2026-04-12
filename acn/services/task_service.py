@@ -105,8 +105,8 @@ class TaskService:
             reward_currency: Currency (ap_points, USD, USDC, ETH)
             max_participants: 1=single, N=fixed multi, None=unlimited bounty
             auto_approve: True → submissions auto-complete without review
-            require_join_approval: True → agents must apply and be approved to join
-            allow_repeat_by_same: True → same agent can complete again
+            require_join_approval: True → solvers must apply and be approved to join
+            allow_repeat_by_same: True → same solver can complete again
             max_total_budget: Budget cap for bounty tasks (max_participants=None)
             use_escrow: True → lock budget in escrow at creation
             deadline_hours: Deadline in hours from now
@@ -279,12 +279,15 @@ class TaskService:
             if agent_id not in (subnet.member_agent_ids or set()):
                 raise PermissionError("Agent is not a member of the task's subnet")
 
+        # ---- Invited solver: bypass require_join_approval ----
+        is_invited = agent_id in (task.invited_agent_ids or [])
+
         # ---- Multi-participant path ----
         if task._is_multi():
             return await self._join_task(task, agent_id, agent_name, agent_type)
 
-        # ---- Join-approval path: agent must apply and be approved ----
-        if task.require_join_approval and task.assignee_id is None:
+        # ---- Join-approval path: solver must apply and be approved ----
+        if task.require_join_approval and not is_invited and task.assignee_id is None:
             existing = await self.task_pool.get_user_participation(
                 task_id, agent_id, active_only=True
             )
@@ -352,6 +355,53 @@ class TaskService:
 
         logger.info("task_accepted", task_id=task_id, agent_id=agent_id)
         return task, None
+
+    async def invite_agent(
+        self,
+        task_id: str,
+        inviter_id: str,
+        invitee_id: str,
+        invitee_name: str = "",
+    ) -> Task:
+        """Creator invites a specific solver to the task.
+
+        Invited solvers can join even when require_join_approval is True.
+        """
+        task = await self.get_task(task_id)
+
+        if task.creator_id != inviter_id:
+            raise PermissionError("Only the task creator can invite solvers")
+
+        if invitee_id == task.creator_id:
+            raise ValueError("Creator cannot invite themselves")
+
+        if task.status != TaskStatus.OPEN:
+            raise ValueError(f"Cannot invite solvers to a task in status: {task.status.value}")
+
+        if invitee_id in (task.invited_agent_ids or []):
+            raise ValueError("This solver has already been invited")
+
+        task.invited_agent_ids = list(task.invited_agent_ids or []) + [invitee_id]
+        await self.repository.save(task)
+
+        if self.activity:
+            await self.activity.record(
+                event_type="task_invite",
+                actor_type=task.creator_type,
+                actor_id=inviter_id,
+                actor_name=task.creator_name,
+                description=f"Invited {invitee_name or invitee_id} to task: {task.title}",
+                task_id=task_id,
+                metadata={"invitee_id": invitee_id},
+            )
+
+        logger.info(
+            "task_solver_invited",
+            task_id=task_id,
+            inviter_id=inviter_id,
+            invitee_id=invitee_id,
+        )
+        return task
 
     async def _join_task(
         self,
@@ -465,7 +515,7 @@ class TaskService:
 
         # ---- Single-participant path (original) ----
         if task.assignee_id != agent_id:
-            raise PermissionError("Only the assigned agent can submit")
+            raise PermissionError("Only the assigned solver can submit")
 
         if task.status == TaskStatus.REJECTED:
             task.resubmit(submission, artifacts)
