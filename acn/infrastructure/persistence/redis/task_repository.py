@@ -709,6 +709,7 @@ class RedisTaskRepository(ITaskRepository):
         data["auto_approve"] = _bool(data.get("auto_approve", ""))
         data["allow_repeat_by_same"] = _bool(data.get("allow_repeat_by_same", ""))
         data["use_escrow"] = _bool(data.get("use_escrow", ""))
+        data["completion_mode"] = data.get("completion_mode") or "independent"
         data["group_id"] = data.get("group_id") or None
 
         # Parse integers

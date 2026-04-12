@@ -151,7 +151,8 @@ class TaskCreateRequest(BaseModel):
     reward: str = Field(..., description="Reward per completion (numeric string, e.g. '50' or '0')")
 
     # ── Layer 2: Common options ───────────────────────────
-    max_participants: int | None = Field(default=1, description="1=single, N=fixed multi, None=unlimited bounty")
+    max_participants: int | None = Field(default=1, description="1=single, N=fixed, None=unlimited")
+    completion_mode: str = Field(default="independent", description="independent | competitive | collaborative")
     auto_approve: bool = Field(default=False, description="True: submissions auto-complete without review")
     task_type: str = Field(default="general", description="Task type category")
     required_tags: list[str] = Field(default_factory=list)
@@ -199,6 +200,12 @@ class TaskCreateRequest(BaseModel):
                 raise ValueError("max_total_budget must be a valid numeric string")
         if self.max_participants is not None and self.max_participants < 1:
             raise ValueError("max_participants must be >= 1")
+        if self.completion_mode not in ("independent", "competitive", "collaborative"):
+            raise ValueError("completion_mode must be independent, competitive, or collaborative")
+        if self.max_participants == 1 and self.completion_mode != "independent":
+            raise ValueError("single-participant tasks must use independent mode")
+        if self.max_participants is None and self.completion_mode == "collaborative":
+            raise ValueError("collaborative mode requires finite max_participants")
         return self
 
 
@@ -222,6 +229,7 @@ class TaskResponse(BaseModel):
     total_budget: str = "0"
     released_amount: str = "0"
     max_participants: int | None = 1
+    completion_mode: str = "independent"
     max_total_budget: str | None = None
     require_join_approval: bool = False
     auto_approve: bool = False
@@ -338,6 +346,7 @@ def _task_to_response(task) -> TaskResponse:
         total_budget=task.total_budget,
         released_amount=task.released_amount,
         max_participants=task.max_participants,
+        completion_mode=task.completion_mode,
         max_total_budget=task.max_total_budget,
         require_join_approval=task.require_join_approval,
         auto_approve=task.auto_approve,
@@ -569,6 +578,7 @@ async def create_task(
             reward=body.reward,
             reward_currency=body.reward_currency,
             max_participants=body.max_participants,
+            completion_mode=body.completion_mode,
             auto_approve=body.auto_approve,
             require_join_approval=body.require_join_approval,
             allow_repeat_by_same=body.allow_repeat_by_same,
@@ -931,6 +941,7 @@ async def agent_create_task(
         reward=request.reward,
         reward_currency=request.reward_currency,
         max_participants=request.max_participants,
+        completion_mode=request.completion_mode,
         auto_approve=request.auto_approve,
         require_join_approval=request.require_join_approval,
         allow_repeat_by_same=request.allow_repeat_by_same,

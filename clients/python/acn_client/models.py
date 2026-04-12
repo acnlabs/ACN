@@ -268,6 +268,7 @@ class TaskInfo(BaseModel):
     total_budget: str = "0"
     released_amount: str = "0"
     max_participants: int | None = 1
+    completion_mode: str = "independent"
     max_total_budget: str | None = None
     require_join_approval: bool = False
     auto_approve: bool = False
@@ -301,6 +302,7 @@ class TaskCreateRequest(BaseModel):
 
     # ── Layer 2: Common options ───────────────────────────
     max_participants: int | None = Field(default=1, description="1=single, N=multi, None=unlimited")
+    completion_mode: str = Field(default="independent", description="independent | competitive | collaborative")
     auto_approve: bool = Field(default=False)
     task_type: str = Field(default="general")
     required_tags: list[str] = Field(default_factory=list)

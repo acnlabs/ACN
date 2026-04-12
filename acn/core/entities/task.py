@@ -190,10 +190,16 @@ class Task:
     Task Domain Entity
 
     Represents a task in the ACN Task Pool.
-    Uses orthogonal boolean fields for maximum composability:
-    - require_join_approval: whether agents need approval to join
-    - auto_approve: whether submissions are auto-approved
-    - max_participants: 1=single, N=fixed multi, None=unlimited (bounty)
+
+    Participation model (two orthogonal dimensions):
+    - max_participants: capacity (1=single, N=fixed, None=unlimited)
+    - completion_mode: how participants work and settle
+        - "independent": each completes separately, paid per completion
+        - "competitive": each submits separately, creator picks winner(s)
+        - "collaborative": team works together, settles on group completion
+
+    When max_participants=1, completion_mode is always "independent".
+    When max_participants is None (unlimited), "collaborative" is invalid.
     """
 
     task_id: str
@@ -237,8 +243,9 @@ class Task:
     released_amount: str = "0"   # Amount released to agents so far
     max_total_budget: str | None = None  # Budget cap for bounty tasks (max_participants=None)
 
-    # Participation control (orthogonal boolean fields)
-    max_participants: int | None = 1    # 1=single, N=fixed multi, None=unlimited
+    # Participation control
+    max_participants: int | None = 1    # 1=single, N=fixed, None=unlimited
+    completion_mode: str = "independent"  # "independent" | "competitive" | "collaborative"
     require_join_approval: bool = False  # True: solvers must apply and be approved to join
     auto_approve: bool = False           # True: submissions auto-complete without review
     allow_repeat_by_same: bool = False   # True: same solver can complete again after finishing
@@ -267,6 +274,8 @@ class Task:
     # Metadata (extensible for future features)
     metadata: dict = field(default_factory=dict)
 
+    VALID_COMPLETION_MODES = ("independent", "competitive", "collaborative")
+
     def __post_init__(self):
         """Validate invariants"""
         if not self.task_id:
@@ -275,6 +284,12 @@ class Task:
             raise ValueError("title cannot be empty")
         if not self.creator_id:
             raise ValueError("creator_id cannot be empty")
+        if self.completion_mode not in self.VALID_COMPLETION_MODES:
+            raise ValueError(f"Invalid completion_mode: {self.completion_mode}")
+        if self.max_participants == 1 and self.completion_mode != "independent":
+            self.completion_mode = "independent"
+        if self.max_participants is None and self.completion_mode == "collaborative":
+            raise ValueError("collaborative mode requires finite max_participants")
 
     # ========== Helpers ==========
 
@@ -523,6 +538,7 @@ class Task:
             "released_amount": self.released_amount,
             "max_total_budget": self.max_total_budget,
             "max_participants": self.max_participants,
+            "completion_mode": self.completion_mode,
             "require_join_approval": self.require_join_approval,
             "auto_approve": self.auto_approve,
             "allow_repeat_by_same": self.allow_repeat_by_same,
@@ -566,5 +582,9 @@ class Task:
             "reward_amount",
         ):
             data.pop(old_field, None)
+
+        # Default completion_mode for tasks created before this field existed
+        if "completion_mode" not in data:
+            data["completion_mode"] = "independent"
 
         return cls(**data)

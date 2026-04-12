@@ -80,6 +80,7 @@ class TaskService:
         reward: str = "0",
         reward_currency: str = "ap_points",
         max_participants: int | None = 1,
+        completion_mode: str = "independent",
         auto_approve: bool = False,
         require_join_approval: bool = False,
         allow_repeat_by_same: bool = False,
@@ -103,11 +104,12 @@ class TaskService:
             required_tags: Tags needed to complete
             reward: Reward per completion (numeric string)
             reward_currency: Currency (ap_points, USD, USDC, ETH)
-            max_participants: 1=single, N=fixed multi, None=unlimited bounty
+            max_participants: 1=single, N=fixed, None=unlimited
+            completion_mode: "independent" | "competitive" | "collaborative"
             auto_approve: True → submissions auto-complete without review
             require_join_approval: True → solvers must apply and be approved to join
             allow_repeat_by_same: True → same solver can complete again
-            max_total_budget: Budget cap for bounty tasks (max_participants=None)
+            max_total_budget: Budget cap for unlimited-capacity tasks
             use_escrow: True → lock budget in escrow at creation
             deadline_hours: Deadline in hours from now
             metadata: Extensible metadata
@@ -147,6 +149,7 @@ class TaskService:
             released_amount="0",
             max_total_budget=max_total_budget,
             max_participants=max_participants,
+            completion_mode=completion_mode,
             auto_approve=auto_approve,
             require_join_approval=require_join_approval,
             allow_repeat_by_same=allow_repeat_by_same,
