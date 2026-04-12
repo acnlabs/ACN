@@ -277,8 +277,21 @@ class RedisTaskRepository(ITaskRepository):
         task_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        requesting_agent_id: str | None = None,
     ) -> list[Task]:
         """Find open tasks with optional filters"""
+        # Pre-compute subnet visibility for the requesting agent
+        visible_subnet_ids: set[str] = set()
+        if requesting_agent_id:
+            all_subnet_ids = await self.redis.smembers("acn:subnets:all")
+            for sid in all_subnet_ids:
+                sid = sid.decode() if isinstance(sid, bytes) else sid
+                raw = await self.redis.hget(f"acn:subnet:{sid}", "member_agent_ids")
+                if raw:
+                    members = json.loads(raw) if isinstance(raw, (str, bytes)) else []
+                    if requesting_agent_id in members:
+                        visible_subnet_ids.add(sid)
+
         task_ids = await self.redis.zrevrange("acn:tasks:open", offset, offset + limit - 1)
 
         tasks = []
@@ -297,6 +310,11 @@ class RedisTaskRepository(ITaskRepository):
                 continue
             if task_type and task.task_type != task_type:
                 continue
+
+            # Subnet visibility: public (no subnet_id) or agent is a member
+            if task.subnet_id:
+                if not requesting_agent_id or task.subnet_id not in visible_subnet_ids:
+                    continue
 
             tasks.append(task)
 

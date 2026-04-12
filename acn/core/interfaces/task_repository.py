@@ -35,8 +35,14 @@ class ITaskRepository(ABC):
         task_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        requesting_agent_id: str | None = None,
     ) -> list[Task]:
-        """Find open tasks with optional filters"""
+        """Find open tasks with optional filters.
+
+        Args:
+            requesting_agent_id: If provided, include private subnet tasks
+                visible to this agent. If None, only public tasks returned.
+        """
         pass
 
     @abstractmethod
