@@ -268,27 +268,59 @@ class PostgresAgentRepository(IAgentRepository):
             results = await pipe.execute()
         return {aid for aid, exists in zip(agent_ids, results, strict=False) if exists}
 
-    async def mark_offline_stale(self) -> int:
-        """Mark agents whose alive key has expired as OFFLINE in PostgreSQL."""
-        all_agents = await self.find_all()
-        online_agents = [a for a in all_agents if a.status == AgentStatus.ONLINE]
-        if not online_agents:
-            return 0
+    async def mark_offline_stale(self, batch_size: int = 500) -> int:
+        """Mark agents whose alive key has expired as OFFLINE in PostgreSQL.
 
-        alive_ids = await self.filter_alive([a.agent_id for a in online_agents])
-        stale = [a for a in online_agents if a.agent_id not in alive_ids]
+        Streams through agents that are currently marked ONLINE in batches
+        of `batch_size`, checks each batch against Redis heartbeat keys,
+        and updates only the stale ones. Previous implementation used
+        `find_all()` which loaded the entire agents table into memory on
+        every tick — unusable once the table passes ~100k rows.
 
-        if not stale:
-            return 0
+        Depends on the partial index
+        `ix_agents_status_online_agent_id` (migration c3d4e5f6a7b8): the
+        `WHERE status='online' AND agent_id > :c ORDER BY agent_id LIMIT N`
+        query degrades to a full pkey scan without it.
+        """
+        total_stale = 0
+        last_agent_id: str | None = None
 
-        stale_ids = [a.agent_id for a in stale]
-        async with self._session_factory() as session:
-            await session.execute(
-                update(AgentModel)
-                .where(AgentModel.agent_id.in_(stale_ids))
-                .values(status=AgentStatus.OFFLINE.value)
-            )
-            await session.commit()
+        while True:
+            async with self._session_factory() as session:
+                stmt = (
+                    select(AgentModel.agent_id)
+                    .where(AgentModel.status == AgentStatus.ONLINE.value)
+                    .order_by(AgentModel.agent_id)
+                    .limit(batch_size)
+                )
+                if last_agent_id is not None:
+                    stmt = stmt.where(AgentModel.agent_id > last_agent_id)
+                result = await session.execute(stmt)
+                batch_ids: list[str] = list(result.scalars().all())
 
-        logger.info("pg_mark_offline_stale", count=len(stale_ids))
-        return len(stale_ids)
+            if not batch_ids:
+                break
+
+            alive_ids = await self.filter_alive(batch_ids)
+            stale_ids = [aid for aid in batch_ids if aid not in alive_ids]
+
+            if stale_ids:
+                async with self._session_factory() as session:
+                    await session.execute(
+                        update(AgentModel)
+                        .where(AgentModel.agent_id.in_(stale_ids))
+                        .values(status=AgentStatus.OFFLINE.value)
+                    )
+                    await session.commit()
+                total_stale += len(stale_ids)
+
+            # Advance the cursor. Use the last id of the batch we just
+            # read, not of stale_ids, or we'd loop forever on a batch
+            # where every agent is still alive.
+            last_agent_id = batch_ids[-1]
+
+            if len(batch_ids) < batch_size:
+                break
+
+        logger.info("pg_mark_offline_stale", count=total_stale)
+        return total_stale

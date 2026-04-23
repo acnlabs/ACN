@@ -373,16 +373,31 @@ class RedisTaskRepository(ITaskRepository):
         return tasks
 
     async def delete(self, task_id: str) -> bool:
-        """Delete a task"""
+        """Delete a task and all its participation side-car keys.
+
+        Without this full sweep, deleting a task that had any participants
+        would leak `acn:participation:*`, `acn:user:*:task:{id}:participations`,
+        `acn:user:*:all_participations` list entries, and
+        `acn:task:{id}:active_count` counters forever (they have no TTL).
+        """
         task = await self.find_by_id(task_id)
         if not task:
             return False
 
-        # Remove from Redis
-        task_key = f"acn:task:{task_id}"
-        await self.redis.delete(task_key)
+        # 1. Collect every participation id attached to this task, plus the
+        #    participant_id for each, so we can scrub the user-scoped indices.
+        participations_key = f"acn:task:{task_id}:participations"
+        raw_pids = await self.redis.zrange(participations_key, 0, -1)
+        pids: list[str] = [p.decode() if isinstance(p, bytes) else p for p in raw_pids]
 
-        # Remove from indices
+        participant_ids: set[str] = set()
+        for pid in pids:
+            p = await self.find_participation_by_id(pid)
+            if p is not None:
+                participant_ids.add(p.participant_id)
+
+        # 2. Primary task key and task-level indices.
+        await self.redis.delete(f"acn:task:{task_id}")
         await self.redis.zrem("acn:tasks:open", task_id)
         _mode = "assigned" if task.require_join_approval else "open"
         await self.redis.srem(f"acn:tasks:by_mode:{_mode}", task_id)
@@ -395,8 +410,24 @@ class RedisTaskRepository(ITaskRepository):
         for skill in task.required_tags:
             await self.redis.srem(f"acn:tasks:by_tag:{skill}", task_id)
 
-        # Remove completions
+        # 3. Participation side-car keys: per-participation hash, the task's
+        #    participations sorted-set, the active_count counter, and the
+        #    completions set.
+        if pids:
+            await self.redis.delete(*[f"acn:participation:{pid}" for pid in pids])
+        await self.redis.delete(participations_key)
+        await self.redis.delete(f"acn:task:{task_id}:active_count")
         await self.redis.delete(f"acn:task:completions:{task_id}")
+
+        # 4. User-scoped indices: delete the per-(user,task) set entirely,
+        #    and lrem each pid out of the user's global participation list
+        #    (that list is append-only across all their tasks, so we can't
+        #    just delete the whole key).
+        for uid in participant_ids:
+            await self.redis.delete(f"acn:user:{uid}:task:{task_id}:participations")
+            user_index_key = f"acn:user:{uid}:all_participations"
+            for pid in pids:
+                await self.redis.lrem(user_index_key, 0, pid)
 
         return True
 

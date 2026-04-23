@@ -248,9 +248,12 @@ class AuditLogger:
             maxlen=self.max_entries,
         )
 
-        # Also store in a daily index for faster queries
+        # Also store in a daily index for faster queries.
+        # Cap length like `type_key` so a single high-traffic day can't
+        # grow the list to multi-GB and stall Redis on the hot path.
         day_key = f"acn:audit:day:{event.timestamp.strftime('%Y%m%d')}"
         await self.redis.lpush(day_key, event_id)
+        await self.redis.ltrim(day_key, 0, self.max_entries - 1)
         await self.redis.expire(day_key, self.retention_days * 24 * 3600)
 
         # Store by event type for type-based queries

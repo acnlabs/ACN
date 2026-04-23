@@ -375,12 +375,33 @@ class PostgresTaskRepository(ITaskRepository):
         return await self._rows_to_tasks(rows)
 
     async def delete(self, task_id: str) -> bool:
+        """Delete a task and its Redis side-car keys.
+
+        Participation rows are removed by the `participations.task_id ->
+        tasks.task_id` foreign key with `ON DELETE CASCADE` (alembic
+        revision `1e400bcfd4ec`); we deliberately do not duplicate that
+        here so future schema changes can't diverge between Python and
+        SQL.
+
+        Redis keys (`acn:task:{id}:active_count`,
+        `acn:task:completions:{id}`) have no TTL and would otherwise
+        leak forever.
+        """
         async with self._session_factory() as session:
             result = await session.execute(
                 delete(TaskModel).where(TaskModel.task_id == task_id)
             )
             await session.commit()
-            return result.rowcount > 0
+
+        deleted = result.rowcount > 0
+        if deleted:
+            # Only touch Redis after SQL commit succeeds, so a rolled-back
+            # delete can't destroy the side-cars of a still-live task.
+            await self._redis.delete(
+                self._active_count_key(task_id),
+                self._completions_key(task_id),
+            )
+        return deleted
 
     async def exists(self, task_id: str) -> bool:
         async with self._session_factory() as session:
