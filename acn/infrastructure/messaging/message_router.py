@@ -192,6 +192,19 @@ class MessageRouter:
         except Exception as e:
             logger.error(f"[{route_id}] Delivery failed: {e}")
 
+            # Store in offline inbox so the recipient can pull when back online
+            await self._store_inbox(
+                to_agent=to_agent,
+                log_entry={
+                    "route_id": route_id,
+                    "from_agent": from_agent,
+                    "to_agent": to_agent,
+                    "direction": "inbound",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "message": message.model_dump() if hasattr(message, "model_dump") else str(message),
+                },
+            )
+
             # Store in dead letter queue for retry
             await self._store_dlq(
                 route_id=route_id,
@@ -341,26 +354,32 @@ class MessageRouter:
                 except Exception as e:
                     logger.error(f"Wildcard handler error: {e}")
 
-    async def get_message_history(
+    async def get_inbox(
         self,
         agent_id: str,
         limit: int = 100,
+        consume: bool = False,
     ) -> list[dict[str, Any]]:
         """
-        Get message history for an agent
+        Get offline inbox for an agent.
+
+        Returns messages that arrived while the agent was unreachable.
+        Pass consume=True to clear the inbox after retrieval (acknowledge all).
 
         Args:
             agent_id: Agent ID
-            limit: Max messages to return
+            limit: Max messages to return (use a large value when consume=True
+                   to avoid silently discarding un-returned messages)
+            consume: If True, delete the inbox key after reading
 
         Returns:
-            List of message records
+            List of pending message records, newest first
         """
-        messages = await self.redis.zrevrange(
-            f"acn:messages:agent:{agent_id}",
-            0,
-            limit - 1,
-        )
+        key = f"acn:inbox:{agent_id}"
+        messages = await self.redis.zrevrange(key, 0, limit - 1)
+
+        if consume:
+            await self.redis.delete(key)
 
         return [json.loads(m) for m in messages]
 
@@ -392,20 +411,34 @@ class MessageRouter:
             "message": msg_data,
         }
 
-        score = datetime.now(UTC).timestamp()
-        _MAX_AGENT_HISTORY = 1000  # keep newest N messages per agent
-
-        # Store in both agents' history, then trim to cap (oldest removed first)
-        for agent_key in (f"acn:messages:agent:{from_agent}", f"acn:messages:agent:{to_agent}"):
-            await self.redis.zadd(agent_key, {json.dumps(log_entry): score})
-            await self.redis.zremrangebyrank(agent_key, 0, -(_MAX_AGENT_HISTORY + 1))
-
-        # Global log with TTL
+        # Global log with TTL (audit trail only, not per-agent history)
         await self.redis.setex(
             f"acn:messages:log:{route_id}",
             7 * 24 * 60 * 60,  # 7 days
             json.dumps(log_entry),
         )
+
+    async def _store_inbox(self, to_agent: str, log_entry: dict[str, Any]) -> None:
+        """
+        Store a failed-delivery message in the recipient's offline inbox.
+
+        The inbox is a bounded sorted set (score = unix timestamp).
+        Oldest messages are evicted when the cap is reached; the key expires
+        automatically after INBOX_TTL seconds so inactive agents don't consume
+        Redis memory indefinitely.
+
+        Args:
+            to_agent: Recipient agent ID
+            log_entry: Message log dict to persist
+        """
+        _INBOX_CAP = 50
+        _INBOX_TTL = 30 * 24 * 3600  # 30 days
+
+        key = f"acn:inbox:{to_agent}"
+        score = datetime.now(UTC).timestamp()
+        await self.redis.zadd(key, {json.dumps(log_entry): score})
+        await self.redis.zremrangebyrank(key, 0, -(_INBOX_CAP + 1))
+        await self.redis.expire(key, _INBOX_TTL)
 
     async def _store_dlq(
         self,

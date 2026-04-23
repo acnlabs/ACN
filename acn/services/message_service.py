@@ -236,24 +236,24 @@ class MessageService:
         self,
         agent_id: str,
         limit: int = 100,
+        consume: bool = False,
     ) -> list[dict]:
         """
-        Get message history for an agent
+        Get offline inbox for an agent (messages that failed delivery while offline).
 
         Args:
             agent_id: Agent ID
-            limit: Maximum number of messages
+            limit: Maximum number of messages to return
+            consume: If True, clear the inbox after retrieval
 
         Returns:
-            List of message records
+            List of pending message records, newest first
         """
-        # Verify agent exists
         agent = await self.agent_repository.find_by_id(agent_id)
         if not agent:
             raise AgentNotFoundException(f"Agent {agent_id} not found")
 
-        # Get message log from MessageRouter
-        return await self.router.get_message_log(agent_id, limit)
+        return await self.router.get_inbox(agent_id, limit, consume)
 
     async def register_handler(
         self,

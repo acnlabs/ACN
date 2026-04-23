@@ -258,12 +258,20 @@ async def get_message_history(
     agent_id: str,
     agent_info: AgentApiKeyDep,
     limit: int = Query(default=100, le=1000),
+    ack: bool = Query(default=False),
     message_service: MessageServiceDep = None,
 ):
-    """Get message history for agent (requires Agent API Key)
+    """Get offline inbox for agent (requires Agent API Key)
 
-    An agent may only retrieve its own message history.
-    Clean Architecture: Route → MessageService → MessageRouter
+    Returns messages that were sent to this agent while it was unreachable.
+    This is a pending-delivery inbox, not a full message archive.
+
+    An agent may only retrieve its own inbox.
+
+    - `limit`: max messages to return (newest first)
+    - `ack=true`: clear the entire inbox after retrieval; caller should use a
+      large enough `limit` (or the default 100) to avoid silently discarding
+      un-returned messages
     """
     if agent_info["agent_id"] != agent_id:
         raise HTTPException(
@@ -271,27 +279,28 @@ async def get_message_history(
             detail="API key does not match agent_id",
         )
     try:
-        # Use MessageService
         history = await message_service.get_message_history(
             agent_id=agent_id,
             limit=limit,
+            consume=ack,
         )
 
-        logger.info("message_history_retrieved", agent_id=agent_id, count=len(history))
+        logger.info("inbox_retrieved", agent_id=agent_id, count=len(history), ack=ack)
 
         return {
             "agent_id": agent_id,
             "messages": history,
             "count": len(history),
             "limit": limit,
+            "ack": ack,
         }
 
     except AgentNotFoundException as e:
-        logger.error("message_history_failed", error=str(e))
+        logger.error("inbox_retrieve_failed", error=str(e))
         raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
-        logger.error("message_history_failed", error=str(e))
+        logger.error("inbox_retrieve_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

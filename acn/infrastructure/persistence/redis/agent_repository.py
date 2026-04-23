@@ -234,6 +234,9 @@ class RedisAgentRepository(IAgentRepository):
         # Remove from unclaimed index
         await self.redis.srem("acn:agents:unclaimed", agent_id)
 
+        # Remove offline inbox so deleted agents don't occupy Redis memory
+        await self.redis.delete(f"acn:inbox:{agent_id}")
+
         return True
 
     async def exists(self, agent_id: str) -> bool:
