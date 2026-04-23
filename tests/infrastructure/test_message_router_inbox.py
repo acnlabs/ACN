@@ -104,11 +104,18 @@ class TestGetInbox:
         fake_redis.delete.assert_not_called()
 
 
-class TestLogMessageNoLongerDoubleWrites:
-    """Regression guard: `_log_message` must not touch `acn:messages:agent:*`."""
+class TestLogMessageUsesCappedStream:
+    """Regression guard: `_log_message` must append to a single capped
+    audit stream, not per-agent sorted sets, not per-route string keys.
+    """
 
     @pytest.mark.asyncio
-    async def test_only_writes_global_audit_key(self, router, fake_redis):
+    async def test_writes_to_capped_stream_only(self, router, fake_redis):
+        from acn.infrastructure.messaging.message_router import (
+            MESSAGE_LOG_STREAM_KEY,
+            MESSAGE_LOG_STREAM_MAXLEN,
+        )
+
         message = MagicMock()
         message.model_dump.return_value = {"role": "user", "parts": []}
 
@@ -120,11 +127,34 @@ class TestLogMessageNoLongerDoubleWrites:
             direction="outbound",
         )
 
-        # The only persistence call should be the 7-day audit log SETEX
-        fake_redis.setex.assert_awaited_once()
-        setex_key = fake_redis.setex.await_args.args[0]
-        assert setex_key == "acn:messages:log:r1"
+        fake_redis.xadd.assert_awaited_once()
+        args = fake_redis.xadd.await_args
+        assert args.args[0] == MESSAGE_LOG_STREAM_KEY
+        fields = args.args[1]
+        assert fields["route_id"] == "r1"
+        assert fields["from_agent"] == "agent-a"
+        assert fields["to_agent"] == "agent-b"
+        assert fields["direction"] == "outbound"
+        # Payload must be a JSON string, not a dict — stream fields are scalars.
+        assert isinstance(fields["message"], str)
 
-        # Must NOT write per-agent history sorted sets
+        # The write must request MAXLEN trimming, or the "capped" guarantee
+        # is worthless and steady-state memory is unbounded.
+        assert args.kwargs.get("maxlen") == MESSAGE_LOG_STREAM_MAXLEN
+        assert args.kwargs.get("approximate") is True
+
+        # Must NOT revive the old per-route string key, nor per-agent sorted sets.
+        assert fake_redis.setex.await_count == 0
         assert fake_redis.zadd.await_count == 0
         assert fake_redis.zremrangebyrank.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_stream_cap_is_sane(self):
+        """If MAXLEN ever drops to something that holds <1 minute of prod
+        traffic, the stream stops being a useful audit tool.
+        """
+        from acn.infrastructure.messaging.message_router import (
+            MESSAGE_LOG_STREAM_MAXLEN,
+        )
+
+        assert MESSAGE_LOG_STREAM_MAXLEN >= 10_000

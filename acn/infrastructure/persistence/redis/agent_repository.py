@@ -234,6 +234,19 @@ class RedisAgentRepository(IAgentRepository):
         # Remove from unclaimed index
         await self.redis.srem("acn:agents:unclaimed", agent_id)
 
+        # Remove ERC-8004 reverse index. Without this, re-binding the same
+        # on-chain token_id to a replacement agent stays permanently
+        # blocked by the duplicate-bind check on save().
+        if agent.erc8004_agent_id:
+            await self.redis.delete(
+                f"acn:agents:by_erc8004_id:{agent.erc8004_agent_id}"
+            )
+
+        # Clear the alive signal immediately rather than waiting for the
+        # 90s TTL to expire, so filter_alive()/mark_offline_stale() never
+        # resurrects a deleted agent in the meantime.
+        await self.redis.delete(f"acn:agents:{agent_id}:alive")
+
         # Remove offline inbox so deleted agents don't occupy Redis memory
         await self.redis.delete(f"acn:inbox:{agent_id}")
 

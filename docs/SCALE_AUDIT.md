@@ -55,12 +55,13 @@
 
 ## P1：规模化会炸
 
-### [ ] P1-1 `acn:messages:log:{route_id}` 稳态 key 数 = 7 天消息积分
+### [x] ✅ 已修 P1-1 `acn:messages:log:{route_id}` 稳态 key 数 = 7 天消息积分
 
-- **位置**：`[acn/infrastructure/messaging/message_router.py:150-168, 414-418](../acn/infrastructure/messaging/message_router.py)`
+- **位置**：`[acn/infrastructure/messaging/message_router.py:386-426](../acn/infrastructure/messaging/message_router.py)`
 - **反模式**：成功/失败都写一 key-per-route，7 天 TTL 只管最终消失
 - **规模化后果**：100 万条/天 × 0.5–2KB 稳态 0.1–0.5GB；千万级/天 可至 TB
-- **修复方向**：采样/聚合/stream (maxlen)；或缩短 TTL + 降采样
+- **修复方向**：~~采样/聚合/stream (maxlen)；或缩短 TTL + 降采样~~
+- **实际修复**：全库 grep 确认**无任何 callsite 读** `acn:messages:log:{route_id}`，它是纯调试 trace。直接把 `_log_message` 从 `SETEX per-route` 改为 `XADD acn:messages:log:stream MAXLEN ~ 100_000`。内存硬顶 ~100 MB 不随 QPS 扩张，仍可通过 `XRANGE`/`XREVRANGE` 调试。常量 `MESSAGE_LOG_STREAM_MAXLEN` 独立导出便于调优与测试断言
 
 ### [ ] P1-2 Metrics counter 使用 `(from_agent, to_agent)` 做 label（高基数键爆炸）
 
@@ -69,12 +70,12 @@
 - **规模化后果**：即使活跃对只有 1e5，数十字节/key 也可数十 MB 仅计数器；再乘错误/重试可逼近 key 数上限
 - **修复方向**：label 分桶/哈希/只统计 subnet 级；外推时序库，Redis 只保留低基数聚合
 
-### [ ] P1-3 `acn:user:{id}:all_participations` 只 lpush 不 ltrim
+### [x] ✅ 已修 P1-3 `acn:user:{id}:all_participations` 只 lpush 不 ltrim
 
-- **位置**：`[acn/infrastructure/persistence/redis/task_repository.py:451-452, 570-573](../acn/infrastructure/persistence/redis/task_repository.py)`
+- **位置**：`[acn/infrastructure/persistence/redis/task_repository.py](../acn/infrastructure/persistence/redis/task_repository.py)` 两个 lpush 点（`add_application`、`atomic_join_task`）
 - **反模式**：每次 join 追加 participation id，与任务删除无联动
 - **规模化后果**：头部用户 10^5 次参与 = 数 MB 级单 key；高活用户持续累积
-- **修复方向**：`ltrim` 或只保留最近 N 条；任务删除时裁剪用户索引
+- **实际修复**：模块级常量 `_ALL_PARTICIPATIONS_CAP = 500`（读路径 `limit<=50` 的 10× 余量），在**两个 lpush 写入点**之后都追加 `ltrim(0, CAP-1)`。任务删除侧的 lrem 路径在 P0-1 里已处理
 
 ### [ ] P1-4 Billing Redis 回退路径 Tx 索引与队列无 cap/TTL
 
@@ -90,18 +91,19 @@
 - **规模化后果**：支付任务长期增长 → 字符串 + 两维 agent 索引 set + 无界 audit list，长时间运行可 GB–TB
 - **修复方向**：终态后 TTL；审计 list cap；或迁 stream + 修剪
 
-### [ ] P1-6 `acn:subnets:all` 只读不写，功能层面的 bug
+### [x] ✅ 已修 P1-6 `acn:subnets:all` 只读不写，功能层面的 bug
 
-- **位置**：读 `[task_repository.py:285-293](../acn/infrastructure/persistence/redis/task_repository.py)`；全库无 `SADD acn:subnets:all`
-- **反模式**：`smembers("acn:subnets:all")` 若永远空，private subnet 任务对成员永远不可见
-- **规模化后果**：功能层面"规模化等于全挂"；Redis 存在与真实子网表不一致的孤儿集合风险
-- **修复方向**：子网 create/delete 时维护该 set；或改用受控扫描 + 缓存
+- **位置**：`[task_repository.py `find_open_tasks`](../acn/infrastructure/persistence/redis/task_repository.py)`
+- **反模式**：`smembers("acn:subnets:all")` 永远空；而且 hash 用的是错 key (`acn:subnet:{sid}` 应为 `acn:subnets:info:{sid}`)。两个 bug 叠加使 `visible_subnet_ids` 永远为空，所有带 `subnet_id` 的 task 对所有 agent 都不可见
+- **规模化后果**：功能层面"规模化等于全挂"
+- **实际修复**：放弃新增索引路线（避免双写漂移）。可见 subnet 等价于 "agent 自己的 `subnet_ids`"，直接 `HGET acn:agents:{uid} subnet_ids` + `json.loads` → `set`。一次 HGET 替换了原来的 O(N_subnets) 扫描，兼做 bug fix 和性能优化。JSON 损坏兜底到空集合（隐藏 private task，不 500）
 
-### [ ] P1-7 `RedisAgentRepository.delete` 未删 `acn:agents:by_erc8004_id` 与 alive
+### [x] ✅ 已修 P1-7 `RedisAgentRepository.delete` 未删 `acn:agents:by_erc8004_id` 与 alive
 
-- **位置**：写索引 `[agent_repository.py:118-122](../acn/infrastructure/persistence/redis/agent_repository.py)`；删除 `206-238`（无 `by_erc8004_id` 清理）
-- **反模式**：链上绑定反向索引是永久 string，未在 delete 时清
+- **位置**：`[agent_repository.py `delete`](../acn/infrastructure/persistence/redis/agent_repository.py)`
+- **反模式**：链上绑定反向索引是永久 string，未在 delete 时清；alive 虽然 90s TTL，但窗口内 `filter_alive`/`mark_offline_stale` 仍会"看到"已删 agent
 - **规模化后果**：删号重建/迁移时残留索引阻止新号绑定；每删一次泄漏 1 string
+- **实际修复**：`delete` 里追加两步：只有 `agent.erc8004_agent_id` 存在才 `DEL acn:agents:by_erc8004_id:{token_id}`（避免 stomp 空字符串 key）；总是 `DEL acn:agents:{id}:alive` 让活性信号即时清零
 - **修复方向**：delete 中 `delete(acn:agents:by_erc8004_id:{id})`（有值时）
 
 ### [ ] P1-8 监控/审计导出 `scan_iter` 对全 key 扫描（运维面爆炸）
@@ -143,7 +145,7 @@
 | 反模式                           | inbox 重构已修           | 新发现位置                                                                   |
 | ----------------------------- | -------------------- | ----------------------------------------------------------------------- |
 | 每 agent 一个 key，无 cap/TTL/删除清理 | 是（cap+TTL+delete 清理） | P1-3 `all_participations`、P1-5 AP2 audit                                |
-| 每消息写双方 sorted set 历史          | 是                    | P1-1 `acn:messages:log:{route_id}` 仍为 key-per-route                     |
+| 每消息写双方 sorted set 历史          | 是                    | ~~P1-1 `acn:messages:log:{route_id}` 仍为 key-per-route~~ ✅ 改用 capped stream |
 | 全局 list 无上限                   | DLQ 已 ltrim          | P0-3 `acn:audit:day:`* 日 list 无 trim                                    |
 | 实体删了侧车存储还在                    | 若指 inbox             | P0-1 RedisTaskRepository、P0-2 PG→Redis completions、P1-7 `by_erc8004_id` |
 | 指标/审计高基数 label                | 部分                   | P1-2 metrics 按 agent 对端打标                                               |

@@ -12,6 +12,13 @@ import redis.asyncio as redis  # type: ignore[import-untyped]
 from ....core.entities import Participation, ParticipationStatus, Task, TaskStatus
 from ....core.interfaces import ITaskRepository
 
+# Cap for the per-user global participation index
+# `acn:user:{uid}:all_participations`. The read path (`find_participations_by_user`)
+# only exposes the head via `lrange(0, limit-1)` with `limit<=50`, so anything
+# beyond a small multiple of that is dead weight. We keep an order-of-magnitude
+# headroom so concurrent writers + the occasional deep-lookup still succeed.
+_ALL_PARTICIPATIONS_CAP = 500
+
 # ============================================================================
 # Lua Scripts for Atomic Operations
 # ============================================================================
@@ -280,17 +287,32 @@ class RedisTaskRepository(ITaskRepository):
         requesting_agent_id: str | None = None,
     ) -> list[Task]:
         """Find open tasks with optional filters"""
-        # Pre-compute subnet visibility for the requesting agent
+        # Pre-compute subnet visibility for the requesting agent.
+        #
+        # The previous implementation tried to iterate `acn:subnets:all`,
+        # but that index was never written (no `SADD` anywhere in the
+        # codebase), and it also used the wrong subnet hash key
+        # (`acn:subnet:{sid}` vs the real `acn:subnets:info:{sid}`). Net
+        # effect: `visible_subnet_ids` was always empty, so every task
+        # with a non-null `subnet_id` was invisible to every agent —
+        # private subnets were effectively broken at scale.
+        #
+        # The correct source of truth is already on the agent itself:
+        # `agent.subnet_ids` is the exact set of subnets it belongs to
+        # (public included). One HGET, no fan-out over all subnets, no
+        # new index to keep in sync on create/delete.
         visible_subnet_ids: set[str] = set()
         if requesting_agent_id:
-            all_subnet_ids = await self.redis.smembers("acn:subnets:all")
-            for sid in all_subnet_ids:
-                sid = sid.decode() if isinstance(sid, bytes) else sid
-                raw = await self.redis.hget(f"acn:subnet:{sid}", "member_agent_ids")
-                if raw:
-                    members = json.loads(raw) if isinstance(raw, (str, bytes)) else []
-                    if requesting_agent_id in members:
-                        visible_subnet_ids.add(sid)
+            raw = await self.redis.hget(
+                f"acn:agents:{requesting_agent_id}", "subnet_ids"
+            )
+            if raw:
+                if isinstance(raw, bytes):
+                    raw = raw.decode()
+                try:
+                    visible_subnet_ids = set(json.loads(raw))
+                except (json.JSONDecodeError, TypeError):
+                    visible_subnet_ids = set()
 
         task_ids = await self.redis.zrevrange("acn:tasks:open", offset, offset + limit - 1)
 
@@ -481,6 +503,7 @@ class RedisTaskRepository(ITaskRepository):
         await self.redis.sadd(user_task_key, participation.participation_id)
         user_index_key = f"acn:user:{participation.participant_id}:all_participations"
         await self.redis.lpush(user_index_key, participation.participation_id)
+        await self.redis.ltrim(user_index_key, 0, _ALL_PARTICIPATIONS_CAP - 1)
 
     async def find_participation_by_id(self, participation_id: str) -> Participation | None:
         """Find participation by ID"""
@@ -602,6 +625,7 @@ class RedisTaskRepository(ITaskRepository):
             # Maintain global user participation index for find_participations_by_user
             user_index_key = f"acn:user:{participation.participant_id}:all_participations"
             await self.redis.lpush(user_index_key, pid)
+            await self.redis.ltrim(user_index_key, 0, _ALL_PARTICIPATIONS_CAP - 1)
             return pid
         except redis.ResponseError as e:
             err = str(e)

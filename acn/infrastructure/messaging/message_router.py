@@ -35,6 +35,18 @@ from ..persistence.redis.registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
 
+# Global message audit trail. Stored as a Redis stream (not one string
+# key per route_id) so memory is bounded by MAXLEN regardless of
+# traffic. The previous `acn:messages:log:{route_id}` design grew at
+# QPS × 604800 s × ~1 KB and had no consumers — it was pure debug
+# trace that nothing ever read, so collapsing it to a single capped
+# stream is safe.
+MESSAGE_LOG_STREAM_KEY = "acn:messages:log:stream"
+# ~100 K entries × ~1 KB/entry ≈ 100 MB hard ceiling. Approximate
+# trimming (XADD MAXLEN ~) lets Redis keep the stream in whole radix
+# nodes so the cost is amortized O(1) per write.
+MESSAGE_LOG_STREAM_MAXLEN = 100_000
+
 
 class MessageRouter:
     """
@@ -391,10 +403,17 @@ class MessageRouter:
         message: Any,
         direction: str,
     ):
-        """Log message to Redis"""
+        """Append a routing event to the bounded audit stream.
+
+        We used to SETEX one string per route_id (7-day TTL). At 1M
+        msg/day that's ~1 M × 7 = 7 M keys of 0.5–2 KB each, ~1–14 GB
+        steady-state with no consumers — it was debug-only trace. A
+        capped Redis stream (XADD ... MAXLEN ~ N) holds the same
+        information under a fixed memory ceiling and is still queryable
+        via XRANGE / XREVRANGE.
+        """
         timestamp = datetime.now(UTC).isoformat()
 
-        # Serialize message
         if hasattr(message, "model_dump"):
             msg_data = message.model_dump()
         elif hasattr(message, "to_dict"):
@@ -402,20 +421,20 @@ class MessageRouter:
         else:
             msg_data = str(message)
 
-        log_entry = {
-            "route_id": route_id,
-            "from_agent": from_agent,
-            "to_agent": to_agent,
-            "direction": direction,
-            "timestamp": timestamp,
-            "message": msg_data,
-        }
-
-        # Global log with TTL (audit trail only, not per-agent history)
-        await self.redis.setex(
-            f"acn:messages:log:{route_id}",
-            7 * 24 * 60 * 60,  # 7 days
-            json.dumps(log_entry),
+        await self.redis.xadd(
+            MESSAGE_LOG_STREAM_KEY,
+            {
+                "route_id": route_id,
+                "from_agent": from_agent,
+                "to_agent": to_agent,
+                "direction": direction,
+                "timestamp": timestamp,
+                # Stream fields must be strings/bytes/int/float, so we
+                # serialize the payload here. Readers XRANGE + json.loads.
+                "message": json.dumps(msg_data),
+            },
+            maxlen=MESSAGE_LOG_STREAM_MAXLEN,
+            approximate=True,
         )
 
     async def _store_inbox(self, to_agent: str, log_entry: dict[str, Any]) -> None:

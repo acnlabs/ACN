@@ -29,6 +29,8 @@ Context: commits `8c540a9` / `bc5b331` / `c71da67` 把消息存储从 "per-agent
 - **清理 `acn:messages:agent:` 遗留 key**
 旧代码向每个 agent 的 sorted set 双写消息历史，新代码不再写但也不主动清。生产环境这些 key 会一直占着 Redis 内存直到手动 `FLUSHDB`。
 写一次性清理脚本：`SCAN 0 MATCH acn:messages:agent:* COUNT 1000` + `UNLINK` 每批，放到 `acn/scripts/`。
+- **清理 `acn:messages:log:{route_id}` 遗留 key**（P1-1 后续）
+切换到 `acn:messages:log:stream` 后，旧的 per-route 字符串 key 会靠自带的 7 天 TTL 自然消失，但想立刻回收内存可以跑一次性脚本：`SCAN 0 MATCH acn:messages:log:* COUNT 1000` → 过滤掉 `stream` 这个字面 key → `UNLINK` 每批。
 
 ---
 
