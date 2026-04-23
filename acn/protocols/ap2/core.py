@@ -123,6 +123,41 @@ class PaymentTaskStatus(StrEnum):
     REFUNDED = "refunded"  # Payment refunded
 
 
+# Statuses considered terminal for retention purposes. Once a task
+# enters one of these, it will never advance further, so its Redis
+# row is safe to expire on a long TTL rather than live forever.
+# DISPUTED is included because disputes in this codebase don't resolve
+# back into in-flight states — if a dispute is ever re-opened after
+# resolution, it'll be a new task.
+_PAYMENT_TERMINAL_STATUSES: frozenset[PaymentTaskStatus] = frozenset(
+    {
+        PaymentTaskStatus.TASK_COMPLETED,
+        PaymentTaskStatus.PAYMENT_RELEASED,
+        PaymentTaskStatus.CANCELLED,
+        PaymentTaskStatus.FAILED,
+        PaymentTaskStatus.PAYMENT_FAILED,
+        PaymentTaskStatus.REFUNDED,
+        PaymentTaskStatus.DISPUTED,
+    }
+)
+
+# Retention window for terminal payment tasks and their
+# by_buyer/by_seller indexes. Long enough to serve dispute and
+# bookkeeping reads; short enough that a years-old deployment doesn't
+# hold every task ever created.
+_PAYMENT_TASK_TERMINAL_TTL_SECONDS = 180 * 24 * 60 * 60
+
+# The by_buyer/by_seller index sets get a sliding TTL refreshed on
+# every sadd. They outlive any single task (multi-task sets) but fall
+# off if an agent goes fully inactive for this long.
+_PAYMENT_INDEX_TTL_SECONDS = 180 * 24 * 60 * 60
+
+# Hard cap on per-task audit events. 100 is >>  the ~8 status-change
+# events a normal task emits, so it only bites when a bug/abuse pumps
+# events at a single task_id.
+_PAYMENT_AUDIT_CAP = 100
+
+
 # =============================================================================
 # Token Pricing Model (ACN Extension)
 # =============================================================================
@@ -865,22 +900,43 @@ class PaymentTaskManager:
     # -------------------------------------------------------------------------
 
     async def _save_task(self, task: PaymentTask):
-        """Save task to Redis"""
+        """Save task to Redis.
+
+        Terminal-status tasks get a long-but-finite TTL so that
+        long-running deployments don't hold the entire payment history
+        in memory forever. In-flight tasks keep the original TTL-less
+        write so a stuck pending task doesn't silently disappear.
+        """
         key = f"{self._prefix}{task.task_id}"
-        await self.redis.set(key, task.model_dump_json())
+        body = task.model_dump_json()
+        if task.status in _PAYMENT_TERMINAL_STATUSES:
+            await self.redis.setex(key, _PAYMENT_TASK_TERMINAL_TTL_SECONDS, body)
+        else:
+            await self.redis.set(key, body)
 
     async def _index_task(self, task: PaymentTask):
-        """Index task for queries"""
-        # By buyer
-        key = f"{self._prefix}by_buyer:{task.buyer_agent}"
-        await self.redis.sadd(key, task.task_id)
+        """Index task for queries.
 
-        # By seller
-        key = f"{self._prefix}by_seller:{task.seller_agent}"
-        await self.redis.sadd(key, task.task_id)
+        Refreshes a sliding TTL on each write so the per-agent index
+        lives only as long as that agent is active. Individual task_ids
+        inside the set may dangle after their task body expires —
+        `get_tasks_by_agent` already ignores `None` results from
+        `get_task`, which is the graceful degradation path.
+        """
+        buyer_key = f"{self._prefix}by_buyer:{task.buyer_agent}"
+        await self.redis.sadd(buyer_key, task.task_id)
+        await self.redis.expire(buyer_key, _PAYMENT_INDEX_TTL_SECONDS)
+
+        seller_key = f"{self._prefix}by_seller:{task.seller_agent}"
+        await self.redis.sadd(seller_key, task.task_id)
+        await self.redis.expire(seller_key, _PAYMENT_INDEX_TTL_SECONDS)
 
     async def _audit_log(self, task_id: str, event: str, data: dict):
-        """Log payment event for audit"""
+        """Log payment event for audit.
+
+        Bounded so a single task_id can't grow a multi-MB event log,
+        and TTL'd to the same window as the task body itself.
+        """
         log_key = f"{self._prefix}audit:{task_id}"
         entry = {
             "event": event,
@@ -888,6 +944,8 @@ class PaymentTaskManager:
             "timestamp": datetime.now(UTC).isoformat(),
         }
         await self.redis.lpush(log_key, json.dumps(entry))
+        await self.redis.ltrim(log_key, 0, _PAYMENT_AUDIT_CAP - 1)
+        await self.redis.expire(log_key, _PAYMENT_TASK_TERMINAL_TTL_SECONDS)
 
     async def _send_webhook(self, event_type: str, task: PaymentTask):
         """Send webhook notification to backend"""

@@ -46,3 +46,30 @@ Context: commits for SCALE_AUDIT P0-1..P0-4。完成了正确性修复，留下�
 - **`RedisTaskRepository.delete` 的 user-index `lrem` 也放 pipeline**
 同一原因：对每个 (user × pid) 对串行 `lrem`，O(user_count × pid_count)。pipeline 化即可。
 影响文件：同上。
+
+---
+
+## Payments / Billing
+
+### P1 sweep follow-ups
+
+Context: commits for SCALE_AUDIT P1-4 / P1-5。
+
+- **In-flight `PaymentTask` 永不过期的兜底清理**（P1-5 后续）
+P1-5 仅给**终态**（completed/cancelled/refunded/disputed/…）的 task 加了 180 天 TTL。一个停在 `PAYMENT_PENDING` 永远不进终态的 task 仍然占用 Redis 内存。属于业务清理职责，建议加一个后台 sweeper：扫 `acn:payment_tasks:*` → 解析 `created_at` → 超过 N 天（例如 7 天）仍未离开 `PAYMENT_PENDING` / `PAYMENT_REQUESTED` 的，强制 `update_task_status(FAILED, reason="expired")`，让它走终态分支被 TTL 接管。
+影响文件：`[acn/protocols/ap2/core.py](../acn/protocols/ap2/core.py)` 新增 `sweep_stale_payment_tasks()` + scheduler 接入。
+- **Billing fallback 的 PG 迁移路径**（P1-4 后续）
+P1-4 给 Redis fallback 加了 90 天 TTL，但这只是"不爆 Redis"的护栏，不是真源。生产部署应该强制要求 `IBillingRepository` 不为 None，并在启动时校验。考虑加一个 `BillingService.__init__` 的 strict 模式开关，或在 health check 里上报"running on Redis fallback"红灯。
+影响文件：`[acn/services/billing_service.py](../acn/services/billing_service.py)`、`[acn/api.py](../acn/api.py)` 启动检查。
+
+---
+
+## Monitoring
+
+### P1-2 follow-ups
+
+- **Metrics key 的 `scan_iter` 在 `prometheus_export` / `get_all_metrics` 是 O(N_keys)**
+P1-2 砍掉了 `(from_agent, to_agent)` 的高基数 label 后，稳态 key 数已经被压成可控量级，但 export 路径仍然是全扫。如果将来又因新需求长出几万个 label 组合，scan 就会拖慢 scrape。考虑维护一个 `acn:metrics:_index` set 记录所有活跃 key，export 时直接 SMEMBERS 替换 SCAN。
+影响文件：`[acn/monitoring/metrics.py](../acn/monitoring/metrics.py)` `prometheus_export()` / `get_all_metrics()`.
+- **Adhoc counter（`METRICS` 没声明的）仍然能无限增长 label key 集合**
+`_sanitize_labels` 对未在 `METRICS` 字典里登记的 metric 名只做 charset/length 守卫，不做 key 白名单。等价于"自由 label 模式"。如果有人 `inc_counter("my_thing", labels={"user_id": ...})` 还是会 cardinality 爆炸。要么强制所有 metric 必须先注册，要么对 unknown metric 也限制 label key 数（例如最多 3 个）。

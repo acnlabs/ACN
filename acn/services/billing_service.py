@@ -35,6 +35,33 @@ if TYPE_CHECKING:
     from .agent_service import AgentService
 
 
+# Bounds for the Redis-fallback path (only active when no PG repository
+# is injected). Without these, deploying ACN in Redis-only mode long
+# enough accumulates the entire financial history with no expiry and no
+# cap — GB-scale for tx bodies and per-user/agent indexes, and the
+# webhooks:pending list has no consumer and no ceiling at all.
+#
+# PG remains the recommended source of truth; these limits exist so that
+# a misconfigured or transitional deployment doesn't silently OOM Redis.
+
+# ~90 days of retention for individual transaction bodies in the
+# fallback store. Long enough to serve the 1000-row billing-stats read
+# and short enough to bound memory.
+_FALLBACK_TX_TTL_SECONDS = 90 * 24 * 60 * 60
+
+# Per-user / per-agent indexes are read with limit<=1000
+# (`get_user_billing_stats`). 2x headroom avoids dropping the tail
+# during concurrent writes.
+_FALLBACK_USER_INDEX_CAP = 2000
+_FALLBACK_AGENT_INDEX_CAP = 2000
+
+# The `webhooks:pending` list is append-only with no in-repo consumer.
+# Treat it as a debug ring buffer until a dispatcher is wired up. 10K
+# entries × ~200B/entry ≈ 2MB hard ceiling.
+_WEBHOOK_PENDING_CAP = 10_000
+_WEBHOOK_PENDING_TTL_SECONDS = 7 * 24 * 60 * 60
+
+
 # =============================================================================
 # Billing Configuration
 # =============================================================================
@@ -527,37 +554,59 @@ class BillingService:
     # -------------------------------------------------------------------------
 
     async def _save_transaction(self, transaction: BillingTransaction):
-        """Save transaction to repository (PG) or Redis fallback."""
+        """Save transaction to repository (PG) or Redis fallback.
+
+        Fallback path uses SETEX with `_FALLBACK_TX_TTL_SECONDS` so tx
+        bodies don't accumulate forever. PG path is unchanged — durable
+        financial data lives there.
+        """
         if self._repository:
             await self._repository.save(transaction)
             return
         key = f"{self._prefix}tx:{transaction.transaction_id}"
-        await self.redis.set(key, transaction.model_dump_json())
+        await self.redis.setex(
+            key, _FALLBACK_TX_TTL_SECONDS, transaction.model_dump_json()
+        )
 
     async def _index_transaction(self, transaction: BillingTransaction):
-        """Index transaction for queries"""
-        # By user
+        """Index transaction for queries (Redis fallback path).
+
+        Per-user/per-agent indexes are lists that both (a) get trimmed
+        to a hard cap after every write, and (b) inherit the same
+        retention window as the tx bodies. Without (a) a high-volume
+        payer/payee grows a single multi-MB list; without (b) the list
+        outlives the tx bodies it points to and resolves to stale nulls.
+        """
         user_key = f"{self._prefix}by_user:{transaction.user_id}"
         await self.redis.lpush(user_key, transaction.transaction_id)
+        await self.redis.ltrim(user_key, 0, _FALLBACK_USER_INDEX_CAP - 1)
+        await self.redis.expire(user_key, _FALLBACK_TX_TTL_SECONDS)
 
-        # By agent
         agent_key = f"{self._prefix}by_agent:{transaction.agent_id}"
         await self.redis.lpush(agent_key, transaction.transaction_id)
+        await self.redis.ltrim(agent_key, 0, _FALLBACK_AGENT_INDEX_CAP - 1)
+        await self.redis.expire(agent_key, _FALLBACK_TX_TTL_SECONDS)
 
-        # By task (if available)
         if transaction.task_id:
             task_key = f"{self._prefix}by_task:{transaction.task_id}"
-            await self.redis.set(task_key, transaction.transaction_id)
+            await self.redis.setex(
+                task_key, _FALLBACK_TX_TTL_SECONDS, transaction.transaction_id
+            )
 
     async def _record_network_fee(self, transaction_id: str, amount: float):
-        """Record network fee for accounting"""
+        """Record network fee for accounting.
+
+        The running total (`network_fees:total`) is intentionally left
+        without TTL — that's the one aggregate we never want to lose.
+        Per-tx fee records mirror the tx-body retention.
+        """
         if self._repository:
             await self._repository.record_network_fee(transaction_id, amount)
             return
         total_key = f"{self._prefix}network_fees:total"
         await self.redis.incrbyfloat(total_key, amount)
         fee_key = f"{self._prefix}network_fees:tx:{transaction_id}"
-        await self.redis.set(fee_key, str(amount))
+        await self.redis.setex(fee_key, _FALLBACK_TX_TTL_SECONDS, str(amount))
 
     async def _reverse_network_fee(self, transaction_id: str, amount: float):
         """Reverse network fee (for refunds)"""
@@ -567,15 +616,20 @@ class BillingService:
         total_key = f"{self._prefix}network_fees:total"
         await self.redis.incrbyfloat(total_key, -amount)
         fee_key = f"{self._prefix}network_fees:tx:{transaction_id}"
-        await self.redis.set(fee_key, f"REVERSED:{amount}")
+        await self.redis.setex(
+            fee_key, _FALLBACK_TX_TTL_SECONDS, f"REVERSED:{amount}"
+        )
 
     async def _send_billing_webhook(self, transaction: BillingTransaction):
-        """Send webhook notification for billing event"""
+        """Send webhook notification for billing event.
+
+        The `webhooks:pending` list has no consumer in-repo — it's a
+        placeholder until a dispatcher ships. We bound it on both axes
+        so the placeholder can't become an unbounded log.
+        """
         if not self.webhook_url:
             return
 
-        # In production, use httpx/aiohttp to send webhook
-        # For now, just log to Redis
         webhook_key = f"{self._prefix}webhooks:pending"
         await self.redis.lpush(
             webhook_key,
@@ -588,6 +642,8 @@ class BillingService:
                 }
             ),
         )
+        await self.redis.ltrim(webhook_key, 0, _WEBHOOK_PENDING_CAP - 1)
+        await self.redis.expire(webhook_key, _WEBHOOK_PENDING_TTL_SECONDS)
 
 
 # =============================================================================

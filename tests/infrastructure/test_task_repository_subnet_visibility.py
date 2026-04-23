@@ -11,8 +11,7 @@ once via HGET `acn:agents:{id} subnet_ids`.
 """
 
 import json
-from datetime import datetime
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 
 import pytest
 

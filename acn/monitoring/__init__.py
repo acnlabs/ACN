@@ -33,9 +33,11 @@ Usage:
     audit = AuditLogger(redis_client)
     analytics = Analytics(redis_client)
 
-    # Record metrics
-    metrics.inc_message_count(from_agent="a", to_agent="b")
-    metrics.observe_latency(operation="route", latency_ms=15.5)
+    # Record metrics. Note: from_agent / to_agent args exist for
+    # signature stability but are intentionally ignored — per-agent
+    # dimensions belong in an external TSDB, not in Redis counter keys.
+    metrics.inc_message_count(status="success")
+    metrics.observe_latency(operation="route", latency_seconds=0.0155)
 
     # Audit logging
     await audit.log_event(

@@ -25,12 +25,28 @@ Architecture:
     └──────────────────────────────────────────────────────┘
 """
 
+import logging
+import re
 import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
 from redis.asyncio import Redis
+
+logger = logging.getLogger(__name__)
+
+# Hard cap on label-value length. Anything longer gets replaced with the
+# placeholder "_overflow_" so a single misbehaving caller can't create
+# a 100KB metric key (which Redis would happily store — but the resulting
+# cardinality and memory would be catastrophic).
+_MAX_LABEL_VALUE_LEN = 64
+
+# Label values are embedded directly into Redis keys with `:` and `=` as
+# delimiters (see `_build_key` / `_parse_key`). Any value containing those
+# characters would round-trip incorrectly. We normalize to a safe subset
+# rather than reject, so known-good callers don't fail.
+_LABEL_VALUE_SAFE = re.compile(r"[^A-Za-z0-9_.\-]")
 
 
 class MetricType(StrEnum):
@@ -51,8 +67,10 @@ class MetricsCollector:
         metrics = MetricsCollector(redis_client)
         await metrics.start()
 
-        # Increment counters
-        await metrics.inc_counter("messages_sent", labels={"from": "agent-a"})
+        # Increment counters. `labels` must match the declared schema in
+        # `METRICS[<name>]["labels"]`; unknown keys are dropped (see
+        # `_sanitize_labels`).
+        await metrics.inc_counter("errors_total", labels={"type": "timeout", "component": "router"})
 
         # Set gauges
         await metrics.set_gauge("active_agents", 42)
@@ -70,7 +88,14 @@ class MetricsCollector:
         "acn_messages_total": {
             "type": MetricType.COUNTER,
             "help": "Total number of A2A messages processed",
-            "labels": ["from_agent", "to_agent", "status"],
+            # NOTE: intentionally *not* keyed by (from_agent, to_agent).
+            # That was a high-cardinality trap — O(unique_pairs) Redis keys
+            # with no TTL, at population scale trivially GB-per-week of
+            # counter storage for no analytic value Prometheus can't do
+            # better. `status` (success/failed/…) is the only dimension
+            # we keep here; per-agent slicing belongs in a time-series
+            # backend, not a Redis counter grid.
+            "labels": ["status"],
         },
         "acn_registrations_total": {
             "type": MetricType.COUNTER,
@@ -162,15 +187,28 @@ class MetricsCollector:
             labels: Label values
         """
         full_name = f"acn_{name}" if not name.startswith("acn_") else name
+        labels = self._sanitize_labels(full_name, labels)
         key = self._build_key(full_name, labels)
         await self.redis.incr(key, value)
 
-    async def inc_message_count(self, from_agent: str, to_agent: str, status: str = "success"):
-        """Convenience method to increment message counter"""
-        await self.inc_counter(
-            "messages_total",
-            labels={"from_agent": from_agent, "to_agent": to_agent, "status": status},
-        )
+    async def inc_message_count(
+        self,
+        from_agent: str = "",  # deprecated: kept for signature stability
+        to_agent: str = "",  # deprecated: kept for signature stability
+        status: str = "success",
+    ):
+        """Increment the message counter.
+
+        `from_agent` / `to_agent` are intentionally ignored. See
+        `METRICS["acn_messages_total"]` for the rationale — keeping
+        per-agent dimensions here was the single largest high-cardinality
+        hazard in the codebase. Callers that need per-agent breakdowns
+        must use an external TSDB.
+        """
+        # Explicitly reference the deprecated args so linters don't flag
+        # them as unused while we keep the signature for API compat.
+        del from_agent, to_agent
+        await self.inc_counter("messages_total", labels={"status": status})
 
     async def inc_registration_count(self, subnet: str = "public"):
         """Convenience method to increment registration counter"""
@@ -194,18 +232,21 @@ class MetricsCollector:
             labels: Label values
         """
         full_name = f"acn_{name}" if not name.startswith("acn_") else name
+        labels = self._sanitize_labels(full_name, labels)
         key = self._build_key(full_name, labels)
         await self.redis.set(key, str(value))
 
     async def inc_gauge(self, name: str, value: float = 1, labels: dict[str, str] | None = None):
         """Increment a gauge value"""
         full_name = f"acn_{name}" if not name.startswith("acn_") else name
+        labels = self._sanitize_labels(full_name, labels)
         key = self._build_key(full_name, labels)
         await self.redis.incrbyfloat(key, value)
 
     async def dec_gauge(self, name: str, value: float = 1, labels: dict[str, str] | None = None):
         """Decrement a gauge value"""
         full_name = f"acn_{name}" if not name.startswith("acn_") else name
+        labels = self._sanitize_labels(full_name, labels)
         key = self._build_key(full_name, labels)
         await self.redis.incrbyfloat(key, -value)
 
@@ -239,7 +280,10 @@ class MetricsCollector:
             operation: Operation name (e.g., "route_message", "register")
             latency_seconds: Latency in seconds
         """
-        key = self._build_key("acn_latency_seconds", {"operation": operation})
+        labels = self._sanitize_labels(
+            "acn_latency_seconds", {"operation": operation}
+        )
+        key = self._build_key("acn_latency_seconds", labels)
 
         # Store in a Redis list for histogram calculation
         _ttl = 90 * 86400  # 90 days
@@ -261,7 +305,10 @@ class MetricsCollector:
             size_bytes: Message size in bytes
             direction: "incoming" or "outgoing"
         """
-        key = self._build_key("acn_message_size_bytes", {"direction": direction})
+        labels = self._sanitize_labels(
+            "acn_message_size_bytes", {"direction": direction}
+        )
+        key = self._build_key("acn_message_size_bytes", labels)
 
         _ttl = 90 * 86400  # 90 days
         await self.redis.lpush(f"{key}:values", str(size_bytes))
@@ -289,6 +336,11 @@ class MetricsCollector:
     async def get_counter(self, name: str, labels: dict[str, str] | None = None) -> int:
         """Get counter value"""
         full_name = f"acn_{name}" if not name.startswith("acn_") else name
+        # Sanitize on read too: writers go through the same pass, so
+        # skipping it on reads would lookup the un-sanitized key and
+        # always return 0 for any caller who passes a label value
+        # containing `:`, `=`, or >64 chars.
+        labels = self._sanitize_labels(full_name, labels)
         key = self._build_key(full_name, labels)
         value = await self.redis.get(key)
         return int(value) if value else 0
@@ -296,6 +348,7 @@ class MetricsCollector:
     async def get_gauge(self, name: str, labels: dict[str, str] | None = None) -> float:
         """Get gauge value"""
         full_name = f"acn_{name}" if not name.startswith("acn_") else name
+        labels = self._sanitize_labels(full_name, labels)
         key = self._build_key(full_name, labels)
         value = await self.redis.get(key)
         return float(value) if value else 0.0
@@ -310,6 +363,7 @@ class MetricsCollector:
             Dict with count, sum, avg, min, max, percentiles
         """
         full_name = f"acn_{name}" if not name.startswith("acn_") else name
+        labels = self._sanitize_labels(full_name, labels)
         key = self._build_key(full_name, labels)
 
         # Get values
@@ -453,6 +507,58 @@ class MetricsCollector:
     # =========================================================================
     # Internal Helpers
     # =========================================================================
+
+    def _sanitize_labels(
+        self, full_name: str, labels: dict[str, str] | None
+    ) -> dict[str, str]:
+        """Apply schema whitelist + cardinality guards to label values.
+
+        The core threat model: every unique (metric_name, label_values)
+        pair becomes a permanent Redis key (counters have no TTL by
+        design). One misbehaving caller passing a unique id per call
+        can therefore grow `acn:metrics:*` without bound. We defend in
+        three ways:
+
+        1. **Schema whitelist**: only label keys declared in
+           `METRICS[name]["labels"]` are kept. Unknown keys are dropped
+           (and logged once so mistakes are findable), instead of
+           silently creating a parallel metrics namespace.
+        2. **Value length cap**: any value longer than
+           `_MAX_LABEL_VALUE_LEN` is replaced with `_overflow_`. No
+           single key embeds a user-controlled blob.
+        3. **Charset sanitize**: `:` and `=` are the key delimiters, so
+           values containing them would break `_parse_key` on export.
+           We collapse non-safe chars to `_`.
+
+        Metrics not declared in `METRICS` (ad-hoc counters) get the
+        charset / length guards but skip the whitelist — existing code
+        paths using `inc_counter("something_adhoc", labels=...)` keep
+        working.
+        """
+        if not labels:
+            return {}
+
+        meta = self.METRICS.get(full_name)
+        allowed: set[str] | None = set(meta["labels"]) if meta else None
+
+        cleaned: dict[str, str] = {}
+        for key, raw_value in labels.items():
+            if allowed is not None and key not in allowed:
+                logger.warning(
+                    "metrics: dropping unknown label %r on %s; allowed=%s",
+                    key,
+                    full_name,
+                    sorted(allowed),
+                )
+                continue
+
+            value = str(raw_value)
+            if len(value) > _MAX_LABEL_VALUE_LEN:
+                value = "_overflow_"
+            value = _LABEL_VALUE_SAFE.sub("_", value)
+            cleaned[key] = value
+
+        return cleaned
 
     def _build_key(self, name: str, labels: dict[str, str] | None) -> str:
         """Build Redis key from metric name and labels"""
