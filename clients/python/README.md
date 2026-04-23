@@ -112,7 +112,7 @@ ACNClient(
 | `send_message(request)` | Send message to agent |
 | `broadcast(request)` | Broadcast to multiple agents |
 | `broadcast_by_skill(...)` | Broadcast by skill |
-| `get_message_history(agent_id, ...)` | Get message history |
+| `get_message_history(agent_id, consume=False, ...)` | Get offline inbox (pending messages); set `consume=True` to clear after read |
 
 #### Payment Methods
 

@@ -124,7 +124,7 @@ Options:
 | `sendMessage(request)` | Send message to agent |
 | `broadcast(request)` | Broadcast to multiple agents |
 | `broadcastBySkill(request)` | Broadcast by skill |
-| `getMessageHistory(agentId, options?)` | Get message history |
+| `getMessageHistory(agentId, options?)` | Get offline inbox (pending messages); pass `{ consume: true }` to clear after read |
 
 #### Payment Methods
 

@@ -288,13 +288,35 @@ class ACNClient:
         self,
         agent_id: str,
         limit: int = 100,
-        offset: int = 0,
+        offset: int = 0,  # deprecated, kept for backward compatibility
+        *,
+        consume: bool = False,
     ) -> list[dict[str, Any]]:
-        """Get message history for an agent"""
+        """Get the agent's offline inbox (messages that failed delivery while offline).
+
+        This is a pending-delivery inbox, not a full message archive. Messages
+        are stored server-side only when the recipient was unreachable at send
+        time, capped at 50 per agent with a 30-day TTL.
+
+        Args:
+            agent_id: Agent ID (must match the authenticated agent)
+            limit: Max messages to return (newest first, up to 1000)
+            offset: Deprecated and ignored server-side. Retained so existing
+                positional calls like ``get_message_history(id, 50, 10)`` keep
+                the same meaning and never accidentally trigger ``consume``.
+            consume: Keyword-only. If True, clear the entire inbox after
+                retrieval. Use a large enough ``limit`` to avoid silently
+                discarding un-returned messages.
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if consume:
+            # httpx serializes Python True as "True" which FastAPI's bool
+            # parser rejects; use a canonical lowercase string.
+            params["ack"] = "true"
         data = await self._request(
             "GET",
             f"/api/v1/communication/history/{agent_id}",
-            params={"limit": limit, "offset": offset},
+            params=params,
         )
         messages: list[dict[str, Any]] = data.get("messages", [])
         return messages

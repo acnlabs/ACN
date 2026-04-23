@@ -121,7 +121,7 @@ ACN (Agent Communication Network) 已完成从混乱代码库到 Clean Architect
 ✓ send_message            - 点对点消息
 ✓ broadcast_message       - 广播消息
 ✓ broadcast_by_skill      - 按技能广播
-✓ get_message_history     - 消息历史
+✓ get_message_history     - 离线收件箱（仅暂存未送达消息，非完整历史）
 ✓ retry_dead_letter_queue - 重试死信队列
 ```
 
@@ -130,7 +130,7 @@ ACN (Agent Communication Network) 已完成从混乱代码库到 Clean Architect
 ✓ send_message         - 发送消息
 ✓ send_message_by_skill - 按技能发送
 ✓ broadcast_message    - 广播消息
-✓ get_message_history  - 获取历史
+✓ get_message_history  - 获取离线收件箱（支持 consume 清空）
 ✓ register_handler     - 注册处理器
 ```
 

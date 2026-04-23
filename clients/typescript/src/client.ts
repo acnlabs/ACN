@@ -256,12 +256,25 @@ export class ACNClient {
     return this.post('/api/v1/communication/broadcast-by-skill', request);
   }
 
-  /** Get message history for an agent */
+  /**
+   * Get the agent's offline inbox (messages that failed delivery while offline).
+   *
+   * This is a pending-delivery inbox, not a full message archive. Server-side
+   * storage is capped at 50 messages per agent with a 30-day TTL.
+   *
+   * @param options.limit   Max messages to return (newest first).
+   * @param options.consume If true, clear the inbox after reading. Use a large
+   *                        enough `limit` to avoid silently discarding messages.
+   * @param options.offset  Deprecated and ignored server-side.
+   */
   async getMessageHistory(
     agentId: string,
-    options?: { limit?: number; offset?: number }
+    options?: { limit?: number; consume?: boolean; offset?: number }
   ): Promise<{ messages: Message[] }> {
-    return this.get(`/api/v1/communication/history/${agentId}`, options);
+    const params: Record<string, string | number | boolean> = {};
+    if (options?.limit !== undefined) params.limit = options.limit;
+    if (options?.consume) params.ack = true;
+    return this.get(`/api/v1/communication/history/${agentId}`, params);
   }
 
   // ============================================

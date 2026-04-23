@@ -118,7 +118,7 @@ ACN 采用**混合分层架构**，结合 Clean Architecture 和 Service Pattern
    - `send_message` - 点对点消息
    - `send_message_by_skill` - 按技能路由
    - `broadcast_message` - 广播消息
-   - `get_message_history` - 消息历史
+   - `get_message_history` - 离线收件箱（未送达消息暂存，非完整历史）
 
 #### Service Pattern Services (直接基础设施):
 4. **MetricsCollector** - Prometheus 指标
@@ -165,7 +165,7 @@ ACN 采用**混合分层架构**，结合 Clean Architecture 和 Service Pattern
    - `POST /send` - 发送消息
    - `POST /broadcast` - 广播消息
    - `POST /broadcast-by-skill` - 按技能广播
-   - `GET /history/{agent_id}` - 消息历史
+   - `GET /history/{agent_id}` - 离线收件箱（暂存未送达消息，`?ack=true` 清空）
    - `POST /retry-dlq` - 重试死信队列
 
 #### Service Pattern Routes (35%):
