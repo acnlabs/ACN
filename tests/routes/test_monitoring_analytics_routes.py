@@ -234,9 +234,10 @@ class TestAnalyticsRoutes:
         assert r.status_code == 200
         body = r.json()
         # The stub returns None for all three fields (see stub_analytics fixture).
-        # When a real ActivityService is injected, messages_sent and errors
-        # will be integers derived from PG activity_events; messages_received
-        # remains None until a task-join aggregation is implemented (BACKLOG).
+        # When a real ActivityService is injected, all three fields are integers:
+        #   messages_sent  — outbound events (task_submitted, task_accepted, …)
+        #   messages_received — task_approved + task_rejected targeting this agent
+        #   errors         — task_cancelled events where agent is the actor
         assert body["messages_sent"] is None
         assert body["messages_received"] is None
         assert body["errors"] is None

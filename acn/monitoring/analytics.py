@@ -179,9 +179,13 @@ class Analytics:
           injected (see ``__init__``). Returns ``None`` when no ActivityService is
           configured.  The mapping from event types to field names is defined by
           ``_SENT_TYPES`` / ``_ERROR_TYPES`` at module level.
-        - ``messages_received``: not yet available — requires a JOIN on the task
-          table to identify events where this agent is the *target* rather than
-          the actor.  Tracked in docs/BACKLOG.md.
+        - ``messages_received``: aggregated from PG ``activity_events`` via
+          ``ActivityService.get_received_count``.  Counts ``task_approved`` and
+          ``task_rejected`` events where ``event_metadata["agent_id"] == agent_id``
+          (the agent is the *subject*, not the *actor*).  Returns ``None`` when no
+          ActivityService is configured.  Note: ``task_cancelled`` inbound
+          (creator cancels a task the agent had joined) is excluded — those
+          events carry no ``agent_id`` in metadata.
         - ``last_heartbeat``: always read from ``acn:heartbeat:{agent_id}`` in
           Redis (written by the liveness path, unaffected by metric schema).
 
