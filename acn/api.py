@@ -163,6 +163,15 @@ async def lifespan(app: FastAPI):
         webhook_url=settings.billing_webhook_url,
         repository=_billing_repository,
     )
+    if billing_service_instance.storage_mode == "redis_fallback":
+        logger.warning(
+            "billing_on_redis_fallback",
+            detail=(
+                "BillingService has no PostgreSQL repository. "
+                "Financial data uses ephemeral Redis storage (90-day TTL, capped indexes). "
+                "Set DATABASE_URL to enable durable PG billing."
+            ),
+        )
 
     # Initialize Activity Service
     activity_service_instance = ActivityService(
@@ -384,6 +393,12 @@ async def ready():
     Returns 200 when the service can handle traffic, 503 when a critical
     dependency (e.g. Redis) is unavailable.  Use this for monitoring/alerting
     but do NOT point the Railway healthcheck at it.
+
+    ``billing_storage`` is informational only; ``"redis_fallback"`` means
+    BillingService has no PostgreSQL repository (financial data is ephemeral).
+    This does not affect the HTTP status code — it is a degraded condition,
+    not a fatal one, and should be monitored via alerting rules rather than
+    causing container restarts.
     """
     redis_status = "unknown"
     try:
@@ -393,6 +408,13 @@ async def ready():
         redis_status = "ok"
     except Exception:
         redis_status = "error"
+
+    # Billing storage mode — reported for observability, not factored into
+    # HTTP status code (redis_fallback is degraded, not an outage).
+    try:
+        billing_storage = dependencies.get_billing_service().storage_mode
+    except Exception:
+        billing_storage = "unknown"
 
     overall = "healthy" if redis_status == "ok" else "degraded"
     status_code = 200 if overall == "healthy" else 503
@@ -404,6 +426,7 @@ async def ready():
             "version": settings.service_version,
             "dependencies": {
                 "redis": redis_status,
+                "billing_storage": billing_storage,
             },
         },
     )

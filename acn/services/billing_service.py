@@ -201,6 +201,15 @@ class BillingService:
         self._repository = repository
         self._prefix = "acn:billing:"
 
+    @property
+    def storage_mode(self) -> str:
+        """Return the active billing storage backend.
+
+        ``"postgres"`` — durable; ``"redis_fallback"`` — ephemeral (90-day TTL,
+        capped indexes).  Callers such as ``/ready`` can surface this to ops.
+        """
+        return "postgres" if self._repository else "redis_fallback"
+
     # -------------------------------------------------------------------------
     # Cost Calculation
     # -------------------------------------------------------------------------
