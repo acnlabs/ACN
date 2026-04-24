@@ -147,6 +147,18 @@ class TestMethodNamesStillExist:
     def test_activity_service_get_received_count(self):
         assert callable(getattr(ActivityService, "get_received_count", None))
 
+    # --- MessageService (P2-B: precise ack) ---
+    def test_message_service_ack_message_history(self):
+        from acn.services.message_service import MessageService
+
+        assert callable(getattr(MessageService, "ack_message_history", None))
+
+    # --- MessageRouter (P2-B: precise ack) ---
+    def test_message_router_ack_inbox(self):
+        from acn.infrastructure.messaging.message_router import MessageRouter
+
+        assert callable(getattr(MessageRouter, "ack_inbox", None))
+
 
 # =============================================================================
 # Helpers

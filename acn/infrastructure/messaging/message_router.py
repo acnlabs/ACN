@@ -460,6 +460,53 @@ class MessageRouter:
                 except Exception as e:
                     logger.error(f"Wildcard handler error: {e}")
 
+    async def ack_inbox(
+        self,
+        agent_id: str,
+        route_ids: list[str],
+    ) -> int:
+        """Precisely remove specific messages from an agent's offline inbox.
+
+        Unlike ``get_inbox(consume=True)`` which clears the *entire* inbox, this
+        method only removes the messages matching the supplied ``route_ids``.  This
+        is safe to call while another process is also writing to the inbox (no
+        full-key delete, only targeted ZREM).
+
+        The inbox sorted set stores full JSON blobs as members.  Because we cannot
+        ZREM by a sub-field, we do a single ZRANGE to fetch all members (bounded
+        by _INBOX_CAP ≤ 50), filter in Python, then pipeline the ZREM calls.
+
+        Args:
+            agent_id: Agent whose inbox to acknowledge.
+            route_ids: List of ``route_id`` values to remove.
+
+        Returns:
+            Number of messages actually removed.
+        """
+        key = f"acn:inbox:{agent_id}"
+        route_id_set = set(route_ids)
+
+        raw_members = await self.redis.zrange(key, 0, -1)
+        to_remove: list[str] = []
+        for raw in raw_members:
+            member = raw.decode() if isinstance(raw, bytes) else raw
+            try:
+                entry = json.loads(member)
+                if entry.get("route_id") in route_id_set:
+                    to_remove.append(member)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if not to_remove:
+            return 0
+
+        async with self.redis.pipeline(transaction=False) as pipe:
+            for member in to_remove:
+                pipe.zrem(key, member)
+            await pipe.execute()
+
+        return len(to_remove)
+
     async def get_inbox(
         self,
         agent_id: str,

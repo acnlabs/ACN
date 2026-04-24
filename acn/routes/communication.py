@@ -303,6 +303,51 @@ async def get_message_history(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+class AckInboxRequest(BaseModel):
+    route_ids: list[str]
+
+
+@router.post("/history/{agent_id}/ack")
+@limiter.limit("120/minute")
+async def ack_message_history(
+    request: Request,
+    agent_id: str,
+    body: AckInboxRequest,
+    agent_info: AgentApiKeyDep,
+    message_service: MessageServiceDep = None,
+):
+    """Precisely acknowledge (remove) specific messages from an agent's inbox.
+
+    Unlike ``GET /history/{agent_id}?ack=true`` which clears the *entire* inbox,
+    this endpoint removes only the messages whose ``route_id`` values are listed
+    in the request body.  Useful when an agent fetches messages in small batches
+    and wants to acknowledge only the batch it has successfully processed.
+
+    An agent may only modify its own inbox (API key must match agent_id).
+
+    Body: ``{"route_ids": ["abc123", "def456", ...]}``
+    """
+    if agent_info["agent_id"] != agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="API key does not match agent_id",
+        )
+    try:
+        acked = await message_service.ack_message_history(
+            agent_id=agent_id,
+            route_ids=body.route_ids,
+        )
+        logger.info("inbox_acked", agent_id=agent_id, acked=acked)
+        return {"agent_id": agent_id, "acked": acked}
+
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    except Exception as e:
+        logger.error("inbox_ack_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.post("/retry-dlq")
 async def retry_dead_letter_queue(
     _: InternalTokenDep,

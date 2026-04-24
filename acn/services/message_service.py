@@ -232,6 +232,29 @@ class MessageService:
 
         return responses
 
+    async def ack_message_history(
+        self,
+        agent_id: str,
+        route_ids: list[str],
+    ) -> int:
+        """Precisely acknowledge (remove) specific messages from an agent's inbox.
+
+        Args:
+            agent_id: Agent whose inbox to update.
+            route_ids: List of route_ids to remove.
+
+        Returns:
+            Number of messages removed.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+        """
+        agent = await self.agent_repository.find_by_id(agent_id)
+        if not agent:
+            raise AgentNotFoundException(f"Agent {agent_id} not found")
+
+        return await self.router.ack_inbox(agent_id, route_ids)
+
     async def get_message_history(
         self,
         agent_id: str,
