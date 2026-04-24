@@ -213,10 +213,13 @@ async def broadcast_by_tag(
             strategy="parallel",
         )
 
+        # Record total_sent and success_count before truncation so the
+        # response accurately reflects actual delivery outcomes, not just
+        # what fits in the returned slice.
+        total_sent = len(responses)
+        success_count = len([r for r in responses if r.get("status") == "success"])
         if body.limit:
             responses = responses[: body.limit]
-
-        success_count = len([r for r in responses if r.get("status") == "success"])
         await metrics.inc_counter(
             "broadcast_sent",
             labels={"type": "tag_broadcast", "status": "success"},
@@ -226,7 +229,8 @@ async def broadcast_by_tag(
             "tag_broadcast_completed",
             from_agent=body.from_agent,
             tags=body.tags,
-            target_count=len(responses),
+            total_sent=total_sent,
+            returned=len(responses),
         )
 
         return {
@@ -234,7 +238,8 @@ async def broadcast_by_tag(
             "from_agent": body.from_agent,
             "tags": body.tags,
             "responses": responses,
-            "total": len(responses),
+            "total": total_sent,
+            "returned": len(responses),
             "successful": success_count,
         }
 

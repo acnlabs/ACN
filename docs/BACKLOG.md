@@ -97,12 +97,9 @@ P1-2 砍掉了 `(from_agent, to_agent)` 的高基数 label 后，稳态 key 数�
   目前没赶着做的原因：Redis 分支本就是 "no-PG fallback"，生产部署会用 PG 分支（已经天然零成本过滤）；tag-index 方案比修 pattern 复杂，值得等一个真实 scale 信号再做。
   影响文件：`[acn/infrastructure/persistence/redis/task_repository.py](../acn/infrastructure/persistence/redis/task_repository.py)` `save` / `_update_status` / `find_open_tasks`。
 
-### broadcast-by-tag 的 `total` 字段语义不准确（P3）
+### ~~broadcast-by-tag 的 `total` 字段语义不准确（P3）~~ ✅ 已修
 
-- **位置**：`acn/acn/routes/communication.py` — `broadcast_by_tag` 路由，第 216-238 行
-- **问题**：`body.limit` 截断 `responses` 发生在 `success_count` 和 `total` 计算之前，导致响应里的 `total` 反映的是截断后的数量，而不是实际广播触达的 agent 数量。客户端无法区分"只有 N 个 agent"和"广播了更多但被截断到 N"。
-- **修法**：先记录 `total_sent = len(responses)`，再截断，用 `total_sent` 作为响应里的 `total`，另加 `returned` 字段表示本次返回条数，或在文档里明确说明 `total` 是截断后计数。
-- **优先级**：P3（语义问题，不影响消息实际投递）
+- **修法**：在截断前记录 `total_sent = len(responses)`，截断后的数量改用新字段 `returned` 表示。响应结构变为 `{"total": <实际广播数>, "returned": <本次返回数>, ...}`。`logger` 同步改为记录 `total_sent` / `returned`。
 
 ---
 
