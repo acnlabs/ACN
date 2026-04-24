@@ -82,3 +82,29 @@ class IActivityRepository(ABC):
         ``actor_id == agent_id``, or None if no events exist.
         """
         pass
+
+    @abstractmethod
+    async def count_received_by_agent(
+        self,
+        agent_id: str,
+        since: str,
+    ) -> int:
+        """
+        Count inbound activity events directed at ``agent_id`` since
+        ``since`` (ISO-8601 string).
+
+        "Inbound" is defined as events where the agent is the *subject*
+        rather than the *actor*:
+        - ``task_approved``: agent's submission was approved; actor is
+          the reviewer.  ``event_metadata["agent_id"]`` identifies which
+          agent was approved.
+        - ``task_rejected``: agent's submission was rejected; actor is
+          the reviewer.  ``event_metadata["agent_id"]`` identifies which
+          agent was rejected.
+
+        Note: ``task_cancelled`` inbound (creator cancels a task the
+        agent had joined) is not counted here because those events carry
+        no ``agent_id`` in metadata and would require a JOIN on
+        ``participations`` — tracked in docs/BACKLOG.md.
+        """
+        pass

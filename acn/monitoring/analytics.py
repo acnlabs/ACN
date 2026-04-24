@@ -199,9 +199,9 @@ class Analytics:
             {
                 "agent_id": str,
                 "period_hours": int,
-                "messages_sent": int | None,  # int when ActivityService injected
-                "messages_received": None,    # not yet implemented; see BACKLOG
-                "errors": int | None,         # int when ActivityService injected
+                "messages_sent": int | None,      # int when ActivityService injected
+                "messages_received": int | None,  # int when ActivityService injected
+                "errors": int | None,             # int when ActivityService injected
                 "last_heartbeat": str | None,
                 "data_source_note": str,
             }
@@ -214,24 +214,31 @@ class Analytics:
         errors: int | None = None
         data_source_note: str
 
+        messages_received: int | None = None
+
         if self._activity_service:
             since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
             counts = await self._activity_service.get_activity_counts(agent_id, since)
 
             # messages_sent: events where the agent is the actor and the event
             # represents an outbound action (submission, acceptance, payment).
-            # Note: "messages_received" requires a join with the task table to
-            # identify events where this agent is the target rather than the
-            # actor; that aggregation is tracked in docs/BACKLOG.md.
             messages_sent = sum(counts.get(t, 0) for t in _SENT_TYPES)
 
             # errors: task_cancelled events where this agent is the actor.
             errors = sum(counts.get(t, 0) for t in _ERROR_TYPES)
 
+            # messages_received: task_approved + task_rejected events where
+            # event_metadata["agent_id"] == agent_id (agent is the subject,
+            # not the actor).  Counts feedback received from reviewers.
+            messages_received = await self._activity_service.get_received_count(
+                agent_id, since
+            )
+
             data_source_note = (
                 "messages_sent and errors are derived from PG activity_events "
                 f"(types: sent={sorted(_SENT_TYPES)}, errors={sorted(_ERROR_TYPES)}). "
-                "messages_received requires a task-join aggregation; see docs/BACKLOG.md."
+                "messages_received counts task_approved + task_rejected events "
+                "targeting this agent (event_metadata.agent_id)."
             )
         else:
             data_source_note = (
@@ -244,7 +251,7 @@ class Analytics:
             "agent_id": agent_id,
             "period_hours": hours,
             "messages_sent": messages_sent,
-            "messages_received": None,  # requires task-join; see BACKLOG
+            "messages_received": messages_received,
             "errors": errors,
             "last_heartbeat": last_heartbeat,
             "data_source_note": data_source_note,

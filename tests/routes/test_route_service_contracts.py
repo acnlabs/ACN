@@ -144,6 +144,9 @@ class TestMethodNamesStillExist:
     def test_activity_service_get_last_activity_at(self):
         assert callable(getattr(ActivityService, "get_last_activity_at", None))
 
+    def test_activity_service_get_received_count(self):
+        assert callable(getattr(ActivityService, "get_received_count", None))
+
 
 # =============================================================================
 # Helpers

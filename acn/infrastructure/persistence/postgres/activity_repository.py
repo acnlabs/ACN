@@ -168,3 +168,31 @@ class PostgresActivityRepository(IActivityRepository):
             )
             ts = result.scalar()
             return ts.isoformat() if ts else None
+
+    async def count_received_by_agent(
+        self,
+        agent_id: str,
+        since: str,
+    ) -> int:
+        since_dt = datetime.fromisoformat(since)
+        if not since_dt.tzinfo:
+            since_dt = since_dt.replace(tzinfo=UTC)
+
+        # Count task_approved and task_rejected events that target this agent.
+        # Both event types store the target agent's ID in event_metadata["agent_id"]
+        # (set by ActivityService.record_task_approved / record_task_rejected).
+        #
+        # Performance note: the `type` IN filter leverages the existing
+        # `ix_activities_type` index to restrict the scan before the JSONB
+        # predicate is evaluated.  A partial expression index on
+        # `(event_metadata->>'agent_id')` would further speed up large tables
+        # but is deferred until query profiling reveals it as a hotspot.
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(func.count()).where(
+                    ActivityModel.type.in_(["task_approved", "task_rejected"]),
+                    ActivityModel.event_metadata["agent_id"].as_string() == agent_id,
+                    ActivityModel.timestamp >= since_dt,
+                )
+            )
+            return result.scalar() or 0

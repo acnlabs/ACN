@@ -397,3 +397,18 @@ class ActivityService:
         if not self._repository:
             return None
         return await self._repository.get_last_activity_at(agent_id)
+
+    async def get_received_count(self, agent_id: str, since: str) -> int:
+        """
+        Return the number of inbound activity events directed at *agent_id*
+        since *since* (ISO-8601).
+
+        "Inbound" means the agent is the subject, not the actor:
+        ``task_approved`` and ``task_rejected`` events where
+        ``event_metadata["agent_id"] == agent_id``.
+
+        Returns 0 when no PostgreSQL repository is configured.
+        """
+        if not self._repository:
+            return 0
+        return await self._repository.count_received_by_agent(agent_id, since)
