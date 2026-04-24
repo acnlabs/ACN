@@ -73,9 +73,19 @@ async def websocket_endpoint(
 
     logger.info("websocket_connected", agent_id=agent_id)
 
+    # websocket.accept() was already called above for the auth handshake,
+    # so tell the manager to skip its own accept() call.
+    # The try block starts here so that if connect() itself raises, the
+    # except clause can still call disconnect() with a defined connection_id
+    # (empty string is a safe no-op in WebSocketManager.disconnect).
+    connection_id = ""
     try:
-        # Register agent WebSocket connection
-        await ws_manager.connect(agent_id, websocket)
+        connection_id = await ws_manager.connect(
+            websocket,
+            user_id=agent_id,
+            metadata={"principal_type": "agent"},
+            already_accepted=True,
+        )
 
         # Keep connection alive and handle messages
         while True:
@@ -87,19 +97,19 @@ async def websocket_endpoint(
 
     except WebSocketDisconnect:
         logger.info("websocket_disconnected", agent_id=agent_id)
-        await ws_manager.disconnect(agent_id)
+        await ws_manager.disconnect(connection_id)
 
     except Exception as e:
         logger.error("websocket_error", agent_id=agent_id, error=str(e))
-        await ws_manager.disconnect(agent_id)
+        await ws_manager.disconnect(connection_id)
         raise
 
 
 @router.get("/api/v1/websocket/connections")
 async def get_active_connections(_: InternalTokenDep, ws_manager: WsManagerDep = None):
-    """Get active WebSocket connections (requires X-Internal-Token)"""
-    connections = await ws_manager.get_active_connections()
-    return {"connections": connections, "count": len(connections)}
+    """Get active WebSocket connections summary (requires X-Internal-Token)"""
+    stats = ws_manager.get_stats()
+    return stats
 
 
 @router.get("/api/v1/websocket/agent/{agent_id}/status")
@@ -114,5 +124,5 @@ async def get_agent_websocket_status(
     """
     if agent_info["agent_id"] != agent_id:
         raise HTTPException(status_code=403, detail="API key does not match agent_id")
-    is_connected = await ws_manager.is_connected(agent_id)
+    is_connected = ws_manager.is_user_connected(agent_id)
     return {"agent_id": agent_id, "connected": is_connected}

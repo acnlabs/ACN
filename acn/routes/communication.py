@@ -78,11 +78,10 @@ async def send_message(
             priority=body.priority,
         )
 
-        await metrics.record_message(
+        await metrics.inc_message_count(
             from_agent=body.from_agent,
             to_agent=body.target_agent,
-            message_type="direct",
-            success=True,
+            status="success",
         )
 
         await audit.log_event(
@@ -98,21 +97,19 @@ async def send_message(
 
     except AgentNotFoundException as e:
         logger.error("message_send_failed", error=str(e))
-        await metrics.record_message(
+        await metrics.inc_message_count(
             from_agent=body.from_agent,
             to_agent=body.target_agent,
-            message_type="direct",
-            success=False,
+            status="not_found",
         )
         raise HTTPException(status_code=404, detail=str(e)) from e
 
     except Exception as e:
         logger.error("message_send_failed", error=str(e))
-        await metrics.record_message(
+        await metrics.inc_message_count(
             from_agent=body.from_agent,
             to_agent=body.target_agent,
-            message_type="direct",
-            success=False,
+            status="error",
         )
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -151,10 +148,9 @@ async def broadcast_message(
         )
 
         success_count = len([r for r in responses if r.get("status") == "success"])
-        await metrics.record_broadcast(
-            message_type="broadcast",
-            target_count=len(responses),
-            success=True,
+        await metrics.inc_counter(
+            "broadcast_sent",
+            labels={"type": "broadcast", "status": "success"},
         )
 
         logger.info(
@@ -178,10 +174,9 @@ async def broadcast_message(
 
     except Exception as e:
         logger.error("broadcast_failed", error=str(e))
-        await metrics.record_broadcast(
-            message_type="broadcast",
-            target_count=0,
-            success=False,
+        await metrics.inc_counter(
+            "broadcast_sent",
+            labels={"type": "broadcast", "status": "error"},
         )
         raise HTTPException(status_code=500, detail=str(e)) from e
 
@@ -222,10 +217,9 @@ async def broadcast_by_tag(
             responses = responses[: body.limit]
 
         success_count = len([r for r in responses if r.get("status") == "success"])
-        await metrics.record_broadcast(
-            message_type="tag_broadcast",
-            target_count=len(responses),
-            success=True,
+        await metrics.inc_counter(
+            "broadcast_sent",
+            labels={"type": "tag_broadcast", "status": "success"},
         )
 
         logger.info(
@@ -316,11 +310,11 @@ async def retry_dead_letter_queue(
     Note: Uses MessageRouter directly (infrastructure operation)
     """
     try:
-        result = await router.retry_failed_messages(max_retries=max_retries)
+        retried = await router.retry_dlq(max_retries=max_retries)
 
-        logger.info("dlq_retry_completed", retried=result.get("retried", 0))
+        logger.info("dlq_retry_completed", retried=retried)
 
-        return result
+        return {"retried": retried, "max_retries": max_retries}
 
     except Exception as e:
         logger.error("dlq_retry_failed", error=str(e))

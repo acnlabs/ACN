@@ -139,10 +139,10 @@ async def lifespan(app: FastAPI):
         gateway_base_url=settings.gateway_base_url,
     )
 
-    # Initialize monitoring
+    # Initialize monitoring (Analytics is wired with activity_service below,
+    # after ActivityService is constructed)
     metrics_instance = MetricsCollector(registry_instance.redis)
     audit_instance = AuditLogger(registry_instance.redis)
-    analytics_instance = Analytics(registry_instance.redis)
 
     # Initialize payment services
     webhook_config = create_webhook_config_from_settings(settings)
@@ -168,6 +168,13 @@ async def lifespan(app: FastAPI):
     activity_service_instance = ActivityService(
         redis=registry_instance.redis,
         repository=_activity_repository,
+    )
+
+    # Analytics is constructed here (after ActivityService) so it can receive
+    # activity_service via the constructor rather than a post-hoc attribute set.
+    analytics_instance = Analytics(
+        redis=registry_instance.redis,
+        activity_service=activity_service_instance,
     )
 
     # Initialize Escrow Client (for Labs task budget management)

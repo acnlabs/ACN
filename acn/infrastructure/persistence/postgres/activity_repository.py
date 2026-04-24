@@ -6,7 +6,7 @@ Full persistent activity storage — no row limit, no TTL.
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ....core.interfaces.activity_repository import IActivityRepository
@@ -136,3 +136,35 @@ class PostgresActivityRepository(IActivityRepository):
                 .limit(limit)
             )
             return [self._model_to_dict(r) for r in result.scalars().all()]
+
+    async def count_by_agent_and_type(
+        self,
+        agent_id: str,
+        since: str,
+    ) -> dict[str, int]:
+        since_dt = datetime.fromisoformat(since)
+        if not since_dt.tzinfo:
+            since_dt = since_dt.replace(tzinfo=UTC)
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(ActivityModel.type, func.count().label("cnt"))
+                .where(
+                    ActivityModel.actor_type == "agent",
+                    ActivityModel.actor_id == agent_id,
+                    ActivityModel.timestamp >= since_dt,
+                )
+                .group_by(ActivityModel.type)
+            )
+            return {row.type: row.cnt for row in result.all()}
+
+    async def get_last_activity_at(self, agent_id: str) -> str | None:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(func.max(ActivityModel.timestamp)).where(
+                    ActivityModel.actor_type == "agent",
+                    ActivityModel.actor_id == agent_id,
+                )
+            )
+            ts = result.scalar()
+            return ts.isoformat() if ts else None

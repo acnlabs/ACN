@@ -189,7 +189,10 @@ async def discover_payment_agents(
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """Discover agents with payment capabilities"""
-    agents = await payment_discovery.discover_agents(method=method, network=network)
+    agents = await payment_discovery.find_agents_accepting_payment(
+        payment_method=method,
+        network=network,
+    )
     return {"agents": agents, "count": len(agents)}
 
 
@@ -209,6 +212,9 @@ async def create_payment_task(
             detail="Authenticated agent does not match from_agent field",
         )
     try:
+        task_metadata = dict(request.metadata or {})
+        task_metadata["network"] = request.network.value if request.network else None
+
         task = await payment_tasks.create_payment_task(
             buyer_agent=request.from_agent,
             seller_agent=request.to_agent,
@@ -217,7 +223,7 @@ async def create_payment_task(
             currency=request.currency,
             payment_method=request.payment_method,
             task_type="payment",
-            metadata=request.metadata,
+            metadata=task_metadata,
         )
 
         return {"task_id": task.task_id, "status": "created"}
@@ -241,18 +247,16 @@ async def get_agent_payment_tasks(
     agent_id: str,
     agent_info: AgentApiKeyDep,
     status: PaymentTaskStatus | None = None,
-    limit: int = Query(default=100, ge=1, le=1000),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=1000),
     payment_tasks: PaymentTasksDep = None,
 ):
     """Get payment tasks for agent (requires Agent API Key matching agent_id)"""
     if agent_info["agent_id"] != agent_id:
         raise HTTPException(status_code=403, detail="API key does not match agent_id")
-    tasks = await payment_tasks.get_agent_tasks(
+    tasks = await payment_tasks.get_tasks_by_agent(
         agent_id=agent_id,
         status=status,
         limit=limit,
-        offset=offset,
     )
     return {"agent_id": agent_id, "tasks": tasks}
 
@@ -266,7 +270,7 @@ async def get_agent_payment_stats(
     """Get payment statistics for agent (requires Agent API Key matching agent_id)"""
     if agent_info["agent_id"] != agent_id:
         raise HTTPException(status_code=403, detail="API key does not match agent_id")
-    stats = await payment_tasks.get_agent_stats(agent_id)
+    stats = await payment_tasks.get_payment_stats(agent_id)
     return stats
 
 

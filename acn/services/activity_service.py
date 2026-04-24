@@ -369,3 +369,31 @@ class ActivityService:
             description=f"Cancelled task: {task_title}",
             task_id=task_id,
         )
+
+    # -------------------------------------------------------------------------
+    # Aggregation (requires PostgreSQL repository)
+    # -------------------------------------------------------------------------
+
+    async def get_activity_counts(
+        self,
+        agent_id: str,
+        since: str,
+    ) -> dict[str, int]:
+        """
+        Return per-type activity counts for *agent_id* since *since* (ISO-8601).
+
+        Counts only rows where the agent is the *actor* (outbound events).
+        Returns an empty dict when no PostgreSQL repository is configured.
+        """
+        if not self._repository:
+            return {}
+        return await self._repository.count_by_agent_and_type(agent_id, since)
+
+    async def get_last_activity_at(self, agent_id: str) -> str | None:
+        """
+        Return ISO-8601 timestamp of the agent's most recent activity event,
+        or None if no events exist or repository is not configured.
+        """
+        if not self._repository:
+            return None
+        return await self._repository.get_last_activity_at(agent_id)

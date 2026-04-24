@@ -159,27 +159,35 @@ class WebSocketManager:
         websocket: WebSocket,
         user_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        already_accepted: bool = False,
     ) -> str:
         """
         Accept a new WebSocket connection
 
         Args:
             websocket: FastAPI WebSocket
-            user_id: Optional user ID
+            user_id: Optional principal identifier (user_id, agent_id, etc.)
             metadata: Optional connection metadata
+            already_accepted: Set to True if the caller already invoked
+                ``websocket.accept()`` (e.g. to perform an auth handshake
+                before handing the socket off to the manager). When True,
+                the manager will not call ``accept()`` again — calling it
+                twice raises RuntimeError in Starlette.
 
         Returns:
-            Connection ID
+            Connection ID (empty string if rejected due to max_connections).
         """
         if self.max_connections > 0 and len(self._connections) >= self.max_connections:
-            await websocket.accept()
+            if not already_accepted:
+                await websocket.accept()
             await websocket.close(code=4429, reason="Too many connections")
             logger.warning(
                 f"WebSocket connection rejected: max_connections={self.max_connections} reached"
             )
             return ""
 
-        await websocket.accept()
+        if not already_accepted:
+            await websocket.accept()
 
         connection_id = uuid4().hex[:16]
 
@@ -568,3 +576,16 @@ class WebSocketManager:
                 channel: len(conn_ids) for channel, conn_ids in self._channels.items()
             },
         }
+
+    def is_user_connected(self, user_id: str) -> bool:
+        """
+        Return True if the given principal has at least one active connection.
+
+        ``user_id`` is the generic principal identifier passed to ``connect()``.
+        Route layer may pass an ``agent_id`` here — the manager is agnostic to
+        the principal type.
+
+        Args:
+            user_id: Principal identifier set during ``connect()``.
+        """
+        return any(conn.user_id == user_id for conn in self._connections.values())

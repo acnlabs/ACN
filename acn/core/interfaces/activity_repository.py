@@ -60,3 +60,25 @@ class IActivityRepository(ABC):
     ) -> list[dict[str, Any]]:
         """Find activities for multiple agents (merged, deduplicated)"""
         pass
+
+    @abstractmethod
+    async def count_by_agent_and_type(
+        self,
+        agent_id: str,
+        since: str,
+    ) -> dict[str, int]:
+        """
+        Return a mapping of {event_type: count} for events where
+        ``actor_id == agent_id`` and ``timestamp >= since`` (ISO-8601 string).
+
+        Only counts rows where the agent is the *actor* (outbound events).
+        """
+        pass
+
+    @abstractmethod
+    async def get_last_activity_at(self, agent_id: str) -> str | None:
+        """
+        Return the ISO-8601 timestamp of the most recent event where
+        ``actor_id == agent_id``, or None if no events exist.
+        """
+        pass

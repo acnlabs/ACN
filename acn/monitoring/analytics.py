@@ -28,9 +28,23 @@ Architecture:
 
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from redis.asyncio import Redis
+
+if TYPE_CHECKING:
+    from ..services.activity_service import ActivityService
+
+# Activity event types that count as "outbound" (agent is the actor).
+# task_created: included because a creator-agent posting a task is an outbound
+# action; pure solver agents will rarely have this type, so the semantic drift
+# is acceptable.  task_accepted: agent claims a task (outbound intent signal).
+# task_submitted: agent delivers work (outbound result).  payment_sent: agent
+# initiates payment.
+_SENT_TYPES = {"task_submitted", "task_accepted", "payment_sent", "task_created"}
+# Activity event types treated as errors/cancellations from the agent's side.
+# task_cancelled: actor is the cancelling party (agent or human creator).
+_ERROR_TYPES = {"task_cancelled"}
 
 
 class Analytics:
@@ -52,14 +66,19 @@ class Analytics:
         health = await analytics.get_system_health()
     """
 
-    def __init__(self, redis: Redis):
+    def __init__(self, redis: Redis, activity_service: "ActivityService | None" = None):
         """
         Initialize analytics service.
 
         Args:
-            redis: Redis client for data access
+            redis: Redis client for data access.
+            activity_service: Optional ActivityService used to aggregate
+                per-agent activity counts from PostgreSQL. When provided,
+                ``get_agent_activity`` populates ``messages_sent`` and
+                ``errors`` from the PG ``activity_events`` table.
         """
         self.redis = redis
+        self._activity_service = activity_service
         self._prefix = "acn:analytics:"
 
     # =========================================================================
@@ -154,32 +173,35 @@ class Analytics:
         """
         Get activity for a specific agent.
 
-        Per-agent message and error counters are intentionally null. Before
-        SCALE_AUDIT P1-2 this method scanned `acn:metrics:acn_messages_total:
-        from_agent={id}*` / `:to_agent={id}*` / `acn_errors_total:*{id}*`,
-        but P1-2 collapsed the `acn_messages_total` labels to `status`-only
-        to stop the cardinality blow-up, so those patterns now match zero
-        keys and the scans always returned zero without raising. Rather
-        than quietly reporting 0 (indistinguishable from "agent idle"), we
-        return null and point consumers at the PG activity_events stream
-        for real per-agent aggregation. See docs/BACKLOG.md.
+        Data sources:
+        - ``messages_sent`` and ``errors``: aggregated from PG ``activity_events``
+          via ``ActivityService.get_activity_counts`` when an ActivityService is
+          injected (see ``__init__``). Returns ``None`` when no ActivityService is
+          configured.  The mapping from event types to field names is defined by
+          ``_SENT_TYPES`` / ``_ERROR_TYPES`` at module level.
+        - ``messages_received``: not yet available — requires a JOIN on the task
+          table to identify events where this agent is the *target* rather than
+          the actor.  Tracked in docs/BACKLOG.md.
+        - ``last_heartbeat``: always read from ``acn:heartbeat:{agent_id}`` in
+          Redis (written by the liveness path, unaffected by metric schema).
 
-        The only field that is still authoritative here is `last_heartbeat`,
-        which reads from `acn:heartbeat:{agent_id}` — that key is written
-        by the liveness path and is unaffected by the metric schema change.
+        Historical note: before SCALE_AUDIT P1-2, this method scanned Redis
+        metric keys per-agent, but P1-2 collapsed ``acn_messages_total`` labels
+        to ``status``-only to prevent cardinality blow-up, making those scans
+        useless. P1-9 set the fields explicitly to ``None`` with a
+        ``data_source_note``. This version wires in PG activity aggregation.
 
         Args:
             agent_id: Agent ID to look up.
-            hours: Reporting window (kept for API shape; per-agent counters
-                   are null so the window is effectively decorative).
+            hours: Reporting window in hours for the activity aggregation.
 
         Returns:
             {
                 "agent_id": str,
                 "period_hours": int,
-                "messages_sent": None,      # not available from Redis metrics
-                "messages_received": None,  # not available from Redis metrics
-                "errors": None,             # not available from Redis metrics
+                "messages_sent": int | None,  # int when ActivityService injected
+                "messages_received": None,    # not yet implemented; see BACKLOG
+                "errors": int | None,         # int when ActivityService injected
                 "last_heartbeat": str | None,
                 "data_source_note": str,
             }
@@ -188,17 +210,44 @@ class Analytics:
         if isinstance(last_heartbeat, bytes):
             last_heartbeat = last_heartbeat.decode()
 
+        messages_sent: int | None = None
+        errors: int | None = None
+        data_source_note: str
+
+        if self._activity_service:
+            since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+            counts = await self._activity_service.get_activity_counts(agent_id, since)
+
+            # messages_sent: events where the agent is the actor and the event
+            # represents an outbound action (submission, acceptance, payment).
+            # Note: "messages_received" requires a join with the task table to
+            # identify events where this agent is the target rather than the
+            # actor; that aggregation is tracked in docs/BACKLOG.md.
+            messages_sent = sum(counts.get(t, 0) for t in _SENT_TYPES)
+
+            # errors: task_cancelled events where this agent is the actor.
+            errors = sum(counts.get(t, 0) for t in _ERROR_TYPES)
+
+            data_source_note = (
+                "messages_sent and errors are derived from PG activity_events "
+                f"(types: sent={sorted(_SENT_TYPES)}, errors={sorted(_ERROR_TYPES)}). "
+                "messages_received requires a task-join aggregation; see docs/BACKLOG.md."
+            )
+        else:
+            data_source_note = (
+                "per-agent message and error counts require PG "
+                "activity_events aggregation (ActivityService not injected); "
+                "see docs/BACKLOG.md"
+            )
+
         return {
             "agent_id": agent_id,
             "period_hours": hours,
-            "messages_sent": None,
-            "messages_received": None,
-            "errors": None,
+            "messages_sent": messages_sent,
+            "messages_received": None,  # requires task-join; see BACKLOG
+            "errors": errors,
             "last_heartbeat": last_heartbeat,
-            "data_source_note": (
-                "per-agent message and error counts require PG "
-                "activity_events aggregation; see docs/BACKLOG.md"
-            ),
+            "data_source_note": data_source_note,
         }
 
     # =========================================================================
