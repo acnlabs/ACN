@@ -117,22 +117,37 @@ class TaskPool:
         limit: int = 20,
     ) -> list[Task]:
         """
-        Find tasks suitable for an agent based on their tags
+        Find tasks suitable for an agent based on their tags.
+
+        The tag filter is pushed down to the repository so there is
+        exactly one filtering layer instead of two. The previous
+        implementation did ``find_open_tasks(limit=limit*2)`` and then
+        re-filtered in Python; the 2× was a hedge against tag filter
+        dropping the first page, but it doubled the per-call cost
+        (ZREVRANGE pulls twice as many IDs → twice as many HGETALL
+        round-trips against Redis) and still didn't guarantee filling
+        ``limit``.
+
+        Note: ``find_open_tasks`` currently still does the tag match in
+        Python, just on the repository side. A true Redis tag index
+        (SET per tag, ZINTERSTORE across selected tags) is the next
+        step and is tracked in docs/BACKLOG.md. This commit only
+        removes the duplicated filtering pass.
+
+        Return contract is "up to ``limit`` tasks"; a single page may
+        legitimately return fewer when tag matches are sparse.
 
         Args:
             agent_tags: Agent's tag list
             limit: Maximum number of tasks to return
 
         Returns:
-            List of matching tasks
+            List of matching tasks (length <= limit).
         """
-        # Get all open tasks and filter by tags
-        tasks = await self.repository.find_open_tasks(limit=limit * 2)  # Get more to filter
-
-        # Filter to tasks the agent can do
-        matching_tasks = [task for task in tasks if task.matches_tags(agent_tags)][:limit]
-
-        return matching_tasks
+        return await self.repository.find_open_tasks(
+            tags=agent_tags,
+            limit=limit,
+        )
 
     async def count_open(self) -> int:
         """

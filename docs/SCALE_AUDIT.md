@@ -6,9 +6,10 @@
 
 ## 摘要
 
-- **4 个 P0**（生产必然炸 / 确定性泄漏 / 单次操作随 N 爆炸）
-- **8 个 P1**（规模化会炸 / 高流量 Redis 失控）
-- **4 个 P2**（小隐患 / 代码异味 / 运维放大）
+- **4 个 P0**（生产必然炸 / 确定性泄漏 / 单次操作随 N 爆炸）— ✅ 全部已修
+- **9 个 P1**（规模化会炸 / 高流量 Redis 失控；含扫描中新增的 P1-9 与归档的 P1-8）— ✅ 全部已修 / 归档
+- **4 个 P2**（小隐患 / 代码异味 / 运维放大）— ✅ 全部已修
+- **残留**：P2-4 的"Redis tag 索引"真 scale 实现、Analytics 迁 PG、per-agent activity 从 `activity_events` 聚合，都作为后续工程项放 `docs/BACKLOG.md`，非本轮必须
 
 ---
 
@@ -104,14 +105,14 @@
 
 ### [x] ✅ 已修 P1-6 `acn:subnets:all` 只读不写，功能层面的 bug
 
-- **位置**：`[task_repository.py `find_open_tasks`](../acn/infrastructure/persistence/redis/task_repository.py)`
+- **位置**：`[task_repository.py` find_open_tasks`](../acn/infrastructure/persistence/redis/task_repository.py)`
 - **反模式**：`smembers("acn:subnets:all")` 永远空；而且 hash 用的是错 key (`acn:subnet:{sid}` 应为 `acn:subnets:info:{sid}`)。两个 bug 叠加使 `visible_subnet_ids` 永远为空，所有带 `subnet_id` 的 task 对所有 agent 都不可见
 - **规模化后果**：功能层面"规模化等于全挂"
 - **实际修复**：放弃新增索引路线（避免双写漂移）。可见 subnet 等价于 "agent 自己的 `subnet_ids`"，直接 `HGET acn:agents:{uid} subnet_ids` + `json.loads` → `set`。一次 HGET 替换了原来的 O(N_subnets) 扫描，兼做 bug fix 和性能优化。JSON 损坏兜底到空集合（隐藏 private task，不 500）
 
 ### [x] ✅ 已修 P1-7 `RedisAgentRepository.delete` 未删 `acn:agents:by_erc8004_id` 与 alive
 
-- **位置**：`[agent_repository.py `delete`](../acn/infrastructure/persistence/redis/agent_repository.py)`
+- **位置**：`[agent_repository.py` delete`](../acn/infrastructure/persistence/redis/agent_repository.py)`
 - **反模式**：链上绑定反向索引是永久 string，未在 delete 时清；alive 虽然 90s TTL，但窗口内 `filter_alive`/`mark_offline_stale` 仍会"看到"已删 agent
 - **规模化后果**：删号重建/迁移时残留索引阻止新号绑定；每删一次泄漏 1 string
 - **实际修复**：`delete` 里追加两步：只有 `agent.erc8004_agent_id` 存在才 `DEL acn:agents:by_erc8004_id:{token_id}`（避免 stomp 空字符串 key）；总是 `DEL acn:agents:{id}:alive` 让活性信号即时清零
@@ -121,7 +122,7 @@
 
 - **位置**：`[monitoring/metrics.py](../acn/monitoring/metrics.py)` `prometheus_export` / `get_all_metrics`；`[monitoring/analytics.py](../acn/monitoring/analytics.py)` `get_agent_activity` / `get_message_stats` / `get_system_health`
 - **原判断**：`scan_iter(acn:metrics:*)` + 按 agent 扫消息计数，百万 key 下 Prometheus scrape 分钟级
-- **归档理由**：P1-2 把 `acn_messages_total` 的 label 从 `(from_agent, to_agent, status)` 削减到只剩 `status` 之后，`acn:metrics:*` 稳态 key 数从 `O(活跃 agent 对)` 压到 `O(已注册 metric × 低基数 label 组合)`，实际即**几十到几百**。当前 schema 下 `scan_iter` 单次 scrape 几十次 GET、p99 几十 ms，不是瓶颈。**本条问题由 P1-2 的 schema 降维顺带消除**。
+- **归档理由**：P1-2 把 `acn_messages_total` 的 label 从 `(from_agent, to_agent, status)` 削减到只剩 `status` 之后，`acn:metrics:`* 稳态 key 数从 `O(活跃 agent 对)` 压到 `O(已注册 metric × 低基数 label 组合)`，实际即**几十到几百**。当前 schema 下 `scan_iter` 单次 scrape 几十次 GET、p99 几十 ms，不是瓶颈。**本条问题由 P1-2 的 schema 降维顺带消除**。
 - **残留跟踪**：BACKLOG 保留两条（`acn:metrics:_index` set 替 scan、adhoc counter 未注册 label 强约束），作为预防未来 schema 再膨胀的预优化。那是"低优先长期"，不再是 P1。
 
 ### [x] ✅ 已修 P1-9 monitoring / analytics routes 长期 500（8/9 endpoint 功能废）+ `get_agent_activity` 恒零副作用
@@ -147,15 +148,29 @@
 
 ## P2：小隐患 / 代码异味
 
-### [ ] P2-1 Lifespan 未关闭 WebSocket / Webhook
+### [x] ✅ 已修 P2-1 Lifespan 未 start/stop WebSocket / Webhook
 
-- **位置**：`[acn/api.py:255-262](../acn/api.py)`；`[infrastructure/messaging/websocket_manager.py:133-155](../acn/infrastructure/messaging/websocket_manager.py)`（有 `stop()` 但未被调用）；`[protocols/ap2/webhook.py:143-152](../acn/protocols/ap2/webhook.py)`
-- **修复方向**：lifespan teardown 顺序 `await ws_manager.stop()`、`webhook_service.stop()`
+- **位置**：`[acn/api.py](../acn/api.py)` lifespan；`[infrastructure/messaging/websocket_manager.py](../acn/infrastructure/messaging/websocket_manager.py)`；`[protocols/ap2/webhook.py](../acn/protocols/ap2/webhook.py)`
+- **反模式**：`WebSocketManager` / `WebhookService` 都构造了但 `start()` 从未被调用；teardown 也没 `stop()`。原报告只记录了泄漏（stop 缺失），实际排查时发现更严重的是 **`start()` 也缺失**
+- **规模化后果**：
+  - **功能 bug（latent）**：`ws_manager.start()` 是 `self._pubsub` 被赋值的唯一路径。没调用 → `subscribe()` 里 `if self._pubsub:` 静默跳过 Redis 订阅 → `_listen_pubsub` 永不运行。单实例部署因为 `broadcast()` 还会跑 `_broadcast_local()` 无感知，但**任何多实例部署跨节点 WebSocket 消息全部丢失**
+  - **资源泄漏**：`webhook_service` 首次 `send_event` 会 lazy-init `httpx.AsyncClient`，但没 `stop()` → 每次进程重启泄漏整个连接池
+- **实际修复**：
+  - a2a 挂载后依次 `await ws_manager_instance.start()`、`await webhook_service_instance.start()`
+  - teardown 顺序修订：watchdog.cancel → ws.stop → webhook.stop → router.close → redis.close → pg.dispose（确保依赖顺序正确：pubsub listener 先于 Redis 关闭、webhook httpx 先于 Redis 关闭）
+  - 两个 `stop()` 各自包 try/except，一侧失败不阻塞另一侧
+- **测试**：`tests/routes/test_lifespan_teardown.py` 用 `ExitStack` + AsyncMock 拦截所有重依赖（CPython 的 `with` 最多嵌套 20 层，必须用 ExitStack），强制 `settings.database_url=""` 走 Redis 分支；断言 start/stop 各调用一次、相位不交错；断言 ws.stop() 抛错时 webhook.stop() 仍然被调用
 
-### [ ] P2-2 `MessageRouter.register_handler` 只追加无注销无上限
+### [x] ✅ 已修 P2-2 `MessageRouter.register_handler` 只追加无去重无上限
 
-- **位置**：`[acn/infrastructure/messaging/message_router.py:298-313](../acn/infrastructure/messaging/message_router.py)`
-- **修复方向**：覆盖策略或 per-type 最大 handler 数
+- **位置**：`[acn/infrastructure/messaging/message_router.py](../acn/infrastructure/messaging/message_router.py)`
+- **反模式**：对 `_handlers[message_type]` 无脑 `append`。长驻进程里遇到 module reload / 启动重试等场景，同一 (type, handler) 会被重复注册，一条消息触发 N 份同样的 handler。并且没有注销接口，整个桶只能增不能减
+- **规模化后果**：被反复 re-register 的 hot 进程会线性放大消息处理 CPU + 调用端副作用（重复落库 / 重复计费）
+- **实际修复**：
+  - 同一 (type, handler) 重复注册变成幂等 no-op
+  - per-type 硬上限 `MAX_HANDLERS_PER_TYPE=32`，超限 `raise ValueError`（让误用的调用方显式失败，而不是静默吞掉 registrations）
+  - 新增 `unregister_handler(type, handler)`；桶空时连 key 一起 delete，避免 `_handlers` 累积已死 type
+- **跟进**：全仓当前只有 1 个调用点（`MessageService.register_handler`），且没有生产调用路径，这次修复更多是对外部 SDK 接入的防御
 
 ### [x] ✅ 已修 P2-3 `Analytics.get_agent_stats` 扫描的 key 模式与真实 schema 不符
 
@@ -163,28 +178,36 @@
 - **反模式**：`scan_iter("acn:agents:*:info")`、`scan_iter("acn:subnets:*:info")`，后缀 `:info` 从未写过 → 永远匹配 0 个 key → 三个 API 永恒返回空数据且不报错
 - **规模化后果**：功能层面"监控面板永远全零"；一旦 fix pattern 还会暴露二级 scale 问题（`_count_agents_in_subnet` 每次扫全量 agent + Python filter，每 subnet O(N)）
 - **实际修复**：
-  - `get_agent_stats` → `scan_iter("acn:agents:*")` + **段数 ==3 过滤**（`acn:agents:{uuid}` 是 3 段；`by_owner:*` / `by_endpoint:*` / `:alive` 等索引都是 4+ 段），不误收索引 key
+  - `get_agent_stats` → `scan_iter("acn:agents:*")` + **段数 ==3 过滤**（`acn:agents:{uuid}` 是 3 段；`by_owner:`* / `by_endpoint:`* / `:alive` 等索引都是 4+ 段），不误收索引 key
   - `get_subnet_stats` → `scan_iter("acn:subnets:info:*")`（真源 schema）
   - `_count_agents_in_subnet` → 弃用 scan+filter 路径，直接 `scard("acn:subnets:{id}:agents")` 读真源成员 set。不仅修了 pattern 错误，还顺便把 O(N_agents) 降到 O(1)
 - **跟进**：PG 化的长期方向（把 agent/subnet 统计放到 PG 聚合）放 BACKLOG，本次只做"对齐 schema + 消除二级 scale 问题"
 
-### [ ] P2-4 `TaskPool.find_tasks_for_agent` 过度拉取后 Python 侧过滤
+### [x] ✅ 已修 P2-4 `TaskPool.find_tasks_for_agent` 过度拉取后 Python 侧过滤
 
-- **位置**：`[acn/infrastructure/task_pool.py:129-134](../acn/infrastructure/task_pool.py)`
-- **修复方向**：仓库层用 tag 索引先过滤
+- **位置**：`[acn/infrastructure/task_pool.py](../acn/infrastructure/task_pool.py)` `find_tasks_for_agent`
+- **反模式**：`repo.find_open_tasks(limit=limit*2)` 不传 tags，拉回后再在 Python 端 `task.matches_tags(agent_tags)` 过滤取前 `limit`。两层过滤（repo 内已有 tags 参数但被绕过），且 2× hedge 放大了每次调用的 Redis 往返
+- **规模化后果**：
+  - Redis 路径下每次 `ZREVRANGE` 拉回 2× task_id + 每个 task 一次 `HGETALL`，随调用 QPS 线性膨胀
+  - PG 路径下 `find_open_tasks(tags=...)` 本来能翻译成 `required_tags @> ARRAY[...]` SQL WHERE，被绕过后变成扫一遍结果集再 Python filter，白费索引
+- **实际修复**：改为 `return await self.repository.find_open_tasks(tags=agent_tags, limit=limit)`。只剩一层过滤：
+  - **PG 路径**：立刻变成原生 ARRAY containment WHERE，扫描量 → 0
+  - **Redis 路径**：目前仓库层仍然是 Python-side `matches_tags`，下推只消除重复过滤 + 去掉 2× hedge。真正的 Redis tag 索引（`acn:tasks:by_tag:{tag}` zset + `ZINTERSTORE` 跨 tag 交集）是更大的 refactor，放在 BACKLOG
+- **行为微变**：原来 2× hedge 是在"一页被 tag 过滤掉大部分"时保守补偿，现在下推后单页可能返回 <`limit` 个；但契约本来就是"up to limit"，外层调用没循环翻页兜底，2× 也不能真保证填满。接受这个微变作为 bug fix 的一部分
+- **测试**：`tests/infrastructure/test_task_pool_find_tasks_for_agent.py` 用 AsyncMock repo 断言（1）`tags=agent_tags` 被下推 + `limit` 不被 ×2（2）pool 不对 repo 结果做二次 filter（即使 repo 返回了 tag 不匹配的 task，pool 必须原样返回，否则就是双层过滤的老毛病）（3）空结果正常透传
 
 ---
 
 ## 对比表：inbox 重构已修 vs 本次新发现
 
 
-| 反模式                           | inbox 重构已修           | 新发现位置                                                                   |
-| ----------------------------- | -------------------- | ----------------------------------------------------------------------- |
-| 每 agent 一个 key，无 cap/TTL/删除清理 | 是（cap+TTL+delete 清理） | P1-3 `all_participations`、P1-5 AP2 audit                                |
+| 反模式                           | inbox 重构已修           | 新发现位置                                                                      |
+| ----------------------------- | -------------------- | -------------------------------------------------------------------------- |
+| 每 agent 一个 key，无 cap/TTL/删除清理 | 是（cap+TTL+delete 清理） | P1-3 `all_participations`、P1-5 AP2 audit                                   |
 | 每消息写双方 sorted set 历史          | 是                    | ~~P1-1 `acn:messages:log:{route_id}` 仍为 key-per-route~~ ✅ 改用 capped stream |
-| 全局 list 无上限                   | DLQ 已 ltrim          | P0-3 `acn:audit:day:`* 日 list 无 trim                                    |
-| 实体删了侧车存储还在                    | 若指 inbox             | P0-1 RedisTaskRepository、P0-2 PG→Redis completions、P1-7 `by_erc8004_id` |
-| 指标/审计高基数 label                | 部分                   | P1-2 metrics 按 agent 对端打标                                               |
+| 全局 list 无上限                   | DLQ 已 ltrim          | P0-3 `acn:audit:day:`* 日 list 无 trim                                       |
+| 实体删了侧车存储还在                    | 若指 inbox             | P0-1 RedisTaskRepository、P0-2 PG→Redis completions、P1-7 `by_erc8004_id`    |
+| 指标/审计高基数 label                | 部分                   | P1-2 metrics 按 agent 对端打标                                                  |
 
 
 ---
@@ -198,4 +221,3 @@
 5. **P1-4 + P1-5（Billing/AP2 list cap）**：在高支付业务打开前必须收紧
 6. **P1-6 + P1-7（子网全集 + erc8004 删除）**：语义正确性修正
 7. **P2 批次**：统一一次 lifespan 清理 + 小改动收尾
-
