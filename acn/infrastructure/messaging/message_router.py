@@ -182,7 +182,48 @@ class MessageRouter:
         endpoint = agent_info.endpoint
         logger.debug(f"[{route_id}] Discovered endpoint: {endpoint}")
 
-        # 2. Log outbound message
+        # 2. Offline pre-check — skip the HTTP round-trip when the registry
+        #    already knows the agent is not online.
+        #
+        #    Done before _log_message so the audit stream reflects the real
+        #    delivery direction ("inbound" inbox write, not a false "outbound").
+        #
+        #    Accuracy note: `status` is written on registration/heartbeat and
+        #    cleared to "offline" by the background watchdog when the heartbeat
+        #    TTL expires (~30 s window).  A false-positive (marked online but
+        #    actually down) will fall through to the HTTP path and write to
+        #    inbox on failure — unchanged from the old behaviour.  A
+        #    false-negative (marked offline but actually responsive) is rare
+        #    and self-heals on the next heartbeat; for now we skip the attempt
+        #    to avoid a guaranteed timeout.
+        if agent_info.status != "online":
+            logger.info(
+                f"[{route_id}] Agent {to_agent!r} is {agent_info.status!r};"
+                " skipping HTTP, delivering directly to inbox"
+            )
+            log_entry = {
+                "route_id": route_id,
+                "from_agent": from_agent,
+                "to_agent": to_agent,
+                "direction": "inbound",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "message": (
+                    message.model_dump()
+                    if hasattr(message, "model_dump")
+                    else str(message)
+                ),
+            }
+            await self._log_message(
+                route_id=route_id,
+                from_agent=from_agent,
+                to_agent=to_agent,
+                message=message,
+                direction="inbound",
+            )
+            await self._store_inbox(to_agent=to_agent, log_entry=log_entry)
+            return {"status": "inbox", "route_id": route_id}
+
+        # 3. Log outbound message (only reached when agent is online)
         await self._log_message(
             route_id=route_id,
             from_agent=from_agent,
@@ -192,7 +233,7 @@ class MessageRouter:
         )
 
         try:
-            # 3. Get A2A client and send message
+            # 4. Get A2A client and send message
             client = await self._get_client(endpoint)
 
             # Create SendMessageRequest
@@ -202,7 +243,7 @@ class MessageRouter:
             )
             response = await client.send_message(request)
 
-            # 4. Log response
+            # 5. Log response
             logger.debug(f"[{route_id}] Received response: {type(response)}")
 
             logger.info(f"[{route_id}] Message delivered successfully")
