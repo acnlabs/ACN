@@ -20,14 +20,37 @@ def mock_registry() -> MagicMock:
 
 
 @pytest.fixture
-def fake_redis() -> AsyncMock:
+def fake_pipe() -> AsyncMock:
+    """Mock for the redis pipeline object returned by `async with redis.pipeline()`.
+
+    Pipeline command methods (zadd, zremrangebyrank, expire …) are called
+    *synchronously* — they queue commands.  Only `execute()` is awaited.
+    We therefore use plain MagicMock for command methods and AsyncMock for
+    execute so the test can use `assert_called_with` / `assert_awaited`.
+    """
+    pipe = MagicMock()
+    pipe.execute = AsyncMock(return_value=[])
+    return pipe
+
+
+@pytest.fixture
+def fake_redis(fake_pipe) -> AsyncMock:
     """Fully-async Redis mock.
 
     `AsyncMock(spec=redis.Redis)` produces MagicMocks for some methods because
     redis-py's stub types are not all annotated as coroutines. We build a plain
     AsyncMock and let each method return an AsyncMock by default.
+
+    `pipeline()` is a *sync* method in redis-py that returns an async context
+    manager; we wire it up explicitly so `async with redis.pipeline(...) as p`
+    works without a "coroutine does not support async context manager" error.
     """
-    return AsyncMock()
+    mock = AsyncMock()
+    pipe_cm = MagicMock()
+    pipe_cm.__aenter__ = AsyncMock(return_value=fake_pipe)
+    pipe_cm.__aexit__ = AsyncMock(return_value=False)
+    mock.pipeline = MagicMock(return_value=pipe_cm)
+    return mock
 
 
 @pytest.fixture
@@ -39,35 +62,40 @@ class TestStoreInbox:
     """`_store_inbox` is the only per-agent persistence path after the refactor."""
 
     @pytest.mark.asyncio
-    async def test_writes_to_recipient_key_only(self, router, fake_redis):
+    async def test_writes_to_recipient_key_only(self, router, fake_redis, fake_pipe):
         await router._store_inbox(
             to_agent="agent-b",
             log_entry={"route_id": "r1", "from_agent": "agent-a", "to_agent": "agent-b"},
         )
 
-        zadd_calls = fake_redis.zadd.await_args_list
-        assert len(zadd_calls) == 1
-        key, _members = zadd_calls[0].args
+        # pipeline() must be called with transaction=False
+        fake_redis.pipeline.assert_called_once_with(transaction=False)
+        # zadd is a sync pipeline command (queued, not awaited directly)
+        assert fake_pipe.zadd.call_count == 1
+        key, _members = fake_pipe.zadd.call_args.args
         assert key == "acn:inbox:agent-b"
+        # execute() must be awaited to flush the pipeline
+        fake_pipe.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_caps_at_50_via_zremrangebyrank(self, router, fake_redis):
+    async def test_caps_at_50_via_zremrangebyrank(self, router, fake_pipe):
         await router._store_inbox(to_agent="agent-b", log_entry={"k": "v"})
 
-        fake_redis.zremrangebyrank.assert_awaited_once_with(
+        # zremrangebyrank is a sync pipeline command
+        fake_pipe.zremrangebyrank.assert_called_once_with(
             "acn:inbox:agent-b",
             0,
             -51,  # -(CAP + 1) — remove everything beyond newest 50
         )
 
     @pytest.mark.asyncio
-    async def test_refreshes_ttl_on_every_write(self, router, fake_redis):
+    async def test_refreshes_ttl_on_every_write(self, router, fake_pipe):
         await router._store_inbox(to_agent="agent-b", log_entry={"k": "v1"})
         await router._store_inbox(to_agent="agent-b", log_entry={"k": "v2"})
 
-        expire_calls = fake_redis.expire.await_args_list
-        assert len(expire_calls) == 2
-        for call in expire_calls:
+        # expire is a sync pipeline command — called once per _store_inbox invocation
+        assert fake_pipe.expire.call_count == 2
+        for call in fake_pipe.expire.call_args_list:
             key, ttl = call.args
             assert key == "acn:inbox:agent-b"
             assert ttl == 30 * 24 * 3600
@@ -176,7 +204,7 @@ class TestOfflinePrecheck:
         return info
 
     @pytest.mark.asyncio
-    async def test_offline_agent_skips_http_and_writes_inbox(self, router, fake_redis):
+    async def test_offline_agent_skips_http_and_writes_inbox(self, router, fake_pipe):
         """Core contract: no HTTP call, message lands in inbox."""
         router.registry.get_agent = AsyncMock(
             return_value=self._make_agent_info("offline")
@@ -194,9 +222,9 @@ class TestOfflinePrecheck:
         assert result["status"] == "inbox"
         assert "route_id" in result
 
-        # Inbox must have been written
-        fake_redis.zadd.assert_awaited_once()
-        key, _ = fake_redis.zadd.await_args.args
+        # Inbox must have been written via pipeline
+        assert fake_pipe.zadd.call_count == 1
+        key, _ = fake_pipe.zadd.call_args.args
         assert key == "acn:inbox:agent-b"
 
     @pytest.mark.asyncio

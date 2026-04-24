@@ -151,7 +151,7 @@
 ### [x] ✅ 已修 P2-1 Lifespan 未 start/stop WebSocket / Webhook
 
 - **位置**：`[acn/api.py](../acn/api.py)` lifespan；`[infrastructure/messaging/websocket_manager.py](../acn/infrastructure/messaging/websocket_manager.py)`；`[protocols/ap2/webhook.py](../acn/protocols/ap2/webhook.py)`
-- **反模式**：`WebSocketManager` / `WebhookService` 都构造了但 `start()` 从未被调用；teardown 也没 `stop()`。原报告只记录了泄漏（stop 缺失），实际排查时发现更严重的是 **`start()` 也缺失**
+- **反模式**：`WebSocketManager` / `WebhookService` 都构造了但 `start()` 从未被调用；teardown 也没 `stop()`。原报告只记录了泄漏（stop 缺失），实际排查时发现更严重的是 `**start()` 也缺失**
 - **规模化后果**：
   - **功能 bug（latent）**：`ws_manager.start()` 是 `self._pubsub` 被赋值的唯一路径。没调用 → `subscribe()` 里 `if self._pubsub:` 静默跳过 Redis 订阅 → `_listen_pubsub` 永不运行。单实例部署因为 `broadcast()` 还会跑 `_broadcast_local()` 无感知，但**任何多实例部署跨节点 WebSocket 消息全部丢失**
   - **资源泄漏**：`webhook_service` 首次 `send_event` 会 lazy-init `httpx.AsyncClient`，但没 `stop()` → 每次进程重启泄漏整个连接池

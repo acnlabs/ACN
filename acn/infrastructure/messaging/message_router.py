@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 # trace that nothing ever read, so collapsing it to a single capped
 # stream is safe.
 MESSAGE_LOG_STREAM_KEY = "acn:messages:log:stream"
+_INBOX_CAP = 50
+_INBOX_TTL = 30 * 24 * 3600  # 30 days
 # ~100 K entries × ~1 KB/entry ≈ 100 MB hard ceiling. Approximate
 # trimming (XADD MAXLEN ~) lets Redis keep the stream in whole radix
 # nodes so the cost is amortized O(1) per write.
@@ -535,21 +537,25 @@ class MessageRouter:
 
         The inbox is a bounded sorted set (score = unix timestamp).
         Oldest messages are evicted when the cap is reached; the key expires
-        automatically after INBOX_TTL seconds so inactive agents don't consume
+        automatically after _INBOX_TTL seconds so inactive agents don't consume
         Redis memory indefinitely.
+
+        The three Redis commands are pipelined (non-transactional) so they
+        consume a single round-trip instead of three.  Strict atomicity is not
+        required here: all three commands target the same key and are ordered
+        correctly within the pipeline.
 
         Args:
             to_agent: Recipient agent ID
             log_entry: Message log dict to persist
         """
-        _INBOX_CAP = 50
-        _INBOX_TTL = 30 * 24 * 3600  # 30 days
-
         key = f"acn:inbox:{to_agent}"
         score = datetime.now(UTC).timestamp()
-        await self.redis.zadd(key, {json.dumps(log_entry): score})
-        await self.redis.zremrangebyrank(key, 0, -(_INBOX_CAP + 1))
-        await self.redis.expire(key, _INBOX_TTL)
+        async with self.redis.pipeline(transaction=False) as pipe:
+            pipe.zadd(key, {json.dumps(log_entry): score})
+            pipe.zremrangebyrank(key, 0, -(_INBOX_CAP + 1))
+            pipe.expire(key, _INBOX_TTL)
+            await pipe.execute()
 
     async def _store_dlq(
         self,
