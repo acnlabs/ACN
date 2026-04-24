@@ -105,5 +105,19 @@ P1-2 砍掉了 `(from_agent, to_agent)` 的高基数 label 后，稳态 key 数�
 ### 扩大覆盖范围（commit `c35c064`+ 起开始有 routes 测试基建）
 
 - **其它 routes 也加 smoke test**
-  目前 `tests/routes/` 只覆盖 `monitoring.py` + `analytics.py`。`registry.py` / `communication.py` / `subnets.py` / `payments.py` / `tasks.py` / `onchain.py` / `websocket.py` 都只有 service-level unit 测试，没有"route → dependency → method exists" 的 contract 检查。按 `test_monitoring_analytics_routes.py` 的 `TestMethodNamesStillExist` 模式给每个 route 加一遍，CI 就能挡住"route 调用一个不存在的方法"这种哑巴失败。
+  目前 `tests/routes/` 只覆盖 `monitoring.py` + `analytics.py`。`registry.py` / `communication.py` / `subnets.py` / `payments.py` / `tasks.py` / `onchain.py` / `websocket.py` 都只有 service-level unit 测试，没有"route → dependency → method exists" 的 contract 检查。按 `test_monitoring_analytics_routes.py` 的 `TestMethodNamesStillExist` 模式给每个 route 加一遍,CI 就能挡住"route 调用一个不存在的方法"这种哑巴失败。
   影响文件：`tests/routes/test_*.py` 新建。
+
+### Routes ↔ services 契约全扫（P1-9 / SCALE_AUDIT 收尾审核发现）
+
+- **已知错配：`routes/websocket.py` 对 `WebSocketManager` 的调用签名反了**
+  `ws_manager.connect(agent_id, websocket)` / `ws_manager.disconnect(agent_id)`，但 manager 真实签名是 `connect(websocket, user_id=None, metadata=None) -> connection_id` / `disconnect(connection_id)`。两个参数位置互换，而且 disconnect 传的是 agent_id 但 manager 内部按 connection_id 索引 → connect 成功后 disconnect 永远找不到。意味着 `/ws/{agent_id}` 端点的连接状态簿记从来没对过（不是本轮 P2-1 引入的，是 pre-existing）。
+  消息路由实际靠 `MessageRouter.route()` 的 inbox 链路，不经过 ws route，所以线上没暴露。P2-1 修好了 `start()/stop()` 之后，跨节点 ws 广播才真正开始工作；此时才会让这个 route 层 bug 的后果被看到（例如 /api/v1/websocket/connections 返回的 count 与实际 agent 数对不上）。
+
+- **修法有选择题**：
+  a) manager 层加 `by_agent_id` 反向索引，connect 时接受 `user_id` 参数并维护 `{agent_id → connection_id}`，disconnect(agent_id) 先查再 remove。Route 改动最小，但 manager 耦合"业务语义的 agent_id"。
+  b) route 层自己维护 `{agent_id → connection_id}` 字典（局部状态），manager 保持"连接 id 纯 opaque"。边界清晰但 route 要多写几行。
+  倾向 (b)，manager 应是通用 ws 基础设施不感知 ACN 业务。
+
+- **扩展动作**：借机把所有 routes 过一遍签名契约 —— P1-9 在 monitoring / analytics 暴露了 8/9 endpoints 都错的情况，不确定 registry / communication / subnets / payments / tasks / onchain 是否有同类遗漏。可和上一条"扩大 smoke test 覆盖"合并成一个 sprint：加 contract 测试的同时把发现的 bug 一起修。
+  影响文件：`acn/routes/*.py` 若干、`acn/infrastructure/messaging/websocket_manager.py` 可能、`tests/routes/test_*.py` 新建。
