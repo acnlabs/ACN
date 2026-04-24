@@ -500,11 +500,8 @@ class MessageRouter:
         if not to_remove:
             return 0
 
-        async with self.redis.pipeline(transaction=False) as pipe:
-            for member in to_remove:
-                pipe.zrem(key, member)
-            await pipe.execute()
-
+        # ZREM accepts multiple members in a single command — no pipeline needed.
+        await self.redis.zrem(key, *to_remove)
         return len(to_remove)
 
     async def get_inbox(

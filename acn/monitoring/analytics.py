@@ -117,7 +117,15 @@ class Analytics:
         return await self._get_agent_stats_from_redis()
 
     async def _get_agent_stats_from_repo(self) -> dict[str, Any]:
-        """Build agent stats from the IAgentRepository (PG-backed when available)."""
+        """Build agent stats from the IAgentRepository (PG-backed when available).
+
+        Note on ``by_subnet``: an agent may belong to multiple subnets
+        (``agent.subnet_ids`` is a list).  Each subnet membership is counted
+        independently, so ``sum(by_subnet.values()) >= total`` when any agent
+        belongs to more than one subnet.  The Redis fallback counts only the
+        agent's primary ``subnet_id`` field (single value), so the two paths
+        are not strictly equivalent; this is the more accurate representation.
+        """
         agents = await self._agent_repo.find_all()  # type: ignore[union-attr]
 
         by_status: dict[str, int] = {}
