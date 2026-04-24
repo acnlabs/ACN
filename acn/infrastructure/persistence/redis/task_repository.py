@@ -401,55 +401,68 @@ class RedisTaskRepository(ITaskRepository):
         would leak `acn:participation:*`, `acn:user:*:task:{id}:participations`,
         `acn:user:*:all_participations` list entries, and
         `acn:task:{id}:active_count` counters forever (they have no TTL).
+
+        Performance: participation hashes are fetched in a single pipeline
+        batch (step 1), and all user-index lrem calls are also pipelined
+        (step 4), reducing round-trips from O(pids) + O(users × pids) to
+        three pipeline batches regardless of participant count.
         """
         task = await self.find_by_id(task_id)
         if not task:
             return False
 
-        # 1. Collect every participation id attached to this task, plus the
-        #    participant_id for each, so we can scrub the user-scoped indices.
+        # 1. Collect all participation IDs, then fetch their hashes in one
+        #    pipeline batch to get participant_ids without N serial HGETALL calls.
         participations_key = f"acn:task:{task_id}:participations"
         raw_pids = await self.redis.zrange(participations_key, 0, -1)
         pids: list[str] = [p.decode() if isinstance(p, bytes) else p for p in raw_pids]
 
         participant_ids: set[str] = set()
-        for pid in pids:
-            p = await self.find_participation_by_id(pid)
-            if p is not None:
-                participant_ids.add(p.participant_id)
-
-        # 2. Primary task key and task-level indices.
-        await self.redis.delete(f"acn:task:{task_id}")
-        await self.redis.zrem("acn:tasks:open", task_id)
-        _mode = "assigned" if task.require_join_approval else "open"
-        await self.redis.srem(f"acn:tasks:by_mode:{_mode}", task_id)
-        await self.redis.srem(f"acn:tasks:by_status:{task.status.value}", task_id)
-        await self.redis.srem(f"acn:tasks:by_creator:{task.creator_id}", task_id)
-
-        if task.assignee_id:
-            await self.redis.srem(f"acn:tasks:by_assignee:{task.assignee_id}", task_id)
-
-        for skill in task.required_tags:
-            await self.redis.srem(f"acn:tasks:by_tag:{skill}", task_id)
-
-        # 3. Participation side-car keys: per-participation hash, the task's
-        #    participations sorted-set, the active_count counter, and the
-        #    completions set.
         if pids:
-            await self.redis.delete(*[f"acn:participation:{pid}" for pid in pids])
-        await self.redis.delete(participations_key)
-        await self.redis.delete(f"acn:task:{task_id}:active_count")
-        await self.redis.delete(f"acn:task:completions:{task_id}")
+            async with self.redis.pipeline(transaction=False) as pipe:
+                for pid in pids:
+                    pipe.hgetall(f"acn:participation:{pid}")
+                results = await pipe.execute()
+            for raw_data in results:
+                if raw_data:
+                    try:
+                        p = self._dict_to_participation(raw_data)
+                        participant_ids.add(p.participant_id)
+                    except Exception:
+                        pass
 
-        # 4. User-scoped indices: delete the per-(user,task) set entirely,
-        #    and lrem each pid out of the user's global participation list
-        #    (that list is append-only across all their tasks, so we can't
-        #    just delete the whole key).
-        for uid in participant_ids:
-            await self.redis.delete(f"acn:user:{uid}:task:{task_id}:participations")
-            user_index_key = f"acn:user:{uid}:all_participations"
-            for pid in pids:
-                await self.redis.lrem(user_index_key, 0, pid)
+        # 2. Primary task key and all task-level index entries — single pipeline.
+        _mode = "assigned" if task.require_join_approval else "open"
+        async with self.redis.pipeline(transaction=False) as pipe:
+            pipe.delete(f"acn:task:{task_id}")
+            pipe.zrem("acn:tasks:open", task_id)
+            pipe.srem(f"acn:tasks:by_mode:{_mode}", task_id)
+            pipe.srem(f"acn:tasks:by_status:{task.status.value}", task_id)
+            pipe.srem(f"acn:tasks:by_creator:{task.creator_id}", task_id)
+            if task.assignee_id:
+                pipe.srem(f"acn:tasks:by_assignee:{task.assignee_id}", task_id)
+            for skill in task.required_tags:
+                pipe.srem(f"acn:tasks:by_tag:{skill}", task_id)
+            # 3. Participation side-car keys in the same batch.
+            if pids:
+                pipe.delete(*[f"acn:participation:{pid}" for pid in pids])
+            pipe.delete(participations_key)
+            pipe.delete(f"acn:task:{task_id}:active_count")
+            pipe.delete(f"acn:task:completions:{task_id}")
+            await pipe.execute()
+
+        # 4. User-scoped indices: delete the per-(user,task) participation set
+        #    and lrem each pid from the user's global list.  All lrem calls are
+        #    batched in a single pipeline so O(users × pids) round-trips become
+        #    one network call regardless of participant count.
+        if participant_ids:
+            async with self.redis.pipeline(transaction=False) as pipe:
+                for uid in participant_ids:
+                    pipe.delete(f"acn:user:{uid}:task:{task_id}:participations")
+                    user_index_key = f"acn:user:{uid}:all_participations"
+                    for pid in pids:
+                        pipe.lrem(user_index_key, 0, pid)
+                await pipe.execute()
 
         return True
 
