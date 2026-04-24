@@ -233,7 +233,10 @@ class TestAnalyticsRoutes:
 
         assert r.status_code == 200
         body = r.json()
-        # P1-9: per-agent counts are intentionally null, not zero.
+        # The stub returns None for all three fields (see stub_analytics fixture).
+        # When a real ActivityService is injected, messages_sent and errors
+        # will be integers derived from PG activity_events; messages_received
+        # remains None until a task-join aggregation is implemented (BACKLOG).
         assert body["messages_sent"] is None
         assert body["messages_received"] is None
         assert body["errors"] is None
