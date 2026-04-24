@@ -281,6 +281,21 @@ async def lifespan(app: FastAPI):
 
     watchdog_task = asyncio.create_task(_heartbeat_watchdog())
 
+    # Background sweeper: force-fail payment tasks stuck in non-terminal
+    # statuses for more than 7 days.  Runs every 6 hours so the window
+    # between creation and expiry is at most 7 days + 6 hours.
+    async def _payment_sweeper():
+        while True:
+            await asyncio.sleep(6 * 3600)
+            try:
+                swept = await payment_tasks_instance.sweep_stale_tasks(stale_after_days=7)
+                if swept:
+                    logger.info("payment_sweeper_ran", swept=swept)
+            except Exception as e:
+                logger.error("payment_sweeper_error", error=str(e))
+
+    sweeper_task = asyncio.create_task(_payment_sweeper())
+
     yield
 
     # Cleanup. Order matters:
@@ -295,6 +310,7 @@ async def lifespan(app: FastAPI):
     #   5. Close Redis connection pool.
     #   6. Dispose PG engine last (it's the outermost resource).
     watchdog_task.cancel()
+    sweeper_task.cancel()
     logger.info("acn_stopping")
     try:
         await ws_manager_instance.stop()

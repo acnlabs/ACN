@@ -14,14 +14,17 @@ This is NOT a reimplementation of AP2, but ACN's unique value-add.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .webhook import WebhookService
@@ -690,8 +693,17 @@ class PaymentTaskManager:
         task_id: str,
         status: PaymentTaskStatus,
         tx_hash: str | None = None,
+        metadata: dict | None = None,
     ) -> PaymentTask:
-        """Update task status"""
+        """Update task status.
+
+        Args:
+            task_id: Task to update.
+            status: New status value.
+            tx_hash: Optional on-chain transaction hash.
+            metadata: Optional extra fields merged into the audit log entry
+                (e.g. ``{"reason": "stale_sweep"}`` from the background sweeper).
+        """
         task = await self.get_task(task_id)
         if not task:
             raise ValueError(f"Task not found: {task_id}")
@@ -715,15 +727,18 @@ class PaymentTaskManager:
 
         await self._save_task(task)
 
-        # Audit log
+        # Audit log — core fields always win over caller-supplied metadata
+        # so that old_status/new_status/tx_hash are never overwritten.
+        audit_data: dict = {**(metadata or {})}
+        audit_data.update({
+            "old_status": old_status.value,
+            "new_status": status.value,
+            "tx_hash": tx_hash,
+        })
         await self._audit_log(
             task_id=task_id,
             event="status_changed",
-            data={
-                "old_status": old_status.value,
-                "new_status": status.value,
-                "tx_hash": tx_hash,
-            },
+            data=audit_data,
         )
 
         # Send webhook based on status
@@ -732,6 +747,71 @@ class PaymentTaskManager:
             await self._send_webhook(webhook_event, task)
 
         return task
+
+    async def sweep_stale_tasks(self, stale_after_days: int = 7) -> int:
+        """Force-fail in-flight payment tasks that have been stuck too long.
+
+        Scans all task body keys under ``acn:payment_tasks:{task_id}`` and
+        moves any non-terminal task whose ``created_at`` is older than
+        ``stale_after_days`` to ``FAILED`` status, recording ``reason:
+        stale_sweep`` in the audit log.  The ``_save_task`` call in
+        ``update_task_status`` then applies the 180-day terminal TTL so the
+        key is reclaimed by Redis rather than living forever.
+
+        Index and audit side-car keys (``by_buyer:``, ``by_seller:``,
+        ``audit:``) are recognised by the presence of ``:`` in the suffix
+        after the prefix and skipped automatically.
+
+        Args:
+            stale_after_days: Age threshold in days (default 7).
+
+        Returns:
+            Number of tasks swept (forced to FAILED).
+        """
+        cutoff = datetime.now(UTC) - timedelta(days=stale_after_days)
+        swept = 0
+
+        async for raw_key in self.redis.scan_iter(f"{self._prefix}*"):
+            key = raw_key if isinstance(raw_key, str) else raw_key.decode()
+            suffix = key[len(self._prefix):]
+            # Skip index/audit sidecar keys — they contain a colon in the
+            # suffix (e.g. "by_buyer:agent-1", "audit:uuid").  Task body keys
+            # are plain UUIDs (no colon).
+            if ":" in suffix:
+                continue
+
+            data = await self.redis.get(key)
+            if not data:
+                continue
+
+            try:
+                task = PaymentTask.model_validate_json(data)
+            except Exception:
+                continue
+
+            if task.status in _PAYMENT_TERMINAL_STATUSES:
+                continue
+
+            if task.created_at >= cutoff:
+                continue
+
+            try:
+                await self.update_task_status(
+                    task.task_id,
+                    PaymentTaskStatus.FAILED,
+                    metadata={"reason": "stale_sweep", "stale_after_days": stale_after_days},
+                )
+                swept += 1
+            except Exception as exc:
+                # Log but don't abort the scan — one bad key shouldn't stop
+                # the rest of the sweep.
+                logger.warning(
+                    "payment_sweep_task_failed",
+                    task_id=task.task_id,
+                    error=str(exc),
+                )
+
+        return swept
 
     def _status_to_webhook_event(self, status: PaymentTaskStatus) -> str | None:
         """Map task status to webhook event type"""
