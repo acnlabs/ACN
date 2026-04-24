@@ -124,6 +124,25 @@
 - **归档理由**：P1-2 把 `acn_messages_total` 的 label 从 `(from_agent, to_agent, status)` 削减到只剩 `status` 之后，`acn:metrics:*` 稳态 key 数从 `O(活跃 agent 对)` 压到 `O(已注册 metric × 低基数 label 组合)`，实际即**几十到几百**。当前 schema 下 `scan_iter` 单次 scrape 几十次 GET、p99 几十 ms，不是瓶颈。**本条问题由 P1-2 的 schema 降维顺带消除**。
 - **残留跟踪**：BACKLOG 保留两条（`acn:metrics:_index` set 替 scan、adhoc counter 未注册 label 强约束），作为预防未来 schema 再膨胀的预优化。那是"低优先长期"，不再是 P1。
 
+### [x] ✅ 已修 P1-9 monitoring / analytics routes 长期 500（8/9 endpoint 功能废）+ `get_agent_activity` 恒零副作用
+
+- **位置**：`[acn/routes/monitoring.py](../acn/routes/monitoring.py)`、`[acn/routes/analytics.py](../acn/routes/analytics.py)`、`[acn/monitoring/analytics.py](../acn/monitoring/analytics.py)` `get_agent_activity`
+- **反模式**：审 P1-8 时顺带发现的长期功能 bug，不在原 SCALE_AUDIT 名单里但严重性相当
+  - `/metrics` 调 `metrics.export_prometheus()` → 真方法是 `prometheus_export()`
+  - `/api/v1/monitoring/health` 调 `metrics.get_health_status()` → 不存在
+  - `/api/v1/monitoring/dashboard` 调 `metrics.get_summary()` 和 `analytics.get_summary()` → 都不存在
+  - `/api/v1/analytics/{agents,messages,latency,subnets}` 调 `get_*_analytics()` → 真方法后缀是 `_stats`
+  - `/api/v1/analytics/agents/{id}` 传 `start_time=...` → 真签名是 `hours=`
+  - **9 个 endpoint 里 8 个长期返回 500**（仅 `/api/v1/monitoring/metrics` 这个普通 metrics JSON 方法名凑巧对上）。`grep` 仓库发现只有 Prometheus scrape 真正在用 `/metrics`，其余 endpoint 无活跃消费者，所以运行时没有报障
+  - 附加副作用：P1-2 后 `get_agent_activity` 的 `messages_sent/received/errors` 永远返回 0（数据源消失但函数没更新），造成"看起来是 0 但实际是无数据"的误导
+- **规模化后果**：一旦未来有 dashboard/告警要用这些 endpoint，全部瞬间不可用；"per-agent 活跃度 = 0"的恒零输出会让运维判断失准
+- **实际修复**：
+  - `monitoring.py`：`/metrics` → `prometheus_export()`；`/health` 弃 metrics 依赖改调 `analytics.get_system_health()`；`/dashboard` 一个调用 `analytics.get_dashboard_data()` 打包全部返回
+  - `analytics.py`：`get_agent_analytics/_message_analytics/_latency_analytics/_subnet_analytics` 全部对齐到 `get_{agent,message,latency,subnet}_stats`；`/agents/{id}` 把 `days * 24` 传成 `hours`；`/latency` 去掉永远被忽略的 `hours` query 参数
+  - `analytics.get_agent_activity`：裁掉永远匹配不到 key 的 scan 路径，`messages_sent/received/errors` 显式返回 `None`，加 `data_source_note` 指向 BACKLOG 的 "PG activity_events 聚合"
+- **测试**：新建 `tests/routes/` 基建 + 12 个 smoke test：9 个 endpoint 各一个"真方法被调到"断言 + anti-regression 的 "方法名还存在"类型校验 + `get_agent_activity` 的 null-by-design 断言
+- **修复方向**：已完成；长期把 Analytics 的 agent/subnet 统计迁到 PG（`IAgentRepository` / `ISubnetRepository` GROUP BY）→ BACKLOG
+
 ---
 
 ## P2：小隐患 / 代码异味

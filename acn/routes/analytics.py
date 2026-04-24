@@ -1,6 +1,14 @@
-"""Analytics API Routes"""
+"""Analytics API Routes
 
-from datetime import UTC, datetime, timedelta
+Previously most endpoints here called methods that did not exist on the
+Analytics class (`get_agent_analytics`, `get_message_analytics`,
+`get_latency_analytics`, `get_subnet_analytics`) and/or passed the wrong
+argument name (`start_time=` instead of `hours=`), so every one of them
+returned 500. This module now calls the real method names exposed by
+acn.monitoring.analytics.Analytics.
+"""
+
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -42,7 +50,7 @@ class ActivitiesResponse(BaseModel):
 @limiter.limit("30/minute")
 async def get_agent_analytics(request: Request, analytics: AnalyticsDep = None):
     """Get agent analytics summary (public, rate-limited)"""
-    return await analytics.get_agent_analytics()
+    return await analytics.get_agent_stats()
 
 
 @router.get("/agents/{agent_id}")
@@ -53,32 +61,43 @@ async def get_agent_activity(
     days: int = Query(default=7, le=90),
     analytics: AnalyticsDep = None,
 ):
-    """Get specific agent activity (public, rate-limited)"""
-    start_time = datetime.now(UTC) - timedelta(days=days)
-    return await analytics.get_agent_activity(agent_id, start_time=start_time)
+    """Get specific agent activity (public, rate-limited).
+
+    Note: Analytics.get_agent_activity() signature uses `hours`, not
+    `start_time`. We convert days→hours here. Since SCALE_AUDIT P1-2
+    collapsed the `acn_messages_total` labels to `status`-only, the
+    per-agent message/error counters inside get_agent_activity() are
+    permanently zero and are now explicitly returned as null; see
+    BACKLOG for the PG activity_events plan.
+    """
+    return await analytics.get_agent_activity(agent_id, hours=days * 24)
 
 
 @router.get("/messages")
 async def get_message_analytics(_: InternalTokenDep, analytics: AnalyticsDep = None):
     """Get message analytics (requires X-Internal-Token)"""
-    return await analytics.get_message_analytics()
+    return await analytics.get_message_stats()
 
 
 @router.get("/latency")
 async def get_latency_analytics(
     _: InternalTokenDep,
-    hours: int = Query(default=24, le=168),
     analytics: AnalyticsDep = None,
 ):
-    """Get latency analytics (requires X-Internal-Token)"""
-    start_time = datetime.now(UTC) - timedelta(hours=hours)
-    return await analytics.get_latency_analytics(start_time=start_time)
+    """Get latency analytics (requires X-Internal-Token).
+
+    Latency stats come straight from the Redis histogram buckets, which
+    is an aggregate view with no time-window dimension. The previously
+    accepted `hours` query arg was silently ignored by the underlying
+    implementation, so it's removed here rather than kept as a lie.
+    """
+    return await analytics.get_latency_stats()
 
 
 @router.get("/subnets")
 async def get_subnet_analytics(_: InternalTokenDep, analytics: AnalyticsDep = None):
     """Get subnet analytics (requires X-Internal-Token)"""
-    return await analytics.get_subnet_analytics()
+    return await analytics.get_subnet_stats()
 
 
 # ========== Activities Endpoints ==========

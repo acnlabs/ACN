@@ -73,3 +73,26 @@ P1-2 砍掉了 `(from_agent, to_agent)` 的高基数 label 后，稳态 key 数�
 影响文件：`[acn/monitoring/metrics.py](../acn/monitoring/metrics.py)` `prometheus_export()` / `get_all_metrics()`.
 - **Adhoc counter（`METRICS` 没声明的）仍然能无限增长 label key 集合**
 `_sanitize_labels` 对未在 `METRICS` 字典里登记的 metric 名只做 charset/length 守卫，不做 key 白名单。等价于"自由 label 模式"。如果有人 `inc_counter("my_thing", labels={"user_id": ...})` 还是会 cardinality 爆炸。要么强制所有 metric 必须先注册，要么对 unknown metric 也限制 label key 数（例如最多 3 个）。
+
+### Per-agent activity via PG `activity_events`（P1-9 后续）
+
+- **`Analytics.get_agent_activity` 的 per-agent 消息/错误计数目前恒为 `None`**
+  P1-2 把 `acn_messages_total` 的 label 从 `(from_agent, to_agent, status)` 砍到 `status`-only 后，原来按 `from_agent={id}` 扫 Redis metric key 的那条路就永远匹配 0 个 key。为了不让 API 返回"看起来是 0 但其实是无数据"的误导值，P1-9 把三个字段明确置 `None` + 加 `data_source_note`。
+  真正的 per-agent 活动源其实已经存在：PG `activity_events` 表（`ActivityService` 写入，routes `/api/v1/analytics/activities` 已在读）。下一步把 `get_agent_activity()` 改成聚合 `activity_events WHERE agent_id=? AND ts >= now() - hours`（按 type 计数），Redis 这一层 metric 就只留 Prometheus 时序用。
+  影响文件：`[acn/monitoring/analytics.py](../acn/monitoring/analytics.py)` `get_agent_activity()`、`[acn/services/activity_service.py](../acn/services/activity_service.py)` 新增聚合 API、`[acn/routes/analytics.py](../acn/routes/analytics.py)` 注入 `ActivityService` 依赖。
+
+### Analytics 的 PG 迁移方向（P2-3 延伸）
+
+- **`get_agent_stats` / `get_subnet_stats` 的真源应在 PG 而非 Redis scan**
+  P2-3 把扫描 pattern 修对了，但底层还是 `scan_iter("acn:agents:*")` + 段数过滤这种偏 workaround 的写法。Agent/Subnet 的权威数据已经在 PG `agents` / `subnets` 表里（`PostgresAgentRepository` / `PostgresSubnetRepository`）。迁移方向：把 `Analytics` 改成注入 `IAgentRepository` / `ISubnetRepository` 而不是裸 Redis，统计用 SQL `GROUP BY status / subnet_id / tags`，Redis 降级仅在"无 PG"配置下兜底。
+  影响文件：`[acn/monitoring/analytics.py](../acn/monitoring/analytics.py)` 构造函数 + `get_agent_stats()` / `get_subnet_stats()`、`[acn/api.py](../acn/api.py)` 构造 Analytics 时传入 repo。
+
+---
+
+## Routes smoke tests
+
+### 扩大覆盖范围（commit `c35c064`+ 起开始有 routes 测试基建）
+
+- **其它 routes 也加 smoke test**
+  目前 `tests/routes/` 只覆盖 `monitoring.py` + `analytics.py`。`registry.py` / `communication.py` / `subnets.py` / `payments.py` / `tasks.py` / `onchain.py` / `websocket.py` 都只有 service-level unit 测试，没有"route → dependency → method exists" 的 contract 检查。按 `test_monitoring_analytics_routes.py` 的 `TestMethodNamesStillExist` 模式给每个 route 加一遍，CI 就能挡住"route 调用一个不存在的方法"这种哑巴失败。
+  影响文件：`tests/routes/test_*.py` 新建。

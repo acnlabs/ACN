@@ -152,51 +152,53 @@ class Analytics:
         hours: int = 24,
     ) -> dict[str, Any]:
         """
-        Get activity statistics for a specific agent.
+        Get activity for a specific agent.
+
+        Per-agent message and error counters are intentionally null. Before
+        SCALE_AUDIT P1-2 this method scanned `acn:metrics:acn_messages_total:
+        from_agent={id}*` / `:to_agent={id}*` / `acn_errors_total:*{id}*`,
+        but P1-2 collapsed the `acn_messages_total` labels to `status`-only
+        to stop the cardinality blow-up, so those patterns now match zero
+        keys and the scans always returned zero without raising. Rather
+        than quietly reporting 0 (indistinguishable from "agent idle"), we
+        return null and point consumers at the PG activity_events stream
+        for real per-agent aggregation. See docs/BACKLOG.md.
+
+        The only field that is still authoritative here is `last_heartbeat`,
+        which reads from `acn:heartbeat:{agent_id}` — that key is written
+        by the liveness path and is unaffected by the metric schema change.
 
         Args:
-            agent_id: Agent ID to analyze
-            hours: Number of hours to look back
+            agent_id: Agent ID to look up.
+            hours: Reporting window (kept for API shape; per-agent counters
+                   are null so the window is effectively decorative).
 
         Returns:
-            Activity statistics including messages sent/received, errors, etc.
+            {
+                "agent_id": str,
+                "period_hours": int,
+                "messages_sent": None,      # not available from Redis metrics
+                "messages_received": None,  # not available from Redis metrics
+                "errors": None,             # not available from Redis metrics
+                "last_heartbeat": str | None,
+                "data_source_note": str,
+            }
         """
-        # Get metrics for this agent
-        prefix = f"acn:metrics:acn_messages_total:from_agent={agent_id}"
-        sent_keys = [k async for k in self.redis.scan_iter(f"{prefix}*")]
-
-        messages_sent = 0
-        for key in sent_keys:
-            value = await self.redis.get(key)
-            messages_sent += int(value) if value else 0
-
-        prefix = f"acn:metrics:acn_messages_total:*to_agent={agent_id}*"
-        recv_keys = [k async for k in self.redis.scan_iter(prefix)]
-
-        messages_received = 0
-        for key in recv_keys:
-            value = await self.redis.get(key)
-            messages_received += int(value) if value else 0
-
-        # Get error count
-        error_prefix = f"acn:metrics:acn_errors_total:*{agent_id}*"
-        error_keys = [k async for k in self.redis.scan_iter(error_prefix)]
-
-        errors = 0
-        for key in error_keys:
-            value = await self.redis.get(key)
-            errors += int(value) if value else 0
-
-        # Get last heartbeat
         last_heartbeat = await self.redis.get(f"acn:heartbeat:{agent_id}")
+        if isinstance(last_heartbeat, bytes):
+            last_heartbeat = last_heartbeat.decode()
 
         return {
             "agent_id": agent_id,
             "period_hours": hours,
-            "messages_sent": messages_sent,
-            "messages_received": messages_received,
-            "errors": errors,
-            "last_heartbeat": last_heartbeat.decode() if last_heartbeat else None,
+            "messages_sent": None,
+            "messages_received": None,
+            "errors": None,
+            "last_heartbeat": last_heartbeat,
+            "data_source_note": (
+                "per-agent message and error counts require PG "
+                "activity_events aggregation; see docs/BACKLOG.md"
+            ),
         }
 
     # =========================================================================
