@@ -235,6 +235,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("a2a_mount_failed", error=str(e))
 
+    # Bring up background workers that own long-lived resources.
+    #
+    # Previously neither of these was started. WebSocketManager without
+    # start() leaves `self._pubsub = None`, so `subscribe()` silently
+    # no-ops its Redis subscription and `_listen_pubsub` never runs —
+    # i.e. cross-process WebSocket broadcasts are dropped on the
+    # receiving node. Single-instance deployments didn't notice because
+    # `broadcast()` still fans out locally via `_broadcast_local()`.
+    #
+    # WebhookService without start() gets lazy-initialized on first
+    # send, but then the httpx.AsyncClient is never aclose()'d on
+    # shutdown, leaking the connection pool on every process exit.
+    await ws_manager_instance.start()
+    await webhook_service_instance.start()
+
     logger.info("acn_started")
 
     # Background watchdog: sync status field for stale agents every 30 min
@@ -252,9 +267,27 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup
+    # Cleanup. Order matters:
+    #   1. Stop the heartbeat watchdog first so it can't race a teardown.
+    #   2. Shut down the WebSocket pubsub listener before closing Redis,
+    #      otherwise its blocking `async for` on a closed connection
+    #      raises noisy errors during shutdown.
+    #   3. Close the webhook httpx client before Redis — it reads config
+    #      out of Redis on retry paths, and we don't want an in-flight
+    #      retry to fault on a closed client.
+    #   4. Close MessageRouter (shuts down A2A httpx clients).
+    #   5. Close Redis connection pool.
+    #   6. Dispose PG engine last (it's the outermost resource).
     watchdog_task.cancel()
     logger.info("acn_stopping")
+    try:
+        await ws_manager_instance.stop()
+    except Exception as e:
+        logger.error("ws_manager_stop_failed", error=str(e))
+    try:
+        await webhook_service_instance.stop()
+    except Exception as e:
+        logger.error("webhook_service_stop_failed", error=str(e))
     await router_instance.close()
     await registry_instance.redis.close()
     if _pg_engine is not None:

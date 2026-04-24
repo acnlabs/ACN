@@ -47,6 +47,13 @@ MESSAGE_LOG_STREAM_KEY = "acn:messages:log:stream"
 # nodes so the cost is amortized O(1) per write.
 MESSAGE_LOG_STREAM_MAXLEN = 100_000
 
+# Per-(message_type) hard cap on registered handlers. The list is kept
+# in memory (not Redis), but the same process might be long-lived and
+# callers might re-register on module reload / hot swap. A cap keeps
+# the fan-out bounded no matter what the caller does. 32 is well above
+# any realistic use (most call sites register one handler per type).
+MAX_HANDLERS_PER_TYPE = 32
+
 
 class MessageRouter:
     """
@@ -313,17 +320,61 @@ class MessageRouter:
         handler: Callable,
     ) -> None:
         """
-        Register handler for incoming messages
+        Register handler for incoming messages.
+
+        Idempotent: registering the same (type, handler) pair twice is a
+        no-op, which matters for long-running processes that re-enter
+        bootstrap paths (module reload, hot-reconnect on a flaky link,
+        retry loops around startup). A hard cap of
+        `MAX_HANDLERS_PER_TYPE` protects against a misbehaving caller
+        fan-out-ing unique closures per retry.
 
         Args:
             message_type: Type of message to handle
             handler: Async handler function
-        """
-        if message_type not in self._handlers:
-            self._handlers[message_type] = []
 
-        self._handlers[message_type].append(handler)
-        logger.info(f"Registered handler for: {message_type}")
+        Raises:
+            ValueError: if the per-type cap is reached.
+        """
+        bucket = self._handlers.setdefault(message_type, [])
+
+        if handler in bucket:
+            # Silent dedupe — callers doing idempotent startup get what
+            # they want (no-op on re-register) without extra bookkeeping.
+            return
+
+        if len(bucket) >= MAX_HANDLERS_PER_TYPE:
+            raise ValueError(
+                f"handler cap reached for message_type={message_type!r}: "
+                f"already {len(bucket)} registered (max "
+                f"{MAX_HANDLERS_PER_TYPE}); refusing to register more"
+            )
+
+        bucket.append(handler)
+        logger.info(
+            f"Registered handler for: {message_type} "
+            f"(now {len(bucket)}/{MAX_HANDLERS_PER_TYPE})"
+        )
+
+    async def unregister_handler(
+        self,
+        message_type: str,
+        handler: Callable,
+    ) -> bool:
+        """Remove a previously registered (type, handler) pair.
+
+        Returns:
+            True if the handler was found and removed; False otherwise.
+            Empty buckets are cleaned up to keep `_handlers` from
+            accumulating keys for long-gone types.
+        """
+        bucket = self._handlers.get(message_type)
+        if not bucket or handler not in bucket:
+            return False
+        bucket.remove(handler)
+        if not bucket:
+            del self._handlers[message_type]
+        return True
 
     async def handle_incoming(
         self,
