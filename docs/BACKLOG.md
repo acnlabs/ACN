@@ -10,16 +10,12 @@
 
 Context: commits `8c540a9` / `bc5b331` / `c71da67` 把消息存储从 "per-agent archive" 改为 "offline inbox"。以下是当时识别但未做的延伸优化。
 
-- `**_store_inbox` 合并 pipeline**
-当前 `zadd` + `zremrangebyrank` + `expire` 是三次独立的 Redis round-trip，可合并为单个 `pipeline()` 降低延迟。
-影响文件：`[acn/infrastructure/messaging/message_router.py](../acn/infrastructure/messaging/message_router.py)` `_store_inbox()`.
+- ~~`**_store_inbox` 合并 pipeline**~~ ✅ 已完成（P2-A）
+  `zadd` + `zremrangebyrank` + `expire` 三次 round-trip → 单个 `pipeline(transaction=False)` 批次。`_INBOX_CAP` / `_INBOX_TTL` 提升为模块常量。测试 fixture 同步更新（pipeline 命令是同步调用，用 `assert_called_with` 而非 `assert_awaited_with`）。
 - ~~`**route()` 前置 `is_online()` 预检**~~
 **已修**：`route()` 在 `get_agent()` 返回的 `agent_info.status` 非 `"online"` 时立即 short-circuit：写 inbox、返回 `{"status": "inbox", "route_id": ...}`，不打开 HTTP 连接、不写 DLQ。零额外 Redis round-trip（status 已随 `get_agent()` 一并读取）。心跳 TTL 延迟导致误判的场景见代码注释。`retry_dlq` 自动受益（调用 `route()`）。测试：`tests/infrastructure/test_message_router_inbox.py::TestOfflinePrecheck`（4 tests）。
-- **按 `route_id` 精准 ack**
-当前 `?ack=true` 是"全清"粗粒度，agent 若用较小 `limit` 分批拉取会丢数据。
-新增 `POST /history/{agent_id}/ack` 接口，body 接收 `route_ids: list[str]`，服务端按 member 精确 `zrem`。
-向后兼容：`?ack=true` 保留，语义不变。
-影响文件：`[acn/routes/communication.py](../acn/routes/communication.py)`, `[acn/services/message_service.py](../acn/services/message_service.py)`, `[acn/infrastructure/messaging/message_router.py](../acn/infrastructure/messaging/message_router.py)`.
+- ~~**按 `route_id` 精准 ack**~~ ✅ 已完成（P2-B）
+  新增 `POST /history/{agent_id}/ack` endpoint，body `{"route_ids": [...]}` 精确 `zrem` 指定消息。`MessageRouter.ack_inbox()` 实现：`ZRANGE 0 -1`（上限 50）→ Python 过滤 → pipeline `ZREM`，2 次 round-trip。`?ack=true` 全清语义保留，向后兼容。Layer-1 smoke tests 新增两个方法存在性守卫。
 
 ### Legacy key cleanup
 
@@ -37,12 +33,11 @@ Context: commits `8c540a9` / `bc5b331` / `c71da67` 把消息存储从 "per-agent
 
 Context: commits for SCALE_AUDIT P0-1..P0-4。完成了正确性修复，留下性能/清理项。
 
-- `**RedisTaskRepository.delete` 用 pipeline 批量取 participation**
-当前对每个参与者串行 `HGETALL`（N 次 round-trip）以拿 `participant_id`。任务有几千参与者时 delete 会很慢。改为一次 pipeline 并发拉所有 participation hash，或 Lua 脚本单次返回 pid→uid 映射。
-影响文件：`[acn/infrastructure/persistence/redis/task_repository.py](../acn/infrastructure/persistence/redis/task_repository.py)` `delete()`.
-- `**RedisTaskRepository.delete` 的 user-index `lrem` 也放 pipeline**
-同一原因：对每个 (user × pid) 对串行 `lrem`，O(user_count × pid_count)。pipeline 化即可。
-影响文件：同上。
+- ~~`**RedisTaskRepository.delete` 用 pipeline 批量取 participation + user-index `lrem` 也放 pipeline**~~ ✅ 已完成（P2-D）
+  - Step-1：pipeline 批量 `HGETALL` 所有 participation hash（N 次串行 → 1 次批次）；`_dict_to_participation` 在 Python 侧逐条解析结果。
+  - Step-2+3：主 task hash、所有 index（`zrem/srem/delete`）和 participation sidecar key 合并为一个 pipeline 批次。
+  - Step-4：所有用户 `lrem` 调用（O(users × pids) 串行 → 1 次 pipeline 批次）。
+  - 测试更新：`test_task_repository_delete_cleanup.py` 重写以正确 mock pipeline 上下文管理器，检验 `pipe.hgetall/delete/lrem` 调用。
 
 ---
 
@@ -86,9 +81,12 @@ P1-2 砍掉了 `(from_agent, to_agent)` 的高基数 label 后，稳态 key 数�
 
 ### Analytics 的 PG 迁移方向（P2-3 延伸）
 
-- `**get_agent_stats` / `get_subnet_stats` 的真源应在 PG 而非 Redis scan**
-P2-3 把扫描 pattern 修对了，但底层还是 `scan_iter("acn:agents:*")` + 段数过滤这种偏 workaround 的写法。Agent/Subnet 的权威数据已经在 PG `agents` / `subnets` 表里（`PostgresAgentRepository` / `PostgresSubnetRepository`）。迁移方向：把 `Analytics` 改成注入 `IAgentRepository` / `ISubnetRepository` 而不是裸 Redis，统计用 SQL `GROUP BY status / subnet_id / tags`，Redis 降级仅在"无 PG"配置下兜底。
-影响文件：`[acn/monitoring/analytics.py](../acn/monitoring/analytics.py)` 构造函数 + `get_agent_stats()` / `get_subnet_stats()`、`[acn/api.py](../acn/api.py)` 构造 Analytics 时传入 repo。
+- ~~`**get_agent_stats` / `get_subnet_stats` 的真源应在 PG 而非 Redis scan**~~ ✅ 已完成（P2-C）
+  - `Analytics.__init__` 新增 `agent_repo: IAgentRepository | None` 和 `subnet_repo: ISubnetRepository | None`。
+  - `get_agent_stats`：repo 可用时调用 `find_all()` 在 Python 侧聚合 `by_status / by_subnet / by_tag / recent_registrations`；无 repo 时 fallback 到 Redis scan。
+  - `get_subnet_stats`：repo 可用时调用 `find_all()` + `count_by_subnet()`；无 repo 时 fallback 到 Redis scan。
+  - 顺带修复历史 bug：`by_status` 初始化键从 `"active/inactive"` 改为 `"online/offline/unknown"`；`get_system_health` 读 `by_status["online"]`（原来读 `"active"` 永远为 0）。
+  - `api.py` 构造 `Analytics` 时传入 `agent_repository` / `subnet_repository`。
 
 ### Redis tag 索引（P2-4 延伸）
 
