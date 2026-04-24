@@ -184,6 +184,8 @@ async def lifespan(app: FastAPI):
     analytics_instance = Analytics(
         redis=registry_instance.redis,
         activity_service=activity_service_instance,
+        agent_repo=agent_repository,
+        subnet_repo=subnet_repository,
     )
 
     # Initialize Escrow Client (for Labs task budget management)

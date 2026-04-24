@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING, Any
 
 from redis.asyncio import Redis
 
+from ..core.interfaces import IAgentRepository, ISubnetRepository
+
 if TYPE_CHECKING:
     from ..services.activity_service import ActivityService
 
@@ -66,7 +68,13 @@ class Analytics:
         health = await analytics.get_system_health()
     """
 
-    def __init__(self, redis: Redis, activity_service: "ActivityService | None" = None):
+    def __init__(
+        self,
+        redis: Redis,
+        activity_service: "ActivityService | None" = None,
+        agent_repo: IAgentRepository | None = None,
+        subnet_repo: ISubnetRepository | None = None,
+    ):
         """
         Initialize analytics service.
 
@@ -76,9 +84,16 @@ class Analytics:
                 per-agent activity counts from PostgreSQL. When provided,
                 ``get_agent_activity`` populates ``messages_sent`` and
                 ``errors`` from the PG ``activity_events`` table.
+            agent_repo: Optional IAgentRepository.  When provided,
+                ``get_agent_stats`` reads from the authoritative PG agents
+                table instead of scanning Redis keys.
+            subnet_repo: Optional ISubnetRepository.  When provided,
+                ``get_subnet_stats`` reads from PG instead of scanning Redis.
         """
         self.redis = redis
         self._activity_service = activity_service
+        self._agent_repo = agent_repo
+        self._subnet_repo = subnet_repo
         self._prefix = "acn:analytics:"
 
     # =========================================================================
@@ -92,28 +107,56 @@ class Analytics:
         Returns:
             Dictionary containing:
             - total: Total registered agents
-            - by_status: Count by status (active, inactive, etc.)
-            - by_subnet: Count by subnet
-            - by_skill: Count by skill
-            - recent_registrations: Recently registered agents
+            - by_status: Count by status (online / offline / busy / …)
+            - by_subnet: Count by subnet (an agent may belong to several)
+            - by_tag: Count by tag
+            - recent_registrations: Recently registered agent IDs
         """
-        # Scan the real agent hash keys. The schema is `acn:agents:{uuid}`
-        # (3 colon-separated segments). The same prefix hosts index keys such
-        # as `acn:agents:by_endpoint:...`, `acn:agents:by_owner:{uid}`,
-        # `acn:agents:by_api_key:{k}`, `acn:agents:by_erc8004_id:{tid}`, and
-        # the `{uuid}:alive` signal — all of which have >=4 segments. Filter
-        # to exactly 3 segments to isolate the real agent hash keys.
-        # (Legacy pattern `acn:agents:*:info` matched nothing because that
-        # suffix was never written.)
+        if self._agent_repo:
+            return await self._get_agent_stats_from_repo()
+        return await self._get_agent_stats_from_redis()
+
+    async def _get_agent_stats_from_repo(self) -> dict[str, Any]:
+        """Build agent stats from the IAgentRepository (PG-backed when available)."""
+        agents = await self._agent_repo.find_all()  # type: ignore[union-attr]
+
+        by_status: dict[str, int] = {}
+        by_subnet: dict[str, int] = {}
+        by_tag: dict[str, int] = {}
+
+        for agent in agents:
+            status = str(agent.status.value) if hasattr(agent.status, "value") else str(agent.status)
+            by_status[status] = by_status.get(status, 0) + 1
+
+            for sid in (agent.subnet_ids or ["public"]):
+                by_subnet[sid] = by_subnet.get(sid, 0) + 1
+
+            for tag in (agent.tags or []):
+                by_tag[str(tag)] = by_tag.get(str(tag), 0) + 1
+
+        recent = sorted(agents, key=lambda a: a.registered_at, reverse=True)[:10]
+        return {
+            "total": len(agents),
+            "by_status": by_status,
+            "by_subnet": by_subnet,
+            "by_tag": by_tag,
+            "recent_registrations": [a.agent_id for a in recent],
+        }
+
+    async def _get_agent_stats_from_redis(self) -> dict[str, Any]:
+        """Fallback: build agent stats by scanning Redis agent hash keys."""
+        # The real agent hash key schema is `acn:agents:{uuid}` (3 segments).
+        # Index keys (`acn:agents:by_endpoint:…`, `{uuid}:alive`, etc.) have
+        # ≥4 segments and are excluded by the length filter.
         agent_keys = [
             k
             async for k in self.redis.scan_iter("acn:agents:*")
             if len((k.decode() if isinstance(k, bytes) else k).split(":")) == 3
         ]
 
-        stats = {
+        stats: dict[str, Any] = {
             "total": len(agent_keys),
-            "by_status": {"active": 0, "inactive": 0, "unknown": 0},
+            "by_status": {"online": 0, "offline": 0, "unknown": 0},
             "by_subnet": {},
             "by_tag": {},
             "recent_registrations": [],
@@ -125,7 +168,6 @@ class Analytics:
                 if not agent_data:
                     continue
 
-                # Decode Redis data
                 agent = {
                     k.decode() if isinstance(k, bytes) else k: (
                         v.decode() if isinstance(v, bytes) else v
@@ -133,16 +175,12 @@ class Analytics:
                     for k, v in agent_data.items()
                 }
 
-                # Count by status
                 status = agent.get("status", "unknown")
                 stats["by_status"][status] = stats["by_status"].get(status, 0) + 1
 
-                # Count by subnet
                 subnet = agent.get("subnet_id", "public")
                 stats["by_subnet"][subnet] = stats["by_subnet"].get(subnet, 0) + 1
 
-                # Count by tag (from tags JSON; read "tags" then fall back to legacy "skills")
-                # Read: support both new "tags" and legacy "skills" key
                 tags_str = agent.get("tags") or agent.get("skills", "[]")
                 try:
                     tags = json.loads(tags_str)
@@ -157,12 +195,10 @@ class Analytics:
             except Exception:
                 continue
 
-        # Get recent registrations from audit log
         recent_keys = await self.redis.lrange("acn:audit:type:agent_registered", 0, 9)
         stats["recent_registrations"] = [
             k.decode() if isinstance(k, bytes) else k for k in recent_keys
         ]
-
         return stats
 
     async def get_agent_activity(
@@ -397,11 +433,58 @@ class Analytics:
 
         Returns:
             Dictionary containing:
-            - total: Total subnets
-            - subnets: List of subnet details
+            - total: Total subnets (including the implicit public network)
+            - subnets: List of subnet detail dicts
         """
-        # The real subnet hash key is `acn:subnets:info:{id}`, not
-        # `acn:subnets:*:info`. Legacy pattern matched nothing.
+        if self._subnet_repo:
+            return await self._get_subnet_stats_from_repo()
+        return await self._get_subnet_stats_from_redis()
+
+    async def _get_subnet_stats_from_repo(self) -> dict[str, Any]:
+        """Build subnet stats from ISubnetRepository (PG-backed when available)."""
+        subnets = await self._subnet_repo.find_all()  # type: ignore[union-attr]
+
+        subnet_list = []
+        for subnet in subnets:
+            agent_count = (
+                await self._agent_repo.count_by_subnet(subnet.subnet_id)
+                if self._agent_repo
+                else await self._count_agents_in_subnet(subnet.subnet_id)
+            )
+            gateway_count = await self._count_gateway_connections(subnet.subnet_id)
+            subnet_list.append(
+                {
+                    "subnet_id": subnet.subnet_id,
+                    "name": subnet.name,
+                    "agent_count": agent_count,
+                    "gateway_connections": gateway_count,
+                    "has_security": bool(subnet.security_config),
+                }
+            )
+
+        public_count = (
+            await self._agent_repo.count_by_subnet("public")
+            if self._agent_repo
+            else await self._count_agents_in_subnet("public")
+        )
+
+        return {
+            "total": len(subnets) + 1,  # +1 for implicit public network
+            "subnets": [
+                {
+                    "subnet_id": "public",
+                    "name": "Public Network",
+                    "agent_count": public_count,
+                    "gateway_connections": 0,
+                    "has_security": False,
+                },
+                *subnet_list,
+            ],
+        }
+
+    async def _get_subnet_stats_from_redis(self) -> dict[str, Any]:
+        """Fallback: build subnet stats by scanning Redis subnet hash keys."""
+        # The real subnet hash key is `acn:subnets:info:{id}`.
         subnet_keys = [k async for k in self.redis.scan_iter("acn:subnets:info:*")]
 
         subnets = []
@@ -418,11 +501,8 @@ class Analytics:
                     for k, v in subnet_data.items()
                 }
 
-                # Get agent count for this subnet
                 subnet_id = subnet.get("subnet_id", "unknown")
                 agent_count = await self._count_agents_in_subnet(subnet_id)
-
-                # Get gateway connection count
                 gateway_count = await self._count_gateway_connections(subnet_id)
 
                 subnets.append(
@@ -438,11 +518,10 @@ class Analytics:
             except Exception:
                 continue
 
-        # Add public subnet
         public_count = await self._count_agents_in_subnet("public")
 
         return {
-            "total": len(subnets) + 1,  # +1 for public
+            "total": len(subnets) + 1,
             "subnets": [
                 {
                     "subnet_id": "public",
@@ -522,7 +601,7 @@ class Analytics:
             "issues": issues,
             "summary": {
                 "agents_total": agent_stats["total"],
-                "agents_active": agent_stats["by_status"].get("active", 0),
+                "agents_active": agent_stats["by_status"].get("online", agent_stats["by_status"].get("active", 0)),
                 "messages_total": message_stats["total"],
                 "success_rate": message_stats["success_rate"],
                 "errors_total": total_errors,
