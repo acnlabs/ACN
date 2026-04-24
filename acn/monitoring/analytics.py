@@ -78,8 +78,19 @@ class Analytics:
             - by_skill: Count by skill
             - recent_registrations: Recently registered agents
         """
-        # Get all agent keys
-        agent_keys = [k async for k in self.redis.scan_iter("acn:agents:*:info")]
+        # Scan the real agent hash keys. The schema is `acn:agents:{uuid}`
+        # (3 colon-separated segments). The same prefix hosts index keys such
+        # as `acn:agents:by_endpoint:...`, `acn:agents:by_owner:{uid}`,
+        # `acn:agents:by_api_key:{k}`, `acn:agents:by_erc8004_id:{tid}`, and
+        # the `{uuid}:alive` signal — all of which have >=4 segments. Filter
+        # to exactly 3 segments to isolate the real agent hash keys.
+        # (Legacy pattern `acn:agents:*:info` matched nothing because that
+        # suffix was never written.)
+        agent_keys = [
+            k
+            async for k in self.redis.scan_iter("acn:agents:*")
+            if len((k.decode() if isinstance(k, bytes) else k).split(":")) == 3
+        ]
 
         stats = {
             "total": len(agent_keys),
@@ -327,8 +338,9 @@ class Analytics:
             - total: Total subnets
             - subnets: List of subnet details
         """
-        # Get all subnet keys
-        subnet_keys = [k async for k in self.redis.scan_iter("acn:subnets:*:info")]
+        # The real subnet hash key is `acn:subnets:info:{id}`, not
+        # `acn:subnets:*:info`. Legacy pattern matched nothing.
+        subnet_keys = [k async for k in self.redis.scan_iter("acn:subnets:info:*")]
 
         subnets = []
         for key in subnet_keys:
@@ -532,21 +544,18 @@ class Analytics:
         return count
 
     async def _count_agents_in_subnet(self, subnet_id: str) -> int:
-        """Count agents in a specific subnet"""
-        # Get all agents and filter by subnet
-        agent_keys = [k async for k in self.redis.scan_iter("acn:agents:*:info")]
-        count = 0
+        """Count agents in a specific subnet.
 
-        for key in agent_keys:
-            agent_data = await self.redis.hgetall(key)
-            if agent_data:
-                agent_subnet = agent_data.get(b"subnet_id", b"public")
-                if isinstance(agent_subnet, bytes):
-                    agent_subnet = agent_subnet.decode()
-                if agent_subnet == subnet_id:
-                    count += 1
-
-        return count
+        Reads directly from the authoritative membership set
+        `acn:subnets:{subnet_id}:agents` that AgentRepository and the registry
+        already maintain (sadd on save, srem on delete). The previous
+        implementation scanned every agent hash and filtered in Python,
+        which (a) used the wrong key pattern `acn:agents:*:info` (never
+        written, so always returned 0) and (b) even if the pattern were
+        fixed would be O(N_agents) per call — unacceptable when this
+        function is invoked for every subnet in `get_subnet_stats`.
+        """
+        return await self.redis.scard(f"acn:subnets:{subnet_id}:agents")
 
     async def _count_gateway_connections(self, subnet_id: str) -> int:
         """Count gateway connections for a subnet"""
