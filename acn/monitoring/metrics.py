@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 # cardinality and memory would be catastrophic).
 _MAX_LABEL_VALUE_LEN = 64
 
+# Maximum number of label *keys* allowed on a metric that is not declared
+# in MetricsCollector.METRICS. Declared metrics are whitelisted to exactly
+# the keys listed in their schema, so this cap only affects truly ad-hoc
+# counters. Three dimensions is generous for any legitimate use case while
+# still preventing a caller from accidentally multiplying cardinality via
+# an arbitrary number of per-request dimensions.
+_MAX_ADHOC_LABEL_KEYS = 3
+
 # Label values are embedded directly into Redis keys with `:` and `=` as
 # delimiters (see `_build_key` / `_parse_key`). Any value containing those
 # characters would round-trip incorrectly. We normalize to a safe subset
@@ -106,6 +114,11 @@ class MetricsCollector:
             "type": MetricType.COUNTER,
             "help": "Total number of broadcast messages",
             "labels": ["type"],
+        },
+        "acn_broadcast_sent": {
+            "type": MetricType.COUNTER,
+            "help": "Broadcast attempts by type and outcome (success / error)",
+            "labels": ["type", "status"],
         },
         "acn_errors_total": {
             "type": MetricType.COUNTER,
@@ -530,16 +543,31 @@ class MetricsCollector:
            values containing them would break `_parse_key` on export.
            We collapse non-safe chars to `_`.
 
-        Metrics not declared in `METRICS` (ad-hoc counters) get the
-        charset / length guards but skip the whitelist — existing code
-        paths using `inc_counter("something_adhoc", labels=...)` keep
-        working.
+        Metrics not declared in `METRICS` (ad-hoc counters) are allowed but
+        capped: no more than `_MAX_ADHOC_LABEL_KEYS` label keys are kept.
+        Extra keys are dropped with a one-time warning.  This prevents a
+        caller from multiplying cardinality via an arbitrary number of
+        per-request dimensions without having to register the metric first.
         """
         if not labels:
             return {}
 
         meta = self.METRICS.get(full_name)
         allowed: set[str] | None = set(meta["labels"]) if meta else None
+
+        # For undeclared metrics, cap the number of label keys.
+        if allowed is None and len(labels) > _MAX_ADHOC_LABEL_KEYS:
+            all_keys = list(labels.keys())
+            kept, dropped = all_keys[:_MAX_ADHOC_LABEL_KEYS], all_keys[_MAX_ADHOC_LABEL_KEYS:]
+            logger.warning(
+                "metrics: adhoc metric %r has %d label keys; capping to %d, "
+                "dropping %s — declare the metric in METRICS to lift this limit",
+                full_name,
+                len(labels),
+                _MAX_ADHOC_LABEL_KEYS,
+                dropped,
+            )
+            labels = {k: labels[k] for k in kept}
 
         cleaned: dict[str, str] = {}
         for key, raw_value in labels.items():
