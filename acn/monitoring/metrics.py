@@ -36,6 +36,12 @@ from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
+# Tracks ad-hoc metric names that have already triggered the "too many label
+# keys" warning so each metric name is logged at most once per process
+# lifetime. Module-level so the dedup is shared across all MetricsCollector
+# instances (there is normally only one, but tests sometimes create many).
+_warned_adhoc_overflow: set[str] = set()
+
 # Hard cap on label-value length. Anything longer gets replaced with the
 # placeholder "_overflow_" so a single misbehaving caller can't create
 # a 100KB metric key (which Redis would happily store — but the resulting
@@ -545,9 +551,11 @@ class MetricsCollector:
 
         Metrics not declared in `METRICS` (ad-hoc counters) are allowed but
         capped: no more than `_MAX_ADHOC_LABEL_KEYS` label keys are kept.
-        Extra keys are dropped with a one-time warning.  This prevents a
-        caller from multiplying cardinality via an arbitrary number of
-        per-request dimensions without having to register the metric first.
+        Extra keys are dropped with a warning that fires at most once per
+        metric name per process (see `_warned_adhoc_overflow`).  This
+        prevents a caller from multiplying cardinality via an arbitrary
+        number of per-request dimensions without having to register the
+        metric first.
         """
         if not labels:
             return {}
@@ -559,14 +567,17 @@ class MetricsCollector:
         if allowed is None and len(labels) > _MAX_ADHOC_LABEL_KEYS:
             all_keys = list(labels.keys())
             kept, dropped = all_keys[:_MAX_ADHOC_LABEL_KEYS], all_keys[_MAX_ADHOC_LABEL_KEYS:]
-            logger.warning(
-                "metrics: adhoc metric %r has %d label keys; capping to %d, "
-                "dropping %s — declare the metric in METRICS to lift this limit",
-                full_name,
-                len(labels),
-                _MAX_ADHOC_LABEL_KEYS,
-                dropped,
-            )
+            if full_name not in _warned_adhoc_overflow:
+                _warned_adhoc_overflow.add(full_name)
+                logger.warning(
+                    "metrics: adhoc metric %r has %d label keys; capping to %d, "
+                    "dropping %s — declare the metric in METRICS to lift this limit "
+                    "(this warning fires once per metric name per process)",
+                    full_name,
+                    len(labels),
+                    _MAX_ADHOC_LABEL_KEYS,
+                    dropped,
+                )
             labels = {k: labels[k] for k in kept}
 
         cleaned: dict[str, str] = {}

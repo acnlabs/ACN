@@ -82,7 +82,7 @@ P1-2 砍掉了 `(from_agent, to_agent)` 的高基数 label 后，稳态 key 数�
 ### Analytics 的 PG 迁移方向（P2-3 延伸）
 
 - ~~`**get_agent_stats` / `get_subnet_stats` 的真源应在 PG 而非 Redis scan**~~ ✅ 已完成（P2-C）
-  - `Analytics.__init_`_ 新增 `agent_repo: IAgentRepository | None` 和 `subnet_repo: ISubnetRepository | None`。
+  - `Analytics.__init`__ 新增 `agent_repo: IAgentRepository | None` 和 `subnet_repo: ISubnetRepository | None`。
   - `get_agent_stats`：repo 可用时调用 `find_all()` 在 Python 侧聚合 `by_status / by_subnet / by_tag / recent_registrations`；无 repo 时 fallback 到 Redis scan。
   - `get_subnet_stats`：repo 可用时调用 `find_all()` + `count_by_subnet()`；无 repo 时 fallback 到 Redis scan。
   - 顺带修复历史 bug：`by_status` 初始化键从 `"active/inactive"` 改为 `"online/offline/unknown"`；`get_system_health` 读 `by_status["online"]`（原来读 `"active"` 永远为 0）。
@@ -120,3 +120,19 @@ P2-4 把 `TaskPool.find_tasks_for_agent` 的重复过滤层消掉了，PG 分支
 ### ~~Routes ↔ services 契约全扫（P1-9 / SCALE_AUDIT 收尾审核发现）~~ ✅ 已完成
 
 见上。
+
+---
+
+## 遗留问题备忘
+
+### `acn_broadcasts_total` 僵尸 metric（低优先级）
+
+`METRICS` 中声明了 `acn_broadcasts_total`（labels: `["type"]`），但代码库里无任何调用路径对它做 `incr`。唯一引用是 `analytics.py` 里的 `SCAN` 读取（`acn:metrics:acn_broadcasts_total:*`），永远读到 0。
+
+实际负责计数的是 `acn_broadcast_sent`（labels: `["type", "status"]`，已在 Metrics cardinality guard sprint 中正式注册）。
+
+待处理选项：
+- 删除 `acn_broadcasts_total` 声明并同步更新 `analytics.py` 的 SCAN 路径（推荐）
+- 或保留但补写调用（与 `acn_broadcast_sent` 语义重叠，不推荐）
+
+影响文件：`acn/monitoring/metrics.py`（METRICS 定义）、`acn/monitoring/analytics.py`（broadcast_pattern SCAN）。
