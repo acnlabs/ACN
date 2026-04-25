@@ -125,14 +125,6 @@ P2-4 把 `TaskPool.find_tasks_for_agent` 的重复过滤层消掉了，PG 分支
 
 ## 遗留问题备忘
 
-### `acn_broadcasts_total` 僵尸 metric（低优先级）
+### ~~`acn_broadcasts_total` 僵尸 metric~~ ✅ 已清理
 
-`METRICS` 中声明了 `acn_broadcasts_total`（labels: `["type"]`），但代码库里无任何调用路径对它做 `incr`。唯一引用是 `analytics.py` 里的 `SCAN` 读取（`acn:metrics:acn_broadcasts_total:*`），永远读到 0。
-
-实际负责计数的是 `acn_broadcast_sent`（labels: `["type", "status"]`，已在 Metrics cardinality guard sprint 中正式注册）。
-
-待处理选项：
-- 删除 `acn_broadcasts_total` 声明并同步更新 `analytics.py` 的 SCAN 路径（推荐）
-- 或保留但补写调用（与 `acn_broadcast_sent` 语义重叠，不推荐）
-
-影响文件：`acn/monitoring/metrics.py`（METRICS 定义）、`acn/monitoring/analytics.py`（broadcast_pattern SCAN）。
+删除了 `METRICS` 里从未被写入的 `acn_broadcasts_total` 声明，同步将 `analytics.py` 的 `broadcast_pattern` SCAN 从 `acn:metrics:acn_broadcasts_total:*` 改为 `acn:metrics:acn_broadcast_sent:*`（实际写入的 counter，labels: `["type", "status"]`）。

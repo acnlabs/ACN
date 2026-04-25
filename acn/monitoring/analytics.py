@@ -342,8 +342,9 @@ class Analytics:
 
         success_rate = (success / total * 100) if total > 0 else 0
 
-        # Get broadcast stats
-        broadcast_pattern = "acn:metrics:acn_broadcasts_total:*"
+        # Get broadcast stats — keyed by acn_broadcast_sent (type + status labels).
+        # Sum all label combinations to get total broadcast attempts.
+        broadcast_pattern = "acn:metrics:acn_broadcast_sent:*"
         broadcast_keys = [k async for k in self.redis.scan_iter(broadcast_pattern)]
         broadcasts = 0
         for key in broadcast_keys:

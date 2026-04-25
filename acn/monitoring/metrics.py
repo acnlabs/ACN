@@ -116,11 +116,6 @@ class MetricsCollector:
             "help": "Total number of agent registrations",
             "labels": ["subnet"],
         },
-        "acn_broadcasts_total": {
-            "type": MetricType.COUNTER,
-            "help": "Total number of broadcast messages",
-            "labels": ["type"],
-        },
         "acn_broadcast_sent": {
             "type": MetricType.COUNTER,
             "help": "Broadcast attempts by type and outcome (success / error)",
