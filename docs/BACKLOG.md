@@ -17,13 +17,12 @@ Context: commits `8c540a9` / `bc5b331` / `c71da67` 把消息存储从 "per-agent
 - ~~**按 `route_id` 精准 ack**~~ ✅ 已完成（P2-B）
 新增 `POST /history/{agent_id}/ack` endpoint，body `{"route_ids": [...]}` 精确 `zrem` 指定消息。`MessageRouter.ack_inbox()` 实现：`ZRANGE 0 -1`（上限 50）→ Python 过滤 → pipeline `ZREM`，2 次 round-trip。`?ack=true` 全清语义保留，向后兼容。Layer-1 smoke tests 新增两个方法存在性守卫。
 
-### Legacy key cleanup
+### ~~Legacy key cleanup~~ ✅ 已完成
 
-- **清理 `acn:messages:agent:` 遗留 key**
-旧代码向每个 agent 的 sorted set 双写消息历史，新代码不再写但也不主动清。生产环境这些 key 会一直占着 Redis 内存直到手动 `FLUSHDB`。
-写一次性清理脚本：`SCAN 0 MATCH acn:messages:agent:* COUNT 1000` + `UNLINK` 每批，放到 `acn/scripts/`。
-- **清理 `acn:messages:log:{route_id}` 遗留 key**（P1-1 后续）
-切换到 `acn:messages:log:stream` 后，旧的 per-route 字符串 key 会靠自带的 7 天 TTL 自然消失，但想立刻回收内存可以跑一次性脚本：`SCAN 0 MATCH acn:messages:log:* COUNT 1000` → 过滤掉 `stream` 这个字面 key → `UNLINK` 每批。
+- ~~**清理 `acn:messages:agent:` 遗留 key**~~
+- ~~**清理 `acn:messages:log:{route_id}` 遗留 key**~~
+
+`acn/scripts/cleanup_legacy_message_keys.py`：dry-run 默认，`--execute` 真删。SCAN + UNLINK 批量处理两类 key；`acn:messages:log:stream` 在 PRESERVE 集合里，不会被误删。
 
 ---
 
@@ -66,8 +65,8 @@ Context: commits for SCALE_AUDIT P1-4 / P1-5。
 - **Metrics key 的 `scan_iter` 在 `prometheus_export` / `get_all_metrics` 是 O(N_keys)**
 P1-2 砍掉了 `(from_agent, to_agent)` 的高基数 label 后，稳态 key 数已经被压成可控量级，但 export 路径仍然是全扫。如果将来又因新需求长出几万个 label 组合，scan 就会拖慢 scrape。考虑维护一个 `acn:metrics:_index` set 记录所有活跃 key，export 时直接 SMEMBERS 替换 SCAN。
 影响文件：`[acn/monitoring/metrics.py](../acn/monitoring/metrics.py)` `prometheus_export()` / `get_all_metrics()`.
-- **Adhoc counter（`METRICS` 没声明的）仍然能无限增长 label key 集合**
-`_sanitize_labels` 对未在 `METRICS` 字典里登记的 metric 名只做 charset/length 守卫，不做 key 白名单。等价于"自由 label 模式"。如果有人 `inc_counter("my_thing", labels={"user_id": ...})` 还是会 cardinality 爆炸。要么强制所有 metric 必须先注册，要么对 unknown metric 也限制 label key 数（例如最多 3 个）。
+- ~~**Adhoc counter（`METRICS` 没声明的）仍然能无限增长 label key 集合**~~ ✅ 已完成（Metrics cardinality guard sprint）
+新增 `_MAX_ADHOC_LABEL_KEYS = 3`：未在 `METRICS` 注册的 metric 最多保留 3 个 label key，超出的 key 被截断并打 WARNING（模块级 `_warned_adhoc_overflow` 去重，每个 metric 名只打一次）。同时将 `acn_broadcast_sent` 补进 `METRICS` 正式注册，消除了代码里唯一的 ad-hoc 调用。
 
 ### Per-agent activity via PG `activity_events`（P1-9 后续）
 
@@ -127,4 +126,4 @@ P2-4 把 `TaskPool.find_tasks_for_agent` 的重复过滤层消掉了，PG 分支
 
 ### ~~`acn_broadcasts_total` 僵尸 metric~~ ✅ 已清理
 
-删除了 `METRICS` 里从未被写入的 `acn_broadcasts_total` 声明，同步将 `analytics.py` 的 `broadcast_pattern` SCAN 从 `acn:metrics:acn_broadcasts_total:*` 改为 `acn:metrics:acn_broadcast_sent:*`（实际写入的 counter，labels: `["type", "status"]`）。
+删除了 `METRICS` 里从未被写入的 `acn_broadcasts_total` 声明，同步将 `analytics.py` 的 `broadcast_pattern` SCAN 从 `acn:metrics:acn_broadcasts_total:`* 改为 `acn:metrics:acn_broadcast_sent:`*（实际写入的 counter，labels: `["type", "status"]`）。
