@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import time
 from typing import Any
 
@@ -26,9 +27,40 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
 
+from ..monitoring import record_auth_failure
+
 logger = structlog.get_logger()
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _peer_ip(request: Request | None) -> str | None:
+    """Best-effort source IP for audit context.
+
+    Intentionally naive — uses the direct TCP peer rather than
+    ``X-Forwarded-For``. The proxy-aware variant lives in
+    ``routes.dependencies`` (gated by ``trusted_proxies``) but
+    pulling that here would create a routes -> auth import cycle.
+    Audit IPs are diagnostic only, never used for security decisions,
+    so the simpler accessor is acceptable.
+    """
+    if request is None:
+        return None
+    try:
+        client = request.client
+        return client.host if client else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _request_path(request: Request | None) -> tuple[str | None, str | None]:
+    """Return ``(path, method)`` from ``request`` defensively."""
+    if request is None:
+        return None, None
+    try:
+        return request.url.path, request.method
+    except Exception:  # noqa: BLE001
+        return None, None
 
 # ---------------------------------------------------------------------------
 # JWKS in-memory cache  (avoids a remote HTTP call on every request)
@@ -151,9 +183,11 @@ async def _refresh_jwks_from_network(domain: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _verify_jwt(token: str) -> dict:
+async def _verify_jwt(token: str, request: Request | None = None) -> dict:
     """Verify an Auth0 JWT and return its payload."""
     settings = _get_settings()
+    src_ip = _peer_ip(request)
+    path, method = _request_path(request)
 
     if not settings.auth0_domain or not settings.auth0_audience:
         if settings.dev_mode:
@@ -200,6 +234,12 @@ async def _verify_jwt(token: str) -> dict:
                     break
 
         if not rsa_key:
+            record_auth_failure(
+                reason="jwt_signing_key_not_found",
+                source_ip=src_ip,
+                path=path,
+                method=method,
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Unable to find appropriate signing key.",
@@ -217,12 +257,25 @@ async def _verify_jwt(token: str) -> dict:
 
     # ExpiredSignatureError must be caught before JWTError (it's a subclass)
     except ExpiredSignatureError:
+        record_auth_failure(
+            reason="jwt_expired",
+            source_ip=src_ip,
+            path=path,
+            method=method,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired.",
         ) from None
     except JWTError as e:
         logger.warning("jwt_verification_failed", error=str(e))
+        record_auth_failure(
+            reason="jwt_invalid",
+            source_ip=src_ip,
+            path=path,
+            method=method,
+            extra={"jwt_error": type(e).__name__},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token.",
@@ -243,6 +296,7 @@ async def _verify_jwt(token: str) -> dict:
 
 
 async def verify_token(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
 ) -> dict:
     """FastAPI dependency: verify Bearer token and return JWT payload."""
@@ -258,24 +312,44 @@ async def verify_token(
         return {"sub": sub, "permissions": ["acn:read", "acn:write", "acn:admin"]}
 
     if credentials is None:
+        path, method = _request_path(request)
+        record_auth_failure(
+            reason="bearer_missing",
+            source_ip=_peer_ip(request),
+            path=path,
+            method=method,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authorization header required.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return await _verify_jwt(credentials.credentials)
+    return await _verify_jwt(credentials.credentials, request=request)
 
 
 def require_permission(permission: str):
     """FastAPI dependency factory: verify token and check for a specific permission."""
 
     async def permission_checker(
+        request: Request,
         credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
     ) -> dict:
-        payload = await verify_token(credentials)
+        payload = await verify_token(request, credentials)
         permissions: list[str] = payload.get("permissions", [])
         if permission not in permissions:
+            path, method = _request_path(request)
+            # ``sub`` is the *actor* (Auth0 user / client) — not a target.
+            # We pass it as ``actor_id`` so analyst queries by target_id stay
+            # clean (target_id is reserved for the asset being protected).
+            record_auth_failure(
+                reason="permission_denied",
+                source_ip=_peer_ip(request),
+                actor_id=payload.get("sub"),
+                path=path,
+                method=method,
+                extra={"permission": permission},
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Missing required permission: {permission}",
@@ -295,6 +369,7 @@ def require_internal_or_permission(permission: str):
     request headers and read by the endpoint handler.
     """
     async def checker(
+        request: Request,
         credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
         x_internal_token: str | None = Header(default=None),
     ) -> dict:
@@ -307,17 +382,31 @@ def require_internal_or_permission(permission: str):
                 sub = credentials.credentials
             return {"sub": sub, "permissions": ["acn:read", "acn:write", "acn:admin"]}
 
-        # Internal token: trusted backend service call
-        if x_internal_token and x_internal_token == settings.internal_api_token:
+        # Internal token: trusted backend service call. Use constant-time
+        # comparison to avoid timing-side-channel leaks of token contents.
+        if (
+            x_internal_token
+            and settings.internal_api_token
+            and secrets.compare_digest(x_internal_token, settings.internal_api_token)
+        ):
             return {
                 "sub": "backend@internal",
                 "permissions": ["acn:read", "acn:write", "acn:admin"],
             }
 
         # Otherwise require standard JWT + permission
-        payload = await verify_token(credentials)
+        payload = await verify_token(request, credentials)
         permissions: list[str] = payload.get("permissions", [])
         if permission not in permissions:
+            path, method = _request_path(request)
+            record_auth_failure(
+                reason="permission_denied",
+                source_ip=_peer_ip(request),
+                actor_id=payload.get("sub"),
+                path=path,
+                method=method,
+                extra={"permission": permission},
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Missing required permission: {permission}",
@@ -328,6 +417,7 @@ def require_internal_or_permission(permission: str):
 
 
 async def get_subject(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
 ) -> str:
     """FastAPI dependency: return the 'sub' claim from the JWT."""
@@ -338,7 +428,7 @@ async def get_subject(
             return "dev@clients"
         return credentials.credentials
 
-    payload = await verify_token(credentials)
+    payload = await verify_token(request, credentials)
     return payload.get("sub", "unknown")
 
 

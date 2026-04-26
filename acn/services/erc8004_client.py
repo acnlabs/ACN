@@ -58,6 +58,51 @@ class ERC8004Client:
             if validation_contract
             else None
         )
+        # Cached chain_id of the RPC endpoint. We populate it on demand
+        # (chain_id is a constant for any given chain — mismatches mean the
+        # RPC URL has been swapped, which is itself a security signal).
+        self._cached_chain_id: int | None = None
+
+    # -------------------------------------------------------------------------
+    # Chain identity guard (security audit H-erc8004)
+    # -------------------------------------------------------------------------
+
+    async def get_chain_id(self) -> int:
+        """Return the chain_id reported by the configured RPC endpoint.
+
+        Cached after first successful call because chain_id is invariant
+        per-chain. Re-raises whatever the underlying RPC raises so callers
+        can distinguish "RPC unreachable" from "RPC reports wrong chain".
+        """
+        if self._cached_chain_id is None:
+            self._cached_chain_id = int(await self._w3.eth.chain_id)
+        return self._cached_chain_id
+
+    async def verify_chain_id(self, expected: int) -> tuple[bool, int | None]:
+        """Best-effort check that the RPC endpoint is on ``expected`` chain.
+
+        Returns ``(matches, actual)``:
+          - ``(True, actual)`` — RPC reports ``expected``.
+          - ``(False, actual)`` — RPC reports a different chain_id; caller
+            should refuse the bind (RPC swap or misconfig).
+          - ``(False, None)`` — RPC unreachable / cannot resolve chain_id;
+            caller should treat as "cannot verify" and refuse the bind
+            rather than silently accepting (fail-closed).
+
+        Why fail-closed: a bind that succeeds when ACN can't prove the
+        RPC endpoint is on the configured chain creates the same
+        attack surface as no check at all (an attacker rebinding RPC to
+        a fork node could still produce matching tokenURIs).
+        """
+        try:
+            actual = await self.get_chain_id()
+        except Exception as exc:  # noqa: BLE001 — RPC errors must not leak details
+            logger.warning(
+                "erc8004_chain_id_unavailable",
+                extra={"expected": expected, "error": str(exc)},
+            )
+            return False, None
+        return actual == expected, actual
 
     # -------------------------------------------------------------------------
     # Identity Registry

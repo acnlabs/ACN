@@ -1002,6 +1002,16 @@ class TaskService:
             TaskNotFoundException: If task not found
             PermissionError: If approver is not the creator
             ValueError: If task is not submitted
+
+        Concurrency model (security audit H3):
+            Two concurrent ``complete_task`` calls on the same task previously
+            both passed the in-memory ``status == SUBMITTED`` check, both ran
+            ``task.complete()``, and both reached
+            ``record_completion`` / ``payment release`` / ``_distribute_reward``
+            — i.e. a *double-pay* race. The fix is a CAS save: the second
+            caller loses the ``SUBMITTED → COMPLETED`` transition at the
+            repository layer and short-circuits before any side effect runs,
+            returning the current task state for idempotent semantics.
         """
         task = await self.get_task(task_id)
 
@@ -1009,9 +1019,24 @@ class TaskService:
         if task.creator_id != approver_id:
             raise PermissionError("Only the task creator can approve")
 
-        # Complete the task
+        # In-memory state-machine transition (raises if already moved).
+        # ``task.complete()`` checks ``status == SUBMITTED`` itself, but that
+        # check alone is not concurrency-safe — see the docstring above.
         task.complete(approver_id, notes)
-        await self.repository.save(task)
+
+        # CAS-save: only persist if the persisted status is still SUBMITTED.
+        # If we lose the race, return the latest task so the API stays
+        # idempotent (caller sees the already-completed task instead of an error).
+        won = await self.repository.compare_and_save(
+            task, expected_status=TaskStatus.SUBMITTED
+        )
+        if not won:
+            logger.info(
+                "complete_task_lost_race",
+                task_id=task_id,
+                approver_id=approver_id,
+            )
+            return await self.get_task(task_id)
 
         # Record completion for the agent
         if task.assignee_id:
@@ -1103,6 +1128,11 @@ class TaskService:
 
         Raises:
             PermissionError: If reviewer is not the creator
+
+        Concurrency: same CAS pattern as ``complete_task`` — locks the
+        ``SUBMITTED → REJECTED`` transition so a concurrent
+        ``complete_task`` that already advanced the state machine can't
+        be silently overwritten back to REJECTED.
         """
         task = await self.get_task(task_id)
 
@@ -1111,7 +1141,16 @@ class TaskService:
             raise PermissionError("Only the task creator can reject")
 
         task.reject(reviewer_id, notes)
-        await self.repository.save(task)
+        won = await self.repository.compare_and_save(
+            task, expected_status=TaskStatus.SUBMITTED
+        )
+        if not won:
+            logger.info(
+                "reject_task_lost_race",
+                task_id=task_id,
+                reviewer_id=reviewer_id,
+            )
+            return await self.get_task(task_id)
 
         # Record activity
         if self.activity and task.assignee_id:
@@ -1138,13 +1177,47 @@ class TaskService:
         Cancel a task.
 
         For multi-participant tasks, also batch-cancels all active participations.
+
+        Concurrency (security audit H3): cancel can be issued from many task
+        states (OPEN / IN_PROGRESS / SUBMITTED / REJECTED). We capture the
+        current status as the CAS expectation so a concurrent cancel by the
+        same creator (or by an admin in the future) only refunds escrow once.
         """
         task = await self.get_task(task_id)
 
         if task.creator_id != canceller_id:
             raise PermissionError("Only the creator can cancel a task")
 
-        # Batch cancel all active participations for multi-participant tasks
+        # Already cancelled? Return early (idempotent).
+        if task.status == TaskStatus.CANCELLED:
+            return task
+
+        # Snapshot the pre-transition status; the CAS below requires the
+        # persisted row to still be in this exact state.
+        expected_status = task.status
+
+        # Run the in-memory transition first so we know the destination is legal
+        # (e.g. ``Task.cancel()`` raises if status is COMPLETED). CAS comes next
+        # — only when CAS wins do we touch participations / payment / escrow.
+        task.cancel()
+        won = await self.repository.compare_and_save(
+            task, expected_status=expected_status
+        )
+        if not won:
+            logger.info(
+                "cancel_task_lost_race",
+                task_id=task_id,
+                canceller_id=canceller_id,
+                expected_status=expected_status.value,
+            )
+            return await self.get_task(task_id)
+
+        # Batch cancel all active participations for multi-participant tasks.
+        # MUST run AFTER the CAS won — otherwise a concurrent ``complete_task``
+        # that wins the task-status CAS while we lose ours would still leave
+        # us having flipped every participation to CANCELLED, producing
+        # ``task=COMPLETED`` with ``participations=all CANCELLED`` (security
+        # audit H3 follow-up).
         if task._is_multi():
             cancelled_count = await self.task_pool.batch_cancel_participations(task_id)
             logger.info(
@@ -1152,9 +1225,6 @@ class TaskService:
                 task_id=task_id,
                 cancelled_count=cancelled_count,
             )
-
-        task.cancel()
-        await self.repository.save(task)
 
         # Cancel payment if exists
         if task.payment_task_id and self.payment_manager:

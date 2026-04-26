@@ -18,6 +18,7 @@ Routers covered
     registry, communication, subnets, payments, tasks, onchain, websocket
 """
 
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from acn.api import app
 from acn.infrastructure.messaging.websocket_manager import WebSocketManager
+from acn.monitoring.audit import AuditLogger
 from acn.monitoring.metrics import MetricsCollector
 from acn.protocols.ap2.core import PaymentDiscoveryService, PaymentTaskManager
 from acn.routes.dependencies import (
@@ -311,6 +313,32 @@ class TestCommunicationContract:
         assert call_kwargs.get("from_agent") == "agent-a"
         assert call_kwargs.get("to_agent") == "agent-b"
         assert call_kwargs.get("status") == "success"
+
+        stub_audit.log_event.assert_awaited_once()
+        audit_kwargs = stub_audit.log_event.await_args.kwargs
+        assert "actor_id" in audit_kwargs and audit_kwargs["actor_id"] == "agent-a"
+        assert "target_id" in audit_kwargs and audit_kwargs["target_id"] == "agent-b"
+        assert "actor" not in audit_kwargs, (
+            "audit.log_event signature uses actor_id, not actor — "
+            "this kwarg name regression caused 500s on every successful send."
+        )
+        assert "resource" not in audit_kwargs, (
+            "audit.log_event signature uses target_id, not resource."
+        )
+
+        from acn.monitoring.audit import AuditEventType
+
+        sig = inspect.signature(AuditLogger.log_event)
+        for kw in audit_kwargs:
+            assert kw in sig.parameters, (
+                f"audit.log_event was called with unknown kwarg {kw!r}; "
+                f"expected one of {list(sig.parameters)}"
+            )
+        et = audit_kwargs.get("event_type")
+        assert et in (
+            AuditEventType.MESSAGE_SENT,
+            AuditEventType.MESSAGE_SENT.value,
+        ), f"event_type should be a valid AuditEventType, got {et!r}"
 
     def test_retry_dlq_calls_retry_dlq_not_retry_failed_messages(self, stub_router):
         from acn.routes.dependencies import get_router

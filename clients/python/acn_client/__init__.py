@@ -33,7 +33,7 @@ from .models import (
     TaskReviewRequest,
     TaskSubmitRequest,
 )
-from .realtime import ACNRealtime
+from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState
 
 __version__ = "0.4.0"
 __all__ = [
@@ -41,6 +41,9 @@ __all__ = [
     "ACNClient",
     "ACNError",
     "ACNRealtime",
+    "ACNRealtimeOptions",
+    "AuthMode",
+    "WSState",
     # Agent models
     "AgentInfo",
     "AgentRegisterRequest",

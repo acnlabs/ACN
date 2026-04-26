@@ -4,7 +4,7 @@ Clean Architecture implementation: Route → Service → Repository
 """
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
@@ -90,6 +90,7 @@ async def create_subnet(
 
 @router.get("")
 async def list_subnets(
+    request: Request,
     owner: str = None,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
@@ -109,7 +110,7 @@ async def list_subnets(
                     detail="Authentication required when filtering by owner",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            payload = await verify_token(credentials)
+            payload = await verify_token(request, credentials)
             requester = payload.get("sub", "")
             permissions = payload.get("permissions", [])
             if requester != owner and "acn:admin" not in permissions:
@@ -151,6 +152,7 @@ async def get_subnet(
 @router.get("/{subnet_id}/agents")
 async def get_subnet_agents(
     subnet_id: str,
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
@@ -175,7 +177,7 @@ async def get_subnet_agents(
                 detail="Authentication required to view private subnet members",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        payload = await verify_token(credentials)
+        payload = await verify_token(request, credentials)
         requester = payload.get("sub", "")
         permissions = payload.get("permissions", [])
         if requester != subnet.owner and "acn:admin" not in permissions:

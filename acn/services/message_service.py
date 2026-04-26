@@ -12,6 +12,7 @@ from a2a.types import Message  # type: ignore[import-untyped]
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
 from ..infrastructure.messaging import MessageRouter
+from ..security import safe_external_error
 
 logger = structlog.get_logger()
 
@@ -222,11 +223,16 @@ class MessageService:
                 )
                 if strategy != "best_effort":
                     raise
+                # M12: sanitise the per-target error before it goes into
+                # the 200 response body. ``str(e)`` would otherwise leak
+                # the agent's internal endpoint (URL, IP, port) and any
+                # raw upstream response body that httpx echoes into
+                # ``ConnectError`` / ``HTTPStatusError`` messages.
                 responses.append(
                     {
                         "agent_id": agent.agent_id,
                         "status": "failed",
-                        "error": str(e),
+                        "error": safe_external_error(e),
                     }
                 )
 

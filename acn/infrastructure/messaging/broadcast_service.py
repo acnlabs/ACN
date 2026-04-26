@@ -23,6 +23,7 @@ import redis.asyncio as redis
 # Official A2A SDK
 from a2a.types import Message  # type: ignore[import-untyped]
 
+from ...security import safe_external_error
 from ..persistence.redis.registry import AgentRegistry
 from .message_router import MessageRouter
 
@@ -279,7 +280,11 @@ class BroadcastService:
                 return agent_id, result
             except Exception as e:
                 logger.error(f"Failed to send to {agent_id}: {e}")
-                return agent_id, {"error": str(e)}
+                # M12: per-target error goes into the broadcast result
+                # map that is returned to the API caller. Sanitise so
+                # the receiver never sees the target agent's endpoint
+                # URL or any raw upstream response body.
+                return agent_id, {"error": safe_external_error(e)}
 
         # Execute all in parallel
         tasks = [send_one(agent_id) for agent_id in to_agents]
@@ -306,7 +311,9 @@ class BroadcastService:
                 results[agent_id] = result
             except Exception as e:
                 logger.error(f"Failed to send to {agent_id}: {e}")
-                results[agent_id] = {"error": str(e)}
+                # M12: see _send_parallel.send_one — sanitise before the
+                # error reaches the API response.
+                results[agent_id] = {"error": safe_external_error(e)}
                 # Stop on first failure in sequential mode
                 break
 
@@ -331,7 +338,9 @@ class BroadcastService:
                 results[agent_id] = result
             except Exception as e:
                 logger.error(f"Failed to send to {agent_id}: {e}")
-                results[agent_id] = {"error": str(e)}
+                # M12: see _send_parallel.send_one — sanitise before the
+                # error reaches the API response.
+                results[agent_id] = {"error": safe_external_error(e)}
                 # Continue despite failure
 
         return results

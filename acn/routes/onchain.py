@@ -44,20 +44,65 @@ def get_erc8004_client(settings: Settings = Depends(get_settings)) -> ERC8004Cli
     return _erc8004_client
 
 
+def _parse_token_id_or_422(value: str | None, agent_id: str) -> int:
+    """Parse a stored ``erc8004_agent_id`` to int, or raise 422.
+
+    Token IDs are persisted as ``str`` for forward-compat (huge IDs, future
+    string-namespaced schemes), so callers must coerce. Pre-launch audit
+    backlog #1: a manually-edited or extremely-old DB row could hold a
+    non-numeric value and cause an unhandled ``ValueError`` → 500.
+
+    Returns 422 (not 500) so the client can distinguish "this agent's
+    on-chain binding is corrupted" from "ACN is broken". Logs the offender
+    so an operator can clean it up.
+    """
+    if value is None:
+        # Callers should have already 404'd on this; treat as 422 for safety.
+        raise HTTPException(status_code=422, detail="Agent has no ERC-8004 token ID")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.error(
+            "erc8004_corrupt_token_id",
+            agent_id=agent_id,
+            stored_value=value,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="Agent's stored ERC-8004 token ID is not a valid integer",
+        ) from None
+
+
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
 
 
 class BindRequest(BaseModel):
-    """Request to bind an on-chain ERC-8004 token ID to an ACN agent."""
+    """Request to bind an on-chain ERC-8004 token ID to an ACN agent.
+
+    The ``chain`` field is **deprecated for client use** (security audit
+    H-erc8004): ACN derives the canonical chain string from its own
+    ``erc8004_chain_id`` setting and ignores any divergent value from the
+    client. Sending it is still allowed for backward-compat, but if it
+    disagrees with the server-derived value the bind is rejected with 422.
+
+    Why: the previous implementation stored ``chain`` verbatim and then
+    served it back as ground truth via ``GET /onchain/agents/{id}``,
+    letting an attacker on a cheap testnet bind a token while claiming
+    "Ethereum mainnet" to anyone who queried the agent.
+    """
 
     token_id: int = Field(..., description="ERC-8004 NFT token ID (agentId on-chain)")
-    chain: str = Field(
-        default="eip155:8453",
-        description='Chain namespace, e.g. "eip155:8453" (Base mainnet)',
+    chain: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            'Optional chain namespace, e.g. "eip155:8453" (Base mainnet). '
+            "Server-derived from ERC8004_CHAIN_ID; if provided must match."
+        ),
     )
-    tx_hash: str | None = Field(None, description="Registration transaction hash (informational)")
+    tx_hash: str | None = Field(None, max_length=128, description="Registration transaction hash (informational)")
 
 
 class BindResponse(BaseModel):
@@ -118,6 +163,42 @@ async def bind_onchain_identity(
     if caller["agent_id"] != agent_id:
         raise HTTPException(status_code=403, detail="API key does not belong to this agent")
 
+    # ── H-erc8004 ──────────────────────────────────────────────────────────
+    # 1. Server-derive the canonical chain string from settings. Any
+    #    client-supplied value is treated as a hint that must match —
+    #    never as data we trust to persist.
+    server_chain = f"eip155:{settings.erc8004_chain_id}"
+    if body.chain is not None and body.chain != server_chain:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Chain mismatch: ACN is configured for {server_chain} but "
+                f"request specified {body.chain!r}. Omit the field or pass "
+                f"the matching value."
+            ),
+        )
+
+    # 2. Confirm the RPC endpoint is actually on the configured chain.
+    #    Without this an operator who swaps ERC8004_RPC_URL to a different
+    #    network (or an attacker who controls the RPC node) could trick
+    #    ACN into accepting binds backed by tokens on the wrong chain.
+    matches, actual = await erc8004.verify_chain_id(settings.erc8004_chain_id)
+    if not matches:
+        logger.error(
+            "erc8004_rpc_chain_mismatch",
+            expected=settings.erc8004_chain_id,
+            actual=actual,
+        )
+        # 503 not 422 — this is a server-side misconfiguration / outage,
+        # not a client error. The client cannot fix it by retrying.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ERC-8004 RPC endpoint is not on the configured chain "
+                f"(expected chain_id={settings.erc8004_chain_id})."
+            ),
+        )
+
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
@@ -149,9 +230,11 @@ async def bind_onchain_identity(
     # Read wallet address from chain (more trustworthy than agent self-report)
     on_chain_wallet = await erc8004.get_agent_wallet(body.token_id)
 
-    # Persist binding
+    # Persist binding — chain is the *server*-derived value, never the
+    # client-supplied one (even when they happen to match the client value
+    # is still discarded; we re-derive on every bind).
     agent.erc8004_agent_id = str(body.token_id)
-    agent.erc8004_chain = body.chain
+    agent.erc8004_chain = server_chain
     agent.erc8004_tx_hash = body.tx_hash
     agent.erc8004_registered_at = datetime.now(UTC)
     if on_chain_wallet:
@@ -163,7 +246,7 @@ async def bind_onchain_identity(
         "erc8004_bound",
         agent_id=agent_id,
         token_id=body.token_id,
-        chain=body.chain,
+        chain=server_chain,
         wallet=on_chain_wallet,
     )
 
@@ -171,7 +254,7 @@ async def bind_onchain_identity(
         status="bound",
         agent_id=agent_id,
         token_id=body.token_id,
-        chain=body.chain,
+        chain=server_chain,
         wallet_address=on_chain_wallet,
         message=(
             f"ERC-8004 token {body.token_id} successfully bound to agent {agent_id}"
@@ -220,7 +303,8 @@ async def get_agent_reputation(
             detail="Agent has not bound an ERC-8004 token ID yet",
         )
 
-    summary = await erc8004.get_reputation_summary(int(agent.erc8004_agent_id))
+    token_id = _parse_token_id_or_422(agent.erc8004_agent_id, agent_id)
+    summary = await erc8004.get_reputation_summary(token_id)
     return ReputationResponse(**summary)
 
 
@@ -258,7 +342,8 @@ async def get_agent_validation(
             detail="Agent has not bound an ERC-8004 token ID yet",
         )
 
-    summary = await erc8004.get_validation_summary(int(agent.erc8004_agent_id))
+    token_id = _parse_token_id_or_422(agent.erc8004_agent_id, agent_id)
+    summary = await erc8004.get_validation_summary(token_id)
     return ValidationSummaryResponse(**summary)
 
 

@@ -610,16 +610,30 @@ def build_erc8004_registration_file(agent: Agent, settings: Settings) -> dict:
     if agent.wallet_address:
         file["agentWallet"] = agent.wallet_address
 
-    # Include on-chain registration reference once the agent has bound a token ID
+    # Include on-chain registration reference once the agent has bound a token ID.
+    # Pre-launch audit backlog #1: tolerate non-integer ``erc8004_agent_id``
+    # (manually-edited rows / very old data) by skipping the ``registrations``
+    # field instead of 5xx-ing the .well-known endpoint. The file is still
+    # spec-valid without ``registrations`` (the field is optional).
     if agent.erc8004_agent_id:
-        file["registrations"] = [
-            {
-                "agentId": int(agent.erc8004_agent_id),
-                "agentRegistry": (
-                    f"eip155:{settings.erc8004_chain_id}"
-                    f":{settings.erc8004_identity_contract}"
-                ),
-            }
-        ]
+        try:
+            token_id = int(agent.erc8004_agent_id)
+        except (TypeError, ValueError):
+            logger.warning(
+                "erc8004_corrupt_token_id_skipped",
+                agent_id=agent.agent_id,
+                stored_value=agent.erc8004_agent_id,
+                action="omitted_registrations_field",
+            )
+        else:
+            file["registrations"] = [
+                {
+                    "agentId": token_id,
+                    "agentRegistry": (
+                        f"eip155:{settings.erc8004_chain_id}"
+                        f":{settings.erc8004_identity_contract}"
+                    ),
+                }
+            ]
 
     return file

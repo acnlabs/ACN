@@ -30,9 +30,9 @@ logger = structlog.get_logger()
 
 
 class PaymentCapabilityRequest(BaseModel):
-    supported_methods: list[SupportedPaymentMethod]
-    supported_networks: list[SupportedNetwork]
-    wallet_address: str | None = None
+    supported_methods: list[SupportedPaymentMethod] = Field(..., max_length=20)
+    supported_networks: list[SupportedNetwork] = Field(..., max_length=20)
+    wallet_address: str | None = Field(default=None, max_length=128)
     wallet_addresses: dict[str, str] = Field(
         default_factory=dict,
         description="Per-network wallet addresses, e.g. {'ethereum': '0x...', 'base': '0x...'}",
@@ -42,19 +42,19 @@ class PaymentCapabilityRequest(BaseModel):
         default=None,
         description="Token-based pricing config, e.g. {'input_price_per_million': 2.5, 'output_price_per_million': 10.0, 'currency': 'USD'}",
     )
-    api_endpoint: str | None = None
-    webhook_url: str | None = None
+    api_endpoint: str | None = Field(default=None, max_length=500)
+    webhook_url: str | None = Field(default=None, max_length=500)
 
 
 class CreatePaymentTaskRequest(BaseModel):
-    from_agent: str
-    to_agent: str
+    from_agent: str = Field(..., max_length=128)
+    to_agent: str = Field(..., max_length=128)
     amount: float = Field(..., gt=0, description="Payment amount (must be positive)")
-    currency: str
+    currency: str = Field(..., max_length=32)
     payment_method: SupportedPaymentMethod
     network: SupportedNetwork
-    description: str | None = None
-    metadata: dict | None = None
+    description: str | None = Field(default=None, max_length=2_000)
+    metadata: dict | None = None  # bounded by BodySizeLimitMiddleware (H6)
 
 
 # =============================================================================
@@ -72,7 +72,7 @@ class TokenPricingRequest(BaseModel):
 class EstimateCostRequest(BaseModel):
     """Request to estimate cost for a service call"""
 
-    agent_id: str
+    agent_id: str = Field(..., max_length=128)
     estimated_input_tokens: int = Field(default=0, ge=0)
     estimated_output_tokens: int = Field(default=0, ge=0)
 
@@ -80,9 +80,9 @@ class EstimateCostRequest(BaseModel):
 class BillUsageRequest(BaseModel):
     """Request to bill token usage after a service call"""
 
-    user_id: str = Field(..., description="User being charged")
-    agent_id: str = Field(..., description="Agent that provided service")
-    task_id: str | None = Field(None, description="Associated task ID")
+    user_id: str = Field(..., max_length=128, description="User being charged")
+    agent_id: str = Field(..., max_length=128, description="Agent that provided service")
+    task_id: str | None = Field(None, max_length=128, description="Associated task ID")
     input_tokens: int = Field(..., ge=0, description="Actual input tokens used")
     output_tokens: int = Field(..., ge=0, description="Actual output tokens used")
 

@@ -114,6 +114,24 @@ return 'OK'
 """
 
 # Atomic complete: set completed + increment completed_count + decrement active
+# Atomic CAS on the task ``status`` field.
+#
+# Used by ``compare_and_save`` (security audit H3) to make single-participant
+# state-machine transitions race-safe. The script either flips ``status`` from
+# ``expected`` → ``new`` (returning 1) or refuses (returning 0). The caller
+# then proceeds with a normal multi-field ``save()`` only when CAS won; that
+# leaves a tiny window where ``status`` is committed but other columns aren't,
+# but ``status`` is the source of truth for the state-machine, so any partial
+# write is at worst a fixable inconsistency, never a double-pay.
+LUA_CAS_TASK_STATUS = """
+local task_key = KEYS[1]
+local current = redis.call('HGET', task_key, 'status')
+if not current then return 0 end
+if current ~= ARGV[1] then return 0 end
+redis.call('HSET', task_key, 'status', ARGV[2])
+return 1
+"""
+
 LUA_COMPLETE_PARTICIPATION = """
 local participation_key = KEYS[1]
 local active_count_key = KEYS[2]
@@ -185,6 +203,7 @@ class RedisTaskRepository(ITaskRepository):
         self._join_script: Any | None = None
         self._cancel_script: Any | None = None
         self._complete_script: Any | None = None
+        self._cas_status_script: Any | None = None
 
     def _get_join_script(self) -> Any:
         if self._join_script is None:
@@ -200,6 +219,11 @@ class RedisTaskRepository(ITaskRepository):
         if self._complete_script is None:
             self._complete_script = self.redis.register_script(LUA_COMPLETE_PARTICIPATION)
         return self._complete_script
+
+    def _get_cas_status_script(self) -> Any:
+        if self._cas_status_script is None:
+            self._cas_status_script = self.redis.register_script(LUA_CAS_TASK_STATUS)
+        return self._cas_status_script
 
     async def save(self, task: Task) -> None:
         """Save or update a task in Redis"""
@@ -266,6 +290,33 @@ class RedisTaskRepository(ITaskRepository):
                 pipe.srem(f"acn:tasks:by_assignee:{existing.assignee_id}", task.task_id)
 
             await pipe.execute()
+
+    async def compare_and_save(self, task: Task, expected_status: TaskStatus) -> bool:
+        """CAS save — security audit H3.
+
+        Two-phase implementation: a Lua script atomically flips the
+        ``status`` hash field iff the current value matches ``expected_status``.
+        Only when CAS wins do we proceed to the regular ``save()`` for the
+        rest of the fields and indexes.
+
+        Why two-phase rather than rewriting all of ``save`` inside a Lua
+        script? ``save()`` touches half a dozen indexes (open / by_status /
+        by_tag / by_creator / by_assignee / mode) and translating that into
+        Lua would duplicate ~80 lines of logic that has to track the existing
+        task's *previous* indexes for cleanup. A successful CAS pins the
+        state-machine outcome; the index updates that follow are convergent.
+        Two losing concurrent callers can never *both* trigger payments.
+        """
+        task_key = f"acn:task:{task.task_id}"
+        cas = self._get_cas_status_script()
+        won = await cas(
+            keys=[task_key],
+            args=[expected_status.value, task.status.value],
+        )
+        if not won:
+            return False
+        await self.save(task)
+        return True
 
     async def find_by_id(self, task_id: str) -> Task | None:
         """Find task by ID"""

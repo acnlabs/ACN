@@ -258,6 +258,42 @@ class PostgresTaskRepository(ITaskRepository):
                 session.add(model)
             await session.commit()
 
+    async def compare_and_save(self, task: Task, expected_status: TaskStatus) -> bool:
+        """CAS update: persist only if DB status currently equals ``expected_status``.
+
+        ``UPDATE ... WHERE task_id=? AND status=?`` is atomic in PostgreSQL —
+        if two transactions race, exactly one row will report ``rowcount == 1``;
+        the other sees zero rows touched. We surface that as ``True`` / ``False``
+        so the service layer can short-circuit double payments.
+        """
+        model = self._task_to_model(task)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                update(TaskModel)
+                .where(TaskModel.task_id == task.task_id)
+                .where(TaskModel.status == expected_status.value)
+                .values(
+                    mode=model.mode,
+                    status=model.status,
+                    creator_id=model.creator_id,
+                    creator_type=model.creator_type,
+                    title=model.title,
+                    description=model.description,
+                    reward_amount=model.reward_amount,
+                    reward_currency=model.reward_currency,
+                    assignee_id=model.assignee_id,
+                    is_multi_participant=model.is_multi_participant,
+                    max_completions=model.max_completions,
+                    completed_count=model.completed_count,
+                    required_tags=model.required_tags,
+                    deadline=model.deadline,
+                    task_metadata=model.task_metadata,
+                    subnet_id=model.subnet_id,
+                )
+            )
+            await session.commit()
+            return result.rowcount == 1
+
     async def find_by_id(self, task_id: str) -> Task | None:
         async with self._session_factory() as session:
             row = await session.get(TaskModel, task_id)

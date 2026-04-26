@@ -9,12 +9,22 @@ Supports two registration modes:
 """
 
 import re
+import secrets
 from typing import Literal
 
 import httpx
 import structlog  # type: ignore[import-untyped]
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[import-untyped]
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -22,12 +32,21 @@ from ..auth.middleware import require_permission, verify_token
 from ..config import Settings, get_settings
 from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
+from ..monitoring import AuditEventType, AuditLevel, fire_and_forget_event, get_audit_singleton
+from ..security import SSRFViolation, safe_resolve_target, validate_endpoint_url
 from ..services.rewards_client import RewardsClient
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     AgentServiceDep,
     InternalTokenDep,
+    ProxyCallerDep,
     SubnetManagerDep,
+    # Underscore-prefixed crossing of module boundaries is intentional:
+    # ``_get_real_ip`` is the canonical proxy-aware IP resolver and we
+    # need the SSRF audit hook to attribute attacks to the real client,
+    # not to the front proxy. Lifting it to a public name would split
+    # ownership; keep the import explicit + commented instead.
+    _get_real_ip,
     limiter,
 )
 
@@ -46,7 +65,11 @@ class AgentJoinRequest(BaseModel):
     description: str = Field(..., min_length=10, max_length=500, description="What this agent does (required)")
     tags: list[str] = Field(default_factory=list, max_length=20, description="Capability tags (e.g. ['coding', 'search']). Optional but recommended for discoverability.")
     endpoint: str = Field(..., max_length=500, description="Agent A2A endpoint URL (must be http/https)")
-    referrer_id: str | None = Field(None, description="Referrer agent ID")
+    referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
+    # `agent_card` is a structured A2A Agent Card; total payload size is
+    # bounded by BodySizeLimitMiddleware (security audit H6) — we don't
+    # impose a Pydantic-level dict cap here because the A2A schema itself
+    # already constrains shape.
     agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
 
     @field_validator("name")
@@ -72,6 +95,13 @@ class AgentJoinRequest(BaseModel):
         v = v.strip()
         if not re.match(r"^https?://", v, re.IGNORECASE):
             raise ValueError("Endpoint must be an http:// or https:// URL.")
+        # SSRF guard: reject IP-literal endpoints in private/reserved ranges.
+        # Hostname resolution is checked again at dispatch time (see
+        # `_proxy_to_agent`) to defend against DNS rebinding.
+        try:
+            validate_endpoint_url(v, allow_loopback=settings.dev_mode)
+        except SSRFViolation as e:
+            raise ValueError(str(e)) from e
         return v
     # Payment capability (optional — can be set later via POST /payments/{id}/payment-capability)
     wallet_addresses: dict[str, str] = Field(
@@ -80,11 +110,13 @@ class AgentJoinRequest(BaseModel):
     )
     wallet_address: str | None = Field(
         default=None,
+        max_length=128,
         description="Legacy single wallet address (auto-mapped to wallet_addresses['ethereum'])",
     )
     accepts_payment: bool = Field(default=False, description="Whether agent accepts payments")
     payment_methods: list[str] = Field(
         default_factory=list,
+        max_length=20,
         description="Accepted payment methods, e.g. ['usdc', 'eth', 'platform_credits']",
     )
     token_pricing: dict | None = Field(
@@ -113,7 +145,7 @@ class AgentJoinResponse(BaseModel):
 class AgentClaimRequest(BaseModel):
     """Request to claim an agent"""
 
-    verification_code: str = Field(..., description="One-time claim token (returned at registration)")
+    verification_code: str = Field(..., max_length=128, description="One-time claim token (returned at registration)")
 
 
 class AgentClaimResponse(BaseModel):
@@ -128,7 +160,7 @@ class AgentClaimResponse(BaseModel):
 class AgentTransferRequest(BaseModel):
     """Request to transfer agent ownership"""
 
-    new_owner: str = Field(..., description="New owner identifier")
+    new_owner: str = Field(..., max_length=128, description="New owner identifier")
 
 
 class AgentTransferResponse(BaseModel):
@@ -409,17 +441,39 @@ async def get_agent(request: Request, agent_id: str, agent_service: AgentService
         raise HTTPException(status_code=404, detail="Agent not found") from e
 
 
+_PROXY_HOP_BY_HOP_HEADERS = frozenset(
+    {
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        # Strip ACN-internal auth so the downstream agent never sees the
+        # caller's ACN API key. ``Authorization`` is intentionally kept —
+        # callers may want to authenticate independently to the target
+        # agent and that header is conceptually theirs.
+        "x-acn-authorization",
+        "x-internal-token",
+    }
+)
+
+
 async def _proxy_to_agent(
     request: Request,
     agent_id: str,
     method: str,
     rest_path: str,
     agent_service,
+    caller: dict,
 ) -> Response:
     """Generic reverse proxy: forward any HTTP method + optional sub-path to the agent's real endpoint.
 
     root POST  /{agent_id}          → {real_endpoint}               (A2A JSON-RPC)
     sub-path   /{agent_id}/foo/bar  → {real_endpoint}/foo/bar       (REST pass-through)
+
+    ``caller`` is the verified ACN-side calling agent (``{agent_id, name}``).
+    Its ID is forwarded as ``X-ACN-Caller-Agent`` so the target endpoint
+    can attribute the request even though all proxied traffic appears to
+    come from ACN's egress IP.
     """
     try:
         agent = await agent_service.get_agent(agent_id)
@@ -434,14 +488,59 @@ async def _proxy_to_agent(
     if rest_path:
         target_url = f"{target_url}/{rest_path.lstrip('/')}"
 
+    # SSRF guard: re-resolve the target host *now* and reject if any DNS
+    # answer points to a private/reserved range. This catches the
+    # "register a public hostname, repoint DNS to 127.0.0.1 later" attack
+    # that pure registration-time validation cannot stop.
+    try:
+        await safe_resolve_target(target_url, allow_loopback=settings.dev_mode)
+    except SSRFViolation as e:
+        logger.warning(
+            "proxy_ssrf_blocked",
+            agent_id=agent_id,
+            target=target_url,
+            reason=str(e),
+        )
+        # Audit trail — fire-and-forget so a misbehaving Redis can never
+        # turn an SSRF block into a 500 (and amplify the attack surface).
+        # Use ``_get_real_ip`` so the recorded ``source_ip`` honours
+        # ``trusted_proxies`` (matches the auth-failure path; without this
+        # we'd attribute every SSRF attempt to the front proxy).
+        try:
+            ssrf_src_ip: str | None = _get_real_ip(request)
+        except Exception:  # noqa: BLE001 — never break the proxy path on diagnostics
+            ssrf_src_ip = request.client.host if request.client else None
+        fire_and_forget_event(
+            get_audit_singleton(),
+            event_type=AuditEventType.SECURITY_SSRF_BLOCKED,
+            actor_id=caller.get("agent_id"),
+            actor_type="agent",
+            target_id=agent_id,
+            target_type="agent",
+            level=AuditLevel.WARNING,
+            details={
+                "target_url": target_url,
+                "reason": str(e),
+                "method": method,
+            },
+            source_ip=ssrf_src_ip,
+        )
+        raise HTTPException(status_code=502, detail="Agent endpoint is not reachable.") from e
+
     body = await request.body()
     forward_headers = {
-        k: v for k, v in request.headers.items()
-        if k.lower() not in ("host", "content-length", "transfer-encoding", "connection")
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in _PROXY_HOP_BY_HOP_HEADERS
     }
+    forward_headers["X-ACN-Caller-Agent"] = caller["agent_id"]
+    if caller.get("name"):
+        forward_headers["X-ACN-Caller-Name"] = caller["name"]
 
     try:
-        client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
+        # ``follow_redirects=False`` so a 3xx response cannot escape the SSRF
+        # guard we just performed by pointing httpx at an internal address.
+        client = httpx.AsyncClient(timeout=60.0, follow_redirects=False)
         req = client.build_request(method, target_url, content=body, headers=forward_headers)
         resp = await client.send(req, stream=True)
 
@@ -469,7 +568,13 @@ async def _proxy_to_agent(
             agent_id=agent_id, method=method,
             target=target_url, error=str(e),
         )
-        raise HTTPException(status_code=502, detail="Failed to reach agent endpoint")
+        # ``from None`` (not ``from e``) — the httpx error chain may carry
+        # connection-level details (resolved IPs, internal hostnames) that
+        # we don't want surfacing in the client's exception trace. The
+        # original error is already in the structured server log above.
+        raise HTTPException(
+            status_code=502, detail="Failed to reach agent endpoint"
+        ) from None
 
 
 async def _join_agent_impl(
@@ -537,7 +642,11 @@ async def join_agent_internal(
 ):
     """Internal join endpoint — no rate limit, requires X-Internal-Token."""
     token = request.headers.get("X-Internal-Token", "")
-    if not token or token != settings.internal_api_token:
+    if (
+        not token
+        or not settings.internal_api_token
+        or not secrets.compare_digest(token, settings.internal_api_token)
+    ):
         raise HTTPException(status_code=401, detail="Internal token required")
     # Get agent service manually to avoid FastAPI Depends() injection edge cases
     from .dependencies import get_agent_service as _get_svc
@@ -582,23 +691,42 @@ async def join_agent(
 
 @router.post("/{agent_id}")
 @limiter.limit("60/minute")
-async def proxy_post(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
-    """Proxy POST to agent's real endpoint — A2A JSON-RPC (message/send, message/stream, tasks/*)."""
-    return await _proxy_to_agent(request, agent_id, "POST", "", agent_service)
+async def proxy_post(
+    request: Request,
+    agent_id: str,
+    caller: ProxyCallerDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Proxy POST to agent's real endpoint — A2A JSON-RPC (message/send, message/stream, tasks/*).
+
+    Requires ``X-ACN-Authorization: Bearer <ACN_API_KEY>`` to identify the calling
+    agent; rate-limit is bucketed per-agent.
+    """
+    return await _proxy_to_agent(request, agent_id, "POST", "", agent_service, caller)
 
 
 @router.put("/{agent_id}")
 @limiter.limit("60/minute")
-async def proxy_put(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
-    """Proxy PUT to agent's real endpoint."""
-    return await _proxy_to_agent(request, agent_id, "PUT", "", agent_service)
+async def proxy_put(
+    request: Request,
+    agent_id: str,
+    caller: ProxyCallerDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Proxy PUT to agent's real endpoint. Requires ``X-ACN-Authorization``."""
+    return await _proxy_to_agent(request, agent_id, "PUT", "", agent_service, caller)
 
 
 @router.patch("/{agent_id}")
 @limiter.limit("60/minute")
-async def proxy_patch(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
-    """Proxy PATCH to agent's real endpoint."""
-    return await _proxy_to_agent(request, agent_id, "PATCH", "", agent_service)
+async def proxy_patch(
+    request: Request,
+    agent_id: str,
+    caller: ProxyCallerDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Proxy PATCH to agent's real endpoint. Requires ``X-ACN-Authorization``."""
+    return await _proxy_to_agent(request, agent_id, "PATCH", "", agent_service, caller)
 
 
 @router.get("", response_model=AgentSearchResponse)
@@ -739,6 +867,7 @@ async def get_agent_endpoint(agent_id: str, agent_service: AgentServiceDep = Non
 
 @router.delete("")
 async def admin_bulk_delete_agents(
+    request: Request,
     _: InternalTokenDep,
     agent_service: AgentServiceDep = None,
     name_prefix: str | None = None,
@@ -749,7 +878,38 @@ async def admin_bulk_delete_agents(
 
     Use dry_run=true (default) to preview which agents would be deleted.
     Set dry_run=false to actually delete.
+
+    Audit (security audit H-audit):
+      - Each successful delete writes an ``AGENT_UNREGISTERED`` audit event
+        attributed to ``actor_id="admin@internal"`` so destructive admin
+        actions are individually traceable.
+      - One ``ADMIN_BULK_DELETE`` summary event is written at the end with
+        the filters and counts. This survives even when individual deletes
+        fail, giving operators a single point to query "did anyone run a
+        bulk delete with prefix X today?".
+      - ``dry_run=True`` writes no audit events — preview is read-only.
+      - All audit writes are awaited (not fire-and-forget) because admin
+        delete actions are compliance-critical: losing an event is worse
+        than the request taking a few extra ms.
+
+    Safety guard (security audit H-audit follow-up):
+      ``dry_run=False`` requires at least one of ``name_prefix`` / ``owner``.
+      Without a filter the loop would target every registered agent — the
+      INTERNAL_API_TOKEN gate is the only thing standing between an operator
+      typo and a full-table wipe. The guard is intentionally NOT applied to
+      ``dry_run=True`` so operators can preview the full population before
+      choosing a filter.
     """
+    if not dry_run and not name_prefix and not owner:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Refusing to bulk-delete without a filter. "
+                "Pass name_prefix or owner explicitly. "
+                "Use dry_run=true to preview filterless results."
+            ),
+        )
+
     agents = await agent_service.search_agents(tags=None, status="all")
 
     # Apply filters
@@ -766,14 +926,59 @@ async def admin_bulk_delete_agents(
             "agents": [{"agent_id": a.agent_id, "name": a.name, "owner": a.owner} for a in targets],
         }
 
+    audit = get_audit_singleton()
+    source_ip = request.client.host if request.client else None
+    actor_id = request.headers.get("x-creator-id") or "admin@internal"
+
     deleted, failed = [], []
     for a in targets:
         try:
             await agent_service.repository.delete(a.agent_id)
             deleted.append(a.agent_id)
             logger.info("admin_bulk_delete", agent_id=a.agent_id, name=a.name)
+            if audit is not None:
+                try:
+                    await audit.log_event(
+                        event_type=AuditEventType.AGENT_UNREGISTERED,
+                        actor_id=actor_id,
+                        actor_type="system",
+                        target_id=a.agent_id,
+                        target_type="agent",
+                        level=AuditLevel.WARNING,
+                        details={
+                            "via": "admin_bulk_delete",
+                            "name": a.name,
+                            "owner": a.owner,
+                        },
+                        source_ip=source_ip,
+                    )
+                except Exception as audit_exc:  # noqa: BLE001
+                    logger.warning(
+                        "admin_bulk_delete_audit_failed",
+                        agent_id=a.agent_id,
+                        error=str(audit_exc),
+                    )
         except Exception as exc:
             failed.append({"agent_id": a.agent_id, "error": str(exc)})
+
+    if audit is not None:
+        try:
+            await audit.log_event(
+                event_type=AuditEventType.ADMIN_BULK_DELETE,
+                actor_id=actor_id,
+                actor_type="system",
+                level=AuditLevel.WARNING,
+                details={
+                    "name_prefix": name_prefix,
+                    "owner": owner,
+                    "matched": len(targets),
+                    "deleted": len(deleted),
+                    "failed": len(failed),
+                },
+                source_ip=source_ip,
+            )
+        except Exception as audit_exc:  # noqa: BLE001
+            logger.warning("admin_bulk_delete_summary_audit_failed", error=str(audit_exc))
 
     return {"dry_run": False, "deleted": len(deleted), "failed": len(failed), "failed_details": failed}
 
@@ -1108,6 +1313,7 @@ async def proxy_subpath(
     request: Request,
     agent_id: str,
     rest_path: str,
+    caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,
 ):
     """Catch-all reverse proxy for agent sub-paths.
@@ -1116,5 +1322,10 @@ async def proxy_subpath(
     ACN-native route is transparently forwarded to the agent's real
     endpoint at {real_endpoint}/{rest_path}, preserving method, headers,
     and body.  SSE streaming is supported for text/event-stream responses.
+
+    Requires ``X-ACN-Authorization: Bearer <ACN_API_KEY>``; rate-limit
+    bucketed per calling agent.
     """
-    return await _proxy_to_agent(request, agent_id, request.method, rest_path, agent_service)
+    return await _proxy_to_agent(
+        request, agent_id, request.method, rest_path, agent_service, caller
+    )

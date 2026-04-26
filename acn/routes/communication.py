@@ -6,9 +6,10 @@ Clean Architecture implementation: Route → MessageService → MessageRouter
 import structlog  # type: ignore[import-untyped]
 from a2a.types import Message, TextPart  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core.exceptions import AgentNotFoundException
+from ..monitoring.audit import AuditEventType
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     AuditDep,
@@ -16,6 +17,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     MessageServiceDep,
     MetricsDep,
     RouterDep,
+    assert_system_caller,
     limiter,
 )
 
@@ -24,25 +26,30 @@ logger = structlog.get_logger()
 
 
 class SendMessageRequest(BaseModel):
-    from_agent: str
-    target_agent: str
-    message: dict  # A2A Message dict
-    priority: str = "normal"
+    from_agent: str = Field(..., max_length=128)
+    target_agent: str = Field(..., max_length=128)
+    # `message` is an A2A Message envelope; its size is bounded by the
+    # global BodySizeLimitMiddleware (security audit H6) — we don't enforce a
+    # Pydantic-level dict cap because per-key length policing here would
+    # double-count the body cap and only trade attack surface for false
+    # negatives.
+    message: dict
+    priority: str = Field(default="normal", max_length=32)
 
 
 class BroadcastRequest(BaseModel):
-    from_agent: str
-    message: dict  # A2A Message dict
-    strategy: str = "parallel"
-    target_subnet: str | None = None
-    target_tags: list[str] | None = None
+    from_agent: str = Field(..., max_length=128)
+    message: dict  # bounded by BodySizeLimitMiddleware (H6)
+    strategy: str = Field(default="parallel", max_length=32)
+    target_subnet: str | None = Field(default=None, max_length=128)
+    target_tags: list[str] | None = Field(default=None, max_length=50)
 
 
 class BroadcastByTagRequest(BaseModel):
-    from_agent: str
-    tags: list[str]
-    message: dict  # A2A Message dict
-    limit: int | None = None
+    from_agent: str = Field(..., max_length=128)
+    tags: list[str] = Field(..., max_length=50)
+    message: dict  # bounded by BodySizeLimitMiddleware (H6)
+    limit: int | None = Field(default=None, ge=1, le=10_000)
 
 
 @router.post("/send")
@@ -85,10 +92,12 @@ async def send_message(
         )
 
         await audit.log_event(
-            event_type="message_sent",
-            actor=body.from_agent,
-            resource=body.target_agent,
-            details={"message_id": result.get("message_id")},
+            event_type=AuditEventType.MESSAGE_SENT,
+            actor_id=body.from_agent,
+            actor_type="agent",
+            target_id=body.target_agent,
+            target_type="agent",
+            message_id=result.get("message_id"),
         )
 
         logger.info("message_sent", from_agent=body.from_agent, to_agent=body.target_agent)
@@ -304,7 +313,9 @@ async def get_message_history(
 
 
 class AckInboxRequest(BaseModel):
-    route_ids: list[str]
+    # Cap the batch — H6 body cap already limits total bytes, but list
+    # length is the more meaningful semantic guard for ack endpoints.
+    route_ids: list[str] = Field(..., max_length=500)
 
 
 @router.post("/history/{agent_id}/ack")
@@ -368,4 +379,111 @@ async def retry_dead_letter_queue(
 
     except Exception as e:
         logger.error("dlq_retry_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# ---------------------------------------------------------------------------
+# Internal channel — for ACN-trusted backend services (e.g. agentplanet
+# backend dispatching chat-mention notifications to ACN agents).
+#
+# Why a dedicated endpoint rather than reusing /send with a system API key:
+#   1. /send enforces ``agent_info.agent_id == body.from_agent`` to prevent
+#      one agent's leaked key from being used to forge messages "from"
+#      another agent. Reusing that path for system traffic would require
+#      registering a real ACN agent for every backend service ("ghost
+#      agent"), which pollutes search/analytics/billing dimensions and
+#      adds an API-key persistence problem on the backend.
+#   2. The internal channel uses ``X-Internal-Token`` (a single shared
+#      operator secret already in use for admin/operator endpoints), and
+#      restricts ``from_agent`` to the reserved ``system:<slug>``
+#      namespace via ``assert_system_caller``. This bounds the blast
+#      radius if the token leaks: an attacker can impersonate
+#      ``system:*`` callers but **cannot** forge messages "from" any real
+#      registered agent (whose ids are UUID4s, never matching the
+#      ``system:`` namespace).
+#
+# Audit / metrics behaviour matches the public /send so blue teams can
+# correlate system traffic with peer-agent traffic on the same dashboards.
+# ---------------------------------------------------------------------------
+@router.post("/internal/send")
+@limiter.limit("600/minute")
+async def internal_send_message(
+    request: Request,
+    body: SendMessageRequest,
+    _: InternalTokenDep,
+    message_service: MessageServiceDep = None,
+    metrics: MetricsDep = None,
+    audit: AuditDep = None,
+):
+    """Send message via the ACN internal channel (requires X-Internal-Token).
+
+    Constraints (vs. public ``/send``):
+      * ``from_agent`` must live in the ``system:<slug>`` namespace —
+        anything else is rejected with HTTP 422 by ``assert_system_caller``
+        (defence-in-depth so a leaked internal token cannot impersonate a
+        real registered agent).
+      * Higher rate limit (600/min) since legitimate backend services emit
+        bursts of fan-out notifications during chat activity. The limit is
+        still bounded so a runaway loop can't DoS the message router.
+      * No ``agent_info`` returned — there's no authenticated agent here,
+        only an authenticated *service*.
+    """
+    assert_system_caller(body.from_agent)
+
+    try:
+        message = Message(
+            role="user",
+            parts=[TextPart(text=str(body.message))],
+        )
+
+        result = await message_service.send_message(
+            from_agent_id=body.from_agent,
+            to_agent_id=body.target_agent,
+            message=message,
+            priority=body.priority,
+        )
+
+        await metrics.inc_message_count(
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            status="success",
+        )
+
+        # Tag the audit record so analysts can distinguish system-channel
+        # traffic from peer-agent traffic at a glance. ``actor_type`` is
+        # the standard discriminator used elsewhere (see send_message
+        # above which uses "agent").
+        await audit.log_event(
+            event_type=AuditEventType.MESSAGE_SENT,
+            actor_id=body.from_agent,
+            actor_type="system",
+            target_id=body.target_agent,
+            target_type="agent",
+            message_id=result.get("message_id"),
+        )
+
+        logger.info(
+            "internal_message_sent",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+        )
+
+        return result
+
+    except AgentNotFoundException as e:
+        logger.error("internal_message_send_failed", error=str(e))
+        await metrics.inc_message_count(
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            status="not_found",
+        )
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    except Exception as e:
+        logger.error("internal_message_send_failed", error=str(e))
+        await metrics.inc_message_count(
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            status="error",
+        )
         raise HTTPException(status_code=500, detail=str(e)) from e

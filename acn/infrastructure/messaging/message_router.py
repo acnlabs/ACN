@@ -31,6 +31,8 @@ from a2a.types import (  # type: ignore[import-untyped]
     TextPart,
 )
 
+from ...config import get_settings
+from ...security import SSRFViolation, safe_resolve_target
 from ..persistence.redis.registry import AgentRegistry
 
 logger = logging.getLogger(__name__)
@@ -118,6 +120,21 @@ class MessageRouter:
         Returns:
             A2AClient instance
         """
+        # SSRF guard: resolve and verify the endpoint hostname BEFORE caching
+        # the A2A client. Even though clients are cached per-endpoint URL,
+        # we re-check on each cache miss; in practice that's once per (rare)
+        # new agent + an invalidation when the cache evicts the entry.
+        # ``allow_loopback`` follows ``dev_mode`` so local agents can keep
+        # registering ``http://127.0.0.1:...`` endpoints in dev.
+        settings = get_settings()
+        try:
+            await safe_resolve_target(endpoint, allow_loopback=settings.dev_mode)
+        except SSRFViolation as e:
+            logger.warning(
+                "router_ssrf_blocked endpoint=%s reason=%s", endpoint, e
+            )
+            raise
+
         if endpoint not in self._clients:
             if len(self._clients) >= self._clients_max:
                 # Evict the oldest entry to keep memory bounded
@@ -128,9 +145,12 @@ class MessageRouter:
                         await old_client.httpx_client.aclose()
                 except Exception:
                     pass
+            # ``follow_redirects=False``: a 3xx pointing to a private
+            # address would otherwise sneak past the SSRF check above.
             httpx_client = httpx.AsyncClient(
                 timeout=30.0,
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+                follow_redirects=False,
             )
             self._clients[endpoint] = A2AClient(
                 httpx_client=httpx_client,

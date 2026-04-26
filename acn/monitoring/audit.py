@@ -28,13 +28,17 @@ Architecture:
     └──────────────────────────────────────────────────────┘
 """
 
+import asyncio
 import json
+import logging
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
+
+_logger = logging.getLogger(__name__)
 
 
 class AuditEventType(StrEnum):
@@ -69,6 +73,10 @@ class AuditEventType(StrEnum):
     SECURITY_AUTH_SUCCESS = "security_auth_success"
     SECURITY_AUTH_FAILURE = "security_auth_failure"
     SECURITY_TOKEN_GENERATED = "security_token_generated"
+    SECURITY_SSRF_BLOCKED = "security_ssrf_blocked"
+
+    # Admin
+    ADMIN_BULK_DELETE = "admin_bulk_delete"
 
     # System
     SYSTEM_STARTED = "system_started"
@@ -667,3 +675,170 @@ class AuditLogger:
         )
 
         return deleted
+
+
+# ---------------------------------------------------------------------------
+# Fire-and-forget helper (security hot paths)
+# ---------------------------------------------------------------------------
+
+
+# Strong references to in-flight fire-and-forget tasks.
+#
+# CPython's asyncio event loop only keeps a *weak* reference to tasks
+# created by ``create_task``; without an external strong reference the
+# task can be garbage-collected before its first ``await`` resolves —
+# silently dropping audit events under load. We retain the Task here
+# until it finishes and discard it via ``add_done_callback``.
+_PENDING_AUDIT_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def fire_and_forget_event(
+    audit: "AuditLogger | None",
+    *,
+    event_type: AuditEventType,
+    actor_id: str | None = None,
+    actor_type: str | None = None,
+    target_id: str | None = None,
+    target_type: str | None = None,
+    subnet_id: str | None = None,
+    level: AuditLevel = AuditLevel.INFO,
+    details: dict[str, Any] | None = None,
+    source_ip: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    """Schedule an audit write without awaiting.
+
+    Why fire-and-forget on auth-failure / SSRF-block paths:
+      Each ``log_event`` performs ~4 Redis ops (xadd + lpush + ltrim + expire).
+      Synchronously awaiting that on every 401/403 lets credential-stuffing
+      traffic amplify into a Redis DoS vector. We additionally never want an
+      audit-pipeline hiccup to turn a clean 401 into a confused 500.
+
+    The helper:
+      - returns immediately if ``audit`` is ``None`` or not started.
+      - swallows scheduling errors (e.g. no running loop in test setups).
+      - retains a strong reference to each spawned task to prevent the
+        well-known "create_task + GC = silently dropped task" trap.
+      - swallows write errors inside the spawned task and logs at debug level.
+
+    Callers should treat the audit write as best-effort — it is *not*
+    suitable for compliance-critical events that must never be lost.
+    """
+    if audit is None or not getattr(audit, "_started", False):
+        return
+
+    async def _safe_write() -> None:
+        try:
+            await audit.log_event(
+                event_type=event_type,
+                actor_id=actor_id,
+                actor_type=actor_type,
+                target_id=target_id,
+                target_type=target_type,
+                subnet_id=subnet_id,
+                level=level,
+                details=details or {},
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+        except Exception as exc:  # noqa: BLE001 — must never raise on hot path
+            _logger.debug(
+                "audit_fire_and_forget_failed",
+                extra={"event_type": event_type.value, "error": str(exc)},
+            )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop — happens only in synchronous test paths.
+        # Nothing useful we can do; drop the event silently.
+        return
+
+    task = loop.create_task(_safe_write())
+    _PENDING_AUDIT_TASKS.add(task)
+    task.add_done_callback(_PENDING_AUDIT_TASKS.discard)
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton for cross-module access (auth middleware, etc.)
+# ---------------------------------------------------------------------------
+#
+# Why a singleton lives here and not only in ``routes.dependencies``:
+#   ``acn.auth.middleware`` is imported *by* ``routes.dependencies`` (for
+#   ``get_subject``). Pushing the audit accessor into ``dependencies`` would
+#   create an import cycle when middleware needs to record JWT failures.
+#   Hosting the singleton next to the AuditLogger class keeps the dependency
+#   graph one-way: ``dependencies -> monitoring`` and ``auth -> monitoring``.
+
+_AUDIT_SINGLETON: "AuditLogger | None" = None
+
+
+def set_audit_singleton(audit: "AuditLogger | None") -> None:
+    """Wire the active AuditLogger so cross-module helpers can reach it.
+
+    Call once during app startup (``dependencies.set_globals``). Safe to call
+    again — the latest binding wins.
+    """
+    global _AUDIT_SINGLETON
+    _AUDIT_SINGLETON = audit
+
+
+def get_audit_singleton() -> "AuditLogger | None":
+    """Return the currently wired AuditLogger (may be ``None`` pre-startup)."""
+    return _AUDIT_SINGLETON
+
+
+def record_auth_failure(
+    *,
+    reason: str,
+    source_ip: str | None = None,
+    actor_id: str | None = None,
+    path: str | None = None,
+    method: str | None = None,
+    subnet_id: str = "",
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Best-effort fire-and-forget audit log for any authn/authz failure.
+
+    Delegates to ``fire_and_forget_event``. Callers are responsible for
+    extracting ``source_ip`` from the request before calling — that lets
+    each call site choose its own proxy-aware vs naive IP strategy without
+    forcing a Request parameter through the helper signature.
+
+    Args:
+        reason: Snake_case tag, e.g. ``"api_key_invalid"``.
+        source_ip: Resolved client IP (already proxy-aware where relevant).
+        actor_id: ID of the *failing principal* (e.g. JWT ``sub`` for
+            permission_denied, target agent_id is intentionally NOT passed
+            here — the failure is attributed to the caller, not the asset).
+        path / method: Request path + method, recorded into ``details`` so
+            analysts can pin attacks to a specific endpoint without
+            cross-referencing access logs.
+        subnet_id: Subnet context if relevant.
+        extra: Additional structured details merged into ``details``.
+    """
+    audit = _AUDIT_SINGLETON
+    if audit is None:
+        return
+    details: dict[str, Any] = {"reason": reason}
+    if path:
+        details["path"] = path
+    if method:
+        details["method"] = method
+    if extra:
+        details.update(extra)
+    # Intentionally leave ``actor_type`` unset. ``actor_id`` for an Auth0
+    # subject can be a user (``auth0|xxx``), an m2m client (``xxx@clients``),
+    # a dev stub (``dev@clients``), or an internal-service marker
+    # (``backend@internal``). Tagging all of those as ``"user"`` poisons
+    # actor-type analytics; analysts can derive the type from the ``sub``
+    # suffix if needed.
+    fire_and_forget_event(
+        audit,
+        event_type=AuditEventType.SECURITY_AUTH_FAILURE,
+        actor_id=actor_id,
+        subnet_id=subnet_id or None,
+        level=AuditLevel.WARNING,
+        details=details,
+        source_ip=source_ip,
+    )

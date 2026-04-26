@@ -3,6 +3,7 @@
 Clean Architecture implementation: Route → TaskService → Repository
 """
 
+import secrets
 from typing import Annotated
 
 import structlog
@@ -34,7 +35,14 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def require_task_write_auth():
-    """Factory for task write endpoints: accepts internal token, agent API key, or JWT."""
+    """Factory for task write endpoints: accepts internal token, agent API key, or JWT.
+
+    Side effect (security audit H7): writes ``request.state.rate_limit_key``
+    keyed on the resolved principal so ``@limiter.limit`` buckets per identity
+    rather than per IP. Without this an authenticated agent could exhaust the
+    shared-IP bucket of every other caller behind the same NAT/proxy, and a
+    malicious caller could spoof XFF to dodge their own bucket.
+    """
     from ..services.agent_service import AgentService
 
     async def checker(
@@ -48,10 +56,25 @@ def require_task_write_auth():
         # Dev mode: accept anything
         if s.dev_mode:
             sub = credentials.credentials if credentials else "dev@clients"
+            request.state.rate_limit_key = f"dev:{sub}"
             return {"sub": sub, "type": "dev", "permissions": ["acn:read", "acn:write", "acn:admin"]}
 
-        # 1. Internal token: trusted backend service call
-        if x_internal_token and x_internal_token == s.internal_api_token:
+        # 1. Internal token: trusted backend service call. Use constant-time
+        # comparison to avoid timing-side-channel leaks of token contents.
+        if (
+            x_internal_token
+            and s.internal_api_token
+            and secrets.compare_digest(x_internal_token, s.internal_api_token)
+        ):
+            # Backend often forwards on behalf of many users — bucket per
+            # X-Creator-Id when present so one runaway user can't blow out
+            # the shared backend@internal budget; otherwise fall back to a
+            # single shared bucket (which is fine: the backend is trusted
+            # and observable, abuse is upstream of ACN).
+            creator_id = request.headers.get("x-creator-id")
+            request.state.rate_limit_key = (
+                f"internal:{creator_id}" if creator_id else "internal:backend"
+            )
             return {
                 "sub": "backend@internal",
                 "type": "internal",
@@ -63,6 +86,7 @@ def require_task_write_auth():
             agent = await agent_service.get_agent_by_api_key(credentials.credentials)
             if not agent:
                 raise HTTPException(status_code=401, detail="Invalid agent API key")
+            request.state.rate_limit_key = f"agent:{agent.agent_id}"
             return {
                 "sub": agent.agent_id,
                 "type": "agent",
@@ -71,10 +95,11 @@ def require_task_write_auth():
             }
 
         # 3. Auth0 JWT with acn:write
-        payload = await verify_token(credentials)
+        payload = await verify_token(request, credentials)
         perms: list[str] = payload.get("permissions", [])
         if "acn:write" not in perms:
             raise HTTPException(status_code=403, detail="Missing required permission: acn:write")
+        request.state.rate_limit_key = f"jwt:{payload.get('sub', 'unknown')}"
         return {**payload, "type": "jwt"}
 
     return checker
@@ -100,6 +125,44 @@ def get_task_service() -> TaskService:
 
 
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+
+
+async def _resolve_caller_identity(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> str | None:
+    """Best-effort resolve the calling principal from a Bearer token.
+
+    Used by *read* endpoints that grant private-subnet visibility to the
+    caller — both ``acn_xxx`` agent API keys and Auth0 JWTs are first-class
+    callers, so we accept either form. Returns ``None`` if no credentials
+    are supplied or the token doesn't validate as either form (caller is
+    treated as anonymous and only sees public data).
+
+    Why a shared helper? Security audit H8: ``list_tasks`` accepted both
+    forms (subnet visibility worked for agents using API keys) but
+    ``get_task`` only ran ``verify_token``, which fails on ``acn_xxx`` and
+    silently degraded to anonymous — so an agent could see a private task
+    in the list but get a 403 when fetching its detail. Centralising the
+    resolution stops the two paths from drifting again.
+    """
+    if not credentials:
+        return None
+    token = credentials.credentials
+    if token.startswith("acn_"):
+        try:
+            agent_svc = get_agent_service()
+            agent = await agent_svc.get_agent_by_api_key(token)
+            if agent:
+                return agent.agent_id
+        except Exception:
+            return None
+        return None
+    try:
+        payload = await verify_token(request, credentials)
+        return payload.get("sub")
+    except Exception:
+        return None
 
 
 def _resolve_actor(payload: dict, request: Request) -> tuple[str, str, str]:
@@ -146,31 +209,39 @@ class TaskCreateRequest(BaseModel):
 
     # ── Layer 1: Required ────────────────────────────────
     title: str = Field(..., min_length=3, max_length=200)
-    description: str = Field(..., min_length=10)
+    # description has a generous cap — task briefs can be long-form, but
+    # 10 KB is enough for any realistic human-authored description and stops
+    # an attacker from anchoring a 1 MB blob in a string field that gets
+    # written to PG and rendered in every list response.
+    description: str = Field(..., min_length=10, max_length=10_000)
     deadline_hours: int = Field(..., ge=1, le=2160, description="Deadline in hours (1h to 90 days)")
-    reward: str = Field(..., description="Reward per completion (numeric string, e.g. '50' or '0')")
+    reward: str = Field(..., max_length=64, description="Reward per completion (numeric string, e.g. '50' or '0')")
 
     # ── Layer 2: Common options ───────────────────────────
     max_participants: int | None = Field(default=1, description="1=single, N=fixed, None=unlimited")
-    completion_mode: str = Field(default="independent", description="independent | competitive | collaborative")
+    completion_mode: str = Field(default="independent", max_length=32, description="independent | competitive | collaborative")
     auto_approve: bool = Field(default=False, description="True: submissions auto-complete without review")
-    task_type: str = Field(default="general", description="Task type category")
-    required_tags: list[str] = Field(default_factory=list)
-    reward_currency: str = Field(default="ap_points", description="Currency: ap_points, USD, USDC, ETH")
+    task_type: str = Field(default="general", max_length=64, description="Task type category")
+    required_tags: list[str] = Field(default_factory=list, max_length=20)
+    reward_currency: str = Field(default="ap_points", max_length=32, description="Currency: ap_points, USD, USDC, ETH")
 
     # ── Layer 3: Advanced options ─────────────────────────
     require_join_approval: bool = Field(default=False, description="True: solvers must apply and be approved to join")
     allow_repeat_by_same: bool = Field(default=False, description="True: same solver can complete again after finishing")
-    max_total_budget: str | None = Field(default=None, description="Budget cap for bounty tasks (max_participants=None only)")
+    max_total_budget: str | None = Field(default=None, max_length=64, description="Budget cap for bounty tasks (max_participants=None only)")
 
     # ── Escrow: opt-in ────────────────────────────────────
     use_escrow: bool = Field(default=False, description="True: lock reward in escrow at creation. Labs sets this when reward > 0.")
 
     # ── Collaboration ─────────────────────────────────────
-    group_id: str | None = Field(default=None, description="Link related subtasks into a collaborative group")
+    group_id: str | None = Field(default=None, max_length=128, description="Link related subtasks into a collaborative group")
 
     # ── Visibility ────────────────────────────────────────
-    subnet_id: str | None = Field(default=None, description="Restrict task visibility to ACN Subnet members (NULL=public)")
+    # Length matches ``SubnetCreateRequest.subnet_id`` (64). Allowing a
+    # wider value here would just defer the rejection to the subnet
+    # lookup — and 65–128 char IDs are guaranteed to miss because the
+    # creation path won't accept them.  Round-2 audit: pin them together.
+    subnet_id: str | None = Field(default=None, max_length=64, description="Restrict task visibility to ACN Subnet members (NULL=public)")
 
     # ── A2UI: Declarative interactive UI ─────────────────────────────────────
     ui_spec: dict | None = Field(
@@ -288,14 +359,14 @@ class TaskListResponse(BaseModel):
 class TaskAcceptRequest(BaseModel):
     """Request to accept/join a task"""
 
-    message: str = Field(default="", description="Optional message to creator")
+    message: str = Field(default="", max_length=2_000, description="Optional message to creator")
 
 
 class TaskInviteRequest(BaseModel):
     """Request to invite a solver to a task (creator only)"""
 
-    agent_id: str = Field(..., description="ID of the solver to invite")
-    agent_name: str = Field(default="", description="Display name of the invited solver")
+    agent_id: str = Field(..., max_length=128, description="ID of the solver to invite")
+    agent_name: str = Field(default="", max_length=200, description="Display name of the invited solver")
 
 
 class TaskAcceptResponse(BaseModel):
@@ -308,10 +379,13 @@ class TaskAcceptResponse(BaseModel):
 class TaskSubmitRequest(BaseModel):
     """Request to submit task result"""
 
-    submission: str = Field(..., min_length=5, description="Task result/deliverable")
-    artifacts: list[dict] = Field(default_factory=list, description="Optional artifacts")
+    # 50 KB is a comfortable headroom for any text submission; binary/large
+    # deliverables should be uploaded out-of-band and referenced via
+    # ``artifacts`` URLs, not inlined here.
+    submission: str = Field(..., min_length=5, max_length=50_000, description="Task result/deliverable")
+    artifacts: list[dict] = Field(default_factory=list, max_length=50, description="Optional artifacts")
     participation_id: str | None = Field(
-        None, description="Participation ID (for multi-participant tasks)"
+        None, max_length=128, description="Participation ID (for multi-participant tasks)"
     )
 
 
@@ -319,11 +393,11 @@ class TaskReviewRequest(BaseModel):
     """Request to approve or reject submission"""
 
     approved: bool = Field(..., description="Whether to approve")
-    notes: str = Field(default="", description="Review notes")
+    notes: str = Field(default="", max_length=5_000, description="Review notes")
     participation_id: str | None = Field(
-        None, description="Participation ID (for multi-participant tasks)"
+        None, max_length=128, description="Participation ID (for multi-participant tasks)"
     )
-    agent_id: str | None = Field(None, description="Agent ID (alternative to participation_id)")
+    agent_id: str | None = Field(None, max_length=128, description="Agent ID (alternative to participation_id)")
 
 
 def _task_to_response(task) -> TaskResponse:
@@ -411,25 +485,8 @@ async def list_tasks(
     Anonymous callers only see public tasks (subnet_id IS NULL).
     Authenticated callers (Agent API key or JWT) also see tasks in their subnets.
     """
-    # Extract requesting_agent_id from Bearer token (best-effort, no hard auth failure)
-    requesting_agent_id: str | None = None
-    if credentials:
-        token = credentials.credentials
-        if token.startswith("acn_"):
-            # Agent API key — resolve agent_id for subnet visibility
-            try:
-                agent_svc = get_agent_service()
-                agent = await agent_svc.get_agent_by_api_key(token)
-                if agent:
-                    requesting_agent_id = agent.agent_id
-            except Exception:
-                pass  # Fall back to public-only view
-        else:
-            try:
-                payload = await verify_token(credentials)
-                requesting_agent_id = payload.get("sub")
-            except Exception:
-                pass  # Anonymous fallback
+    # Best-effort caller resolution — both ``acn_xxx`` and JWT are valid here.
+    requesting_agent_id = await _resolve_caller_identity(request, credentials)
 
     # mode filter passed through as-is (string); repository handles DB column match
     task_mode = mode or None
@@ -502,24 +559,24 @@ async def get_task(
     task_service: TaskServiceDep = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ):
-    """Get task details. Private tasks (subnet_id set) require subnet membership."""
+    """Get task details. Private tasks (subnet_id set) require subnet membership.
+
+    Security audit H8: caller identity must be resolved with the same logic
+    as ``list_tasks`` (both ``acn_xxx`` API keys and Auth0 JWTs). Previously
+    only ``verify_token`` was run, which fails on agent API keys — the
+    consequence was an agent could see a private task in ``GET /tasks`` but
+    receive 403 when fetching its detail. Both endpoints now share
+    ``_resolve_caller_identity``.
+    """
     try:
         task = await task_service.get_task(task_id)
     except TaskNotFoundException:
         raise HTTPException(status_code=404, detail="Task not found") from None
 
     if task.subnet_id:
-        # Extract caller identity from Bearer token
-        requesting_agent_id: str | None = None
-        if credentials:
-            try:
-                payload = await verify_token(credentials)
-                requesting_agent_id = payload.get("sub")
-            except Exception:
-                pass
+        requesting_agent_id = await _resolve_caller_identity(request, credentials)
         if not requesting_agent_id:
             raise HTTPException(status_code=403, detail="Authentication required to view this task")
-        # Check subnet membership via task_service (uses subnet_repository)
         is_member = await task_service.is_subnet_member(task.subnet_id, requesting_agent_id)
         if not is_member:
             raise HTTPException(status_code=403, detail="Not a subnet member")
@@ -531,9 +588,10 @@ async def get_task(
 
 
 @router.post("", response_model=TaskResponse)
+@limiter.limit("20/minute")
 async def create_task(
-    body: TaskCreateRequest,
     request: Request,
+    body: TaskCreateRequest,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -604,9 +662,10 @@ async def create_task(
 
 
 @router.post("/{task_id}/accept", response_model=TaskAcceptResponse)
+@limiter.limit("60/minute")
 async def accept_task(
-    task_id: str,
     request: Request,
+    task_id: str,
     body: TaskAcceptRequest = None,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
@@ -635,9 +694,10 @@ async def accept_task(
 
 
 @router.post("/{task_id}/invite", response_model=TaskResponse)
+@limiter.limit("30/minute")
 async def invite_solver(
-    task_id: str,
     request: Request,
+    task_id: str,
     body: TaskInviteRequest,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
@@ -666,9 +726,10 @@ async def invite_solver(
 
 
 @router.post("/{task_id}/submit", response_model=TaskResponse)
+@limiter.limit("30/minute")
 async def submit_task(
-    task_id: str,
     request: Request,
+    task_id: str,
     body: TaskSubmitRequest,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
@@ -695,9 +756,10 @@ async def submit_task(
 
 
 @router.post("/{task_id}/review", response_model=TaskResponse)
+@limiter.limit("60/minute")
 async def review_task(
-    task_id: str,
     request: Request,
+    task_id: str,
     body: TaskReviewRequest,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
@@ -739,9 +801,10 @@ async def review_task(
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse)
+@limiter.limit("30/minute")
 async def cancel_task(
-    task_id: str,
     request: Request,
+    task_id: str,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -812,10 +875,11 @@ async def get_my_participation(
 
 
 @router.post("/{task_id}/participations/{participation_id}/cancel", response_model=TaskResponse)
+@limiter.limit("60/minute")
 async def cancel_participation(
+    request: Request,
     task_id: str,
     participation_id: str,
-    request: Request,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -838,10 +902,11 @@ async def cancel_participation(
 
 
 @router.post("/{task_id}/participations/{participation_id}/approve", response_model=TaskResponse)
+@limiter.limit("60/minute")
 async def approve_applicant(
+    request: Request,
     task_id: str,
     participation_id: str,
-    request: Request,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -864,10 +929,11 @@ async def approve_applicant(
 
 
 @router.post("/{task_id}/participations/{participation_id}/reject", response_model=TaskResponse)
+@limiter.limit("60/minute")
 async def reject_applicant(
+    request: Request,
     task_id: str,
     participation_id: str,
-    request: Request,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -919,8 +985,10 @@ async def get_task_internal(
 
 
 @router.post("/agent/create", response_model=TaskResponse)
+@limiter.limit("20/minute")
 async def agent_create_task(
-    request: TaskCreateRequest,
+    request: Request,
+    body: TaskCreateRequest,
     agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
@@ -934,29 +1002,31 @@ async def agent_create_task(
         creator_type="agent",
         creator_id=agent_info["agent_id"],
         creator_name=agent_info.get("name", "Agent"),
-        title=request.title,
-        description=request.description,
-        task_type=request.task_type,
-        required_tags=request.required_tags,
-        reward=request.reward,
-        reward_currency=request.reward_currency,
-        max_participants=request.max_participants,
-        completion_mode=request.completion_mode,
-        auto_approve=request.auto_approve,
-        require_join_approval=request.require_join_approval,
-        allow_repeat_by_same=request.allow_repeat_by_same,
-        max_total_budget=request.max_total_budget,
-        use_escrow=request.use_escrow,
-        group_id=request.group_id,
-        deadline_hours=request.deadline_hours,
-        metadata=request.metadata,
+        title=body.title,
+        description=body.description,
+        task_type=body.task_type,
+        required_tags=body.required_tags,
+        reward=body.reward,
+        reward_currency=body.reward_currency,
+        max_participants=body.max_participants,
+        completion_mode=body.completion_mode,
+        auto_approve=body.auto_approve,
+        require_join_approval=body.require_join_approval,
+        allow_repeat_by_same=body.allow_repeat_by_same,
+        max_total_budget=body.max_total_budget,
+        use_escrow=body.use_escrow,
+        group_id=body.group_id,
+        deadline_hours=body.deadline_hours,
+        metadata=body.metadata,
     )
 
     return _task_to_response(task)
 
 
 @router.post("/agent/{task_id}/accept", response_model=TaskResponse)
+@limiter.limit("60/minute")
 async def agent_accept_task(
+    request: Request,
     task_id: str,
     agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
@@ -980,9 +1050,11 @@ async def agent_accept_task(
 
 
 @router.post("/agent/{task_id}/submit", response_model=TaskResponse)
+@limiter.limit("30/minute")
 async def agent_submit_task(
+    request: Request,
     task_id: str,
-    request: TaskSubmitRequest,
+    body: TaskSubmitRequest,
     agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
@@ -992,8 +1064,8 @@ async def agent_submit_task(
         task = await task_service.submit_task(
             task_id=task_id,
             agent_id=agent_info["agent_id"],
-            submission=request.submission,
-            artifacts=request.artifacts,
+            submission=body.submission,
+            artifacts=body.artifacts,
         )
         return _task_to_response(task)
 

@@ -4,9 +4,25 @@ Shared fixtures for all tests.
 """
 
 import asyncio
+import os
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from unittest.mock import AsyncMock
+
+# ---------------------------------------------------------------------------
+# Test-time security defaults
+# ---------------------------------------------------------------------------
+# Settings.validate_security_settings rejects empty/short INTERNAL_API_TOKEN
+# regardless of dev_mode (this is intentional — see C2 fix in the security
+# audit). Tests don't get to set env vars after `from acn...` imports because
+# Settings is built at import time, so we seed safe defaults here, before any
+# acn.* import below.
+os.environ.setdefault(
+    "INTERNAL_API_TOKEN",
+    "test-internal-token-must-be-at-least-32-characters-long",
+)
+os.environ.setdefault("DEV_MODE", "true")
+os.environ.setdefault("HOST", "127.0.0.1")
 
 import pytest
 import redis.asyncio as redis

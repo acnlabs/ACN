@@ -40,9 +40,11 @@ Usage:
     metrics.observe_latency(operation="route", latency_seconds=0.0155)
 
     # Audit logging
+    from acn.monitoring.audit import AuditEventType
     await audit.log_event(
-        event_type="agent_registered",
-        agent_id="cursor-agent",
+        event_type=AuditEventType.AGENT_REGISTERED,
+        actor_id="admin",
+        target_id="cursor-agent",
         details={"subnet": "team-a"}
     )
 
@@ -51,11 +53,25 @@ Usage:
 """
 
 from .analytics import Analytics
-from .audit import AuditLogger
+from .audit import (
+    AuditEventType,
+    AuditLevel,
+    AuditLogger,
+    fire_and_forget_event,
+    get_audit_singleton,
+    record_auth_failure,
+    set_audit_singleton,
+)
 from .metrics import MetricsCollector
 
 __all__ = [
     "MetricsCollector",
     "AuditLogger",
+    "AuditEventType",
+    "AuditLevel",
     "Analytics",
+    "fire_and_forget_event",
+    "set_audit_singleton",
+    "get_audit_singleton",
+    "record_auth_failure",
 ]

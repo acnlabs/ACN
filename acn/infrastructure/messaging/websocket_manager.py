@@ -24,6 +24,8 @@ from uuid import uuid4
 import redis.asyncio as redis
 from fastapi import WebSocket
 
+from ...security import safe_external_error
+
 logger = logging.getLogger(__name__)
 
 
@@ -422,11 +424,16 @@ class WebSocketManager:
                 await self._handlers[message_type](connection, data)
             except Exception as e:
                 logger.error(f"Handler error for {message_type}: {e}")
+                # M12: error frame is sent back over the WebSocket to the
+                # client. ``str(e)`` would otherwise leak handler-internal
+                # details (httpx URLs, traceback fragments). The category
+                # alone is sufficient for clients to act on (retry,
+                # surface a UI message); full detail is in the server log.
                 await self._send(
                     connection,
                     {
                         "type": MessageType.ERROR.value,
-                        "error": str(e),
+                        "error": safe_external_error(e),
                     },
                 )
 

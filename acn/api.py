@@ -13,6 +13,7 @@ Based on A2A Protocol: https://github.com/a2aproject/A2A
 """
 
 import asyncio
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -29,11 +30,12 @@ from a2a.types import (  # type: ignore[import-untyped]
 from a2a.types import (  # type: ignore[import-untyped]
     SecurityScheme as A2ASecurityScheme,
 )
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from slowapi import _rate_limit_exceeded_handler  # type: ignore[import-untyped]
 from slowapi.errors import RateLimitExceeded  # type: ignore[import-untyped]
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import get_settings
 from .infrastructure.messaging import (
@@ -55,6 +57,7 @@ from .infrastructure.persistence.redis import RedisAgentRepository, RedisSubnetR
 from .infrastructure.persistence.redis.registry import AgentRegistry
 from .infrastructure.persistence.redis.task_repository import RedisTaskRepository
 from .infrastructure.task_pool import TaskPool
+from .middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .monitoring import Analytics, AuditLogger, MetricsCollector
 from .protocols.a2a.server import create_a2a_app
 from .protocols.ap2 import (
@@ -76,6 +79,7 @@ from .routes import (
     websocket,
 )
 from .routes.dependencies import limiter
+from .security import check_tls_config
 from .services import AgentService, BillingService, MessageService, SubnetService, TaskService
 from .services.activity_service import ActivityService
 from .services.auth0_client import Auth0CredentialClient
@@ -90,6 +94,13 @@ logger = structlog.get_logger()
 async def lifespan(app: FastAPI):
     """Lifespan context manager"""
     logger.info("acn_starting", version=settings.service_version)
+
+    # M13: scan URL settings for plain-HTTP misconfiguration in production.
+    # Soft check (warning only, never fails startup) because ACN routinely
+    # runs behind a TLS-terminating reverse proxy and we cannot reliably
+    # tell intra-cluster service-mesh URLs apart from real cleartext leaks.
+    # See ``acn.security.tls_check`` for the rationale.
+    check_tls_config(settings, logger)
 
     # Initialize core services
     registry_instance = AgentRegistry(settings.redis_url)
@@ -344,6 +355,100 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+# ---------------------------------------------------------------------------
+# Global exception handlers (security-audit H4)
+# ---------------------------------------------------------------------------
+# Audit finding H4: many handlers do `raise HTTPException(status_code=500,
+# detail=str(e))`, which leaks internal exception messages — sometimes with
+# stack-trace-level detail (DB error strings, internal hostnames, library
+# tracebacks) — to anonymous callers. We cannot fix this purely call-site by
+# call-site, so we install global handlers that:
+#
+# 1. Log the real exception with full context (request_id, path, method) so
+#    operators can still debug from the structured logs.
+# 2. Replace the response body with a constant-shape generic error and a
+#    request_id the caller can quote in support tickets.
+# 3. Apply ONLY to ≥500 responses and to fully-unhandled `Exception`s.
+#    4xx keep their detail because the caller is expected to act on those
+#    messages ("agent not found", "permission denied", validation errors).
+#
+# This is layered defence: even if a route author forgets and writes
+# `raise HTTPException(500, detail=str(e))`, the handler below will sanitise
+# the response before it leaves the process.
+def _new_request_id(request: Request) -> str:
+    rid = getattr(request.state, "request_id", None)
+    if rid:
+        return str(rid)
+    rid = str(uuid.uuid4())
+    try:
+        request.state.request_id = rid
+    except Exception:  # pragma: no cover  - state may be readonly on some scopes
+        pass
+    return rid
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    """Sanitise 5xx HTTPExceptions; pass 4xx through unchanged."""
+    if exc.status_code < 500:
+        # 4xx semantics are part of the API contract — keep them verbatim.
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=getattr(exc, "headers", None),
+        )
+    request_id = _new_request_id(request)
+    logger.error(
+        "http_5xx_response",
+        status_code=exc.status_code,
+        detail=str(exc.detail),
+        path=request.url.path,
+        method=request.method,
+        request_id=request_id,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": "internal_server_error",
+            "message": "An internal error occurred. Please try again later.",
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Last-resort handler: any uncaught exception becomes a generic 500.
+
+    Without this, Starlette's default ServerErrorMiddleware echoes the full
+    traceback into the response body when ``debug=True`` and a bare error
+    message otherwise — neither is acceptable for a public API. We log the
+    exception with ``exc_info`` so traces still land in our log pipeline.
+    """
+    request_id = _new_request_id(request)
+    logger.error(
+        "unhandled_exception",
+        error=type(exc).__name__,
+        detail=str(exc),
+        path=request.url.path,
+        method=request.method,
+        request_id=request_id,
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_server_error",
+            "message": "An internal error occurred. Please try again later.",
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -352,6 +457,42 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Internal-Token"],
     allow_private_network=False,
+)
+
+# Body size cap (security audit H6).
+# Registered AFTER CORSMiddleware so it sits *outside* CORS in the wrap order
+# (Starlette wraps middleware bottom-up: the last `add_middleware` call is the
+# outermost layer).  Putting BodySizeLimit on the outside means oversized
+# requests are rejected before any other layer touches them — including
+# CORS preflight bookkeeping — which is exactly what we want.
+#
+# We hand the middleware ``cors_origins`` so its 413 response can carry the
+# right ``Access-Control-Allow-Origin`` echo: without it, browsers see a
+# generic CORS error instead of a clean 413 and developers chase phantom
+# CORS misconfigs (round-2 audit finding).
+app.add_middleware(
+    BodySizeLimitMiddleware,
+    max_bytes=settings.max_request_body_size,
+    cors_allow_origins=settings.cors_origins,
+)
+
+# Security response headers (security audit M11).
+# Registered LAST so it ends up as the OUTERMOST middleware — that way it
+# decorates *every* response, including those generated by the body-size
+# cap (413), the rate limiter (429), and the global exception handlers
+# (500). Inner middleware get their headers added on top of whatever they
+# emitted; we never clobber an intentional override.
+#
+# HSTS is gated on ``dev_mode``: dev rigs frequently run over plain HTTP
+# and shipping HSTS would lock localhost browsers into TLS-only access for
+# a year. In production (``dev_mode=False``) we always opt in, regardless
+# of whether ``gateway_base_url`` is HTTPS — the operator's TLS terminator
+# is the source of truth, and HSTS being present even when ACN itself
+# happens to be on plain HTTP behind a TLS-terminating proxy is the
+# desired behaviour.
+app.add_middleware(
+    SecurityHeadersMiddleware,
+    hsts=not settings.dev_mode,
 )
 
 # Include routers

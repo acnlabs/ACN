@@ -118,6 +118,16 @@ class AgentRegisterRequest(BaseModel):
     def endpoint_must_be_url(cls, v: str) -> str:
         if not (v.startswith("http://") or v.startswith("https://")):
             raise ValueError("endpoint must start with http:// or https://")
+        # SSRF guard: forbid IP-literal endpoints in private/reserved ranges
+        # at registration time. Hostname → DNS rebinding is checked at
+        # request-dispatch time in _proxy_to_agent / MessageRouter.
+        from .config import get_settings as _get_settings
+        from .security import SSRFViolation, validate_endpoint_url
+
+        try:
+            validate_endpoint_url(v, allow_loopback=_get_settings().dev_mode)
+        except SSRFViolation as e:
+            raise ValueError(str(e)) from e
         return v
 
     @field_validator("tags", mode="before")
@@ -319,16 +329,26 @@ class ExternalAgentJoinRequest(BaseModel):
     name: str = Field(..., description="Agent name", min_length=1, max_length=100)
     description: str | None = Field(None, description="Agent description", max_length=500)
     tags: list[str] = Field(
-        default_factory=list, description="Agent capability tags (e.g., ['coding', 'review'])"
+        default_factory=list,
+        max_length=20,
+        description="Agent capability tags (e.g., ['coding', 'review'])",
     )
     mode: str = Field(
-        default="pull", description="Communication mode: 'pull' (polling) or 'push' (A2A endpoint)"
+        default="pull",
+        max_length=16,
+        description="Communication mode: 'pull' (polling) or 'push' (A2A endpoint)",
     )
-    endpoint: str | None = Field(None, description="A2A endpoint URL (required for push mode)")
+    endpoint: str | None = Field(
+        None, max_length=500, description="A2A endpoint URL (required for push mode)"
+    )
     source: str | None = Field(
-        None, description="Where the agent came from (e.g., 'moltbook', 'openclaw')"
+        None,
+        max_length=64,
+        description="Where the agent came from (e.g., 'moltbook', 'openclaw')",
     )
-    referrer: str | None = Field(None, description="Referrer agent ID (for invitation tracking)")
+    referrer: str | None = Field(
+        None, max_length=128, description="Referrer agent ID (for invitation tracking)"
+    )
 
 
 class ExternalAgentJoinResponse(BaseModel):

@@ -9,7 +9,13 @@ from functools import lru_cache
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_DEV_INTERNAL_TOKEN = "dev-internal-token-2024"
+# Hosts allowed when ``dev_mode=True``. Deliberately *excludes* ``0.0.0.0``
+# even though dev-mode docker-compose often binds it — letting dev_mode
+# accept all-interfaces would let an operator who flipped DEV_MODE=true on
+# a prod box quietly expose the auth-bypassed service to the public network.
+# Forcing the bind host to also change before that's possible is a
+# defence-in-depth on top of the dev_mode security checks below.
+_DEV_MODE_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 class Settings(BaseSettings):
@@ -51,8 +57,12 @@ class Settings(BaseSettings):
     # Must be pre-created in Backend's wallets table before enabling fee collection.
     acn_revenue_wallet_id: str | None = None
 
-    # Internal API Token (shared with Backend for service-to-service auth)
-    internal_api_token: str = _DEV_INTERNAL_TOKEN
+    # Internal API Token (shared with Backend for service-to-service auth).
+    # MUST be set via env var (INTERNAL_API_TOKEN). No code default is
+    # provided — the validator below rejects empty/short tokens regardless
+    # of dev_mode, eliminating the historical "open-source default password"
+    # foot-gun.
+    internal_api_token: str | None = None
 
     # Webhooks (for backend integration)
     webhook_url: str | None = None  # e.g., "https://your-backend.com/api/acn/webhook"
@@ -87,6 +97,14 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["*"]
 
+    # Reverse-proxy IPs whose X-Forwarded-For / X-Real-IP headers we trust.
+    # Empty list means "untrusted environment": ignore forwarded headers,
+    # rate-limit on the immediate peer IP. Set to e.g.
+    # TRUSTED_PROXIES=["10.0.0.1","10.0.0.2"] when ACN sits behind a known
+    # set of L7 proxies/load-balancers. Mis-trusting allows clients to
+    # spoof XFF and bypass per-IP rate limits — see C1a security audit.
+    trusted_proxies: list[str] = []
+
     # Observability
     log_level: str = "INFO"
     otel_enabled: bool = False  # Enable OpenTelemetry (requires opentelemetry-sdk)
@@ -100,6 +118,26 @@ class Settings(BaseSettings):
 
     # WebSocket limits
     max_websocket_connections: int = 10_000
+
+    # WebSocket auth: allow API key in the URL query string?
+    # Security audit M14: an API key in ``?token=...`` ends up in:
+    #   - server access logs (Nginx, Cloudflare, ALB),
+    #   - Referer headers when the WS handshake is initiated from a page,
+    #   - browser history / shoulder-surfable URL bars.
+    # The recommended path is a one-shot first-message auth handshake or
+    # the Authorization header. We keep the query-string path available
+    # but make it OFF by default in production. ``dev_mode=True`` flips
+    # this to True automatically (see validator below) so dev rigs that
+    # paste a token in the URL keep working.
+    websocket_allow_query_token: bool = False
+
+    # Request body size cap (security audit H6).
+    # Hard ceiling enforced by BodySizeLimitMiddleware before the request
+    # reaches Pydantic. 1 MiB is enough for any legitimate JSON payload we
+    # currently accept (the largest is task submission ~50 KB); raise this
+    # only after auditing every endpoint that consumes large dict fields
+    # (message, metadata, ui_spec, agent_card).
+    max_request_body_size: int = 1_048_576  # 1 MiB
 
     # Anti-spam / join controls
     # Max registrations from one IP per day (endpoint-less agents are cheaper to spam)
@@ -131,33 +169,67 @@ class Settings(BaseSettings):
     )
 
     @model_validator(mode="after")
-    def validate_production_settings(self) -> "Settings":
-        """Fail fast on unsafe configuration when running in production mode."""
-        if self.dev_mode:
-            return self
+    def validate_security_settings(self) -> "Settings":
+        """Fail fast on unsafe configuration.
 
+        Defenses are deliberately decoupled from ``dev_mode`` so that a
+        single misconfigured flag cannot turn off everything at once
+        (this was the pre-launch "dev_mode single point of failure"
+        finding from the security audit):
+
+        - Internal API token: required and >= 32 chars *always*. Removes
+          the open-source default-password foot-gun.
+        - CORS ``["*"]``: only tolerated when ``dev_mode=True``.
+        - Auth0: required when ``dev_mode=False``.
+        - ``dev_mode=True`` must bind to a loopback interface (``localhost``
+          / ``127.0.0.1`` / ``::1``). Refusing to bind on a public interface
+          while dev-mode auth bypasses are active makes "I left DEV_MODE=true
+          on the prod box" physically impossible.
+        """
         errors: list[str] = []
 
-        if not self.internal_api_token or len(self.internal_api_token) < 32:
-            errors.append("INTERNAL_API_TOKEN must be at least 32 characters in production.")
-        elif self.internal_api_token == _DEV_INTERNAL_TOKEN:
+        if not self.internal_api_token:
             errors.append(
-                "INTERNAL_API_TOKEN must be overridden in production "
-                "(current value is the insecure development default)."
+                "INTERNAL_API_TOKEN must be set. Generate one with "
+                '`python -c "import secrets; print(secrets.token_urlsafe(32))"` '
+                "and put it in your .env (no code default is provided)."
+            )
+        elif len(self.internal_api_token) < 32:
+            errors.append(
+                f"INTERNAL_API_TOKEN must be at least 32 characters "
+                f"(current length: {len(self.internal_api_token)})."
             )
 
-        if self.cors_origins == ["*"]:
+        if not self.dev_mode and self.cors_origins == ["*"]:
             errors.append(
-                "CORS_ORIGINS must not be ['*'] in production. "
+                "CORS_ORIGINS must not be ['*'] when DEV_MODE=false. "
                 "Set it to the list of allowed origins."
             )
 
-        if not self.auth0_domain or not self.auth0_audience:
-            errors.append("AUTH0_DOMAIN and AUTH0_AUDIENCE must be set in production.")
+        if not self.dev_mode and (not self.auth0_domain or not self.auth0_audience):
+            errors.append("AUTH0_DOMAIN and AUTH0_AUDIENCE must be set when DEV_MODE=false.")
+
+        # M14: in dev mode we always allow the query-token WS auth path,
+        # regardless of any explicit env setting. Reasoning: the only
+        # reason to *disable* query tokens is "production access logs
+        # are leaking the key" — irrelevant on a developer laptop.
+        # Pinning ``True`` here means existing dev clients that paste
+        # tokens in URLs keep working without one more env var to set,
+        # and it cannot accidentally tighten in dev.
+        if self.dev_mode:
+            self.websocket_allow_query_token = True
+
+        if self.dev_mode and self.host not in _DEV_MODE_ALLOWED_HOSTS:
+            errors.append(
+                f"DEV_MODE=true refuses to bind to non-loopback host {self.host!r}. "
+                f"Allowed: {sorted(_DEV_MODE_ALLOWED_HOSTS)}. "
+                "If you need to expose the service on a public interface, "
+                "set DEV_MODE=false (and configure Auth0 + a non-'*' CORS origin)."
+            )
 
         if errors:
             raise ValueError(
-                "Production configuration errors detected:\n"
+                "Security configuration errors detected:\n"
                 + "\n".join(f"  - {e}" for e in errors)
             )
 

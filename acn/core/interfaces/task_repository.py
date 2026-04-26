@@ -23,6 +23,28 @@ class ITaskRepository(ABC):
         pass
 
     @abstractmethod
+    async def compare_and_save(self, task: Task, expected_status: TaskStatus) -> bool:
+        """Atomically save the task only if the persisted status equals
+        ``expected_status``.
+
+        Used to make single-participant state-machine transitions safe under
+        concurrent requests (security audit H3). Without this, two callers
+        that both read ``SUBMITTED`` can each pass the in-memory status check
+        in :meth:`Task.complete` and both trigger payment release / reward
+        distribution before either persists — i.e. *double-pay*.
+
+        Implementations MUST perform the status check and the field write in
+        a single atomic operation (e.g. ``UPDATE ... WHERE status=?`` for SQL,
+        a Lua script or WATCH/MULTI for Redis).
+
+        Returns:
+            True if the CAS won and the task was persisted, False if the
+            status precondition no longer holds (caller should treat the
+            transition as already-applied and behave idempotently).
+        """
+        pass
+
+    @abstractmethod
     async def find_by_id(self, task_id: str) -> Task | None:
         """Find task by ID"""
         pass
