@@ -27,12 +27,179 @@ from .models import (
 
 
 class ACNError(Exception):
-    """ACN API Error"""
+    """ACN API error.
 
-    def __init__(self, status_code: int, message: str):
+    Surfaces ACN's structured error response so callers can:
+
+    * Branch on ``status_code`` (HTTP semantics — part of the API contract).
+    * Branch on ``error_code`` for ACN's H4-sanitised 5xx responses
+      (``"internal_server_error"`` etc.) where the body intentionally does
+      not include the underlying exception detail. ``None`` for older 4xx
+      responses that just carry ``{"detail": "..."}``.
+    * Quote ``request_id`` in support tickets — H4 mints a UUID per failed
+      5xx and includes it in both the response body and ``X-Request-ID``
+      header so operators can grep it out of structured logs. The exception
+      ``str()`` includes it so it shows up in stack traces and chat error
+      messages without callers needing to remember to print it themselves.
+
+    Backward compatibility: the ``ACNError(status_code, message)`` two-arg
+    form continues to work; ``error_code`` and ``request_id`` are kw-only
+    and default to ``None`` so older call sites never break.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        error_code: str | None = None,
+        request_id: str | None = None,
+    ):
         self.status_code = status_code
         self.message = message
-        super().__init__(f"ACN Error {status_code}: {message}")
+        self.error_code = error_code
+        self.request_id = request_id
+        # Bake request_id into the str so it travels through any layer that
+        # only logs the exception message (and not the attributes). The
+        # whole point of H4's request_id contract is to give the user a
+        # short token they can paste into a support ticket.
+        suffix = f" [request_id={request_id}]" if request_id else ""
+        super().__init__(f"ACN Error {status_code}: {message}{suffix}")
+
+
+# ---------------------------------------------------------------------------
+# Error-response parsing
+# ---------------------------------------------------------------------------
+#
+# ACN returns three different error body shapes depending on the path:
+#
+#   1. 4xx with a string detail   →  ``{"detail": "agent not found"}``
+#      (raised explicitly by route code; the message is part of the API
+#      contract — callers branch on it).
+#
+#   2. 422 validation (FastAPI)   →  ``{"detail": [{"loc": [...],
+#                                                    "msg": "...",
+#                                                    "type": "..."}, ...]}``
+#      (Pydantic schema rejection — ``detail`` is a *list*, not a string;
+#      blindly stringifying it gives unreadable output.)
+#
+#   3. 5xx sanitised (H4)         →  ``{"error": "internal_server_error",
+#                                        "message": "An internal error...",
+#                                        "request_id": "<uuid>"}``
+#      (global handler in ``acn/api.py``: drops the original exception
+#      message to prevent leaking internal infra detail; mints a
+#      ``request_id`` echoed in the ``X-Request-ID`` header so operators
+#      can correlate with structured logs.)
+#
+# Pre-fix, ``_request`` did ``error.get("detail", error.get("message",
+# response.text))`` — which:
+#   * Worked for shape (1).
+#   * Silently dumped the whole list for shape (2) — unreadable.
+#   * Got the ``message`` for shape (3) but **threw away** ``error_code``
+#     and ``request_id``, defeating the entire purpose of H4's contract.
+#
+# This helper centralises the parsing so every endpoint method gets the
+# same structured ``ACNError`` regardless of which body shape ACN
+# returned.
+# ---------------------------------------------------------------------------
+
+
+# Cap for the worst-case "ACN returned a giant HTML 502 from a misconfigured
+# load balancer" path — we don't want a 500KB error string in the chat UI
+# or in our log pipeline. 2048 is enough to keep the salient first paragraph
+# of any reasonable error while bounding pathological inputs.
+_MAX_FALLBACK_MESSAGE_LEN = 2048
+
+# Cap for the per-item validation error summary on 422s. FastAPI emits one
+# entry per failed field; capping at 5 keeps the message from running off
+# the screen while still being actionable.
+_MAX_VALIDATION_ENTRIES = 5
+
+
+def _summarise_validation_errors(items: list[Any]) -> str:
+    """Render a 422 ``detail`` list-of-dicts as a single readable line.
+
+    FastAPI's 422 ``detail`` is a list of ``{"loc": [...], "msg": "...",
+    "type": "..."}`` entries. We collapse each to ``loc: msg`` and join
+    with ``; ``. Truncate at ``_MAX_VALIDATION_ENTRIES`` so a request
+    that fails 50 fields doesn't produce a 50-line error.
+    """
+    parts: list[str] = []
+    for item in items[:_MAX_VALIDATION_ENTRIES]:
+        if isinstance(item, dict):
+            loc = item.get("loc")
+            msg = item.get("msg") or item.get("type") or str(item)
+            if isinstance(loc, list) and loc:
+                # Skip the leading "body"/"query"/"path" segment — caller
+                # cares about the field name, not the request part.
+                tail = ".".join(str(seg) for seg in loc[1:]) or str(loc[0])
+                parts.append(f"{tail}: {msg}")
+            else:
+                parts.append(str(msg))
+        else:
+            parts.append(str(item))
+    summary = "; ".join(parts)
+    extra = len(items) - _MAX_VALIDATION_ENTRIES
+    if extra > 0:
+        summary += f" (... +{extra} more)"
+    return summary
+
+
+def _build_acn_error(response: httpx.Response) -> ACNError:
+    """Convert a non-2xx ``httpx.Response`` into a structured ``ACNError``.
+
+    Tolerates every body shape ACN can produce, including non-JSON
+    (HTML 502 from a misconfigured proxy, empty bodies on 504, etc.).
+    """
+    body: dict[str, Any] = {}
+    try:
+        # ``response.json()`` raises on empty body / non-JSON; we want a
+        # plain dict either way so downstream code is uniform.
+        if response.content:
+            parsed = response.json()
+            if isinstance(parsed, dict):
+                body = parsed
+    except Exception:
+        body = {}
+
+    # --- message ----------------------------------------------------------
+    raw_detail = body.get("detail")
+    if isinstance(raw_detail, str):
+        message = raw_detail
+    elif isinstance(raw_detail, list) and raw_detail:
+        message = _summarise_validation_errors(raw_detail)
+    elif raw_detail is not None:
+        # Some custom routes return ``detail`` as a dict; stringify defensively.
+        message = str(raw_detail)
+    else:
+        # H4 sanitised 5xx path, or any other shape that doesn't use ``detail``.
+        message = body.get("message") or response.text or f"HTTP {response.status_code}"
+
+    if isinstance(message, str) and len(message) > _MAX_FALLBACK_MESSAGE_LEN:
+        message = message[:_MAX_FALLBACK_MESSAGE_LEN] + "...(truncated)"
+
+    # --- error_code -------------------------------------------------------
+    raw_error = body.get("error")
+    error_code = raw_error if isinstance(raw_error, str) else None
+
+    # --- request_id -------------------------------------------------------
+    # Body wins over header on conflict because ``acn/api.py`` always sets
+    # both to the same UUID — but a buggy proxy could rewrite the header
+    # while leaving the body intact, so the body is the more trustworthy
+    # source. Header is the fallback for endpoints that mint a request_id
+    # without echoing it into the body (defensive — none today, but cheap).
+    raw_request_id = body.get("request_id")
+    request_id = raw_request_id if isinstance(raw_request_id, str) else None
+    if not request_id:
+        header_rid = response.headers.get("X-Request-ID")
+        request_id = header_rid if header_rid else None
+
+    return ACNError(
+        response.status_code,
+        message,
+        error_code=error_code,
+        request_id=request_id,
+    )
 
 
 class ACNClient:
@@ -109,12 +276,7 @@ class ACNClient:
         )
 
         if not response.is_success:
-            try:
-                error = response.json()
-                message = error.get("detail", error.get("message", response.text))
-            except Exception:
-                message = response.text
-            raise ACNError(response.status_code, message)
+            raise _build_acn_error(response)
 
         if response.status_code == 204:
             return {}

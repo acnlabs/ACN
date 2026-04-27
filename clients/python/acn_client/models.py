@@ -98,6 +98,16 @@ class AgentInfo(BaseModel):
     created_at: datetime | None = None
     last_seen: datetime | None = None
 
+    # Owner of the agent (e.g. ``user-{id}`` for end-user-registered agents,
+    # ``provider-{id}`` for platform-managed integrations, or ``system`` for
+    # ACN-internal/built-in agents). Defaulted to ``None`` for backward
+    # compatibility with older ACN responses that may not surface this
+    # field — callers should treat ``None`` as "unknown owner" rather than
+    # asserting equality. Added during 14.5-3 cleanup so backends can
+    # filter ``search_agents`` results by owner without a separate
+    # ``GET /agents/{id}`` round-trip.
+    owner: str | None = None
+
     # Payment capability
     wallet_address: str | None = None
     accepts_payment: bool = False
