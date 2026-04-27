@@ -62,10 +62,16 @@ class MessageService:
         Raises:
             AgentNotFoundException: If sender or recipient not found
         """
-        # Verify sender exists
-        sender = await self.agent_repository.find_by_id(from_agent_id)
-        if not sender:
-            raise AgentNotFoundException(f"Sender agent {from_agent_id} not found")
+        # Internal channel (``POST /communication/internal/send``) uses
+        # ``from_agent`` values in the reserved ``system:<slug>`` namespace
+        # (``assert_system_caller`` at the HTTP layer). These IDs are
+        # **not** registered agents — the registry can never issue a UUID
+        # colliding with ``system:`` (see 14.5-1 / 14.6 design). Skip the
+        # sender table lookup; recipient validation + routing still apply.
+        if not from_agent_id.startswith("system:"):
+            sender = await self.agent_repository.find_by_id(from_agent_id)
+            if not sender:
+                raise AgentNotFoundException(f"Sender agent {from_agent_id} not found")
 
         # Verify recipient exists
         recipient = await self.agent_repository.find_by_id(to_agent_id)
@@ -81,18 +87,26 @@ class MessageService:
                 status=recipient.status.value,
             )
 
-        # Route message
+        # Route message.
+        # ``priority`` is a request-level hint used by the HTTP layer
+        # (rate-limit buckets, audit tagging) but ``MessageRouter.route``
+        # does not accept it — passing it via **kwargs raises TypeError.
+        # Strip it here so callers can pass it freely without caring about
+        # the router's signature.
+        router_kwargs = {k: v for k, v in kwargs.items() if k != "priority"}
+
         logger.info(
             "routing_message",
             from_agent=from_agent_id,
             to_agent=to_agent_id,
+            priority=kwargs.get("priority", "normal"),
         )
 
         response = await self.router.route(
             from_agent=from_agent_id,
             to_agent=to_agent_id,
             message=message,
-            **kwargs,
+            **router_kwargs,
         )
 
         return response
