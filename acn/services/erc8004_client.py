@@ -9,6 +9,7 @@ ABIs sourced from: https://github.com/erc-8004/erc-8004-contracts/tree/master/ab
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -62,6 +63,14 @@ class ERC8004Client:
         # (chain_id is a constant for any given chain — mismatches mean the
         # RPC URL has been swapped, which is itself a security signal).
         self._cached_chain_id: int | None = None
+        # Serialise the cold-start RPC roundtrip. Without this, N concurrent
+        # binds at first request all see ``_cached_chain_id is None`` and
+        # each fire their own ``eth_chainId`` call (typical RPC providers
+        # rate-limit at 25 req/s; a deploy-time burst trivially trips it).
+        # Once the cache is populated the ``async with`` is the only added
+        # cost (no RPC under the lock except on the very first miss), so the
+        # steady-state hot path stays lock-light.
+        self._chain_id_lock = asyncio.Lock()
 
     # -------------------------------------------------------------------------
     # Chain identity guard (security audit H-erc8004)
@@ -73,10 +82,17 @@ class ERC8004Client:
         Cached after first successful call because chain_id is invariant
         per-chain. Re-raises whatever the underlying RPC raises so callers
         can distinguish "RPC unreachable" from "RPC reports wrong chain".
+
+        Uses double-checked locking so concurrent cold-start callers
+        coalesce onto a single RPC roundtrip (the lock-free first check
+        keeps the steady-state hot path branchless).
         """
-        if self._cached_chain_id is None:
-            self._cached_chain_id = int(await self._w3.eth.chain_id)
-        return self._cached_chain_id
+        if self._cached_chain_id is not None:
+            return self._cached_chain_id
+        async with self._chain_id_lock:
+            if self._cached_chain_id is None:
+                self._cached_chain_id = int(await self._w3.eth.chain_id)
+            return self._cached_chain_id
 
     async def verify_chain_id(self, expected: int) -> tuple[bool, int | None]:
         """Best-effort check that the RPC endpoint is on ``expected`` chain.

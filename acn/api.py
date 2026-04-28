@@ -83,6 +83,7 @@ from .security import check_tls_config
 from .services import AgentService, BillingService, MessageService, SubnetService, TaskService
 from .services.activity_service import ActivityService
 from .services.auth0_client import Auth0CredentialClient
+from .services.erc8004_client import ERC8004Client
 from .services.escrow_client import AgentPlanetEscrowProvider
 
 # Settings
@@ -279,6 +280,71 @@ async def lifespan(app: FastAPI):
     await ws_manager_instance.start()
     await webhook_service_instance.start()
 
+    # Pre-warm the ERC-8004 client at boot when the integration is enabled.
+    # Why fail-fast here: chain_id mismatch is a config disaster (wrong RPC
+    # URL or wrong chain_id env var); deferring detection to the first bind
+    # request makes the symptom "503s buried in a request log somewhere"
+    # instead of a clean refuse-to-start failure.  Unreachable RPC, by
+    # contrast, is treated as a transient operability concern (we still
+    # boot — the runtime check inside the bind endpoint stays the safety
+    # net), so an RPC blip on rolling restart can't take the cluster down.
+    if settings.erc8004_enabled:
+        erc8004_warm = ERC8004Client(
+            rpc_url=settings.erc8004_rpc_url,
+            identity_contract=settings.erc8004_identity_contract,
+            reputation_contract=settings.erc8004_reputation_contract,
+            validation_contract=settings.erc8004_validation_contract,
+        )
+        try:
+            matches, actual = await erc8004_warm.verify_chain_id(
+                settings.erc8004_chain_id
+            )
+        except Exception as exc:  # noqa: BLE001 — startup must surface RPC errors clearly
+            logger.error(
+                "erc8004_startup_verify_failed",
+                expected=settings.erc8004_chain_id,
+                rpc_url=settings.erc8004_rpc_url,
+                error=str(exc),
+            )
+            matches, actual = False, None
+        if matches:
+            logger.info(
+                "erc8004_chain_id_verified",
+                chain_id=actual,
+                rpc_url=settings.erc8004_rpc_url,
+            )
+        elif actual is not None:
+            logger.error(
+                "erc8004_chain_id_mismatch_at_startup",
+                expected=settings.erc8004_chain_id,
+                actual=actual,
+                rpc_url=settings.erc8004_rpc_url,
+            )
+            raise RuntimeError(
+                f"ERC-8004 RPC reports chain_id={actual} but config expects "
+                f"{settings.erc8004_chain_id}; refusing to start (set "
+                f"ERC8004_ENABLED=false to bypass for emergencies)."
+            )
+        else:
+            logger.warning(
+                "erc8004_rpc_unreachable_at_startup",
+                expected=settings.erc8004_chain_id,
+                rpc_url=settings.erc8004_rpc_url,
+                detail="proceeding; bind endpoint will re-verify per request",
+            )
+        # Hand the (possibly already-warmed) client to the route singleton
+        # so subsequent bind requests reuse it — preserves the chain_id
+        # cache so binds don't pay an extra RPC roundtrip.
+        onchain.set_erc8004_client(erc8004_warm)
+
+    # Activate audit writes for the lifetime of the app.  Without this,
+    # ``AuditLogger._started`` stays False and every ``fire_and_forget_event``
+    # short-circuits at its first guard — silently turning all H-audit
+    # security writes (auth failures, SSRF blocks, admin bulk deletes)
+    # into no-ops in production.  ``start()`` itself logs a SYSTEM_STARTED
+    # event so we can see the boundary in the audit stream.
+    await audit_instance.start()
+
     logger.info("acn_started")
 
     # Background watchdog: sync status field for stale agents every 30 min
@@ -333,6 +399,24 @@ async def lifespan(app: FastAPI):
         await webhook_service_instance.stop()
     except Exception as e:
         logger.error("webhook_service_stop_failed", error=str(e))
+    # Drain in-flight fire-and-forget audit writes BEFORE Redis closes.
+    # Order matters: ``stop()`` flips ``_started=False`` so the helper
+    # rejects new events; then drain gives existing ones up to 3 s to
+    # finish flushing to the still-open Redis pool.  Any remaining task
+    # is silently dropped (audit is best-effort, see helper docstring).
+    try:
+        await audit_instance.stop()
+        from acn.monitoring.audit import drain_pending_audit_tasks
+
+        drained, dropped = await drain_pending_audit_tasks(timeout=3.0)
+        if drained or dropped:
+            logger.info(
+                "audit_drain_complete",
+                drained=drained,
+                dropped=dropped,
+            )
+    except Exception as e:
+        logger.error("audit_stop_failed", error=str(e))
     await router_instance.close()
     await registry_instance.redis.close()
     if _pg_engine is not None:

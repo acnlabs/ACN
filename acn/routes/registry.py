@@ -37,6 +37,7 @@ from ..security import SSRFViolation, safe_resolve_target, validate_endpoint_url
 from ..services.rewards_client import RewardsClient
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
+    AgentIdPath,
     AgentServiceDep,
     InternalTokenDep,
     ProxyCallerDep,
@@ -432,7 +433,7 @@ async def list_unclaimed_agents(
 
 @router.get("/{agent_id}", response_model=AgentInfo)
 @limiter.limit("120/minute")
-async def get_agent(request: Request, agent_id: str, agent_service: AgentServiceDep = None):
+async def get_agent(request: Request, agent_id: AgentIdPath, agent_service: AgentServiceDep = None):
     """Get agent information (public discovery; verification_code not included)."""
     try:
         agent = await agent_service.get_agent(agent_id)
@@ -459,7 +460,7 @@ _PROXY_HOP_BY_HOP_HEADERS = frozenset(
 
 async def _proxy_to_agent(
     request: Request,
-    agent_id: str,
+    agent_id: AgentIdPath,
     method: str,
     rest_path: str,
     agent_service,
@@ -693,7 +694,7 @@ async def join_agent(
 @limiter.limit("60/minute")
 async def proxy_post(
     request: Request,
-    agent_id: str,
+    agent_id: AgentIdPath,
     caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,
 ):
@@ -709,7 +710,7 @@ async def proxy_post(
 @limiter.limit("60/minute")
 async def proxy_put(
     request: Request,
-    agent_id: str,
+    agent_id: AgentIdPath,
     caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,
 ):
@@ -721,7 +722,7 @@ async def proxy_put(
 @limiter.limit("60/minute")
 async def proxy_patch(
     request: Request,
-    agent_id: str,
+    agent_id: AgentIdPath,
     caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,
 ):
@@ -773,7 +774,7 @@ async def search_agents(
 
 @router.post("/{agent_id}/heartbeat")
 async def agent_heartbeat(
-    agent_id: str,
+    agent_id: AgentIdPath,
     agent_info: AgentApiKeyDep,
     agent_service: AgentServiceDep = None,
 ):
@@ -793,7 +794,7 @@ async def agent_heartbeat(
 
 
 @router.get("/{agent_id}/.well-known/agent-card.json")
-async def get_agent_card(agent_id: str, agent_service: AgentServiceDep = None):
+async def get_agent_card(agent_id: AgentIdPath, agent_service: AgentServiceDep = None):
     """Get agent's A2A Agent Card (v0.3.0 compliant)
 
     Returns the card submitted at registration time if available.
@@ -833,7 +834,7 @@ async def get_agent_card(agent_id: str, agent_service: AgentServiceDep = None):
 
 @router.get("/{agent_id}/.well-known/agent-registration.json")
 async def get_agent_registration_file(
-    agent_id: str,
+    agent_id: AgentIdPath,
     agent_service: AgentServiceDep = None,
     cfg: Settings = Depends(get_settings),
 ):
@@ -853,7 +854,7 @@ async def get_agent_registration_file(
 
 
 @router.get("/{agent_id}/endpoint")
-async def get_agent_endpoint(agent_id: str, agent_service: AgentServiceDep = None):
+async def get_agent_endpoint(agent_id: AgentIdPath, agent_service: AgentServiceDep = None):
     """Get agent endpoint
 
     Clean Architecture: Route → AgentService → Repository
@@ -985,7 +986,7 @@ async def admin_bulk_delete_agents(
 
 @router.delete("/{agent_id}")
 async def unregister_agent(
-    agent_id: str,
+    agent_id: AgentIdPath,
     payload: dict = Depends(require_permission("acn:write")),
     agent_service: AgentServiceDep = None,
 ):
@@ -1101,7 +1102,7 @@ async def _increment_referral_count(referrer_id: str, agent_service) -> None:
 
 @router.post("/{agent_id}/claim", response_model=AgentClaimResponse)
 async def claim_agent(
-    agent_id: str,
+    agent_id: AgentIdPath,
     request: AgentClaimRequest,
     background_tasks: BackgroundTasks,
     payload: dict = Depends(verify_token),
@@ -1144,7 +1145,7 @@ async def claim_agent(
 
 @router.post("/{agent_id}/transfer", response_model=AgentTransferResponse)
 async def transfer_agent(
-    agent_id: str,
+    agent_id: AgentIdPath,
     request: AgentTransferRequest,
     payload: dict = Depends(require_permission("acn:write")),
     agent_service: AgentServiceDep = None,
@@ -1185,7 +1186,7 @@ async def transfer_agent(
 
 @router.post("/{agent_id}/release", response_model=AgentReleaseResponse)
 async def release_agent(
-    agent_id: str,
+    agent_id: AgentIdPath,
     payload: dict = Depends(require_permission("acn:write")),
     agent_service: AgentServiceDep = None,
 ):
@@ -1263,7 +1264,7 @@ class AgentWalletsResponse(BaseModel):
 
 @router.get("/{agent_id}/wallets", response_model=AgentWalletsResponse)
 async def get_agent_wallets(
-    agent_id: str,
+    agent_id: AgentIdPath,
     agent_service: AgentServiceDep = None,
 ):
     """
@@ -1311,7 +1312,7 @@ async def get_agent_wallets(
 @limiter.limit("60/minute")
 async def proxy_subpath(
     request: Request,
-    agent_id: str,
+    agent_id: AgentIdPath,
     rest_path: str,
     caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,

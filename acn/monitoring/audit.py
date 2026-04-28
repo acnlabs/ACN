@@ -264,10 +264,14 @@ class AuditLogger:
         await self.redis.ltrim(day_key, 0, self.max_entries - 1)
         await self.redis.expire(day_key, self.retention_days * 24 * 3600)
 
-        # Store by event type for type-based queries
+        # Store by event type for type-based queries.
+        # Mirror day_key's TTL: without an explicit expire, cold event types
+        # (early experimental events, deprecated flows) accumulate forever
+        # under the 100k entry cap and dilute analyses with stale rows.
         type_key = f"acn:audit:type:{event_type.value}"
         await self.redis.lpush(type_key, event_id)
         await self.redis.ltrim(type_key, 0, self.max_entries - 1)
+        await self.redis.expire(type_key, self.retention_days * 24 * 3600)
 
         return event_id
 
@@ -691,6 +695,48 @@ class AuditLogger:
 # until it finishes and discard it via ``add_done_callback``.
 _PENDING_AUDIT_TASKS: set[asyncio.Task[Any]] = set()
 
+# Per-call ceiling for a single audit write.  Bounds the time a hung
+# Redis call can pin one ``_PENDING_AUDIT_TASKS`` entry: under a Redis
+# stall + heavy auth-failure load, an unbounded write would let the
+# set grow without limit (each task pins its closure + redis client
+# objects).  2 s comfortably covers a healthy 4-op write while still
+# bleeding off attempts during outages.
+_AUDIT_WRITE_TIMEOUT_S: float = 2.0
+
+
+async def drain_pending_audit_tasks(timeout: float = 3.0) -> tuple[int, int]:
+    """Wait for in-flight fire-and-forget audit writes during shutdown.
+
+    Without a drain step, lifespan teardown closes Redis (and the event
+    loop shortly after) while ``_PENDING_AUDIT_TASKS`` may still hold
+    coroutines that haven't reached their first ``await``. Those tasks
+    are then cancelled by the loop, dropping audit events that were
+    *already accepted* by the helper.
+
+    Returns ``(drained, dropped)`` for caller logging:
+      - ``drained`` — tasks that completed within the timeout.
+      - ``dropped`` — tasks still in flight when the timeout fired
+        (these are cancelled to release Redis client / closure refs
+        promptly; the underlying audit write is lost — best-effort).
+
+    Safe to call multiple times.  The fire-and-forget helper checks
+    ``audit._started``; callers should flip it off (via ``audit.stop()``)
+    *before* awaiting the drain so no new tasks queue up after we
+    snapshot the set.
+    """
+    pending = list(_PENDING_AUDIT_TASKS)
+    if not pending:
+        return 0, 0
+    # Use ``asyncio.wait`` (not ``wait_for(gather(...))``) because the
+    # latter cancels and re-awaits the inner tasks before returning,
+    # making "still running at deadline" indistinguishable from
+    # "finished cleanly". ``wait`` returns the (done, pending) split
+    # at the deadline without cancelling pending tasks itself.
+    done, still_running = await asyncio.wait(pending, timeout=timeout)
+    for task in still_running:
+        task.cancel()
+    return len(done), len(still_running)
+
 
 def fire_and_forget_event(
     audit: "AuditLogger | None",
@@ -729,17 +775,32 @@ def fire_and_forget_event(
 
     async def _safe_write() -> None:
         try:
-            await audit.log_event(
-                event_type=event_type,
-                actor_id=actor_id,
-                actor_type=actor_type,
-                target_id=target_id,
-                target_type=target_type,
-                subnet_id=subnet_id,
-                level=level,
-                details=details or {},
-                source_ip=source_ip,
-                user_agent=user_agent,
+            await asyncio.wait_for(
+                audit.log_event(
+                    event_type=event_type,
+                    actor_id=actor_id,
+                    actor_type=actor_type,
+                    target_id=target_id,
+                    target_type=target_type,
+                    subnet_id=subnet_id,
+                    level=level,
+                    details=details or {},
+                    source_ip=source_ip,
+                    user_agent=user_agent,
+                ),
+                timeout=_AUDIT_WRITE_TIMEOUT_S,
+            )
+        except TimeoutError:
+            # Redis stalled — never let a hung audit write pin the task
+            # entry indefinitely; ``_PENDING_AUDIT_TASKS`` would otherwise
+            # grow unbounded under attack.  ``asyncio.TimeoutError`` is
+            # aliased to the builtin since 3.11; use the canonical name.
+            _logger.debug(
+                "audit_fire_and_forget_timeout",
+                extra={
+                    "event_type": event_type.value,
+                    "timeout_s": _AUDIT_WRITE_TIMEOUT_S,
+                },
             )
         except Exception as exc:  # noqa: BLE001 — must never raise on hot path
             _logger.debug(

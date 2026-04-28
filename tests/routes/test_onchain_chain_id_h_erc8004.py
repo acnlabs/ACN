@@ -28,7 +28,7 @@ silently.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -340,8 +340,13 @@ def _make_erc_client_with_chain_id(values):
         def __init__(self, items):
             self.eth = _Eth(items)
 
+    import asyncio as _asyncio
+
     client = ERC8004Client.__new__(ERC8004Client)
     client._cached_chain_id = None
+    # Match the post-P2 cold-start lock initialised in ``__init__``;
+    # the test helper bypasses ``__init__`` to avoid Web3 plumbing.
+    client._chain_id_lock = _asyncio.Lock()
     client._w3 = _W3(values)
     return client
 
@@ -382,3 +387,77 @@ class TestErc8004ClientVerifyChainId:
         ok, actual = await client.verify_chain_id(8453)
         assert ok is False
         assert actual is None
+
+    @pytest.mark.asyncio
+    async def test_concurrent_cold_start_coalesces_to_single_rpc(self):
+        """P2-#2: concurrent cold-start callers must share one RPC roundtrip.
+
+        Before the lock was added, N coroutines hitting ``get_chain_id`` at
+        once each saw ``_cached_chain_id is None`` and fired their own
+        ``eth_chainId`` call — burning RPC quota and tripping provider rate
+        limits during deploy bursts.
+        """
+        import asyncio as _asyncio
+
+        # ``_Eth.chain_id`` returns a fresh awaitable each call — give it
+        # one slow item; the lock should make later concurrent waiters reuse
+        # the result instead of triggering more pops.
+        from acn.services.erc8004_client import ERC8004Client
+
+        rpc_calls = 0
+        rpc_release = _asyncio.Event()
+
+        class _SlowEth:
+            @property
+            def chain_id(self):
+                nonlocal rpc_calls
+                rpc_calls += 1
+
+                async def _coro():
+                    await rpc_release.wait()
+                    return 8453
+
+                return _coro()
+
+        class _SlowW3:
+            def __init__(self):
+                self.eth = _SlowEth()
+
+        client = ERC8004Client.__new__(ERC8004Client)
+        client._cached_chain_id = None
+        client._chain_id_lock = _asyncio.Lock()
+        client._w3 = _SlowW3()
+
+        callers = [_asyncio.create_task(client.get_chain_id()) for _ in range(20)]
+        # Yield long enough for every coroutine to enter ``get_chain_id``
+        # and queue on the lock before we let the RPC resolve.
+        await _asyncio.sleep(0)
+        await _asyncio.sleep(0)
+        rpc_release.set()
+        results = await _asyncio.gather(*callers)
+
+        assert results == [8453] * 20
+        assert rpc_calls == 1, (
+            f"thundering herd: cold-start should coalesce concurrent waiters "
+            f"onto a single RPC roundtrip, got {rpc_calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_lock_acquired_only_once_after_cache_populated(self):
+        """Steady-state callers must skip the lock entirely (lock-free fast path)."""
+        import asyncio as _asyncio
+
+        from acn.services.erc8004_client import ERC8004Client
+
+        client = ERC8004Client.__new__(ERC8004Client)
+        client._cached_chain_id = 8453  # pretend the cache was warmed already
+        sentinel_lock = _asyncio.Lock()
+        await sentinel_lock.acquire()  # hold the lock — would deadlock if used
+        client._chain_id_lock = sentinel_lock
+
+        # ``_w3`` left unset on purpose: any RPC attempt would AttributeError,
+        # demonstrating the warm path neither acquires the lock nor calls RPC.
+        result = await client.get_chain_id()
+        assert result == 8453
+        assert sentinel_lock.locked()  # we never released, lock untouched
+        sentinel_lock.release()

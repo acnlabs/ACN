@@ -9,15 +9,21 @@ from typing import Annotated
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi import Request as _Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
 
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
-from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
+from ..auth.middleware import require_permission, verify_token
 from ..config import get_settings
 from ..core.entities import TaskStatus
 from ..services import TaskNotFoundException, TaskService
-from .dependencies import AgentApiKeyDep, InternalTokenDep, get_agent_service, limiter  # type: ignore[import-untyped]
+from .dependencies import (  # type: ignore[import-untyped]
+    AgentApiKeyDep,
+    InternalTokenDep,
+    ParticipationIdPath,
+    TaskIdPath,
+    get_agent_service,
+    limiter,
+)
 
 settings = get_settings()
 
@@ -555,7 +561,7 @@ async def match_tasks_for_agent(
 @limiter.limit("120/minute")
 async def get_task(
     request: _Request,
-    task_id: str,
+    task_id: TaskIdPath,
     task_service: TaskServiceDep = None,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ):
@@ -665,7 +671,7 @@ async def create_task(
 @limiter.limit("60/minute")
 async def accept_task(
     request: Request,
-    task_id: str,
+    task_id: TaskIdPath,
     body: TaskAcceptRequest = None,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
@@ -697,7 +703,7 @@ async def accept_task(
 @limiter.limit("30/minute")
 async def invite_solver(
     request: Request,
-    task_id: str,
+    task_id: TaskIdPath,
     body: TaskInviteRequest,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
@@ -729,7 +735,7 @@ async def invite_solver(
 @limiter.limit("30/minute")
 async def submit_task(
     request: Request,
-    task_id: str,
+    task_id: TaskIdPath,
     body: TaskSubmitRequest,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
@@ -759,7 +765,7 @@ async def submit_task(
 @limiter.limit("60/minute")
 async def review_task(
     request: Request,
-    task_id: str,
+    task_id: TaskIdPath,
     body: TaskReviewRequest,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
@@ -804,7 +810,7 @@ async def review_task(
 @limiter.limit("30/minute")
 async def cancel_task(
     request: Request,
-    task_id: str,
+    task_id: TaskIdPath,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -833,7 +839,7 @@ async def cancel_task(
 @limiter.limit("60/minute")
 async def list_participations(
     request: _Request,
-    task_id: str,
+    task_id: TaskIdPath,
     status: str | None = Query(
         None, description="Filter by status: active, submitted, completed, rejected, cancelled"
     ),
@@ -859,7 +865,7 @@ async def list_participations(
 
 @router.get("/{task_id}/participations/me", response_model=ParticipationResponse | None)
 async def get_my_participation(
-    task_id: str,
+    task_id: TaskIdPath,
     request: Request,
     payload: dict = Depends(require_permission("acn:read")),
     task_service: TaskServiceDep = None,
@@ -878,8 +884,8 @@ async def get_my_participation(
 @limiter.limit("60/minute")
 async def cancel_participation(
     request: Request,
-    task_id: str,
-    participation_id: str,
+    task_id: TaskIdPath,
+    participation_id: ParticipationIdPath,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -905,8 +911,8 @@ async def cancel_participation(
 @limiter.limit("60/minute")
 async def approve_applicant(
     request: Request,
-    task_id: str,
-    participation_id: str,
+    task_id: TaskIdPath,
+    participation_id: ParticipationIdPath,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -932,8 +938,8 @@ async def approve_applicant(
 @limiter.limit("60/minute")
 async def reject_applicant(
     request: Request,
-    task_id: str,
-    participation_id: str,
+    task_id: TaskIdPath,
+    participation_id: ParticipationIdPath,
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
@@ -961,7 +967,7 @@ async def reject_applicant(
 
 @router.get("/{task_id}/internal")
 async def get_task_internal(
-    task_id: str,
+    task_id: TaskIdPath,
     _: InternalTokenDep,
     task_service: TaskServiceDep = None,
 ):
@@ -1027,7 +1033,7 @@ async def agent_create_task(
 @limiter.limit("60/minute")
 async def agent_accept_task(
     request: Request,
-    task_id: str,
+    task_id: TaskIdPath,
     agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,
 ):
@@ -1053,7 +1059,7 @@ async def agent_accept_task(
 @limiter.limit("30/minute")
 async def agent_submit_task(
     request: Request,
-    task_id: str,
+    task_id: TaskIdPath,
     body: TaskSubmitRequest,
     agent_info: AgentApiKeyDep,
     task_service: TaskServiceDep = None,

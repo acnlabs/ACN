@@ -176,7 +176,7 @@ H7 范围内不修，因为本身只针对 *已认证* agent 的高频写。修�
 
 影响文件：`acn/api.py` middleware 链、`acn/routes/dependencies.py`（_resolve_agent_by_bearer 加 negative cache）、`acn/auth/middleware.py` verify_token 缓存。
 
-### 路径/查询参数缺 `max_length`（H6 延伸）
+### ~~路径/查询参数缺 `max_length`（H6 延伸）~~ ✅ 已修（P2-#3）
 
 H6 把所有 body Pydantic 模型的字符串字段都加了 `max_length`，并装了 1 MiB 总 body cap。但路径参数（`subnet_id` / `agent_id` 等 `str` path / query params）仍是无界 — 攻击者可以发 `GET /api/v1/subnets/<10MB-string>/...`，体积不大但仍会进入 Redis key 拼接 / SQL like 查询 / audit log。
 
@@ -228,7 +228,7 @@ H6 装了 1 MiB 总 body cap，所有 string 字段也都加了 `max_length`。�
 
 影响文件：`acn/middleware.py`。
 
-### `_PENDING_AUDIT_TASKS` 无界 + 缺 shutdown drain（H-audit 延伸）
+### ~~`_PENDING_AUDIT_TASKS` 无界 + 缺 shutdown drain（H-audit 延伸）~~ ✅ 已修（P2-#1，B+C 组合）
 
 `fire_and_forget_event` 用 module-level set 持强引用避免 GC 回收 task（必须的，不能改回去）。但目前：
 
@@ -266,7 +266,7 @@ H-audit 给所有 401/403/SSRF block 都加了 `fire_and_forget_event`，但没�
 
 影响文件：`acn/monitoring/audit.py` `record_auth_failure`。
 
-### `acn:audit:type:*` list 缺 expire（历史问题，H-audit 期间发现）
+### ~~`acn:audit:type:*` list 缺 expire（历史问题，H-audit 期间发现）~~ ✅ 已修（P2-#4）
 
 `AuditLogger.log_event` 写三处：
 - `acn:audit:stream`（xadd + xtrim maxlen=100k）✓
@@ -279,7 +279,7 @@ H-audit 给所有 401/403/SSRF block 都加了 `fire_and_forget_event`，但没�
 
 影响文件：`acn/monitoring/audit.py` `log_event`（约第 130-160 行 `lpush + ltrim` 后）。
 
-### Lifespan startup 应预热 ERC-8004 RPC chain_id 校验（H-erc8004 延伸）
+### ~~Lifespan startup 应预热 ERC-8004 RPC chain_id 校验（H-erc8004 延伸）~~ ✅ 已修（P2-#5，fail-fast on mismatch）
 
 H-erc8004 把 chain_id 校验放在 bind 端点的运行时——首个 bind 请求触发 RPC `eth_chainId`，结果 cache 在 `ERC8004Client._cached_chain_id`。这够用：
 
@@ -330,7 +330,7 @@ H-erc8004 把 `_cached_chain_id` 设计成永久缓存（chain_id 是不变量�
 
 影响文件：`acn/services/erc8004_client.py` `get_chain_id` / `_cached_chain_id`。
 
-### `verify_chain_id` cold-start thundering herd（H-erc8004 延伸）
+### ~~`verify_chain_id` cold-start thundering herd（H-erc8004 延伸）~~ ✅ 已修（P2-#2，asyncio.Lock + 双检查）
 
 `ERC8004Client.get_chain_id` 的 cache write 不是原子操作：
 

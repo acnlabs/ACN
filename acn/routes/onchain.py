@@ -32,6 +32,18 @@ logger = structlog.get_logger()
 _erc8004_client: ERC8004Client | None = None
 
 
+def set_erc8004_client(client: ERC8004Client | None) -> None:
+    """Lifespan hook for installing a pre-warmed ERC-8004 client.
+
+    Used by ``acn.api`` startup so the chain_id RPC roundtrip is paid
+    once at boot (fail-fast on RPC mismatch), instead of on the first
+    bind request.  Subsequent ``get_erc8004_client`` calls return the
+    same instance so cache state is preserved.
+    """
+    global _erc8004_client
+    _erc8004_client = client
+
+
 def get_erc8004_client(settings: Settings = Depends(get_settings)) -> ERC8004Client:
     global _erc8004_client
     if _erc8004_client is None:

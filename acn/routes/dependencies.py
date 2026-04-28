@@ -8,7 +8,7 @@ import secrets
 import time
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Path, Request
 from slowapi import Limiter  # type: ignore[import-untyped]
 from slowapi.util import get_remote_address  # type: ignore[import-untyped]
 
@@ -37,6 +37,51 @@ from ..services import AgentService, BillingService, MessageService, SubnetServi
 from ..services.activity_service import ActivityService
 
 settings = get_settings()
+
+
+# ---------------------------------------------------------------------------
+# Path-parameter length caps (P2-#3 / H6 follow-up)
+# ---------------------------------------------------------------------------
+#
+# H6 fenced off body-side abuse with a 1 MiB cap + per-string ``max_length``
+# on every Pydantic field. Path/query parameters were left unbounded because
+# Starlette's URL parser caps headers at ~64 KB anyway — but that ceiling
+# only stops the request *before* it hits the ASGI body middleware. A 60 KB
+# ``subnet_id`` still flows downstream into:
+#
+#   - Redis key composition (``acn:subnet:{subnet_id}`` etc.) —— cardinality
+#     pressure on the keyspace, harder OPS-side cleanup.
+#   - SQL ``WHERE`` clauses — PostgreSQL accepts arbitrary VARCHAR but
+#     planner cost climbs with parameter size.
+#   - Audit log structured fields — bloats the daily/type lists with
+#     50 KB strings each event.
+#
+# The caps below are conservative ceilings well above any legitimate id
+# (typical ACN ids are ``acn:<UUID4>`` ≈ 41 chars; subnet ids are short
+# slugs). Numbers chosen to align with the Postgres VARCHAR widths in the
+# schema where present, otherwise sized at ~3× typical id length so a
+# legacy/exotic id format doesn't regress.
+MAX_SUBNET_ID_LEN: int = 100  # matches Postgres String(100) on tasks.subnet_id
+MAX_AGENT_ID_LEN: int = 128
+MAX_TASK_ID_LEN: int = 128
+MAX_PARTICIPATION_ID_LEN: int = 128
+
+SubnetIdPath = Annotated[
+    str,
+    Path(max_length=MAX_SUBNET_ID_LEN, description="Subnet identifier"),
+]
+AgentIdPath = Annotated[
+    str,
+    Path(max_length=MAX_AGENT_ID_LEN, description="Agent identifier"),
+]
+TaskIdPath = Annotated[
+    str,
+    Path(max_length=MAX_TASK_ID_LEN, description="Task identifier"),
+]
+ParticipationIdPath = Annotated[
+    str,
+    Path(max_length=MAX_PARTICIPATION_ID_LEN, description="Participation identifier"),
+]
 
 
 def _get_real_ip(request: Request) -> str:

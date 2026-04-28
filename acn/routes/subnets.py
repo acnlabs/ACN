@@ -13,7 +13,9 @@ from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
+    AgentIdPath,
     AgentServiceDep,
+    SubnetIdPath,
     SubnetServiceDep,
 )
 
@@ -135,7 +137,7 @@ async def list_subnets(
 
 @router.get("/{subnet_id}")
 async def get_subnet(
-    subnet_id: str,
+    subnet_id: SubnetIdPath,
     subnet_service: SubnetServiceDep = None,
 ):
     """Get subnet details
@@ -151,7 +153,7 @@ async def get_subnet(
 
 @router.get("/{subnet_id}/agents")
 async def get_subnet_agents(
-    subnet_id: str,
+    subnet_id: SubnetIdPath,
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
@@ -204,8 +206,8 @@ async def get_subnet_agents(
 
 @router.post("/{agent_id}/subnets/{subnet_id}")
 async def join_subnet(
-    agent_id: str,
-    subnet_id: str,
+    agent_id: AgentIdPath,
+    subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
@@ -243,8 +245,8 @@ async def join_subnet(
 
 @router.delete("/{agent_id}/subnets/{subnet_id}")
 async def leave_subnet(
-    agent_id: str,
-    subnet_id: str,
+    agent_id: AgentIdPath,
+    subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
@@ -275,7 +277,7 @@ async def leave_subnet(
 
 @router.get("/{agent_id}/subnets")
 async def get_agent_subnets(
-    agent_id: str,
+    agent_id: AgentIdPath,
     agent_info: AgentApiKeyDep,
     agent_service: AgentServiceDep = None,
 ):
@@ -295,7 +297,7 @@ async def get_agent_subnets(
 
 @router.delete("/{subnet_id}")
 async def delete_subnet(
-    subnet_id: str,
+    subnet_id: SubnetIdPath,
     payload: dict = Depends(require_permission("acn:write")),
     subnet_service: SubnetServiceDep = None,
 ):
@@ -330,8 +332,8 @@ async def delete_subnet(
 
 @router.post("/{subnet_id}/members/{agent_id}", tags=["subnets-internal"])
 async def admin_add_subnet_member(
-    subnet_id: str,
-    agent_id: str,
+    subnet_id: SubnetIdPath,
+    agent_id: AgentIdPath,
     payload: dict = Depends(require_internal_or_permission("acn:admin")),
     subnet_service: SubnetServiceDep = None,
 ):
@@ -354,8 +356,8 @@ async def admin_add_subnet_member(
 
 @router.delete("/{subnet_id}/members/{agent_id}", tags=["subnets-internal"])
 async def admin_remove_subnet_member(
-    subnet_id: str,
-    agent_id: str,
+    subnet_id: SubnetIdPath,
+    agent_id: AgentIdPath,
     payload: dict = Depends(require_internal_or_permission("acn:admin")),
     subnet_service: SubnetServiceDep = None,
 ):
