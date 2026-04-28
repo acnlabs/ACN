@@ -3,6 +3,8 @@
 Clean Architecture implementation: Route → MessageService → MessageRouter
 """
 
+import uuid
+
 import structlog  # type: ignore[import-untyped]
 from a2a.types import Message, TextPart  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -23,6 +25,22 @@ from .dependencies import (  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1/communication", tags=["communication"])
 logger = structlog.get_logger()
+
+
+def _payload_to_a2a_message(payload: dict) -> Message:
+    """Build an A2A ``Message`` with a fresh per-request ``messageId``.
+
+    The ``a2a`` Python models require ``messageId`` on every ``Message``;
+    constructing with only ``role`` + ``parts`` raises
+    ``pydantic.ValidationError`` and surfaces to callers as HTTP 500 (H4
+    sanitised).  One UUID4 per accepted HTTP request is the correct
+    envelope identity for REST-originated traffic.
+    """
+    return Message(
+        message_id=str(uuid.uuid4()),
+        role="user",
+        parts=[TextPart(text=str(payload))],
+    )
 
 
 class SendMessageRequest(BaseModel):
@@ -73,10 +91,7 @@ async def send_message(
             detail="Authenticated agent does not match from_agent field",
         )
     try:
-        message = Message(
-            role="user",
-            parts=[TextPart(text=str(body.message))],
-        )
+        message = _payload_to_a2a_message(body.message)
 
         result = await message_service.send_message(
             from_agent_id=body.from_agent,
@@ -143,10 +158,7 @@ async def broadcast_message(
             detail="Authenticated agent does not match from_agent field",
         )
     try:
-        message = Message(
-            role="user",
-            parts=[TextPart(text=str(body.message))],
-        )
+        message = _payload_to_a2a_message(body.message)
 
         responses = await message_service.broadcast_message(
             from_agent_id=body.from_agent,
@@ -210,10 +222,7 @@ async def broadcast_by_tag(
             detail="Authenticated agent does not match from_agent field",
         )
     try:
-        message = Message(
-            role="user",
-            parts=[TextPart(text=str(body.message))],
-        )
+        message = _payload_to_a2a_message(body.message)
 
         responses = await message_service.broadcast_message(
             from_agent_id=body.from_agent,
@@ -431,10 +440,7 @@ async def internal_send_message(
     assert_system_caller(body.from_agent)
 
     try:
-        message = Message(
-            role="user",
-            parts=[TextPart(text=str(body.message))],
-        )
+        message = _payload_to_a2a_message(body.message)
 
         result = await message_service.send_message(
             from_agent_id=body.from_agent,
