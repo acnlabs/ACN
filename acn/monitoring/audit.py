@@ -733,8 +733,17 @@ async def drain_pending_audit_tasks(timeout: float = 3.0) -> tuple[int, int]:
     # "finished cleanly". ``wait`` returns the (done, pending) split
     # at the deadline without cancelling pending tasks itself.
     done, still_running = await asyncio.wait(pending, timeout=timeout)
-    for task in still_running:
-        task.cancel()
+    if still_running:
+        for task in still_running:
+            task.cancel()
+        # ``cancel()`` is a *request*; without awaiting, the cancellation
+        # only takes effect when the loop next schedules each task — and
+        # in lifespan teardown that may be after Redis is closed, which
+        # produces noisy "coroutine was never awaited" warnings.  Await
+        # them now so cancellation propagates before the caller continues
+        # the shutdown sequence.  ``return_exceptions`` swallows the
+        # ``CancelledError`` re-raise from each task.
+        await asyncio.gather(*still_running, return_exceptions=True)
     return len(done), len(still_running)
 
 

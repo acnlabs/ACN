@@ -60,7 +60,6 @@ async def test_startup_verify_match_logs_and_injects_client():
 
         async with api_module.lifespan(api_module.app):
             erc_stub.verify_chain_id.assert_awaited_once_with(8453)
-            assert onchain_module.get_erc8004_client.__wrapped__ if False else True  # noqa: E501  – sanity ref
             # The lifespan must install the warmed instance, not lazy-init a fresh one.
             assert onchain_module._erc8004_client is erc_stub, (
                 "warmed client must be reused by the route layer to preserve "
