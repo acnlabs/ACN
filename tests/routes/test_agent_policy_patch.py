@@ -48,7 +48,6 @@ from acn.routes.dependencies import (
     limiter,
 )
 
-
 VALID_INTERNAL_TOKEN = "test-internal-token-min-32-chars-padding"
 
 
@@ -106,14 +105,18 @@ def stub_agent_service():
 
     svc.update_communication_policy = AsyncMock(side_effect=_update)
 
-    # Default ``get_agent`` raises 404 for everything. Tests that
-    # need a successful read (TestGetPolicy) override this on the
-    # stub directly. Without an explicit default, ``AsyncMock``
-    # autocreates a child mock that returns a mock instance,
-    # which then sends ``jsonable_encoder`` into infinite
-    # recursion when the route tries to serialize a mock's
-    # ``.communication_policy`` attribute.
+    # Phase 2 PR #1 (Group B #3-bis): the PATCH /policy route now
+    # pre-fetches the agent so it can record ``old_mode`` in the
+    # POLICY_CHANGED audit event. Tests need ``get_agent`` to succeed
+    # for ``agent-target`` and 404 for everyone else; the previous
+    # always-404 default would break every happy-path test now that
+    # the route reads the entity before the update.
     async def _default_get_agent(agent_id: str):
+        if agent_id == "agent-target":
+            existing = MagicMock()
+            existing.agent_id = agent_id
+            existing.communication_policy = {"mode": "open"}
+            return existing
         raise AgentNotFoundException(agent_id)
 
     svc.get_agent = AsyncMock(side_effect=_default_get_agent)
@@ -206,22 +209,29 @@ class TestSchemaValidation:
     ``isinstance(dict)`` check)."""
 
     def test_unknown_mode_rejected(self, stub_agent_service):
+        """Phase 2 PR #1 supports ``open`` / ``closed`` / ``manifest``.
+        ``allowlist`` is reserved for Phase 2 PR #2 and must surface
+        422 here so a forward-shipped client can't store half-baked
+        allowlist policies that activate on PR #2 deploy."""
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
             r = client.patch(
                 "/api/v1/agents/agent-target/policy",
-                json={"communication_policy": {"mode": "manifest"}},
+                json={"communication_policy": {"mode": "allowlist"}},
                 headers={"Authorization": "Bearer owner-key"},
             )
 
         assert r.status_code == 422, r.text
-        # Pin the wire-shape: error mentions both supported modes
-        # and the one we tried, so a frontend can surface a useful
-        # message without parsing.
+        # Pin the wire-shape: error mentions all currently-supported
+        # modes and the one we tried, so a frontend can surface a
+        # useful message without parsing.
         body_text = r.text
-        assert "manifest" in body_text
+        assert "allowlist" in body_text
         assert "open" in body_text and "closed" in body_text
+        # PR #1 supports manifest — make sure the error message
+        # reflects that, not a stale Phase 1 list.
+        assert "manifest" in body_text
         stub_agent_service.update_communication_policy.assert_not_awaited()
 
     def test_unknown_top_level_key_rejected(self, stub_agent_service):
@@ -442,6 +452,142 @@ class TestPersistenceFlow:
 
 
 # --------------------------------------------------------------------------- #
+# Phase 2 PR #1 (Group B #3-bis): POLICY_CHANGED audit emit
+# --------------------------------------------------------------------------- #
+
+
+class TestPolicyChangedAudit:
+    """Phase 2 PR #1 promotes the historical INFO log to a structured
+    ``POLICY_CHANGED`` audit event so platform tooling can correlate
+    policy flips with subsequent traffic drops in
+    ``MESSAGE_REJECTED``.
+
+    These tests pin the audit-emit contract:
+
+    * Every successful PATCH writes one ``POLICY_CHANGED`` event.
+    * ``details`` carries ``old_mode`` (read pre-update) and
+      ``new_mode``.
+    * ``actor_type`` reflects the caller kind (``agent`` vs
+      ``internal``) so audit consumers can filter by source.
+    * Sensitive transitions (``open`` → ``closed`` / ``manifest``)
+      escalate to ``WARNING`` level so on-call dashboards surface
+      them by default.
+    * Audit failures must not 5xx the PATCH — the policy mutation
+      is already persisted; surfacing 500 would mislead clients
+      into thinking the policy didn't change.
+    """
+
+    def test_open_to_closed_emits_warning_audit(self, stub_agent_service):
+        """Sensitive transition: open → closed must emit
+        ``POLICY_CHANGED`` at WARNING level.
+
+        We patch ``fire_and_forget_event`` directly rather than
+        ``log_event`` — the route uses fire-and-forget so the audit
+        write doesn't block the response, but that means the
+        coroutine isn't actually awaited inside ``TestClient``'s
+        synchronous send loop. Capturing the args at the
+        ``fire_and_forget_event`` boundary side-steps the timing
+        issue entirely and matches what the route actually invokes.
+        """
+        from acn.monitoring.audit import AuditEventType, AuditLevel
+
+        captured: list[dict] = []
+
+        def _capture(*_args, **kwargs):
+            captured.append(kwargs)
+
+        _wire(stub_agent_service)
+
+        with patch(
+            "acn.routes.registry.fire_and_forget_event",
+            side_effect=_capture,
+        ):
+            with TestClient(app) as client:
+                r = client.patch(
+                    "/api/v1/agents/agent-target/policy",
+                    json={"communication_policy": {"mode": "closed"}},
+                    headers={"Authorization": "Bearer owner-key"},
+                )
+
+        assert r.status_code == 200, r.text
+        assert len(captured) == 1, captured
+        kw = captured[0]
+        assert kw["event_type"] == AuditEventType.POLICY_CHANGED
+        assert kw["level"] == AuditLevel.WARNING
+        assert kw["target_id"] == "agent-target"
+        details = kw["details"]
+        assert details["old_mode"] == "open"
+        assert details["new_mode"] == "closed"
+        assert details["caller_kind"] == "agent"
+
+    def test_open_to_manifest_emits_warning_audit(self, stub_agent_service):
+        """``manifest`` is also a tightening transition (the recipient
+        is opting into a low-attention divert path); flip to
+        WARNING level so it shows up on the same dashboards as
+        ``closed``."""
+        from acn.monitoring.audit import AuditEventType, AuditLevel
+
+        captured: list[dict] = []
+
+        def _capture(*_args, **kwargs):
+            captured.append(kwargs)
+
+        _wire(stub_agent_service)
+
+        with patch(
+            "acn.routes.registry.fire_and_forget_event",
+            side_effect=_capture,
+        ):
+            with TestClient(app) as client:
+                r = client.patch(
+                    "/api/v1/agents/agent-target/policy",
+                    json={"communication_policy": {"mode": "manifest"}},
+                    headers={"Authorization": "Bearer owner-key"},
+                )
+
+        assert r.status_code == 200, r.text
+        assert len(captured) == 1, captured
+        kw = captured[0]
+        assert kw["event_type"] == AuditEventType.POLICY_CHANGED
+        assert kw["level"] == AuditLevel.WARNING
+        assert kw["details"]["old_mode"] == "open"
+        assert kw["details"]["new_mode"] == "manifest"
+
+    def test_internal_token_caller_recorded_as_internal(self, stub_agent_service):
+        """X-Internal-Token branch must record ``caller_kind=internal``
+        so analysts can filter ops-tool flips out of the
+        agent-self-service stream when investigating anomalies."""
+        from acn.monitoring.audit import AuditEventType
+
+        captured: list[dict] = []
+
+        def _capture(*_args, **kwargs):
+            captured.append(kwargs)
+
+        _wire(stub_agent_service)
+
+        with patch(
+            "acn.routes.dependencies.settings.internal_api_token",
+            VALID_INTERNAL_TOKEN,
+        ), patch(
+            "acn.routes.registry.fire_and_forget_event",
+            side_effect=_capture,
+        ):
+            with TestClient(app) as client:
+                r = client.patch(
+                    "/api/v1/agents/agent-target/policy",
+                    json={"communication_policy": {"mode": "closed"}},
+                    headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+                )
+
+        assert r.status_code == 200, r.text
+        assert len(captured) == 1, captured
+        kw = captured[0]
+        assert kw["event_type"] == AuditEventType.POLICY_CHANGED
+        assert kw["details"]["caller_kind"] == "internal"
+
+
+# --------------------------------------------------------------------------- #
 # GET /policy: symmetric counterpart so owners can read their own policy
 # --------------------------------------------------------------------------- #
 
@@ -576,8 +722,12 @@ class TestRegistrationAcceptsPolicy:
         from acn.models import AgentRegisterRequest
         from acn.routes.registry import AgentJoinRequest
 
+        # Phase 2 PR #1: ``manifest`` is now a supported mode, so we
+        # use ``allowlist`` (reserved for PR #2) as the unsupported
+        # value. The shared-validator invariant is what's pinned —
+        # whichever mode is "currently rejected" is incidental.
         bad_payload = {
-            "communication_policy": {"mode": "manifest"},
+            "communication_policy": {"mode": "allowlist"},
         }
 
         # Build the rest of the required fields just enough to
@@ -601,7 +751,7 @@ class TestRegistrationAcceptsPolicy:
 
         # The validator is the same — the error text contains the
         # same diagnostic substring on both sides.
-        assert "manifest" in str(exc_register.value)
-        assert "manifest" in str(exc_join.value)
+        assert "allowlist" in str(exc_register.value)
+        assert "allowlist" in str(exc_join.value)
         assert "open" in str(exc_register.value).lower()
         assert "open" in str(exc_join.value).lower()

@@ -103,6 +103,7 @@ Usage:
 from a2a.types import DataPart, Message, Part, Role, TextPart
 
 from .broadcast_service import BroadcastResult, BroadcastService, BroadcastStrategy
+from .manifest_dispatcher import ManifestDispatcher
 from .message_router import (
     MessageRouter,
     create_data_message,
@@ -118,6 +119,7 @@ __all__ = [
     "BroadcastService",
     "WebSocketManager",
     "SubnetManager",
+    "ManifestDispatcher",
     # Official A2A types (re-exported)
     "Message",
     "TextPart",

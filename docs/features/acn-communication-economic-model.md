@@ -133,7 +133,7 @@ Notify 层有两种进入路径，对应不同阶段：
 发送方调用现有统一发送接口提交完整消息，ACN 网关根据目标 policy 决定是否将消息降级为 Notify 条目。发送方无需感知目标 mode，接口不变：
 
 ```
-POST /api/v1/messages/send
+POST /api/v1/communication/send
 ```
 
 ```json
@@ -145,12 +145,14 @@ POST /api/v1/messages/send
 }
 ```
 
+> Phase 2 新增 `summary?: str(0..200)`（manifest mode 下作为元数据存入通知队列；详见 Group B #1）。Phase 1 该字段未生效，提交也会被 schema 接受但忽略。
+
 **路径二（Phase 3）：发送方主动提交 Notify + 附费**
 
-发送方希望声明 `attention_fee` 时，显式提交 Notify 格式（仅元数据，无正文）：
+发送方希望声明 `attention_fee` 时，显式提交 Notify 格式（仅元数据，无正文）。Phase 3 才上线：
 
 ```
-POST /api/v1/messages/notify
+POST /api/v1/communication/manifest/send
 ```
 
 ```json
@@ -187,9 +189,9 @@ POST /api/v1/messages/notify
 
 关键约束：
 
-- `summary` 字段上限 80 字，仅允许自然语言描述，禁止嵌入完整指令或结构化可执行内容（由网关做格式校验），防止 summary 被滥用为免费消息通道
-- 发送方可设置 TTL，默认 48 小时，超时未被拉取自动清除
-- 速率限制：每个发送方（agent_id 维度）每分钟最多向同一 agent 写 N 条通知；同时设置基于 wallet address 的全局上限，防止多账号绕过
+- `summary` 字段上限 **200 字符**（Group B #1 决策），超过 200 直接 422 拒绝；未传时 ACN 截断 `content[:200]+"…"` 兜底——鼓励发送方传，截断只是底线
+- 发送方可设置 TTL，TTL 范围 `300..86400` 秒（Group B #2 决策），缺省 24 小时
+- 速率限制：双桶并行——agent_id 维度（沿用 Phase 1 60/min）+ wallet address 全局维度（Phase 1 L418 已上线，600/min），任一桶满即 429
 
 接收方扫描通知队列不需要 LLM，看 `from_agent_name` + `message_type` + `summary` 即可做决策：忽略、拉取内容、或加入 allowlist。
 
@@ -200,10 +202,12 @@ POST /api/v1/messages/notify
 接收方决定查看某条通知后，主动拉取完整内容：
 
 ```
-GET /api/v1/messages/{manifest_id}/content
+GET /api/v1/communication/content/{manifest_id}
 ```
 
-支持**分段拉取**，接收方可以只读取部分内容再决定是否继续：
+> 鉴权：caller 必须在自己的 manifest queue 里持有这个 `manifest_id`（详见 Group A #4 API 鉴权矩阵）。
+
+支持**分段拉取**（Phase 3 引入；Phase 2 直接整段返回），接收方可以只读取部分内容再决定是否继续：
 
 ```json
 {
@@ -213,10 +217,10 @@ GET /api/v1/messages/{manifest_id}/content
 }
 ```
 
-继续拉取：
+继续拉取（Phase 3）：
 
 ```
-GET /api/v1/messages/{manifest_id}/content?cursor=cursor-xyz
+GET /api/v1/communication/content/{manifest_id}?cursor=cursor-xyz
 ```
 
 成本归属：
@@ -236,7 +240,9 @@ GET /api/v1/messages/{manifest_id}/content?cursor=cursor-xyz
 
 ### Session 层：实时会话
 
-双方均同意时建立实时 channel，适用于需要多轮交互的协作场景：
+双方均同意时建立实时 channel，适用于需要多轮交互的协作场景。
+
+> **路径前缀提示**：以下 `/api/v1/sessions/`* 是 Phase 3 设计期占位路径；正式上线时应与 `/communication/`* namespace 对齐为 `/api/v1/communication/sessions/`*，与 inbox / manifest / content 平级。具体形态在 Phase 3 启动时决议。
 
 **发起邀请：**
 
@@ -327,13 +333,15 @@ Session 层特性：
 
 ### Allowlist API
 
-配合 `allowlist` 模式，新增管理接口：
+配合 `allowlist` 模式，新增管理接口（详细鉴权与一致性策略见 Group B #3）：
 
 ```
-POST   /api/v1/agents/{id}/allowlist/{target_id}   # 加入白名单，需 API Key
-DELETE /api/v1/agents/{id}/allowlist/{target_id}   # 移出白名单，需 API Key
-GET    /api/v1/agents/{id}/allowlist               # 查看白名单（私有，需 Key）
+GET    /api/v1/agents/{id}/allowlist             # 查看白名单（owner-only，需 Key）
+POST   /api/v1/agents/{id}/allowlist             # 加入白名单：body {target_id, reason?}
+DELETE /api/v1/agents/{id}/allowlist/{target_id} # 移出白名单
 ```
+
+> 容量上限 500 条；超出 `POST` 返回 422 `allowlist_capacity_exceeded`；不提供 `incoming` 反查接口（隐私语义）。
 
 **动态信任建立**：allowlist 不只是手动维护，可以通过以下方式自动更新：
 
@@ -346,33 +354,29 @@ GET    /api/v1/agents/{id}/allowlist               # 查看白名单（私有，
 
 ### Policy 公开查询 API
 
-发送方在发消息前可查询目标的通信策略（仅暴露公开字段），预判是否会被拒绝或需要附带 `attention_fee`：
+发送方在发消息前可查询目标的通信策略（仅暴露公开字段），预判是否会被拒绝或需要附带 `attention_fee`。
+
+Phase 1 已上线 owner-only 的读写端点：
 
 ```
-GET /api/v1/agents/{id}/communication_policy
+GET   /api/v1/agents/{id}/policy   # 读取自己的 policy（owner / internal token）
+PATCH /api/v1/agents/{id}/policy   # 修改自己的 policy（owner / internal token）
 ```
 
-```json
-{
-  "mode": "manifest",
-  "attention_fee_required": false,
-  "min_fee": null
-}
-```
-
-> 此接口不暴露 allowlist 成员列表，只返回 `mode`、是否需要费用及最低费用金额。无需 API Key（公开可读）。  
-> `attention_fee_required` 和 `min_fee` 字段在 Phase 3 Module B 上线后生效，Phase 2 始终返回 `false` / `null`。
+> 当前 `GET /agents/{id}/policy` 是 owner-or-internal only（`reject_reason` 可能含敏感语境，不开放匿名读）。  
+> 公开 read-only 形态（暴露 `mode` + `attention_fee_required`，不暴露 allowlist 成员）将在 Phase 3 Module B 上线时另增端点（如 `GET /agents/{id}/communication_profile`），不复用 owner-only 路径。
 
 ---
 
 ### 通知队列 API
 
-`manifest` 模式下，接收方通过以下接口管理通知队列（无需 LLM，纯元数据操作）：
+`manifest` 模式下，接收方通过以下接口管理通知队列（无需 LLM，纯元数据操作；详细鉴权矩阵见 Group A #4）：
 
 ```
-GET    /api/v1/agents/{id}/manifest                    # 查看通知队列，需 API Key
-GET    /api/v1/agents/{id}/manifest?type=task_request  # 按 message_type 过滤
-DELETE /api/v1/agents/{id}/manifest/{manifest_id}      # 忽略并删除通知，需 API Key
+GET    /api/v1/communication/manifest/{agent_id}                    # 查看通知队列（owner-only，403 越权）
+GET    /api/v1/communication/manifest/{agent_id}?since=<ts>         # 增量补推（ZRANGEBYSCORE）
+GET    /api/v1/communication/manifest/{agent_id}?type=task_request  # 按 message_type 过滤（Phase 3）
+DELETE /api/v1/communication/manifest/{agent_id}/{mid}              # 忽略并删除通知（mid 越权 → 404）
 ```
 
 ---
@@ -381,7 +385,7 @@ DELETE /api/v1/agents/{id}/manifest/{manifest_id}      # 忽略并删除通知�
 
 Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内部的可选扩展。
 
-发送方通过 Notify 层路径二（`POST /api/v1/messages/notify`）在通知中声明 `attention_fee`，网关在投递前锁定托管。
+发送方通过 Notify 层路径二（`POST /api/v1/communication/manifest/send` + `attention_fee` 字段）在通知中声明 `attention_fee`，网关在投递前锁定托管。
 
 处理流程：
 
@@ -426,11 +430,11 @@ Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内�
   - `GET /api/v1/agents/{id}/endpoint` 不应公开真实 endpoint，仅 owner/internal 可见
   - `GET /api/v1/agents/{id}/.well-known/agent-card.json` 中的 `url` 应替换为 ACN 代理地址
 - 测试覆盖：默认 open 通过、closed 返回 403、message/proxy/broadcast 均被 policy 拦截、公开接口不泄露真实 endpoint、双桶速率限制三层契约（`_wallet_rate_limit_key` 按 walleted/un-walleted/大小写规范化派生正确 key、`verify_agent_api_key` / `verify_proxy_caller` 在鉴权阶段把 wallet 写入 `request.state`、7 个公网 inbound 写入口都同时挂 agent + wallet 双桶装饰器且不能退化为单桶）
-- **文档明确：ACN 不负责 token 成本，agent 运营者自行承担（L424）**——单独凝练成本与责任边界的章节，避免散落多处。落点：本文档 [`Token 推理成本责任边界`](#token-推理成本责任边界)，包含「为什么这一边界是有意为之」「ACN 提供的对冲工具表」「给 agent 运营者的实操建议」。SDK / 接入文档接入时引用该小节即可，不需要在 ACN 协议层重新表述
+- **文档明确：ACN 不负责 token 成本，agent 运营者自行承担（L424）**——单独凝练成本与责任边界的章节，避免散落多处。落点：本文档 `[Token 推理成本责任边界](#token-推理成本责任边界)`，包含「为什么这一边界是有意为之」「ACN 提供的对冲工具表」「给 agent 运营者的实操建议」。SDK / 接入文档接入时引用该小节即可，不需要在 ACN 协议层重新表述
 
 **Phase 1 实现决策记录**：
 
-- `closed` mode 覆盖所有入站通信入口：`messages/send`、broadcast 单目标投递、A2A proxy、catch-all proxy
+- `closed` mode 覆盖所有入站通信入口：`/communication/send`、broadcast 单目标投递、A2A proxy、catch-all proxy
 - A2A proxy 遇到目标 agent 为 `closed` 时返回 `403 communication_rejected`，不转发到真实 endpoint
 - broadcast 遇到 `closed` 目标时采用 per-target rejected 语义：该目标标记为 `rejected`，不影响其他目标投递
 - 公开接口只暴露 ACN 代理地址，不暴露真实 endpoint；Phase 1 至少替换 agent card 顶层 `url`
@@ -456,6 +460,7 @@ Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内�
 **Phase 1 metrics + audit 落点（Step 2.5）**：
 
 - **新增 metric**：`acn_messages_rejected_by_policy_total{path,reason}`，`path ∈ {single, internal, broadcast_target, proxy, a2a}`，`reason ∈ {policy_closed, policy_unknown_mode}`。其中 `proxy` 覆盖 `routes/registry.py:_proxy_to_agent` 的四条 reverse-proxy 路径，`a2a` 覆盖 A2A 协议入口的 `route` / `subnet_routing` action（`broadcast` action 共用 `broadcast_target` 标签，因为它走 BroadcastService）。与既有的 `acn_messages_total{status="rejected"}` 并存——后者保留作为「消息总流量按状态切片」的 dashboard 入口，新 metric 提供按通道 + 拒绝原因的细粒度切片，便于运维识别异常通道（例如 `proxy` 突增可能意味着 ACN API key 泄露 + 攻击者枚举 closed agent；`broadcast_target` 突增可能意味着批量发件人遭遇集中拒绝）
+- **新增 metric（Phase 2 PR #1 review fix P1-B3）**：`acn_messages_diverted_to_manifest_total{path}`，`path ∈ {router, subnet}`，反映网关分流到 manifest queue 的消息量；与 `acn_messages_rejected_by_policy_total` 是 "policy-shaped traffic that didn't reach the inbox" 的另一面——前者是被 manifest mode 转入异步通知通道、待接收方拉取，后者是被 closed mode 拒绝。`path={router}` 覆盖 HTTP / A2A / DLQ retry 路径，`path={subnet}` 覆盖 subnet WebSocket 推送；如果某段时间 `subnet` 路径流量持续为 0 而 `router` 不为 0，可能意味着 subnet 通道 manifest 分流未生效（PR #1 上线前曾出现该 bug）。计数点收口在 `ManifestDispatcher.dispatch()` 内部，由 router / subnet 透传 `path` 标签——单点收口避免双计
 - **新增 audit event 类型**：`MESSAGE_REJECTED = "message_rejected"`。仅在「单发」与「internal 单发」两条路径上写 audit（每次 HTTP 请求一条，频率可控）。**广播 per-target 拒绝、subnet 实时推送拒绝、DLQ 丢弃**不写 audit，避免一次广播写入数百条 audit 污染 stream；这些路径仅靠 metric + 结构化日志即可定位
 - **计数收口规则**：拒绝 metric **只在最近的层 inc 一次**——`MessageRouter.route()` / `SubnetManager.forward_request()` 内部不 inc（它们只 raise PolicyRejected），由各调用点在 catch 后 inc：`routes/communication.py` (`send` / `internal_send` / `broadcast_message`)、`routes/registry.py:_proxy_to_agent` (`path="proxy"`)、`protocols/a2a/server.py` 的 `_handle_routing` 与 `_handle_subnet_routing` (`path="a2a"`)。避免双计：例如同一条 single send 不会同时被 router 内部和 routes 层各计一次
 - **DLQ drop 暂不计 metric / 不写 audit**：`MessageRouter.retry_dlq` 不持有 metrics 句柄，且 DLQ 重试是后台 ops 操作（已 returns retried count）；drop 量本身价值有限，仅靠 `policy_closed → drop` 的结构化日志即可定位（与上方「DLQ retry 行为」一致）。如 Phase 2 重写 DLQ 模型时再评估是否补 metric
@@ -476,6 +481,173 @@ Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内�
 - 默认 TTL：**24 小时**（发送方可缩短，不可延长）
 - 暂存内容与 Notify 条目生命周期绑定：条目删除或过期，内容同步清除
 - 存储成本由平台承担（Phase 2 验证阶段），Phase 3 转为发送方计费
+
+**Phase 2 Group A 决策记录（架构契约层）**：
+
+整组的 v1 review 共识：架构契约层先决（4 条），决定 Group B 模式实现层（manifest summary / TTL / allowlist 存储 / WS 推送语义）怎么写。回写自 Phase 2 启动决策会议。
+
+- **#4 inbox vs manifest 通知队列：完全独立两套存储 + 独立 API 入口**
+  - Redis key 设计：`acn:inbox:{<agent_id>}`（沿用 Phase 1）+ **manifest queue 三 key 双结构**（详见 Group B #7）：ZSET `acn:manifest:{<agent_id>}`（score=expires_at，member=manifest_id，支持 since 增量 + 过期清理）+ 详情 hash `acn:manifest:{<agent_id>}:<mid>`（存 sender / summary / ts）+ content `acn:content:{<agent_id>}:<mid>`（正文暂存，受 10 KB / 24h 约束）；三 key 用 `{<agent_id>}` 作 hash tag 强制同 slot（cluster MULTI 必需）
+  - `**manifest_id` 生成规则**：服务端 `uuid4().hex` 不可猜测（不是序号、不是时间戳衍生值），是 P0-3 鉴权矩阵中"知道 mid 才能拉 content"安全模型的前提
+  - API 入口设计：`/api/v1/communication/inbox/*`（Phase 1，已有）与 `/api/v1/communication/manifest/*`（Phase 2 新加，平级 namespace）+ `GET /api/v1/communication/content/{manifest_id}`（拉正文）
+  - **API 鉴权矩阵（Phase 2 整合 review P0-3 决议）**：
+
+    | API                                                 | 鉴权                            | 越权检查 / 拒绝形态                                                                                                                                                                                |
+    | --------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+    | `POST /communication/manifest/send`                 | `AgentApiKeyDep`（任何已注册 agent） | 双桶速率限制（沿用 L418）；`closed` recipient → 403 `communication_rejected`；`allowlist` 不在名单 → 自动落 manifest queue                                                                                    |
+    | `GET /communication/manifest/{agent_id}`            | `OwnerOrInternalDep`          | 沿用 Phase 1 dep 行为：`X-Internal-Token` 优先；否则 path `agent_id` 必须严格相等于 caller agent_id，否则 **403 `API key does not match agent_id`**（保留 Phase 1 "不泄露其他 agent 存在性"语义——错 key + 任意 agent 都同形态 403） |
+    | `GET /communication/manifest/{agent_id}?since=<ts>` | 同上                            | 同上                                                                                                                                                                                         |
+    | `DELETE /communication/manifest/{agent_id}/{mid}`   | `OwnerOrInternalDep`          | 同上 + `mid` 必须在 caller 的 manifest ZSET 内，否则 **404 `manifest_not_found`**（删除路径 mid 越权用 404，避免 mid 枚举）                                                                                        |
+    | `GET /communication/content/{mid}`                  | `AgentApiKeyDep` + 二次校验       | caller 必须在 `acn:manifest:{<caller_id>}` ZSET 里持有这个 `mid`，**否则一律 404**（不区分 mid 不存在 / 存在但越权——避免 mid 枚举攻击）                                                                                    |
+
+    - **关键安全前提**：`mid` 是不可猜测 UUID（`uuid4().hex`），"知道 mid 才能拉"是合理安全模型；如果未来 mid 改成可推测形式（如 `<owner_id>:<seq>`），二次校验必须升级为"PG 持久化的 mid → owner 映射表"
+    - **403 vs 404 选择**：path 维度（`owner_id`）越权 → 403（沿用 Phase 1 `OwnerOrInternalDep`，本身已不泄露其他 agent 存在性）；mid 维度二次校验越权 → 404（mid 是不可枚举的随机 UUID）。**不修改 Phase 1 dep**，避免破坏已上线测试与对接方依赖
+    - **internal token 调用**：`X-Internal-Token` 走 `OwnerOrInternalDep` 时本就跳过 owner_id 检查（沿用 Phase 1 行为，系统通知场景适用），仍要写 audit 日志（Group A #6 决策）
+  - **manifest content 拉取语义（Phase 2 整合 review P1-9 决议）**：
+    - **可重复拉取**：同一 caller 在 TTL 内可任意次 `GET /content/{mid}`，不消耗配额（除速率限制外）；接收方可能在 LLM 处理时重新拉取上下文
+    - **不标记 `read` 状态**：Phase 2 manifest queue 不引入 read / unread / acked 字段——manifest 的语义是"被通知方决定要不要 LLM 处理"，read 标记会让"已读取但未决策"和"已决策"混淆。客户端如需"已处理"标记，可调 `DELETE /communication/manifest/{agent_id}/{mid}` 显式清除
+    - **拉取不消耗 fee（Phase 3 联动）**：Phase 3 引入 `attention_fee` 后，"释放 fee 给接收方"的 trigger 是接收方**显式 ack**（如 `POST /communication/manifest/{agent_id}/{mid}/ack` 或调用方在 inbox 写回应），**不是 GET content**——拉取仅是"接收方查看通知"，不代表已处理；多次拉取也不会重复释放 fee。Phase 2 不实施这部分，但 schema 预留 `acked_at` 字段为 nullable（Phase 3 激活）
+    - **过期后行为**：TTL 到期后 `acn:manifest:{<agent_id>}` ZSET + 详情 hash + content 三 key 同步过期（Group B #2 hash tag 保证），过期后任何 `GET /content/{mid}` 一律返 404（不区分"过期"和"不存在"，避免 mid 枚举侧信道）
+    - **content 大小语义**：Phase 2 上限 10 KB（已在 Phase 2 内容暂存约束章节定义），超出 `POST /communication/send` 在 manifest 路径上直接 422 拒绝；Phase 3 引入 `content_url` 后，超过 10 KB 的内容由发送方自托管，ACN 仅存元数据 + url + hash
+    - **`POST /send` manifest 分流响应字段（PR #1 review fix P1-B2）**：recipient mode 触发 manifest 分流时，`POST /communication/send` 与 subnet `forward_request` 都返回 `{"status": "sent", "delivery_mode": "manifest", "mid": <hex32>, "ts": <ms>, "route_id": <8 hex>}`——**关键**：`status` 仍是 `sent`（不是 `manifest`），让现有 SDK 客户端的 `result["status"] == "sent"` 成功判断分支继续工作；`delivery_mode` 是新加字段，纯加性，老客户端 ignore 即可。inbox 路径同步也带 `delivery_mode: "inbox"`，让新 SDK 可以单字段判断投递路径而无需嵌套 status 枚举
+  - mode → 队列映射：`open` 写 inbox；`manifest` 写 manifest queue + 暂存 content；`allowlist` 名单内走 inbox / 名单外走 manifest（与上方路由表对齐）；`closed` 都不写（403）
+  - 理由：①数据语义不同（完整正文 vs 元数据 + 内容指针），字段集 / TTL / ack 行为 / 容量上限完全不同；②向后兼容：现有 `open` mode 客户端只读 inbox，混队列会读到不认识的字段；③API 演进路径不同（manifest 后续要长出 attention_fee / from_agent 过滤 / expiry 排序，inbox 不需要）
+  - 影响：新增 3 个 Redis key namespace + 3 套 API，Agent 实体不变，无迁移；**先做最小骨架原型验证数据模型**，再展开 sprint 实施
+- **#5 Subnet 内通信：不绕过 policy（沿用 Phase 1）**
+  - Phase 1 `SubnetManager.forward_request()` 已在每次推送前 re-fetch agent policy 做检查（`acn/infrastructure/messaging/subnet_manager.py`）；registry 查不到时 fail-open 到 `policy=None`（防 Redis 抖动制造 outage）
+  - **Phase 2 PR #1 review fix（P0-A1）**：SubnetManager 完整支持 manifest 分流，与 `MessageRouter` 行为对齐——`check_inbound_or_raise` 改为 `check_inbound`（拿到完整 `PolicyDecision`），manifest 分支调用共享 `ManifestDispatcher` 写入 manifest queue + 推 WS + 计数 metric。原本的旧版本只看 `allow=False` 直接 raise，对 `mode=manifest` 的 `allow=True / route_to=manifest` 静默通过，等于让 manifest mode 在 subnet 通道完全失效。修复后所有 inbound 通道（HTTP / A2A / DLQ retry / subnet WebSocket）走相同 dispatcher，metric 通过 `path={router|subnet}` label 区分 ingress
+  - Phase 2 增量：`allowlist` mode 上线后，**同 subnet 成员自动出现在彼此的 allowlist**——subnet 通过联动 allowlist 实现"内部信任"，而不是通过 subnet 绕过 policy。理由：subnet 加入是 owner 单方面决定，不是双向授权；让 subnet 绕过 policy 等于让 owner 替接收方做决定
+- **#6 Internal Token 调用：绕过 policy + 强制写 audit（沿用 Phase 1）**
+  - Phase 1 `PolicyCheckService.check_inbound` 对 `system:*` sender 直接 allow；`assert_system_caller` 强制 `/internal/send` 调用方必须用 `system:<slug>` 命名空间；audit 路径写 `actor_type="system"` 标签
+  - 理由：服务条款变更 / 安全告警 / 账户冻结等强制通知不能被 closed 阻断；豁免必须配套审计才能被信任
+  - Phase 2 增量：合规摘要文档化——豁免范围仅 `system:<slug>`、每条豁免投递必有 audit、Phase 3 引入"用户拒收 system 通知"细粒度（如可关闭营销通知，但不可关闭安全通知）
+- **#8 A2A 协议入口 `from_agent`：Phase 2 强校验 = bearer 解出的真实 caller（必填、严格相等）**
+  - Phase 1 `_safe_a2a_from_agent` 只防 `system:*` 伪造；non-system from_agent 完全相信 client 声称值（因为 `open / closed` 不依赖 sender 真伪）。Phase 2 `allowlist` 依赖 sender 真实性，必须升级
+  - **实施路径（Phase 2 整合 review P0-1 决议）**：A2A SDK 的 `A2AFastAPIApplication.build()`（`acn/protocols/a2a/server.py:883`）不是标准 FastAPI router，**不能直接挂 FastAPI dependency**。改用 **ASGI middleware 包装方案**——在 `create_a2a_app` 返回前用 `Starlette` middleware 包一层 `ACNA2AAuthMiddleware`：拦截 `/a2a/jsonrpc` 路径下所有请求，验证 `X-ACN-Authorization: Bearer <api_key>` header（复用 `_resolve_agent_by_bearer` 的 60s API Key cache），把解出的真实 caller agent_id 塞进 ASGI `scope["acn_caller_agent_id"]`；不带 header 或 header 无效直接返回 401（不进 A2A executor）
+  - 校验机制：`_safe_a2a_from_agent(context)` 升级为 `_verify_a2a_from_agent(context, scope)`——从 `scope` 读真实 caller，与 `context.metadata.from_agent` **严格相等**：a) 缺失 `from_agent` 直接 `TaskState.rejected`；b) `from_agent` 与 caller 不等直接 `TaskState.rejected`；c) `system:*` 伪造仍然降级（保留 Phase 1 行为）
+  - 为什么不用方案 B（在 `ACNAgentExecutor.execute()` 里读 metadata token）：会把 ACN 鉴权语义塞进 A2A 协议字段，污染协议；middleware 方案零侵入 SDK
+  - 为什么不用方案 C（fork SDK）：维护成本最高，且 middleware 方案足够
+  - 拒绝形态：`TaskState.rejected` + `DataPart{detail: "from_agent_mismatch", expected, claimed}`，与 Phase 1 `communication_rejected` 错误形态对齐
+  - 严格性取舍：缺失 `from_agent` 也拒（不像 Phase 1 静默降级到 `unknown`），因为 a) 接收方需要看到真实 sender 才能做 allowlist 决策 b) 缺失意味着客户端实现不规范，应及早暴露
+  - 链上签名兼容：Phase 2 暂不实施，预留 `X-ACN-Signature` 头作为未来扩展点；middleware 加签名验证位时只需在同一处扩展
+  - 过渡策略：发布前 30 天 SDK 警告版本（middleware 接受老 from_agent 但 logger.warning + 在 response header 加 `X-ACN-Deprecation: from_agent_strict_check_in_30d`），30 天后强制；同步通知对接者
+  - 影响范围：新增 1 个 middleware 类（约 80 行）+ 修改 `_safe_a2a_from_agent` → `_verify_a2a_from_agent`（3 个调用点 `_handle_routing` / `_handle_subnet_routing` / `_handle_broadcast`）；不改 SDK
+
+**Phase 2 Group B 决策记录（模式实现层）**：
+
+Group A 拍板架构契约层后，Group B 落地 manifest mode + allowlist 的实现细节。下列 5 条决策（#1 / #2 / #3 / #3-bis / #7）覆盖 manifest queue 数据结构、TTL、allowlist 存储一致性、mode 切换迁移、WebSocket 推送语义。
+
+- **#1 manifest summary 由谁产出：发送方传 + ACN 截断兜底**
+  - 字段：`summary?: str(0..200)`；超过 200 直接 422 拒绝（不静默截断，让 SDK 早暴露）
+  - 兜底：未传时 ACN 写入 `content[:200] + "…"`（仅当原文 > 200 时加省略号）；不做 markdown / 代码块 / 多语言语义截断（违反 L424 责任边界，且会引入 LLM 成本）
+  - 文档语义：**截断是兜底底线，不是好体验**——manifest 接入文档明确建议发送方传 summary
+  - 观测埋点：新增 `acn_manifest_summary_provided_total{provided=true|false}`；3 个月后按 P95/P99 content 长度回看是否调整 N=200
+  - **影响 endpoint（P0 review v2 修正）**：`summary?` 加在路径一**统一入口** `POST /communication/send`（Phase 2 manifest mode 走的是路径一 + 网关按 policy 分流——见 [Notify 层](#notify-层轻量通知推送) 章节"路径一/路径二"区分）。recipient mode = `manifest` 或 `allowlist` 名单外时，网关把 `summary`（或 `content[:200]` 兜底）写入 manifest queue 详情 hash；recipient mode = `open` / `allowlist` 名单内时网关忽略此字段（消息整体进 inbox）。Phase 3 路径二 `POST /communication/manifest/send` 上线时复用同一 schema（同样支持 `summary?` 字段 + 新增 `attention_fee`）
+  - LLM 摘要彻底延后到 Phase 3 评估（且必须由发送方付费触发，不由 ACN 默认开启）
+- **#2 manifest 通知队列 TTL：Redis 原生 TTL + Cluster hash tag + 下限 5 分钟**
+  - 主线：每个 manifest 条目和对应 content 写入时设 `PEXPIREAT = now + ttl_seconds`；TTL 范围 `300..86400`（**下限 5 分钟**——人决策都不止 60s，下限太小不可用），缺省 86400
+  - **Cluster sharding hash tag**（部署阻塞性细节，原型必验）：manifest queue ZSET key = `acn:manifest:{<agent_id>}`、详情 hash key = `acn:manifest:{<agent_id>}:<mid>`、content key = `acn:content:{<agent_id>}:<mid>` —— 用 `{<agent_id>}` 作 hash tag，强制三个 key 落在同一 slot；否则 cluster 部署 `MULTI/EXEC` 跨 slot 直接 `CROSSSLOT` 报错
+  - 原子性：`MULTI/EXEC` 同一 deadline 写入 ZSET + 详情 hash + content 三个 key，避免 dangling reference（manifest 引用了已过期的 content）
+  - PostgreSQL 镜像后台清理：Phase 3 引入 PG 镜像时再加 worker（按 `manifest.expires_at` 索引每分钟批量删）
+  - Phase 3 联动点：attention_fee 接入后"未拉取自动过期 = 自动退款"策略需要重设计 TTL 行为；已在 Phase 3 待决策表登记
+- **#3 allowlist 存储：Redis SET（30s TTL）+ PostgreSQL 关系表 + 容量 500 + 砍 incoming API**
+  - PG 表 schema：`agent_allowlist(owner_id UUID NOT NULL, target_id UUID NOT NULL, created_at TIMESTAMPTZ DEFAULT now(), reason TEXT, PRIMARY KEY(owner_id, target_id)) + INDEX(target_id)`；`INDEX(target_id)` 仅供运维 / 反作弊检索使用，不暴露 API
+  - Redis cache key：`acn:allowlist:{<owner_id>}` 类型 SET，TTL **30 秒**——撤销 allowlist = 拉黑场景，必须秒级生效；30s 是 fail-safe 兜底（写路径直接 SADD/SREM 同步更新 cache，正常路径不会 stale 30s）
+  - 一致性策略：先 PG 事务写入 → 成功后 Redis SADD/SREM（best-effort，失败靠 30s TTL reload 兜底）；**不**采用"先写 PG → 整 key invalidate"模式（每次写都丢全集要重新加载）
+  - 容量上限：单 agent 默认 **500 条**（保守起点；文档标注"按观测调整"），超出 `POST /allowlist` 返回 422 `allowlist_capacity_exceeded`
+  - API 三个：`GET /agents/{id}/allowlist`（列表）、`POST /agents/{id}/allowlist`（add，body `{target_id, reason?}`）、`DELETE /agents/{id}/allowlist/{target_id}`（remove）
+  - **不提供** `GET /allowlist/incoming` 反查"谁把我加进了 allowlist"——allowlist 是接收方私有授权，target 不应该看到自己被谁拉白名单（隐私语义 + 无真实需求）；未来若要做"关注关系"按 `acn-follow-proposal.md` 单独设计
+  - 路由层接入：`MessageRouter` 在 `mode=allowlist` 时先查 `SISMEMBER acn:allowlist:{<rcpt>} <sender>`，命中走 inbox / 不命中走 manifest queue（与 Group A #4 路由表一致）
+  - 原型 PR 必验：PG 事务 + Redis SADD/SREM 的写后立即读、Redis 抖动时 fail-safe 行为
+  - `**validate_policy_dict` schema 升级路径（Phase 2 整合 review P0-2 决议）**：Phase 1 `acn/services/policy_service.py:58` 当前 `SUPPORTED_POLICY_MODES = frozenset({"open", "closed"})` + `allowed_keys = {"mode", "reject_reason"}`（strict-keys 拒绝其他顶层字段）。Phase 2 分两个 PR 上线：
+    - **PR #1（已上线）**：`SUPPORTED_POLICY_MODES = frozenset({"open", "closed", "manifest"})`——`manifest` 加入接受集；`allowlist` **暂不**支持（继续 422），等 PR #2 接入 PG `agent_allowlist` 表 + Redis SET cache 后一起放开
+    - **PR #2（pending）**：`SUPPORTED_POLICY_MODES = frozenset({"open", "closed", "manifest", "allowlist"})`
+    - `**allowed_keys` 不变**：仍是 `{"mode", "reject_reason"}` —— allowlist 名单内容**不进 policy dict**，独立在 `agent_allowlist` PG 表里；policy dict 只携带"我现在用哪种模式 + 拒绝时显示什么文案"两个语义
+    - **mode = `allowlist` 时空名单的 fallback 行为**：硬编码为"名单外走 manifest"，不开放配置——Phase 2 简化决策，避免 policy dict schema 膨胀；如果 owner 想"白名单内走 inbox / 白名单外直接拒"，应该用 `mode=closed` + 把白名单成员加到 system 通道，而不是细调 fallback
+    - **strict-keys 行为不变**：升级版本启用后，老客户端如果在 policy dict 里塞 `allowlist` / `manifest_threshold` / 其他半成品字段，仍然会被 422 拒绝——这是 Phase 1 strict-keys 的预期行为（"policy 是 explicit contract"），manifest mode 不应让这条规则松动
+    - 影响：`policy_service.py` 改 1 个常量 + 加 2 个 mode 分支（`manifest` / `allowlist` 落入 `check_inbound` 的新决策路径），约 30 行；Phase 1 现有 strict-keys 测试不需要改
+- **#3-bis mode 切换迁移语义（新增）**：
+  - **cache invalidate 机制（P1-6 修正）**：Phase 1 没有 `acn:policy:{<agent_id>}` 独立 cache key——policy 是 `Agent` 实体字段，invalidate 通过 `agent_service.update_communication_policy → repository.save(agent)` 把整个 agent row 覆盖到 Redis（Phase 1 现有机制）；`MessageRouter` / `SubnetManager` 每次 `registry.get_agent()` 读最新 row。Phase 2 不需要新增 cache 层
+  - 已有数据保留：切换前已落 inbox 或 manifest queue 的消息**不删不迁移**，让接收方消费完旧数据；新到消息按新 mode 路由
+  - 在途消息一致性：以 ACN 收到 `POST /send` 请求时刻的 policy 为准（请求级 policy 快照），不引入分布式锁——简单可解释，唯一边界情形是切换瞬间 ±50ms 内的并发请求可能按旧 policy 处理，可接受
+  - **DLQ retry × manifest mode 边界（P1-8 决议）**：`MessageRouter.retry_dlq` 重试时**重新 check 当前 policy**——如发送时 `open` / 重试时 `closed` 或 `manifest`，drop 旧消息（与 Phase 1 DLQ retry 行为完全一致；接收方有权撤回信任，DLQ 是网络抖动重试场景，不应违背最新意图）。这与"已落 inbox 老消息保留"不冲突——已写 inbox 的是已经投递成功的，DLQ 里的是未成功投递；retry 不强行投递新 mode 拒绝的消息
+  - **审计（P1-5 修正）**：Phase 2 新增 `AuditEventType.POLICY_CHANGED = "policy_changed"` 枚举（Phase 1 当前是 INFO log，注释明说"待 Phase 2 视频次决定是否升格为 audit event"——manifest mode 上线后 policy 切换频率会增加，正是升格触发条件），含 `old_mode` / `new_mode` / `actor_id` / `caller_kind`；mode 切到 `closed` 或 `manifest` 同时触发额外 logger.warning（用于运维监控异常切换）
+- **#7 WebSocket 实时投递在 manifest 模式下推什么：推元数据 + ZSET 增量补推 + SDK 版本声明**
+  - 新 WS event_type：`manifest_notification`，payload `{mid, sender, summary, ts, expires_at}`，**不携带 content**
+  - **推送通道（Phase 2 整合 review P1-13 决议）**：加到 `acn/infrastructure/messaging/websocket_manager.py:MessageType` 枚举（不是 `SubnetManager.GatewayMessageType`）——`WebSocketManager` 是 Phase 1 已有的客户端通道（`/ws/{agent_id}`，agent 接收方自己连），承载 chat / status / 通知；`SubnetManager` 是 subnet 接入协议通道，仅 subnet 内 agent 用。manifest 通知语义匹配前者，命名风格沿用 Phase 1 snake_case（与 `agent_message` / `agent_status` 一致）
+  - manifest queue Redis 数据结构：**ZSET（score = `expires_at` ts）+ 详情 hash 双 key**——ZSET 唯一同时支持 `since` 增量查询（`ZRANGEBYSCORE since=<ts> +inf`）+ 过期清理（`ZREMRANGEBYSCORE -inf now`）；详情 hash 存 `summary / sender / ts`（ZSET member 仅是 manifest_id）。**此项倒灌补充至 Group A #4 manifest queue 数据结构**
+  - WS 离线补推：连接重建后客户端 `GET /communication/manifest/{agent_id}?since=<ts>` 增量补，由路由层 `ZRANGEBYSCORE` 实现
+  - 客户端兼容：老 SDK 收到不认识 event_type 直接 ignore（Phase 1 协议约定）；推送时机与 manifest queue 写入同步（`MessageRouter.route` 内部判断 recipient mode == `manifest` / `allowlist 名单外` 时调 `ws_manager.send_to_agent(recipient, {"type": "manifest_notification", ...})`，与 inbox 写入是 fire-and-forget 关系——WS 发送失败不影响 manifest queue 已落库）
+  - **mode 切换 SDK 版本警卫**：`PATCH /agents/{id}/policy` 切到 `manifest` / `allowlist` 时返回 warning header `X-ACN-SDK-Min-Version: <version>`；运维文档单独写一节"开启 manifest mode 前必须 SDK ≥ x.y.z（必须实现 `manifest_notification` handler，否则 agent 收不到任何新通知）"——这是隐性 breaking change，不显式提示会让 agent 静默"哑巴"
+  - inbox event 不变（Phase 1 `agent_message` 兼容；manifest mode 不再推 `agent_message`，只推 `manifest_notification`）
+
+**Phase 2 Group C 决策记录（独立技术债）**：
+
+Group C 与架构契约层 / 模式实现层不耦合，是 Phase 1 遗留的工程债。两条都属于"先继续观测、条件触发后再做"的延后决策，**不阻塞 Group B 原型 PR 启动**。
+
+- **#9 BroadcastService 与 MessageService.broadcast_message 双轨清理：反向方案 = HTTP 广播改走 `BroadcastService`，删 `MessageService.broadcast_message`**
+  - 现状：HTTP `/communication/broadcast` → `MessageService.broadcast_message`（简化版，strategy 字段实际无差异）；A2A 协议入口 → `BroadcastService`（含 `asyncio.gather` 真并行 + `broadcast_id` 持久化 + 聚合返回）。Phase 1 policy 检查放在 `MessageRouter` 层，对两套自动生效，P0 风险为 0
+  - 决议：**反向收敛**——`BroadcastService` 已是更完整的实现（真并行 + broadcast_id 持久化 + 聚合），HTTP `/communication/broadcast` 改为内部调用 `BroadcastService.broadcast`；删除 `MessageService.broadcast_message` 和 strategy 死字段
+  - 反向 vs 正向：正向（把 BroadcastService 能力上提到 MessageService）需要重新设计 `MessageService` 签名 + 加 broadcast_id 持久化 + 改 A2A 入口接线，工作量大；反向只是删薄壳 + 改 HTTP 路由层接线点，工作量约 1/3
+  - 影响：删 `MessageService.broadcast_message` 方法 + 相关测试；HTTP `/communication/broadcast` route handler 改调 `BroadcastService.broadcast`；返回 schema 对齐 A2A 路径（broadcast_id 暴露给 HTTP 调用方，便于追踪）
+  - 验收：HTTP 广播必须返回 `broadcast_id`，且与 A2A 路径一致；现有 HTTP 广播 e2e 测试全过；新加一条"HTTP 广播路径必须经 BroadcastService"的契约测试
+  - 不阻塞 Group B 原型；可作为 Group B 之后的独立小 PR
+- **#10 WALLET_RATE_LIMIT 升格时机：Phase 2 不升格，先埋点观测**
+  - Phase 2 不升格 = 在没数据时升格属于"提前抽象"——Settings 设计 + 文档 + migration 都要做，结果可能还要改名
+  - Phase 2 同步动作（manifest mode 上线时一并交付）：加埋点 `acn_rate_limit_hits_total{bucket,result}`（bucket = `agent` / `wallet`，result = `pass` / `throttle`）；约 5 行 prometheus instrumentation
+  - 触发升格条件：上线后 1~2 周采集数据，**任一条件成立即升格**——①合法用户 P95 接近 600/min（说明阈值偏紧，需要按 plan 调档）；②运维需要按事件临时调整阈值（不能改代码即生效）；③Phase 3 引入多档位 plan
+  - 升格形态：`Settings.wallet_rate_limit: str = "600/minute"`（默认值不变），`dependencies.py:WALLET_RATE_LIMIT` 改为读 settings；运维文档加一节"调参依据 = 看 wallet 桶 P99 利用率"
+  - Phase 3 启动前必须升格（多 plan 多档位场景下硬编码不可维护）
+  - 不阻塞 Group B 原型；可作为 manifest mode 上线 PR 中"附带的 5 行埋点改动"一并交付
+
+**Phase 2 原型 PR 验收清单（启动前的最小可信验证）**：
+
+Phase 2 共 11 条决策（Group A 4 + Group B 5 + Group C 2）密集落地，决策依赖跨度大；启动正式 sprint 前以**两个最小骨架原型 PR** 先验证关键风险点，原型通过后再展开实施。
+
+**原型 PR #1：manifest mode 最小骨架**（覆盖决策 Group A #4 + Group B #1 / #2 / #7 + 部分 #3-bis）
+
+- **必验风险点**：
+  1. **Redis Cluster hash tag 真生效**——cluster 模式下 `MULTI/EXEC` 同时写 ZSET + 详情 hash + content 三 key，确认不报 `CROSSSLOT`（Group B #2 部署阻塞性细节，不验直接挂掉生产 cluster 部署）
+  2. **同 deadline 过期同步**——三 key 写入后立即 `PTTL` 应该完全一致；24h 过期窗口跳到末尾后 `ZRANGE` 不应该返回 dangling reference
+  3. **WS 推送链路打通**——`POST /communication/send` 到 manifest mode recipient → `MessageRouter` 写 manifest queue → `WebSocketManager.send_to_agent(recipient, {"type": "manifest_notification", ...})`（P1-13 通道）→ 客户端 `GET /content/{mid}` 拉到正文
+  4. **ZSET `since` 增量补推**——`GET /communication/manifest/{agent_id}?since=<ts>` 用 `ZRANGEBYSCORE since=<ts> +inf` 返回过期前新增条目（Group B #7 关键能力，离线重连补推依赖此实现）
+  5. **manifest queue / content API 鉴权**——P0-3 鉴权矩阵的关键 case：`GET /communication/manifest/{wrong_agent_id}` → 403；`GET /content/{mid}` 跨 agent 拉取 → 404；`GET /content/{已过期 mid}` → 404
+  6. **summary 422 兜底**——`POST /communication/send` 携带 `summary > 200 字符` → 422（Group B #1 决策，避免静默截断）
+- **不验的事**（保持原型最小）：
+  - allowlist mode 路由（由原型 PR #2 覆盖）
+  - SDK 版本 warning header（上线 PR）
+  - PG 镜像后台清理（Phase 3）
+  - LLM summary（Phase 3）
+  - prod 文档 / 灰度策略
+- **预期产出**：1 个原型 PR + 6 条 unit/integration test 证明上述 6 个风险点全过；`manifest_notification` event 加到 `WebSocketManager.MessageType` 枚举；`acn:manifest:{<agent_id>}` 三 key 数据结构在 cluster 测试 fixture 通过
+- **PR #1 review 后追加修复（已落地）**：
+  - **P0-A1**：抽 `acn/infrastructure/messaging/manifest_dispatcher.py:ManifestDispatcher`，把 manifest 分流（write + WS push + metric inc）从 `MessageRouter._route_to_manifest` 提到独立模块；`SubnetManager.forward_request` 同样接入，把原本只调用 `check_inbound_or_raise`（manifest mode 静默通过）改成 `check_inbound` + `decision.route_to == "manifest"` 调用 dispatcher。所有 inbound 路径（router / subnet）行为对齐
+  - **P0-A2**：补 `tests/infrastructure/test_message_router_manifest.py` + `test_subnet_manager_manifest.py` + `test_manifest_dispatcher.py`，确保两条路径都有 manifest 集成测试断言
+  - **P1-B1**：`extract_summary` 兼容 DataPart（`[data: N keys]` 占位）+ 空 message 占位（`[empty message]`），避免 manifest 列表出现空白行
+  - **P1-B2**：`POST /send` manifest 分流响应 `status="sent"` + `delivery_mode="manifest"`（不是 `status="manifest"`），保持 SDK 客户端的 `result["status"] == "sent"` 成功判断分支兼容
+  - **P1-B3**：新增 `acn_messages_diverted_to_manifest_total{path}` metric，与 `acn_messages_rejected_by_policy_total` 互为 inbox 路径流失对照面
+
+**原型 PR #2：allowlist mode 最小骨架**（覆盖决策 Group B #3 + #3-bis）
+
+- **必验风险点**：
+  1. **PG 事务 + Redis SADD/SREM 双写一致性**——写 PG 事务 commit 后立即 `GET allowlist` 必须命中（不能因为 Redis SADD 还没跑就让 policy check 看到 stale 视图）
+  2. **30s TTL 兜底**——人为模拟 Redis 抖动（`DEL acn:allowlist:{owner_id}` 后立即查），必须从 PG reload 成功并重建 cache
+  3. **policy mode 切换原子性（#3-bis）**——并发场景测试：`PATCH /policy` 切到 `allowlist` + 同时 `POST /send` 发到这个 agent（10 个并发请求），结果验证：50ms 切换窗口内的并发请求按请求级 policy 快照处理，不引发死锁 / 不漏判 / 不双投递
+  4. **DLQ retry 时刻 policy 检查（#3-bis）**——人为构造一条 DLQ 记录（agent open 时落库的）→ 把 agent 切到 closed → 调 `MessageRouter.retry_dlq` → 验证消息被 drop 且不再入队
+  5. **容量上限 422**——单 agent allowlist 加到 500 条 → 第 501 条 `POST /allowlist` 返 422 `allowlist_capacity_exceeded`
+  6. **incoming 反查 API 不存在**——契约测试断言 `GET /agents/{id}/allowlist/incoming` 路由未注册（防止后续 PR 不慎加回去）
+  7. `**validate_policy_dict` schema 升级（P0-2）**——`SUPPORTED_POLICY_MODES` 包含 `manifest` / `allowlist`；strict-keys 仍拒绝其他顶层字段（如 `mode=allowlist` + 携带 `allowlist: [...]` 字段直接 422）
+- **不验的事**：
+  - manifest queue 集成（让 router 在 mode=allowlist 名单外时简单返回 501，等原型 #1 完成后真正 wire-up）
+  - 容量上限 500 的精确动态调整（写死 `MAX_ALLOWLIST_SIZE = 500` 即可）
+  - incoming 反查替代品 `acn-follow-proposal` 联动
+- **预期产出**：1 个原型 PR + 7 条 unit/integration test 证明一致性边界；`agent_allowlist` PG 表 + alembic migration；`acn:allowlist:`* Redis SET cache 层
+
+**原型阶段公共要求**：
+
+- 两个原型可并行开发（不同 namespace、不同 PG 表、不同 API 路径，无代码耦合）
+- 原型期间不做 metrics / audit 完整 wire-up（Phase 1 风格的最少埋点即可）；这些在原型通过后的正式 sprint 补全
+- 原型 review pass 标准：6 / 7 个验收点全部 ✅；review 时一并消化 Phase 2 review v2 剩余 P1（#7 BroadcastService 反向收敛、#10 mode 切换 SDK 版本灰度、#11 错误码 schema 规范）
 
 ### Phase 3：经济闭环与默认迁移
 
@@ -588,13 +760,15 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 
 **ACN 协议层提供的工具，可由 agent 运营者用来兜底自己的成本风险**：
 
-| ACN 提供的能力                              | 可对冲的 token 成本风险                                                                                |
-| -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `communication_policy.mode = closed`   | 全锁：恶意/不感兴趣的发件方完全无法触达，零推理开销                                                                    |
-| `communication_policy.mode = allowlist`（Phase 2） | 半锁：白名单内 agent 完整投递；白名单外发件方降级到 Notify 元数据（与 `mode = manifest` 路径一致），**正文不解开 → 不触发推理**         |
-| `communication_policy.mode = manifest`（Phase 2） | 元数据先行：接收方扫 `from_agent_name` + `summary` 即可决策是否拉取正文，**避免对每条入站消息无差别 LLM 推理**                  |
-| 速率限制（agent 桶 + wallet 桶，已上线）           | 单点限速 + 全局熔断，避免短时间内被海量请求打爆 token 预算                                                          |
-| `attention_fee`（Phase 3）               | 把"陌生通信摩擦"的部分摩擦成本反向收取，**只覆盖一条窄路径**——首次接触场景，不试图覆盖整体推理成本                                       |
+
+| ACN 提供的能力                                        | 可对冲的 token 成本风险                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `communication_policy.mode = closed`             | 全锁：恶意/不感兴趣的发件方完全无法触达，零推理开销                                                           |
+| `communication_policy.mode = allowlist`（Phase 2） | 半锁：白名单内 agent 完整投递；白名单外发件方降级到 Notify 元数据（与 `mode = manifest` 路径一致），**正文不解开 → 不触发推理** |
+| `communication_policy.mode = manifest`（Phase 2）  | 元数据先行：接收方扫 `from_agent_name` + `summary` 即可决策是否拉取正文，**避免对每条入站消息无差别 LLM 推理**          |
+| 速率限制（agent 桶 + wallet 桶，已上线）                     | 单点限速 + 全局熔断，避免短时间内被海量请求打爆 token 预算                                                   |
+| `attention_fee`（Phase 3）                         | 把"陌生通信摩擦"的部分摩擦成本反向收取，**只覆盖一条窄路径**——首次接触场景，不试图覆盖整体推理成本                                |
+
 
 **给 agent 运营者的实操建议**（写进 SDK / 接入文档而非 ACN 协议本身）：
 
@@ -623,19 +797,22 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 
 ### Phase 2 待决策
 
+> ✅ 标记的议题已在 Phase 2 启动前决议完毕，详细推理见上文「Phase 2 Group A 决策记录（架构契约层）」/「Phase 2 Group B 决策记录（模式实现层）」/「Phase 2 Group C 决策记录（独立技术债）」。
 
-| #   | 议题                                                           | 倾向方案                                                                                                                                                                                                                          |
-| --- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Notify 路径一的 `summary` 由谁产出？                                  | 优先取发送方传入的 `summary`，未传则截断 content 前 N 字。LLM 摘要延后到 Phase 3 评估                                                                                                                                                                  |
-| 2   | manifest 通知队列 TTL 清理机制                                       | Redis TTL 自动过期为主；PostgreSQL 部署增加后台周期清理任务                                                                                                                                                                                      |
-| 3   | allowlist 存储结构                                               | Redis Set 索引 + PostgreSQL 独立关系表（`agent_allowlist(owner_id, target_id)`），不塞 JSONB                                                                                                                                              |
-| 4   | inbox 与 manifest 通知队列的关系                                     | 完全独立两套存储与 API 入口，避免现有客户端读到不认识的条目                                                                                                                                                                                              |
-| 5   | Subnet 内通信是否绕过 `communication_policy`？                       | **不绕过**，但允许通过 `allowlist` 自动加入 subnet 成员                                                                                                                                                                                      |
-| 6   | Internal Token 调用是否绕过 policy？                                | 绕过 policy 但写 audit 日志；平台系统通知不被拦                                                                                                                                                                                               |
-| 7   | WebSocket 实时投递在 manifest 模式下推什么？                             | 推 Notify 元数据，接收方再决定是否拉取 Content                                                                                                                                                                                               |
-| 8   | A2A 协议入口 `from_agent` 是否要强校验？                                | Phase 1 不修；`open/closed` 不依赖 sender 真伪。Phase 2 引入 `allowlist` 时一并解决：要求调 ACN 的 A2A 接口时携带 caller agent 身份签名（API Key 或链上签名），并校验与 `context.metadata.from_agent` 一致                                                                |
-| 9   | `BroadcastService` 与 `MessageService.broadcast_message` 双轨清理 | 现状：HTTP 广播走 `MessageService`（简化版，strategy 实际无差），A2A 协议入口走 `BroadcastService`（含 `asyncio.gather` 真并行 + `broadcast_id` 持久化）。Phase 1 policy 放在 router 层因此对两套自动生效。Phase 2 将 `BroadcastService` 的并行/聚合能力上提到 `MessageService`，删除独立类 |
-| 10  | `WALLET_RATE_LIMIT` 何时从代码常量升格为 `Settings` 字段                 | Phase 1 写死 `dependencies.py:WALLET_RATE_LIMIT = "600/minute"`（无观测的保守值）。Phase 2 接入"wallet 桶利用率"指标（`acn_rate_limit_hits_total{bucket="wallet",result}`）后，按合法用户 P95/P99 调参并升格为 `Settings.wallet_rate_limit`，让运维不改代码即可调；当前阶段不升格是为了避免在没有数据的情况下提前抽象      |
+
+| #     | 议题                                                           | 倾向方案 / 已决方案                                                                                                                                                                                                                                                                             |
+| ----- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Notify 路径一的 `summary` 由谁产出？                                  | ✅ **已决（Group B）**：发送方传 `summary?: str(0..200)`（超长 422），未传则 `content[:200]+"…"` 截断兜底；文档明确"截断是兜底丑陋的"，鼓励发送方传；埋点 `acn_manifest_summary_provided_total`，3 个月后回看 N 调整                                                                                                                         |
+| 2     | manifest 通知队列 TTL 清理机制                                       | ✅ **已决（Group B）**：Redis 原生 TTL（`PEXPIREAT`），TTL 范围 `300..86400` 缺省 86400；**Cluster 必用 hash tag** `acn:manifest:{<agent_id>}` / `acn:content:{<agent_id>}:<mid>` 让 ZSET / 详情 hash / content 三 key 落同 slot；MULTI 同 deadline 写入；PG 镜像后台清理延后到 Phase 3                                       |
+| 3     | allowlist 存储结构                                               | ✅ **已决（Group B）**：PG `agent_allowlist(owner_id, target_id)` + `INDEX(target_id)` 持久化；Redis SET `acn:allowlist:{<owner_id>}` cache TTL **30 秒**；写路径 PG 事务 → Redis SADD/SREM 同步；容量 **500 条**；3 个 owner-only API（GET/POST/DELETE），**砍 incoming 反查 API**（隐私语义）                              |
+| 3-bis | mode 切换迁移语义                                                  | ✅ **已决（Group B）**：`PATCH /policy` 入 PG 事务 + 立即 invalidate Redis cache；已落 inbox / manifest queue 老消息**保留**；在途消息以 ACN 收到 send 请求时刻的 policy 为准（请求级快照，不引分布式锁）；mode 切换写 `POLICY_CHANGED` 审计 + 切到 `closed`/`manifest` 触发 logger.warning                                                       |
+| 4     | inbox 与 manifest 通知队列的关系                                     | ✅ **已决（Group A）**：完全独立两套存储 + 独立 API 入口；`acn:inbox:{id}` / `acn:manifest:{id}` / `acn:content:{mid}` 三 namespace；`/communication/inbox/`* 与 `/communication/manifest/`* 平级；最小骨架原型先行                                                                                                      |
+| 5     | Subnet 内通信是否绕过 `communication_policy`？                       | ✅ **已决（Group A）**：不绕过（沿用 Phase 1 `SubnetManager` re-fetch policy）；Phase 2 通过 `allowlist` 联动让 subnet 成员自动互相在白名单中                                                                                                                                                                         |
+| 6     | Internal Token 调用是否绕过 policy？                                | ✅ **已决（Group A）**：绕过 policy + 强制写 audit；豁免严格限定 `system:<slug>`，`assert_system_caller` 把关；audit 必带 `actor_type="system"`                                                                                                                                                                 |
+| 7     | WebSocket 实时投递在 manifest 模式下推什么？                             | ✅ **已决（Group B）**：新 WS event `manifest_notification`，payload `{mid, sender, summary, ts, expires_at}`，**不带 content**；manifest queue 用 ZSET（score=expires_at）+ 详情 hash 双 key 结构（倒灌补 #4 数据结构）；离线补推 `?since=<ts>` 增量；mode 切换到 manifest/allowlist 返回 `X-ACN-SDK-Min-Version` warning header |
+| 8     | A2A 协议入口 `from_agent` 是否要强校验？                                | ✅ **已决（Group A）**：Phase 2 强校验。`/a2a/jsonrpc` 加 `verify_a2a_caller` dep（仿 `verify_proxy_caller` 用 `X-ACN-Authorization`）；`from_agent` 必填 + 与 caller 真实 agent_id 严格相等，否则 `TaskState.rejected` + `from_agent_mismatch`；30 天 SDK warning 过渡期                                                |
+| 9     | `BroadcastService` 与 `MessageService.broadcast_message` 双轨清理 | ✅ **已决（Group C）**：**反向收敛**——HTTP `/communication/broadcast` 改走 `BroadcastService.broadcast`，删 `MessageService.broadcast_message` 与 strategy 死字段；HTTP 路径返回 `broadcast_id` 与 A2A 对齐；可作为 Group B 之后独立小 PR                                                                                  |
+| 10    | `WALLET_RATE_LIMIT` 何时从代码常量升格为 `Settings` 字段                 | ✅ **已决（Group C）**：Phase 2 不升格——manifest mode 上线时同步加埋点 `acn_rate_limit_hits_total{bucket,result}`，1~2 周采数后任一条件成立（P95 接近上限 / 运维需热调参 / Phase 3 多 plan）即升格为 `Settings.wallet_rate_limit`；Phase 3 启动前必须升格                                                                                    |
 
 
 ### Phase 3 待决策
@@ -648,7 +825,7 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 | 13  | `manifest` 默认 mode 切换的迁移策略              | 视为 breaking change：先发布 SDK 升级窗口、提前广播切换日，旧版本访问失败时返回明确错误码        |
 
 
-> 上述决策一旦确定，应回填到对应章节并升版本。Phase 2 启动前完成 1–10，Phase 3 启动前完成 11–13。
+> 上述决策一旦确定，应回填到对应章节并升版本。**Phase 2 启动前 1–10 已全部决议完毕**（✅ #1 #2 #3 #3-bis #4 #5 #6 #7 #8 #9 #10）；Phase 3 启动前完成 11–13。
 
 ---
 

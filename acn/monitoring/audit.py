@@ -66,6 +66,14 @@ class AuditEventType(StrEnum):
     MESSAGE_REJECTED = "message_rejected"
     BROADCAST_SENT = "broadcast_sent"
 
+    # Communication policy
+    # Emitted whenever an agent's `communication_policy.mode` flips between
+    # `open` / `closed` / `manifest` / `allowlist`. Captures both the previous
+    # and new mode in `details` so audit consumers can correlate sudden traffic
+    # drops with policy transitions. See Phase 2 Group B decision #3-bis in
+    # docs/features/acn-communication-economic-model.md.
+    POLICY_CHANGED = "policy_changed"
+
     # Subnet
     SUBNET_CREATED = "subnet_created"
     SUBNET_DELETED = "subnet_deleted"

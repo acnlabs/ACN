@@ -28,7 +28,7 @@ import pytest
 import redis.asyncio as redis
 
 from acn.core.entities import Agent, AgentStatus, Subnet
-from acn.core.interfaces import IAgentRepository, ISubnetRepository
+from acn.core.interfaces import IAgentRepository, IFollowRepository, ISubnetRepository
 
 
 @pytest.fixture(scope="session")
@@ -55,6 +55,13 @@ def mock_agent_repository() -> IAgentRepository:
 def mock_subnet_repository() -> ISubnetRepository:
     """Mock SubnetRepository for testing"""
     repo = AsyncMock(spec=ISubnetRepository)
+    return repo
+
+
+@pytest.fixture
+def mock_follow_repository() -> IFollowRepository:
+    """Mock FollowRepository for testing"""
+    repo = AsyncMock(spec=IFollowRepository)
     return repo
 
 
@@ -111,6 +118,53 @@ async def mock_redis() -> AsyncGenerator[redis.Redis, None]:
     mock.exists.return_value = 0
 
     yield mock
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 PR #1: realistic Redis fixture for ManifestService tests
+# ---------------------------------------------------------------------------
+#
+# The manifest queue uses ZADD/HSET/SET inside a MULTI/EXEC pipeline +
+# PEXPIRE, ZRANGEBYSCORE with score ranges, and per-owner hash tags
+# for cluster-slot affinity. ``AsyncMock(spec=redis.Redis)`` cannot
+# reproduce those semantics — every command returns ``None`` unless
+# explicitly stubbed, and the assertions we care about (atomicity,
+# TTL bounds, summary truncation observed via real reads) need a
+# Redis that actually executes the commands.
+#
+# We default to fakeredis (in-process, no server). When ``REDIS_URL``
+# is set we use the real client so CI can opt into real-Redis runs by
+# starting a sidecar. Either way the fixture is async, FLUSH'd before
+# yielding, and disposed cleanly.
+@pytest.fixture
+async def manifest_redis() -> AsyncGenerator[redis.Redis, None]:
+    """Async Redis-shaped client suitable for ManifestService testing.
+
+    Prefers a real Redis (``REDIS_URL`` env var) when available; falls
+    back to ``fakeredis.aioredis`` so contributors don't need a Redis
+    daemon running locally. The real path matters in CI for
+    catching cluster-mode regressions; the fake path is strictly
+    faster on dev laptops.
+    """
+    redis_url = os.environ.get("REDIS_URL")
+    if redis_url:
+        client: redis.Redis = redis.from_url(redis_url, decode_responses=False)
+    else:
+        # Imported lazily so contributors who don't run manifest
+        # tests aren't forced to install fakeredis.
+        from fakeredis import aioredis as _fakeredis_async
+
+        client = _fakeredis_async.FakeRedis(decode_responses=False)
+
+    # FLUSHDB to isolate from prior test runs. Fakeredis is per-
+    # instance but we still call this so the real-Redis path doesn't
+    # leak state between test files.
+    await client.flushdb()
+    try:
+        yield client
+    finally:
+        await client.flushdb()
+        await client.aclose()
 
 
 # =============================================================================

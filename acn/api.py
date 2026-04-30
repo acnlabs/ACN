@@ -40,6 +40,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import get_settings
 from .infrastructure.messaging import (
     BroadcastService,
+    ManifestDispatcher,
     MessageRouter,
     SubnetManager,
     WebSocketManager,
@@ -75,6 +76,7 @@ from .routes import (
     communication,
     dependencies,
     follows,
+    manifest,
     monitoring,
     onchain,
     payments,
@@ -89,6 +91,7 @@ from .services import (
     AgentService,
     BillingService,
     FollowService,
+    ManifestService,
     MessageService,
     PolicyCheckService,
     SubnetService,
@@ -160,28 +163,55 @@ async def lifespan(app: FastAPI):
     # rules drift if a future caller mutated one of them.
     policy_service_instance = PolicyCheckService()
 
-    router_instance = MessageRouter(
-        registry_instance,
-        registry_instance.redis,
-        policy_service=policy_service_instance,
-    )
-    message_service_instance = MessageService(router_instance, agent_repository)
-    broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
+    # Initialize monitoring (Analytics is wired with activity_service
+    # below, after ActivityService is constructed). Hoisted ahead of
+    # the router/dispatcher block (Phase 2 PR #1 review fix P0-A1) so
+    # the manifest dispatcher can take a metrics handle for the
+    # ``messages_diverted_to_manifest_total`` counter.
+    metrics_instance = MetricsCollector(registry_instance.redis)
+    audit_instance = AuditLogger(registry_instance.redis)
+
+    # Phase 2 PR #1: ManifestService is owned alongside the policy
+    # service. Both are stateless thin wrappers over Redis, so they
+    # can share the same redis client and lifespan as the registry.
+    # WebSocketManager is constructed before the router so the
+    # manifest dispatcher can hold a reference for the
+    # ``manifest_notification`` push.
+    manifest_service_instance = ManifestService(registry_instance.redis)
     ws_manager_instance = WebSocketManager(
         registry_instance.redis,
         max_connections=settings.max_websocket_connections,
     )
+
+    # Phase 2 PR #1 review fix (P0-A1): single ManifestDispatcher
+    # shared by both the HTTP/A2A path (MessageRouter) and the
+    # subnet WebSocket path (SubnetManager). Centralising here keeps
+    # manifest semantics — write to the queue, push WS, count metric
+    # — uniform across ingress channels. A drift between the two
+    # would otherwise let manifest mode silently bypass on one path
+    # while functioning on the other (the exact bug PR #1 review
+    # caught on the subnet side).
+    manifest_dispatcher_instance = ManifestDispatcher(
+        manifest_service=manifest_service_instance,
+        ws_manager=ws_manager_instance,
+        metrics=metrics_instance,
+    )
+
+    router_instance = MessageRouter(
+        registry_instance,
+        registry_instance.redis,
+        policy_service=policy_service_instance,
+        manifest_dispatcher=manifest_dispatcher_instance,
+    )
+    message_service_instance = MessageService(router_instance, agent_repository)
+    broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
     subnet_manager_instance = SubnetManager(
         registry=registry_instance,
         redis_client=registry_instance.redis,
         gateway_base_url=settings.gateway_base_url,
         policy_service=policy_service_instance,
+        manifest_dispatcher=manifest_dispatcher_instance,
     )
-
-    # Initialize monitoring (Analytics is wired with activity_service below,
-    # after ActivityService is constructed)
-    metrics_instance = MetricsCollector(registry_instance.redis)
-    audit_instance = AuditLogger(registry_instance.redis)
 
     # Initialize payment services
     webhook_config = create_webhook_config_from_settings(settings)
@@ -291,6 +321,7 @@ async def lifespan(app: FastAPI):
         activity_service=activity_service_instance,
         follow_service=follow_service_instance,
         policy_service=policy_service_instance,
+        manifest_service=manifest_service_instance,
     )
 
     # Phase 1 wiring guard
@@ -664,6 +695,14 @@ app.include_router(follows.router)
 app.include_router(registry.router)
 app.include_router(onchain.router)
 app.include_router(communication.router)
+# Phase 2 PR #1: manifest queue routes share the
+# /api/v1/communication prefix with the communication router so the
+# client surface looks unified (POST /communication/send and GET
+# /communication/manifest/... live next to each other in OpenAPI).
+# We include it as a separate router rather than folding into
+# communication.py so the manifest-specific imports (ManifestServiceDep)
+# stay in their own file.
+app.include_router(manifest.router)
 app.include_router(subnets.router)
 app.include_router(monitoring.router)
 app.include_router(analytics.router)

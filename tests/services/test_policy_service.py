@@ -18,7 +18,6 @@ import pytest
 from acn.core.exceptions import PolicyRejected
 from acn.services import PolicyCheckService, PolicyDecision
 
-
 RECIPIENT_ID = "recipient-1"
 
 
@@ -30,12 +29,17 @@ RECIPIENT_ID = "recipient-1"
 def test_open_mode_allows():
     """Default ``open`` mode (the legacy behaviour every existing agent
     has) must allow any non-system sender — regression here would close
-    the network the moment Phase 1 deploys."""
+    the network the moment Phase 1 deploys.
+
+    Phase 2 PR #1: ``route_to`` is now part of the contract and must be
+    ``"inbox"`` for the open path so the router doesn't accidentally
+    divert to manifest.
+    """
     svc = PolicyCheckService()
 
     decision = svc.check_inbound("sender-a", RECIPIENT_ID, {"mode": "open"})
 
-    assert decision == PolicyDecision(allow=True)
+    assert decision == PolicyDecision(allow=True, route_to="inbox")
 
 
 def test_none_policy_treated_as_open():
@@ -93,28 +97,37 @@ def test_system_sender_bypasses_closed_policy():
     own internal channel (``POST /communication/internal/send``) must
     keep working even when the recipient is fully closed — otherwise
     chat-mention notifications and similar platform messages stop
-    flowing the moment any agent toggles closed."""
+    flowing the moment any agent toggles closed.
+
+    System bypass leaves ``route_to`` unset (``None``) so the router
+    falls through to its default inbox/HTTP path — system traffic is
+    never diverted to manifest regardless of the recipient's mode.
+    """
     svc = PolicyCheckService()
     policy = {"mode": "closed", "reject_reason": "busy"}
 
     decision = svc.check_inbound("system:chat-backend", RECIPIENT_ID, policy)
 
     assert decision == PolicyDecision(allow=True)
+    assert decision.route_to is None
 
 
 def test_unknown_mode_fails_closed():
-    """Any mode other than ``open`` / ``closed`` is rejected (fail-closed).
+    """Any mode outside the supported set is rejected (fail-closed).
 
-    Phase 1 only knows two modes; an unknown value almost always means
-    a misconfiguration. Failing closed makes the typo loud (the owner's
+    Phase 1 + Phase 2 PR #1 know three modes (``open``, ``closed``,
+    ``manifest``); an unknown value almost always means a
+    misconfiguration. Failing closed makes the typo loud (the owner's
     own test sends start failing immediately) instead of hiding the
     misconfiguration behind silent acceptance.
     """
     svc = PolicyCheckService()
 
-    # ``manifest`` is a Phase 2 mode that should be rejected by a
-    # Phase 1 server.
-    decision = svc.check_inbound("sender-a", RECIPIENT_ID, {"mode": "manifest"})
+    # ``allowlist`` is reserved for Phase 2 PR #2 and is intentionally
+    # absent from the PR #1 supported set — a client built against a
+    # future schema (``mode=allowlist``) hitting a current server must
+    # be rejected loudly rather than silently degraded.
+    decision = svc.check_inbound("sender-a", RECIPIENT_ID, {"mode": "allowlist"})
 
     assert decision.allow is False
     assert decision.reason == "policy_unknown_mode"
@@ -199,3 +212,80 @@ def test_or_raise_does_not_swallow_system_exemption():
     svc.check_inbound_or_raise(
         "system:notifier", RECIPIENT_ID, {"mode": "closed"}
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 PR #1 — manifest mode (accept-but-divert)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_mode_allows_with_route_to_manifest():
+    """``manifest`` mode is the new accept-but-divert path. The decision
+    must come back ``allow=True`` (so the router doesn't bump the
+    rejection counter) but with ``route_to="manifest"`` so the router
+    short-circuits to ManifestService.write instead of the inbox."""
+    svc = PolicyCheckService()
+
+    decision = svc.check_inbound("sender-a", RECIPIENT_ID, {"mode": "manifest"})
+
+    assert decision.allow is True
+    assert decision.route_to == "manifest"
+    # No rejection metadata leaks into a manifest divert — these
+    # fields are reserved for the closed-mode reject branch.
+    assert decision.reason is None
+    assert decision.reject_reason is None
+
+
+def test_manifest_mode_or_raise_does_not_raise():
+    """``check_inbound_or_raise`` must NOT raise for manifest mode —
+    the message is accepted from the sender's perspective; the divert
+    happens in the router after the gate."""
+    svc = PolicyCheckService()
+
+    # Must not raise; downstream router branch on route_to.
+    svc.check_inbound_or_raise("sender-a", RECIPIENT_ID, {"mode": "manifest"})
+
+
+def test_system_sender_bypasses_manifest_mode():
+    """System exemption applies uniformly — ``system:*`` senders bypass
+    even manifest divert. Platform notifications must reach the inbox
+    so user-facing UIs (chat mentions, payment alerts) keep working
+    regardless of the recipient's manifest mode."""
+    svc = PolicyCheckService()
+
+    decision = svc.check_inbound("system:chat", RECIPIENT_ID, {"mode": "manifest"})
+
+    assert decision.allow is True
+    # System bypass does NOT set route_to=manifest; the router will
+    # fall through to its default inbox path.
+    assert decision.route_to is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 PR #1 — validate_policy_dict expansion
+# ---------------------------------------------------------------------------
+
+
+def test_validate_policy_dict_accepts_manifest_mode():
+    """Schema validator must let ``mode=manifest`` through so the
+    PATCH /policy + register/join routes can persist it."""
+    from acn.services.policy_service import validate_policy_dict
+
+    # Accepted with no extra fields.
+    out = validate_policy_dict({"mode": "manifest"})
+    assert out == {"mode": "manifest"}
+
+    # ``reject_reason`` is reused as a free-form label for the manifest
+    # listing UI (decision Group A #4).
+    out = validate_policy_dict({"mode": "manifest", "reject_reason": "Async only"})
+    assert out == {"mode": "manifest", "reject_reason": "Async only"}
+
+
+def test_validate_policy_dict_rejects_allowlist_mode_in_pr1():
+    """``allowlist`` mode is reserved for Phase 2 PR #2. PR #1 must
+    reject it at the schema layer so users can't store half-baked
+    allowlist policies that activate on PR #2 deploy."""
+    from acn.services.policy_service import validate_policy_dict
+
+    with pytest.raises(ValueError, match="must be one of"):
+        validate_policy_dict({"mode": "allowlist"})

@@ -37,6 +37,7 @@ from ..services import (
     AgentService,
     BillingService,
     FollowService,
+    ManifestService,
     MessageService,
     PolicyCheckService,
     SubnetService,
@@ -279,6 +280,12 @@ _follow_service: FollowService | None = None
 # /{agent_id}/{rest_path} catch-all) become a structural bypass of
 # communication_policy.
 _policy_service: PolicyCheckService | None = None
+# Phase 2 PR #1 manifest queue service. Owned by lifespan wiring; the
+# manifest routes (routes/manifest.py) and MessageRouter (for
+# decision.route_to == "manifest") are the only readers. Defaulting to
+# ``None`` lets test harnesses bring the app up without manifest
+# wiring — same pattern as ``_policy_service`` above.
+_manifest_service: ManifestService | None = None
 
 
 def init_services(
@@ -300,6 +307,7 @@ def init_services(
     activity_service: ActivityService | None = None,
     follow_service: FollowService | None = None,
     policy_service: PolicyCheckService | None = None,
+    manifest_service: ManifestService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -313,7 +321,7 @@ def init_services(
         _subnet_manager
     global _metrics, _audit, _analytics
     global _payment_discovery, _payment_tasks, _webhook_service, _billing_service
-    global _activity_service, _follow_service, _policy_service
+    global _activity_service, _follow_service, _policy_service, _manifest_service
 
     _registry = registry
     _agent_service = agent_service
@@ -334,6 +342,7 @@ def init_services(
     _activity_service = activity_service
     _follow_service = follow_service
     _policy_service = policy_service
+    _manifest_service = manifest_service
 
 
 # Dependency functions
@@ -456,6 +465,21 @@ def get_follow_service() -> FollowService:
     return _follow_service
 
 
+def get_manifest_service() -> ManifestService:
+    """Get the ManifestService instance.
+
+    Phase 2 PR #1 introduces the manifest queue. Like ``get_router``
+    and unlike ``get_policy_service``, this raises when uninitialized
+    rather than returning ``None`` — the manifest routes have no
+    meaningful degraded behaviour without a service to back them, so
+    a 500 is preferable to silently no-op'ing requests in a
+    half-wired environment.
+    """
+    if _manifest_service is None:
+        raise RuntimeError("ManifestService not initialized")
+    return _manifest_service
+
+
 def get_policy_service() -> PolicyCheckService | None:
     """Get the PolicyCheckService instance, or ``None`` if policy is not wired.
 
@@ -487,6 +511,7 @@ BillingServiceDep = Annotated[BillingService, Depends(get_billing_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 FollowServiceDep = Annotated[FollowService, Depends(get_follow_service)]
 PolicyServiceDep = Annotated["PolicyCheckService | None", Depends(get_policy_service)]
+ManifestServiceDep = Annotated[ManifestService, Depends(get_manifest_service)]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]

@@ -13,7 +13,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import httpx
@@ -31,8 +31,6 @@ from a2a.types import (  # type: ignore[import-untyped]
     TextPart,
 )
 
-from typing import TYPE_CHECKING
-
 from ...config import get_settings
 from ...core.exceptions import PolicyRejected
 from ...security import SSRFViolation, safe_resolve_target
@@ -45,6 +43,7 @@ from ..persistence.redis.registry import AgentRegistry
 # (services -> infrastructure -> services).
 if TYPE_CHECKING:
     from ...services.policy_service import PolicyCheckService
+    from .manifest_dispatcher import ManifestDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +101,7 @@ class MessageRouter:
         registry: AgentRegistry,
         redis_client: redis.Redis,
         policy_service: "PolicyCheckService | None" = None,
+        manifest_dispatcher: "ManifestDispatcher | None" = None,
     ):
         """
         Initialize Message Router
@@ -118,10 +118,21 @@ class MessageRouter:
                 rollout — that explicit opt-out is preserved so this
                 change can land without rewiring every test fixture in
                 a single PR.
+            manifest_dispatcher: Phase 2 PR #1 manifest divert handler.
+                Required when ``policy_service`` may emit
+                ``PolicyDecision.route_to == "manifest"``; otherwise
+                manifest-mode messages would surface a clear
+                ``RuntimeError`` rather than silently fall through to
+                inbox (which would defeat the recipient's opt-in).
+                Defaulting to ``None`` keeps legacy tests working that
+                don't exercise manifest mode at all. The dispatcher
+                bundles ``ManifestService`` + WS + metrics, so this
+                router only needs one collaborator reference.
         """
         self.registry = registry
         self.redis = redis_client
         self.policy_service = policy_service
+        self.manifest_dispatcher = manifest_dispatcher
 
         # Cache of A2A clients by endpoint (capped to prevent unbounded growth)
         self._clients: dict[str, A2AClient] = {}
@@ -225,7 +236,7 @@ class MessageRouter:
         if not agent_info:
             raise ValueError(f"Agent not found in ACN Registry: {to_agent}")
 
-        # 1.5. Gateway-level access control (Phase 1).
+        # 1.5. Gateway-level access control (Phase 1) + manifest divert (Phase 2 PR #1).
         #
         # We check policy as early as possible — *before* the offline
         # inbox path and *before* any HTTP work — so a recipient with
@@ -234,15 +245,42 @@ class MessageRouter:
         # rejection is a hard short-circuit: no _log_message (kept for
         # delivered traffic), no _store_inbox, no _store_dlq.
         #
+        # Phase 2 introduces ``PolicyDecision.route_to``: when set to
+        # ``"manifest"`` the router writes a manifest entry and pushes
+        # a ``MANIFEST_NOTIFICATION`` WS event instead of going through
+        # the inbox/HTTP path. The send is treated as accepted from the
+        # sender's perspective (status="manifest", no PolicyRejected),
+        # which matches the "accept-but-divert" mental model of the
+        # manifest mode.
+        #
         # ``policy_service`` is optional during the rollout window so
         # legacy tests / scripts that build a router without one keep
         # working unchanged. Production wiring (acn/api.py) installs it.
         if self.policy_service is not None:
-            self.policy_service.check_inbound_or_raise(
+            decision = self.policy_service.check_inbound(
                 sender_id=from_agent,
                 recipient_id=to_agent,
                 recipient_policy=agent_info.communication_policy,
             )
+            if not decision.allow:
+                # Same surface as the Phase 1 ``check_inbound_or_raise``
+                # path; we just inline the raise here so we can reuse
+                # the decision object for the route_to branch above.
+                assert decision.reason is not None, (
+                    "PolicyDecision(allow=False) must always carry a reason"
+                )
+                raise PolicyRejected(
+                    reason=decision.reason,
+                    reject_reason=decision.reject_reason,
+                    recipient_id=to_agent,
+                )
+            if decision.route_to == "manifest":
+                return await self._route_to_manifest(
+                    route_id=route_id,
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    message=message,
+                )
 
         endpoint = agent_info.endpoint
         logger.debug(f"[{route_id}] Discovered endpoint: {endpoint}")
@@ -286,7 +324,16 @@ class MessageRouter:
                 direction="inbound",
             )
             await self._store_inbox(to_agent=to_agent, log_entry=log_entry)
-            return {"status": "inbox", "route_id": route_id}
+            # ``status="inbox"`` predates Phase 2 — kept verbatim for
+            # SDK compatibility. ``delivery_mode="inbox"`` mirrors the
+            # manifest-mode response shape so clients that switched to
+            # the new schema can use a single key (``delivery_mode``)
+            # instead of branching on ``status`` enum strings.
+            return {
+                "status": "inbox",
+                "delivery_mode": "inbox",
+                "route_id": route_id,
+            }
 
         # 3. Log outbound message (only reached when agent is online)
         await self._log_message(
@@ -637,6 +684,65 @@ class MessageRouter:
             maxlen=MESSAGE_LOG_STREAM_MAXLEN,
             approximate=True,
         )
+
+    async def _route_to_manifest(
+        self,
+        *,
+        route_id: str,
+        from_agent: str,
+        to_agent: str,
+        message: Message,
+    ) -> dict[str, Any]:
+        """Phase 2 PR #1: divert inbound message into manifest queue.
+
+        Thin wrapper that forwards to ``ManifestDispatcher`` (the
+        shared helper used by both the router and the subnet
+        manager). The dispatcher handles storage, WS notification,
+        and metric counting; this method's only job is to surface
+        the result in the router's ``route()`` response shape so the
+        caller (``POST /send`` etc.) gets a consistent
+        ``{"status": "sent", "delivery_mode": "manifest", ...}`` envelope.
+
+        We don't ``_log_message`` here: the send was accepted, but
+        actual delivery is deferred. Logging as ``direction=
+        outbound`` would conflate with HTTP-delivered traffic;
+        ``inbound`` would conflate with the inbox path. The manifest
+        queue itself is the audit trail (every entry carries
+        sender_id + ts).
+        """
+        if self.manifest_dispatcher is None:
+            # Configuration error: policy says "route to manifest"
+            # but the router has no dispatcher. Fail loudly rather
+            # than silently dropping (which would surface as
+            # messages disappearing without trace) or fail-open to
+            # inbox (which would defeat the recipient's
+            # manifest-mode opt-in).
+            raise RuntimeError(
+                "manifest mode requested but ManifestDispatcher is not wired; "
+                "construct MessageRouter with manifest_dispatcher=... or set "
+                "the recipient's communication_policy back to open/closed"
+            )
+
+        entry = await self.manifest_dispatcher.dispatch(
+            owner_id=to_agent,
+            sender_id=from_agent,
+            message=message,
+            path="router",
+            route_id=route_id,
+        )
+        # P1-B2 review fix: keep ``status="sent"`` so existing SDK
+        # clients that branch on ``result["status"] == "sent"``
+        # continue to recognise this as success. ``delivery_mode``
+        # is the new field for clients that want to distinguish
+        # inbox vs manifest semantics. Pure additive — Phase 1
+        # responses didn't carry ``delivery_mode`` at all.
+        return {
+            "status": "sent",
+            "delivery_mode": "manifest",
+            "route_id": route_id,
+            "mid": entry.mid,
+            "ts": entry.ts_ms,
+        }
 
     async def _store_inbox(self, to_agent: str, log_entry: dict[str, Any]) -> None:
         """

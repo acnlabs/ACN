@@ -62,6 +62,12 @@ dev = [
     "black>=24.1.0",
     "ruff>=0.2.0",
     "mypy>=1.8.0",
+    # fakeredis backs the ManifestService unit tests when no real
+    # Redis is available locally. The Phase 2 PR #1 manifest queue
+    # uses ZADD/HSET/SET inside a MULTI/EXEC pipeline; AsyncMock
+    # cannot reproduce the ordered-dispatch + pipeline semantics
+    # that those assertions depend on.
+    "fakeredis>=2.21.0",
 ]
 
 [project.urls]

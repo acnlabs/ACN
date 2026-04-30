@@ -55,6 +55,7 @@ from ..persistence.redis.registry import AgentRegistry
 # during this module's import (services -> infrastructure -> services).
 if TYPE_CHECKING:
     from ...services.policy_service import PolicyCheckService
+    from .manifest_dispatcher import ManifestDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,7 @@ class SubnetManager:
         heartbeat_interval: int = 30,
         heartbeat_timeout: int = 90,
         policy_service: "PolicyCheckService | None" = None,
+        manifest_dispatcher: "ManifestDispatcher | None" = None,
     ):
         """
         Initialize Subnet Manager
@@ -152,6 +154,17 @@ class SubnetManager:
                 ``communication_policy`` denies the sender. ``None``
                 preserves pre-Phase-1 behaviour (rollout opt-out used
                 by legacy fixtures and the api.py wiring transition).
+            manifest_dispatcher: Phase 2 PR #1 review fix (P0-A1) —
+                shared helper for manifest-mode divert. When the
+                policy decision yields ``route_to == "manifest"``,
+                ``forward_request`` calls into the dispatcher
+                instead of pushing the message via WebSocket. This
+                mirrors what ``MessageRouter`` already does on the
+                HTTP path so manifest semantics are uniform across
+                ingress channels. Defaulting to ``None`` keeps
+                policy-only legacy fixtures working — manifest mode
+                will then surface a clear ``RuntimeError`` rather
+                than silently bypass.
         """
         self.registry = registry
         self.redis = redis_client
@@ -159,6 +172,7 @@ class SubnetManager:
         self.heartbeat_interval = heartbeat_interval
         self.heartbeat_timeout = heartbeat_timeout
         self.policy_service = policy_service
+        self.manifest_dispatcher = manifest_dispatcher
 
         # Subnets: {subnet_id: Subnet}
         self._subnets: dict[str, Subnet] = {}
@@ -661,7 +675,11 @@ class SubnetManager:
                 ``context.metadata.from_agent``.
 
         Returns:
-            A2A response from agent
+            A2A response from agent on the open/inbox path; an
+            envelope dict ``{"status": "sent", "delivery_mode":
+            "manifest", "mid": ..., "ts": ...}`` when the recipient's
+            policy is ``manifest`` and the message was diverted into
+            the manifest queue.
 
         Raises:
             ValueError: subnet or agent not found / not connected.
@@ -669,6 +687,10 @@ class SubnetManager:
                 denies the sender. Raised before any WebSocket frame
                 is sent — the recipient never sees the rejected
                 request.
+            RuntimeError: recipient is in manifest mode but the
+                subnet manager was constructed without a
+                ``manifest_dispatcher``. Fail loudly rather than
+                silently bypass the divert.
         """
         if subnet_id not in self._subnets:
             raise ValueError(f"Subnet not found: {subnet_id}")
@@ -677,21 +699,27 @@ class SubnetManager:
         if agent_id not in subnet.connections:
             raise ValueError(f"Agent not connected: {subnet_id}/{agent_id}")
 
-        # Gateway-level access control (Phase 1).
+        # Gateway-level access control (Phase 1) + manifest divert (Phase 2 PR #1).
         #
         # The cached ``connection.agent_info`` is built from the
         # client-supplied register payload at gateway-connect time and
         # does NOT carry ``communication_policy``. We therefore re-fetch
         # the canonical AgentInfo from the registry on every forward —
-        # this also ensures that policy changes (open ↔ closed) take
-        # effect immediately for already-connected agents, without
-        # requiring a reconnect.
+        # this also ensures that policy changes (open ↔ closed ↔
+        # manifest) take effect immediately for already-connected
+        # agents, without requiring a reconnect.
         #
         # If the registry lookup misses (e.g. Redis flake or the
         # connected agent has not yet been persisted), we fall back to
         # ``policy=None`` which the service treats as ``open`` — the
         # WebSocket connection itself already proves the agent's
         # presence so failing closed here would manufacture outages.
+        #
+        # PR #1 review fix (P0-A1): we now use ``check_inbound`` (not
+        # ``..._or_raise``) so we can branch on ``decision.route_to``.
+        # Manifest mode → divert into the manifest queue + push WS
+        # notification, identical to the HTTP/A2A path. Closed mode →
+        # raise ``PolicyRejected`` (preserves the Phase 1 surface).
         if self.policy_service is not None:
             policy: dict[str, Any] | None = None
             try:
@@ -704,11 +732,70 @@ class SubnetManager:
                     agent_id,
                     exc,
                 )
-            self.policy_service.check_inbound_or_raise(
+
+            decision = self.policy_service.check_inbound(
                 sender_id=from_agent or "unknown",
                 recipient_id=agent_id,
                 recipient_policy=policy,
             )
+            if not decision.allow:
+                # Mirror ``check_inbound_or_raise`` semantics — the
+                # caller (gateway HTTP handler / A2A protocol
+                # router) already maps ``PolicyRejected`` to the
+                # canonical 403 / TaskState.rejected response.
+                assert decision.reason is not None, (
+                    "PolicyDecision(allow=False) must always carry a reason"
+                )
+                raise PolicyRejected(
+                    reason=decision.reason,
+                    reject_reason=decision.reject_reason,
+                    recipient_id=agent_id,
+                )
+            if decision.route_to == "manifest":
+                if self.manifest_dispatcher is None:
+                    # Same fail-loud reasoning as the router-side
+                    # branch: silently dropping or fail-open routing
+                    # to the WS push would defeat the recipient's
+                    # opt-in. A clear RuntimeError surfaces the
+                    # missing wiring at the smallest possible blast
+                    # radius (one subnet send), and production
+                    # wiring (acn/api.py) always installs one.
+                    raise RuntimeError(
+                        "manifest mode requested on subnet path but "
+                        "ManifestDispatcher is not wired; construct "
+                        "SubnetManager with manifest_dispatcher=..."
+                    )
+                # Coerce the subnet-side message — historically a
+                # plain dict — into an A2A Message so the dispatcher
+                # can extract a summary from its TextParts. The
+                # dispatcher itself falls back to a placeholder if
+                # the parts list is empty, so an unparseable dict
+                # still produces a non-blank manifest entry.
+                a2a_message = (
+                    message
+                    if isinstance(message, Message)
+                    else Message.model_validate(message)
+                    if hasattr(Message, "model_validate")
+                    else message
+                )
+                entry = await self.manifest_dispatcher.dispatch(
+                    owner_id=agent_id,
+                    sender_id=from_agent or "unknown",
+                    message=a2a_message,
+                    path="subnet",
+                )
+                # Subnet callers historically got an A2A response
+                # dict. Returning the manifest envelope keeps the
+                # shape contract identical to the HTTP path so any
+                # caller that already understands manifest divert
+                # (Phase 2 SDK) recognises both ingress channels
+                # uniformly.
+                return {
+                    "status": "sent",
+                    "delivery_mode": "manifest",
+                    "mid": entry.mid,
+                    "ts": entry.ts_ms,
+                }
 
         connection = subnet.connections[agent_id]
         request_id = str(uuid4())

@@ -46,7 +46,6 @@ from .dependencies import (  # type: ignore[import-untyped]
     PolicyServiceDep,
     ProxyCallerDep,
     SubnetManagerDep,
-    verify_owner_or_internal,
     # Underscore-prefixed crossing of module boundaries is intentional:
     # ``_get_real_ip`` is the canonical proxy-aware IP resolver and we
     # need the SSRF audit hook to attribute attacks to the real client,
@@ -61,6 +60,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     # zero value.
     _wallet_rate_limit_key,
     limiter,
+    verify_owner_or_internal,
 )
 
 router = APIRouter(prefix="/api/v1/agents", tags=["registry"])
@@ -1241,29 +1241,71 @@ async def update_agent_policy(
     persisted value (especially useful when passing ``null`` to
     reset, since the response shows the entity-layer default).
     """
+    # Phase 2 PR #1 (Group B #3-bis): we now need ``old_mode`` for
+    # the structured audit event, so capture it before the update.
+    # Wrap in get_agent so the 404 path still wins over any audit
+    # work — a missing agent should not surface a "policy_changed"
+    # audit event with a phantom old_mode.
+    try:
+        existing = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+    old_mode = (existing.communication_policy or {}).get("mode", "open")
+
     try:
         agent = await agent_service.update_communication_policy(
             agent_id=agent_id,
             communication_policy=body.communication_policy,
         )
     except AgentNotFoundException as e:
+        # Race: agent was deleted between get_agent and update. Same
+        # surface (404) as the pre-check; just keep the audit emit
+        # path inert.
         raise HTTPException(status_code=404, detail="Agent not found") from e
 
-    # Log every policy mutation. Combined with the existing
-    # MESSAGE_REJECTED audit on the receive side, this gives a
-    # complete forensic trail of "who changed the policy when, and
-    # who was rejected as a result". We don't write a structured
-    # audit event for Phase 1 — INFO log is enough at the expected
-    # cardinality (rare operator action). If automation starts
-    # flipping policies frequently we'll promote this to an audit
-    # event in Phase 2.
-    logger.info(
-        "communication_policy_updated",
-        agent_id=agent_id,
-        caller_kind=caller.get("caller_kind"),
-        caller_agent_id=caller.get("agent_id"),
-        new_mode=(agent.communication_policy or {}).get("mode"),
+    new_mode = (agent.communication_policy or {}).get("mode", "open")
+
+    # Phase 2 PR #1 promotes the historical INFO log to a structured
+    # POLICY_CHANGED audit event so platform tooling can correlate
+    # policy flips with subsequent traffic drops in MESSAGE_REJECTED.
+    # We keep it best-effort (fire_and_forget) — the policy mutation
+    # is already persisted; failing to write the audit must not 5xx
+    # the request. Sensitive transitions (open -> closed/manifest)
+    # ALSO get a structured WARNING log so on-call notices even
+    # when the audit pipeline is degraded.
+    sensitive = old_mode == "open" and new_mode in ("closed", "manifest")
+    fire_and_forget_event(
+        get_audit_singleton(),
+        event_type=AuditEventType.POLICY_CHANGED,
+        actor_id=caller.get("agent_id"),
+        actor_type=caller.get("caller_kind"),
+        target_id=agent_id,
+        target_type="agent",
+        level=AuditLevel.WARNING if sensitive else AuditLevel.INFO,
+        details={
+            "old_mode": old_mode,
+            "new_mode": new_mode,
+            "caller_kind": caller.get("caller_kind"),
+        },
     )
+    if sensitive:
+        logger.warning(
+            "communication_policy_tightened",
+            agent_id=agent_id,
+            old_mode=old_mode,
+            new_mode=new_mode,
+            caller_kind=caller.get("caller_kind"),
+            caller_agent_id=caller.get("agent_id"),
+        )
+    else:
+        logger.info(
+            "communication_policy_updated",
+            agent_id=agent_id,
+            caller_kind=caller.get("caller_kind"),
+            caller_agent_id=caller.get("agent_id"),
+            old_mode=old_mode,
+            new_mode=new_mode,
+        )
 
     return {
         "agent_id": agent_id,

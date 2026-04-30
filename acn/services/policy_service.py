@@ -55,7 +55,18 @@ SYSTEM_SENDER_PREFIX = "system:"
 # a new mode to validation without wiring the corresponding decision
 # branch would otherwise pass schema review and silently fail-closed
 # at runtime.
-SUPPORTED_POLICY_MODES = frozenset({"open", "closed"})
+# Phase 2 prototype PR #1 expansion (Group A #1):
+# - ``manifest`` — accept-but-divert: messages are stashed in the
+#   manifest queue (``acn:manifest:{<agent_id>}`` ZSET) and the agent
+#   gets a WS notification with sender_id + summary. Full content is
+#   pulled on demand via ``GET /communication/content/{mid}``.
+#
+# Phase 2 prototype PR #2 will add ``allowlist`` mode (gates on a
+# relational allow set; membership stored in a separate PG table —
+# *not* inside the policy dict). It is intentionally absent from
+# the validator until PR #2 is wired so users cannot store half-baked
+# allowlist policies that activate on upgrade.
+SUPPORTED_POLICY_MODES = frozenset({"open", "closed", "manifest"})
 
 # Cap on user-supplied ``reject_reason`` strings. Long enough for a
 # short human explanation ("on vacation until 2026-05") but short
@@ -75,10 +86,17 @@ def validate_policy_dict(value: Any) -> dict[str, Any] | None:
     drift — adding a new mode requires touching this file in two
     aligned places.
 
-    Phase 1 accepted shape::
+    Phase 1 + Phase 2 PR #1 accepted shape::
 
-        {"mode": "open" | "closed",
+        {"mode": "open" | "closed" | "manifest",
          "reject_reason"?: str (≤ MAX_REJECT_REASON_LEN chars)}
+
+    Note that ``mode=manifest`` does NOT take any extra config in the
+    policy dict (no per-agent summary length cap, no per-agent TTL):
+    those constants live in ``services/manifest_service.py`` and are
+    intentionally globally tuned in Phase 2 to avoid each agent owner
+    needing to discover a safe default. ``reject_reason`` is reused
+    as an optional human label for the manifest queue UI.
 
     Returns:
         ``None`` if ``value`` is None (lets the caller decide whether
@@ -147,38 +165,55 @@ def validate_policy_dict(value: Any) -> dict[str, Any] | None:
 class PolicyDecision:
     """Outcome of a policy check.
 
-    ``allow=True`` callers ignore the other fields. ``allow=False``
-    callers must surface ``reason`` to metrics/audit and may surface
-    ``reject_reason`` (the recipient's free-form explanation) to the
-    sender.
+    ``allow=True`` callers ignore ``reason`` / ``reject_reason`` but
+    MUST honour ``route_to``. ``allow=False`` callers surface
+    ``reason`` to metrics/audit and may surface ``reject_reason`` (the
+    recipient's free-form explanation) to the sender.
+
+    Phase 2 (Group A #4) introduces ``route_to``:
+
+    * ``"inbox"`` (or None) — the historical default; deliver to the
+      recipient's inbox (and push WS via the agent_message channel).
+    * ``"manifest"`` — divert to the manifest queue; only sender +
+      summary are visible until the recipient explicitly pulls
+      content. Set by ``mode=manifest`` and by ``mode=allowlist`` when
+      the sender is *not* in the recipient's allowlist.
+
+    ``route_to`` is only meaningful when ``allow=True``.
     """
 
     allow: bool
     reason: str | None = None
     reject_reason: str | None = None
+    route_to: str | None = None
 
 
 class PolicyCheckService:
     """Decide whether an inbound message is allowed to reach the recipient.
 
-    Phase 1 supports two modes:
+    Phase 1 + Phase 2 PR #1 supports three modes:
 
-    * ``open``   — accept (legacy default; the field is backfilled to
-      ``{"mode": "open"}`` on every ``Agent`` instance, so an absent
-      policy lands here too).
-    * ``closed`` — reject with ``reason="policy_closed"``.
+    * ``open``     — accept and route to inbox (legacy default; the
+      field is backfilled to ``{"mode": "open"}`` on every ``Agent``
+      instance, so an absent policy lands here too).
+    * ``closed``   — reject with ``reason="policy_closed"``.
+    * ``manifest`` — accept but route to the manifest queue
+      (``decision.route_to == "manifest"``). The router writes a
+      summary entry and pushes a WS notification; full content is
+      pulled on demand by the recipient.
 
-    Any other mode value (e.g. ``manifest`` shipped from a forward
-    client, or a typo) is treated as **fail-closed** — rejected with
-    ``reason="policy_unknown_mode"`` and a warning log. Rationale:
+    Any other mode value (e.g. ``allowlist`` arriving before Phase 2
+    PR #2 is shipped, or a typo) is treated as **fail-closed** —
+    rejected with ``reason="policy_unknown_mode"`` and a warning log.
+    Rationale:
 
-    * Phase 1 only supports the two modes above. An unknown mode
-      almost always means a misconfiguration, and silently accepting
-      would hide it; the agent owner notices immediately when their
-      own test sends start failing.
-    * Forward-compatibility (e.g. manifest mode arriving before Phase 2)
-      is handled via versioned releases, not via fail-open semantics —
-      the server upgrade installs the new branch in this method.
+    * Unknown modes almost always mean a misconfiguration, and
+      silently accepting would hide it; the agent owner notices
+      immediately when their own test sends start failing.
+    * Forward-compatibility (e.g. ``allowlist`` shipping from a
+      future client before the server upgrade) is handled via
+      versioned releases, not via fail-open semantics — the server
+      upgrade installs the new branch in this method.
 
     The ``message_meta`` keyword-only parameter is unused in Phase 1
     but reserved so Phase 2/3 (``manifest`` size threshold,
@@ -230,7 +265,7 @@ class PolicyCheckService:
         mode = policy.get("mode", "open")
 
         if mode == "open":
-            return PolicyDecision(allow=True)
+            return PolicyDecision(allow=True, route_to="inbox")
 
         if mode == "closed":
             return PolicyDecision(
@@ -238,6 +273,15 @@ class PolicyCheckService:
                 reason="policy_closed",
                 reject_reason=policy.get("reject_reason"),
             )
+
+        if mode == "manifest":
+            # Accept-but-divert. ``allow=True`` so the router doesn't
+            # increment ``acn_messages_rejected_total`` (these aren't
+            # rejections from the sender's perspective — the message
+            # is accepted, just stashed in a low-attention queue), and
+            # ``route_to="manifest"`` instructs the router to skip the
+            # inbox write and call ManifestService.write instead.
+            return PolicyDecision(allow=True, route_to="manifest")
 
         logger.warning(
             "policy_unknown_mode",

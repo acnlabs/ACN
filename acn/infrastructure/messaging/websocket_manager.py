@@ -44,6 +44,13 @@ class MessageType(StrEnum):
     SYSTEM = "system"
     ERROR = "error"
 
+    # Phase 2 manifest mode notification (decision Group B #7).
+    # Pushed by MessageRouter._route_to_manifest after a manifest
+    # entry is persisted, so the recipient client can decide
+    # whether to pull full content via GET /communication/content/{mid}.
+    # Payload shape: {type, mid, sender_id, summary, ts}.
+    MANIFEST_NOTIFICATION = "manifest_notification"
+
     # Connection management
     PING = "ping"
     PONG = "pong"
