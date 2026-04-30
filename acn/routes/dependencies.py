@@ -172,8 +172,86 @@ def _rate_limit_key(request: Request) -> str:
     return f"ip:{_get_real_ip(request)}"
 
 
+# ---------------------------------------------------------------------------
+# L418 — wallet-dimension rate limiting (Phase 1 P2)
+# ---------------------------------------------------------------------------
+#
+# Why a SECOND bucket on top of the per-agent ``_rate_limit_key``:
+#   The per-agent bucket caps any single ``agent_id`` at ``WALLET_RATE / 60``
+#   QPS, but agent IDs are cheap — anyone can register an unlimited number
+#   of agents under a single wallet. Without a wallet ceiling, the
+#   effective abuse rate is ``N_agents × per-agent-rate``, defeating
+#   the intent of rate limiting entirely.
+#
+# Design choice: dual bucket (Scheme B), not fallback (Scheme A).
+#   Both ``@limiter.limit(AGENT_RATE)`` and
+#   ``@limiter.limit(WALLET_RATE, key_func=_wallet_rate_limit_key)`` are
+#   stacked on protected routes. SlowAPI evaluates them independently;
+#   either bucket exhausting yields 429. This means a wallet with one
+#   noisy agent gets throttled per-agent first (good attribution),
+#   while a wallet fan-out across many agents gets throttled per-wallet
+#   (good abuse prevention).
+#
+# Why we don't fall back to ``agent:<id>`` when wallet is missing:
+#   Falling back would let attackers opt out of the wallet ceiling
+#   simply by not binding a wallet. Instead, ALL un-walleted agents
+#   share ONE global ``wallet:none`` bucket. This is intentional:
+#   un-walleted agents are "free-tier" identities; they collectively
+#   get the same budget as a single walleted owner, so any meaningful
+#   throughput needs a wallet binding (which carries gas cost and is
+#   therefore harder to spam).
+#
+# What about the registration / pre-auth path:
+#   This key_func runs only on routes that already authenticated via
+#   ``verify_agent_api_key`` / ``verify_proxy_caller`` (which is when
+#   ``request.state.wallet_address`` gets set). Pre-auth abuse on
+#   ``POST /agents/register`` is a separate concern (sign-up rate
+#   limit) that Phase 2 covers, not L418.
+def _wallet_rate_limit_key(request: Request) -> str:
+    """Rate-limit key for the secondary per-wallet bucket.
+
+    Returns ``wallet:<address>`` for walleted agents and ``wallet:none``
+    for un-walleted agents (sharing a global free-tier ceiling — see
+    the section comment above for why a fallback to per-agent or per-IP
+    would defeat the protection).
+
+    Lower-cases the address to avoid splitting the bucket on
+    case-variant copies of the same EVM address (``0xAbc`` vs ``0xabc``
+    would otherwise count as two distinct buckets).
+    """
+    wallet = getattr(request.state, "wallet_address", None)
+    if not wallet:
+        return "wallet:none"
+    return f"wallet:{wallet.lower()}"
+
+
 # Shared rate limiter — backed by Redis for consistency across multiple instances
 limiter = Limiter(key_func=_rate_limit_key, storage_uri=settings.redis_url)
+
+
+# L418: per-wallet ceiling applied as a SECOND ``@limiter.limit`` on
+# protected inbound routes (see _wallet_rate_limit_key docstring above).
+#
+# Sizing rationale (600/minute = 10 req/s):
+#   * Legitimate single-wallet operators typically run 1–3 agents at
+#     ~60 req/min each (the existing per-agent limit on /send), giving
+#     a real-world ceiling of ~60–180 req/min. 600 leaves ~3–10x
+#     headroom so honest fan-out never hits this limit.
+#   * Abuse scenario: an attacker spinning up 50 agents under one
+#     wallet and saturating each at 60 req/min would otherwise emit
+#     3 000 req/min. 600/min caps that at 5x the per-agent budget —
+#     enough headroom for legitimate scaling, while preventing the
+#     "register many agents" exploit from increasing throughput.
+#   * Chosen as a round multiple of 60/min so per-agent and per-wallet
+#     budgets are easy to reason about together (1 walleted agent uses
+#     up to 10 % of its wallet bucket; 10 agents would saturate it).
+#
+# Kept as a module-level constant rather than a settings field for
+# Phase 1: tuning belongs in code review, not runtime config, until we
+# have telemetry showing legitimate wallets routinely brushing the
+# limit. Phase 2 promotes this to ``Settings.wallet_rate_limit`` once
+# observability for "wallet bucket utilization" is wired up.
+WALLET_RATE_LIMIT = "600/minute"
 
 # Global service instances (initialized in lifespan)
 _registry: AgentRegistry | None = None
@@ -420,28 +498,52 @@ SubjectDep = Annotated[str, Depends(get_subject)]
 
 _API_KEY_CACHE_TTL = 60.0  # seconds
 _API_KEY_CACHE_MAX = 10_000  # max entries to prevent unbounded growth
-# {api_key: (agent_id, name, expires_at)}
-_api_key_cache: dict[str, tuple[str, str, float]] = {}
+# {api_key: (agent_id, name, wallet_address, expires_at)}
+#
+# wallet_address is cached alongside (agent_id, name) so the L418 rate
+# limiter can derive a per-wallet bucket without a second Redis lookup
+# per request. Adding it to the cache row (rather than a separate cache)
+# keeps the row atomic — a single TTL eviction can never leave the
+# limiter looking at a stale wallet attached to a fresh agent_id.
+_api_key_cache: dict[str, tuple[str, str, str | None, float]] = {}
 
 
 def _get_cached_agent(api_key: str) -> dict | None:
     entry = _api_key_cache.get(api_key)
-    if entry and entry[2] > time.monotonic():
-        return {"agent_id": entry[0], "name": entry[1]}
+    if entry and entry[3] > time.monotonic():
+        return {
+            "agent_id": entry[0],
+            "name": entry[1],
+            "wallet_address": entry[2],
+        }
     if entry:
         del _api_key_cache[api_key]
     return None
 
 
-def _cache_agent(api_key: str, agent_id: str, name: str) -> dict:
+def _cache_agent(
+    api_key: str,
+    agent_id: str,
+    name: str,
+    wallet_address: str | None = None,
+) -> dict:
     # Evict all expired entries when the cache is full
     if len(_api_key_cache) >= _API_KEY_CACHE_MAX:
         now = time.monotonic()
-        expired = [k for k, v in _api_key_cache.items() if v[2] <= now]
+        expired = [k for k, v in _api_key_cache.items() if v[3] <= now]
         for k in expired:
             del _api_key_cache[k]
-    _api_key_cache[api_key] = (agent_id, name, time.monotonic() + _API_KEY_CACHE_TTL)
-    return {"agent_id": agent_id, "name": name}
+    _api_key_cache[api_key] = (
+        agent_id,
+        name,
+        wallet_address,
+        time.monotonic() + _API_KEY_CACHE_TTL,
+    )
+    return {
+        "agent_id": agent_id,
+        "name": name,
+        "wallet_address": wallet_address,
+    }
 
 
 async def _resolve_agent_by_bearer(
@@ -457,7 +559,25 @@ async def _resolve_agent_by_bearer(
     if not agent:
         _record_auth_failure(reason="api_key_invalid", request=request)
         raise HTTPException(status_code=401, detail="Invalid API key")
-    return _cache_agent(api_key, agent.agent_id, agent.name)
+    # Pull wallet_address from the entity. ``Agent.__post_init__`` keeps
+    # the legacy single ``wallet_address`` field in sync with the
+    # primary entry of ``wallet_addresses``, so reading the legacy
+    # field here is correct for both legacy and multi-chain agents.
+    #
+    # ``getattr`` (not direct attribute access) on purpose: tests
+    # frequently stub ``agent_service.get_agent_by_api_key`` with
+    # SimpleNamespace / lightweight dataclass mocks that omit the
+    # full Agent surface. A direct ``agent.wallet_address`` would
+    # AttributeError those out, masking real failures behind a
+    # confusing 500 in unrelated tests. None is a valid wallet
+    # value (un-walleted agent) and is correctly handled by the
+    # L418 key_func, so falling back to None is safe.
+    return _cache_agent(
+        api_key,
+        agent.agent_id,
+        agent.name,
+        wallet_address=getattr(agent, "wallet_address", None),
+    )
 
 
 async def verify_agent_api_key(
@@ -482,6 +602,10 @@ async def verify_agent_api_key(
     agent_info = await _resolve_agent_by_bearer(api_key, agent_service, request=request)
     request.state.agent_id = agent_info["agent_id"]
     request.state.rate_limit_key = f"agent:{agent_info['agent_id']}"
+    # L418: expose the agent's bound wallet address to the
+    # ``_wallet_rate_limit_key`` key_func so the secondary
+    # per-wallet bucket can be derived without a second auth lookup.
+    request.state.wallet_address = agent_info.get("wallet_address")
     return agent_info
 
 
@@ -526,6 +650,13 @@ async def verify_proxy_caller(
     agent_info = await _resolve_agent_by_bearer(api_key, agent_service, request=request)
     request.state.agent_id = agent_info["agent_id"]
     request.state.rate_limit_key = f"agent:{agent_info['agent_id']}"
+    # L418: same wallet exposure as ``verify_agent_api_key`` —
+    # proxy paths must enforce the per-wallet ceiling too, otherwise
+    # an attacker could shift the entire abuse pattern from
+    # ``/communication/send`` (gated) onto ``/agents/{id}/...``
+    # proxy traffic (un-gated) and re-acquire the same multi-account
+    # leverage L418 is designed to prevent.
+    request.state.wallet_address = agent_info.get("wallet_address")
     return agent_info
 
 

@@ -13,12 +13,14 @@ from pydantic import BaseModel, Field
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..monitoring.audit import AuditEventType
 from .dependencies import (  # type: ignore[import-untyped]
+    WALLET_RATE_LIMIT,
     AgentApiKeyDep,
     AuditDep,
     InternalTokenDep,
     MessageServiceDep,
     MetricsDep,
     RouterDep,
+    _wallet_rate_limit_key,
     assert_system_caller,
     limiter,
 )
@@ -108,6 +110,11 @@ class BroadcastByTagRequest(BaseModel):
 
 @router.post("/send")
 @limiter.limit("60/minute")
+# L418: secondary per-wallet ceiling. Stacked with the per-agent
+# ``60/minute`` above so a wallet fan-out across many agents can't
+# bypass the per-agent limit. See ``_wallet_rate_limit_key`` for the
+# rationale on the dual-bucket vs fallback choice.
+@limiter.limit(WALLET_RATE_LIMIT, key_func=_wallet_rate_limit_key)
 async def send_message(
     request: Request,
     body: SendMessageRequest,
@@ -228,6 +235,11 @@ async def send_message(
 
 @router.post("/broadcast")
 @limiter.limit("10/minute")
+# L418: same dual-bucket pattern as ``/send``. Broadcast already has
+# a tight per-agent budget (10/min), but the wallet ceiling still
+# matters: it caps cross-agent fan-out from one wallet (e.g. 100
+# agents × 10/min = 1 000 broadcasts/min absent this gate).
+@limiter.limit(WALLET_RATE_LIMIT, key_func=_wallet_rate_limit_key)
 async def broadcast_message(
     request: Request,
     body: BroadcastRequest,
@@ -300,6 +312,10 @@ async def broadcast_message(
 
 @router.post("/broadcast-by-tag")
 @limiter.limit("10/minute")
+# L418: shares the wallet bucket with ``/broadcast`` and ``/send``
+# — they all consume the same per-wallet budget so an attacker can't
+# multiplex across endpoints to lift the effective ceiling.
+@limiter.limit(WALLET_RATE_LIMIT, key_func=_wallet_rate_limit_key)
 async def broadcast_by_tag(
     request: Request,
     body: BroadcastByTagRequest,

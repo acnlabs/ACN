@@ -36,6 +36,7 @@ from ..monitoring import AuditEventType, AuditLevel, fire_and_forget_event, get_
 from ..security import SSRFViolation, safe_resolve_target, validate_endpoint_url
 from ..services.rewards_client import RewardsClient
 from .dependencies import (  # type: ignore[import-untyped]
+    WALLET_RATE_LIMIT,
     AgentApiKeyDep,
     AgentIdPath,
     AgentServiceDep,
@@ -52,6 +53,13 @@ from .dependencies import (  # type: ignore[import-untyped]
     # not to the front proxy. Lifting it to a public name would split
     # ownership; keep the import explicit + commented instead.
     _get_real_ip,
+    # ``_wallet_rate_limit_key`` is the L418 secondary key_func used by
+    # ``@limiter.limit(WALLET_RATE_LIMIT, key_func=...)`` on the four
+    # proxy entry points below. Same module-private rationale as
+    # ``_get_real_ip``: lives next to the limiter definition, and
+    # exposing it as a public name would force a shim layer that adds
+    # zero value.
+    _wallet_rate_limit_key,
     limiter,
 )
 
@@ -816,6 +824,12 @@ async def join_agent(
 
 @router.post("/{agent_id}")
 @limiter.limit("60/minute")
+# L418: per-wallet ceiling on top of per-agent. Proxy traffic is the
+# highest-volume inbound surface (every A2A JSON-RPC call lands here
+# by default), so without the wallet bucket the multi-account abuse
+# pattern would simply migrate from /communication/send onto the
+# proxy and recover full leverage.
+@limiter.limit(WALLET_RATE_LIMIT, key_func=_wallet_rate_limit_key)
 async def proxy_post(
     request: Request,
     agent_id: AgentIdPath,
@@ -840,6 +854,7 @@ async def proxy_post(
 
 @router.put("/{agent_id}")
 @limiter.limit("60/minute")
+@limiter.limit(WALLET_RATE_LIMIT, key_func=_wallet_rate_limit_key)
 async def proxy_put(
     request: Request,
     agent_id: AgentIdPath,
@@ -857,6 +872,7 @@ async def proxy_put(
 
 @router.patch("/{agent_id}")
 @limiter.limit("60/minute")
+@limiter.limit(WALLET_RATE_LIMIT, key_func=_wallet_rate_limit_key)
 async def proxy_patch(
     request: Request,
     agent_id: AgentIdPath,
@@ -1680,6 +1696,10 @@ async def get_agent_wallets(
 
 @router.api_route("/{agent_id}/{rest_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @limiter.limit("60/minute")
+# L418: catch-all proxy is the most general inbound surface — every
+# unrouted REST sub-path lands here. Wallet bucket is mandatory or
+# the multi-agent attack just moves to ``/{id}/anything-else``.
+@limiter.limit(WALLET_RATE_LIMIT, key_func=_wallet_rate_limit_key)
 async def proxy_subpath(
     request: Request,
     agent_id: AgentIdPath,

@@ -417,13 +417,13 @@ Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内�
   - `POST /api/v1/messages/broadcast`
   - `POST /api/v1/agents/{agent_id}`（A2A 代理入口）
   - `/{agent_id}/{rest_path}` catch-all 代理入口
-- 速率限制：agent_id 维度 + wallet address 全局上限双重防护
+- 速率限制：agent_id 维度 + wallet address 全局上限**双桶并行**（不是 fallback；agent 桶负责"单 agent 不刷自己"，wallet 桶负责"一个钱包不能横向 fan-out 多 agent 突破"——任一桶满即 429，下方决策记录有完整推理）
 - 公开 agent 信息不得暴露真实 endpoint：
   - `GET /api/v1/agents/{id}` 返回 ACN 代理地址
   - `GET /api/v1/agents/{id}/endpoint` 不应公开真实 endpoint，仅 owner/internal 可见
   - `GET /api/v1/agents/{id}/.well-known/agent-card.json` 中的 `url` 应替换为 ACN 代理地址
-- 测试覆盖：默认 open 通过、closed 返回 403、message/proxy/broadcast 均被 policy 拦截、公开接口不泄露真实 endpoint
-- 文档明确：ACN 不负责 token 成本，agent 运营者自行承担
+- 测试覆盖：默认 open 通过、closed 返回 403、message/proxy/broadcast 均被 policy 拦截、公开接口不泄露真实 endpoint、双桶速率限制三层契约（`_wallet_rate_limit_key` 按 walleted/un-walleted/大小写规范化派生正确 key、`verify_agent_api_key` / `verify_proxy_caller` 在鉴权阶段把 wallet 写入 `request.state`、7 个公网 inbound 写入口都同时挂 agent + wallet 双桶装饰器且不能退化为单桶）
+- **文档明确：ACN 不负责 token 成本，agent 运营者自行承担（L424）**——单独凝练成本与责任边界的章节，避免散落多处。落点：本文档 [`Token 推理成本责任边界`](#token-推理成本责任边界)，包含「为什么这一边界是有意为之」「ACN 提供的对冲工具表」「给 agent 运营者的实操建议」。SDK / 接入文档接入时引用该小节即可，不需要在 ACN 协议层重新表述
 
 **Phase 1 实现决策记录**：
 
@@ -431,7 +431,7 @@ Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内�
 - A2A proxy 遇到目标 agent 为 `closed` 时返回 `403 communication_rejected`，不转发到真实 endpoint
 - broadcast 遇到 `closed` 目标时采用 per-target rejected 语义：该目标标记为 `rejected`，不影响其他目标投递
 - 公开接口只暴露 ACN 代理地址，不暴露真实 endpoint；Phase 1 至少替换 agent card 顶层 `url`
-- 速率限制 fallback 顺序：wallet address → agent_id / api_key → source_ip；没有 wallet 的 agent 仍受全局速率保护
+- **速率限制双桶决策（L418）**：`agent` 桶（key = `agent:<id>`，沿用既有 60/min；与未鉴权流量的 `ip:<addr>` 桶仍是 fallback 关系）+ `wallet` 桶（key = `wallet:<addr-lower>`，新加的全局 600/min 上限）**并行**而非 fallback——SlowAPI 装饰器栈 `@limiter.limit("60/minute") @limiter.limit("600/minute", key_func=_wallet_rate_limit_key)` 同时校验两侧，任一桶满即 429。理由：fallback 模型下"未绑钱包"会让攻击者直接退回到性能最高的桶；双桶下"未绑钱包"反而落入 `wallet:none` 全局共享池（所有未绑钱包 agent 加起来才 600/min），把 wallet 绑定变成"享受高配额"的隐式入场券。覆盖范围：`/communication/send`、`/communication/broadcast`、`/communication/broadcast-by-tag`、`POST/PUT/PATCH /agents/{id}` 与 `/{id}/{rest_path}` catch-all——七个公网 inbound 写入口；`/internal/send` 因走 X-Internal-Token 不绑钱包，不在双桶范围。`request.state.wallet_address` 由 `verify_agent_api_key` / `verify_proxy_caller` 在鉴权阶段写入并随 60s API-Key cache 一起缓存（避免每请求二次 Redis 查询）。Sizing：wallet 桶 600/min ≈ 单 wallet 10 agent 满载等价（合法用户实际跑 1-3 agent，3-10x 余量）+ 攻击场景下 50 agent × 60/min = 3000/min 流量被砍至 5x 防护。Sizing 走代码常量（`WALLET_RATE_LIMIT`）而非 settings，待 Phase 2 有"wallet 桶利用率"观测后再升格
 - Phase 1 暂不深度清洗 agent card 的所有扩展字段；如发现第三方 agent card 在扩展字段中嵌入真实 endpoint，Phase 2 增加字段级清洗策略
 - **Endpoint disclosure 收口（L421）**：`GET /api/v1/agents/{id}/endpoint` 改为 owner-or-internal only（`OwnerOrInternalDep`）：仅 `Authorization: Bearer <agent-的-API-Key>` 或 `X-Internal-Token` 可读真实 endpoint。匿名读路径完全消除——这是 closed mode 全套保护的前提，否则攻击者可绕过 ACN 直击 agent 真实地址
 - **Agent card 顶层 `url` 清洗（L422）**：`GET /api/v1/agents/{id}/.well-known/agent-card.json` 顶层 `url` 强制改写为 ACN 代理地址（`{base_url}/api/v1/agents/{id}`），caller 注册时 card 内嵌入的真实 URL 不再外泄；fallback auto-generated card 同步使用代理 URL。深层字段（`services[]` 等）暂不递归清洗，留待 Phase 2
@@ -572,6 +572,37 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 
 `attention_fee` 不是“补偿接收方所有通信成本”，而是“补偿 ACN 协议层的陌生通信摩擦”。长期关系建立后的算力成本由双方私下协商，或通过任务 Escrow（Layer 3）结算。
 
+### Token 推理成本责任边界
+
+> **明确不属于 ACN 协议层职责的部分。** 上述 `attention_fee`（Phase 3）只在"陌生通信摩擦"这一条窄路径上做经济补偿；**agent 自身后端 LLM/token 的推理成本，ACN 不监控、不补贴、不代收、不代付**。
+
+**为什么这一边界是有意为之**：
+
+- **可见性问题**：ACN 站在通信入口，看到的只是消息元数据（envelope）；agent 后端用 GPT-4 / Claude / 自托管 OSS 模型、用 1k / 100k token、用一次推理 / RAG 多跳——ACN 既看不到也不应看到。把"看不到的成本"塞进协议层等于给 agent 运营者做一个无法对账的黑盒。
+- **数量级问题**：同一条入站消息，不同后端实现的真实成本可以相差 **2–3 个数量级**（自托管 7B 模型 vs GPT-4 长上下文）。任何"按消息估算成本"的协议层补偿都必然要么压垮便宜的 agent，要么补不够昂贵的 agent。
+- **A2A 原则一致性**：A2A 协议把 agent 视为自治主体；其内部资源管理（含模型选型、token 预算、限流策略）属于 agent 自治范围，外部协议无权干预。
+- **激励一致性**：把成本责任明确推给 agent 运营者，反向激励他们启用 `communication_policy.closed` / `allowlist` / 自有 rate limit，从而**自然涌现"高价值 agent 主动收紧入口"**的市场行为——这也是 Phase 3 `attention_fee` 经济模型能 work 的前提。
+
+**ACN 协议层提供的工具，可由 agent 运营者用来兜底自己的成本风险**：
+
+| ACN 提供的能力                              | 可对冲的 token 成本风险                                                                                |
+| -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `communication_policy.mode = closed`   | 全锁：恶意/不感兴趣的发件方完全无法触达，零推理开销                                                                    |
+| `communication_policy.mode = allowlist`（Phase 2） | 半锁：白名单内 agent 完整投递；白名单外发件方降级到 Notify 元数据（与 `mode = manifest` 路径一致），**正文不解开 → 不触发推理**         |
+| `communication_policy.mode = manifest`（Phase 2） | 元数据先行：接收方扫 `from_agent_name` + `summary` 即可决策是否拉取正文，**避免对每条入站消息无差别 LLM 推理**                  |
+| 速率限制（agent 桶 + wallet 桶，已上线）           | 单点限速 + 全局熔断，避免短时间内被海量请求打爆 token 预算                                                          |
+| `attention_fee`（Phase 3）               | 把"陌生通信摩擦"的部分摩擦成本反向收取，**只覆盖一条窄路径**——首次接触场景，不试图覆盖整体推理成本                                       |
+
+**给 agent 运营者的实操建议**（写进 SDK / 接入文档而非 ACN 协议本身）：
+
+- 在自己 LLM 调用侧设置 `max_tokens` / `timeout` / 月度封顶熔断；ACN 网关速率限制只是**外部洪流防护**，不替代后端预算控制
+- 重资产 agent（昂贵模型 / 长上下文）不要默认 `open`：Phase 2 上线后首选 `mode = manifest`（元数据先行、按需拉取），有稳定协作圈的用 `mode = allowlist`（白名单内走完整投递、白名单外降级 manifest）；`mode = closed` 仅用于"维护期"或"完全私有"场景（**所有人**都被拒），不是日常推荐——把自己关死还不如不上线
+- 接入 metric `acn_messages_rejected_by_policy_total{path,reason}` 监控自己 policy 的实际拦截量，校准 closed/allowlist 边界
+- 对来自 ACN 的入站消息，先看 envelope（`from_agent`、`message_type`、`summary`）再决定是否进入 LLM 处理链；这是 manifest 模式（Phase 2）背后的设计共识，open 模式下也建议手动遵循
+- 如果出现"被某个发件方持续刷量"的情况，**直接把对方移出 `allowlist` / 切到 `closed`** 即可——ACN 不会代为做这个决策
+
+> **一句话结论**：ACN 是"门口的看门人"，能决定哪些访客被放进来；访客进来之后烧掉多少茶水（token），由屋主（agent 运营者）自己负责，并通过 ACN 提供的关门 / 限速 / 摩擦费工具按需对冲。
+
 ---
 
 ## 向后兼容性
@@ -601,6 +632,7 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 | 7   | WebSocket 实时投递在 manifest 模式下推什么？                             | 推 Notify 元数据，接收方再决定是否拉取 Content                                                                                                                                                                                               |
 | 8   | A2A 协议入口 `from_agent` 是否要强校验？                                | Phase 1 不修；`open/closed` 不依赖 sender 真伪。Phase 2 引入 `allowlist` 时一并解决：要求调 ACN 的 A2A 接口时携带 caller agent 身份签名（API Key 或链上签名），并校验与 `context.metadata.from_agent` 一致                                                                |
 | 9   | `BroadcastService` 与 `MessageService.broadcast_message` 双轨清理 | 现状：HTTP 广播走 `MessageService`（简化版，strategy 实际无差），A2A 协议入口走 `BroadcastService`（含 `asyncio.gather` 真并行 + `broadcast_id` 持久化）。Phase 1 policy 放在 router 层因此对两套自动生效。Phase 2 将 `BroadcastService` 的并行/聚合能力上提到 `MessageService`，删除独立类 |
+| 10  | `WALLET_RATE_LIMIT` 何时从代码常量升格为 `Settings` 字段                 | Phase 1 写死 `dependencies.py:WALLET_RATE_LIMIT = "600/minute"`（无观测的保守值）。Phase 2 接入"wallet 桶利用率"指标（`acn_rate_limit_hits_total{bucket="wallet",result}`）后，按合法用户 P95/P99 调参并升格为 `Settings.wallet_rate_limit`，让运维不改代码即可调；当前阶段不升格是为了避免在没有数据的情况下提前抽象      |
 
 
 ### Phase 3 待决策
@@ -608,12 +640,12 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 
 | #   | 议题                                      | 倾向方案                                                           |
 | --- | --------------------------------------- | -------------------------------------------------------------- |
-| 10  | `attention_fee` 与 `IEscrowProvider` 的关系 | 内置内存/Redis 托管为先，预留 `IEscrowProvider` 升级接口，不强绑现有任务 escrow       |
-| 11  | `content_url` 的 SSRF 防护                 | ACN 提供可选拉取代理（复用 `_proxy_to_agent` 的 SSRF 校验），轻量 agent 可直接走代理拉取 |
-| 12  | `manifest` 默认 mode 切换的迁移策略              | 视为 breaking change：先发布 SDK 升级窗口、提前广播切换日，旧版本访问失败时返回明确错误码        |
+| 11  | `attention_fee` 与 `IEscrowProvider` 的关系 | 内置内存/Redis 托管为先，预留 `IEscrowProvider` 升级接口，不强绑现有任务 escrow       |
+| 12  | `content_url` 的 SSRF 防护                 | ACN 提供可选拉取代理（复用 `_proxy_to_agent` 的 SSRF 校验），轻量 agent 可直接走代理拉取 |
+| 13  | `manifest` 默认 mode 切换的迁移策略              | 视为 breaking change：先发布 SDK 升级窗口、提前广播切换日，旧版本访问失败时返回明确错误码        |
 
 
-> 上述决策一旦确定，应回填到对应章节并升版本。Phase 2 启动前完成 1–9，Phase 3 启动前完成 10–12。
+> 上述决策一旦确定，应回填到对应章节并升版本。Phase 2 启动前完成 1–10，Phase 3 启动前完成 11–13。
 
 ---
 
