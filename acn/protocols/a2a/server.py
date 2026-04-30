@@ -42,6 +42,8 @@ from fastapi import FastAPI
 from redis.asyncio import Redis
 
 from ...config import get_settings
+from ...core.exceptions import PolicyRejected
+from ...monitoring import MetricsCollector
 from ...infrastructure.messaging import (
     BroadcastService,
     BroadcastStrategy,
@@ -54,6 +56,59 @@ from ...infrastructure.persistence.redis.registry import AgentRegistry
 settings = get_settings()
 
 logger = structlog.get_logger()
+
+
+# A2A protocol entry: anti-spoofing for the ``system:`` exemption
+# ----------------------------------------------------------------
+#
+# PolicyCheckService grants an unconditional bypass to any sender whose
+# id starts with ``system:`` (Phase 1 唯一豁免规则). The exemption
+# assumes the caller has already proven they belong to the ACN
+# control plane via ``X-Internal-Token`` + ``assert_system_caller``
+# at ``POST /communication/internal/send``.
+#
+# The A2A protocol entry has neither of those gates — ``context.metadata``
+# is just a free-form dict the client sets. Without sanitization, any
+# external agent could put ``"from_agent": "system:fake"`` in metadata
+# and bypass every closed recipient on the network. That would defeat
+# the entire policy gate, so we collapse any ``system:`` value here
+# back to a non-privileged sentinel before it reaches PolicyCheckService.
+#
+# Why "unknown" instead of e.g. caller's real agent id:
+# - The A2A entry doesn't currently authenticate the caller (Phase 2
+#   待决策 #8). Inventing a real agent id from an unauthenticated
+#   field would be a different, subtler form of the same forging
+#   problem. ``unknown`` is non-system, so it goes through the normal
+#   ``open/closed`` branches — exactly the safe default.
+# - The legitimate ACN-internal callers do NOT use the A2A protocol
+#   entry — they use ``/communication/internal/send`` (token-gated).
+#   Demoting ``system:`` here therefore breaks no real flow.
+_A2A_SAFE_FROM_AGENT_FALLBACK = "unknown"
+
+
+def _safe_a2a_from_agent(context: RequestContext) -> str:
+    """Return a sender id safe to hand to PolicyCheckService.
+
+    Strips any client-supplied ``system:*`` value so the protocol
+    entry cannot be used to forge the policy exemption. See the
+    module-level note for the threat model.
+    """
+    metadata = getattr(context, "metadata", None) or {}
+    raw = metadata.get("from_agent", _A2A_SAFE_FROM_AGENT_FALLBACK)
+    if not isinstance(raw, str):
+        return _A2A_SAFE_FROM_AGENT_FALLBACK
+    if raw.startswith("system:"):
+        # Log at WARNING-level so abuse attempts surface even when
+        # they're successfully demoted — without this an attacker
+        # could probe the gate silently.
+        logger.warning(
+            "a2a_from_agent_system_namespace_demoted",
+            received=raw,
+            context_id=getattr(context, "context_id", None),
+            task_id=getattr(context, "task_id", None),
+        )
+        return _A2A_SAFE_FROM_AGENT_FALLBACK
+    return raw
 
 
 class ACNAgentExecutor(AgentExecutor):
@@ -87,6 +142,7 @@ class ACNAgentExecutor(AgentExecutor):
         router: MessageRouter,
         broadcast: BroadcastService,
         subnet_manager: SubnetManager,
+        metrics: MetricsCollector | None = None,
     ):
         """Initialize ACN Agent Executor
 
@@ -95,11 +151,18 @@ class ACNAgentExecutor(AgentExecutor):
             router: Message Router for point-to-point routing
             broadcast: Broadcast Service for multi-agent messaging
             subnet_manager: Subnet Manager for subnet gateway routing
+            metrics: Optional MetricsCollector for the
+                ``acn_messages_rejected_by_policy_total`` counter.
+                Optional so a partial bring-up (e.g. unit tests
+                instantiating the executor in isolation) keeps
+                working — production lifespan injects a real
+                MetricsCollector via ``create_a2a_app``.
         """
         self.registry = registry
         self.router = router
         self.broadcast = broadcast
         self.subnet_manager = subnet_manager
+        self.metrics = metrics
 
     async def execute(
         self,
@@ -189,6 +252,112 @@ class ACNAgentExecutor(AgentExecutor):
         )
         # ACN infrastructure tasks are atomic and complete immediately
         # There's no long-running process to cancel
+
+    async def _inc_policy_rejected_metric(
+        self,
+        *,
+        reason: str,
+        context: RequestContext | None = None,
+    ) -> None:
+        """Bump ``acn_messages_rejected_by_policy_total`` for an
+        A2A-protocol-side rejection.
+
+        Path label is fixed to ``"a2a"`` so all A2A-entry rejections
+        (route + subnet_routing + future actions) bucket together —
+        operators rarely need to differentiate the sub-handlers and
+        keeping label cardinality low matters more than fine-grained
+        slicing.
+
+        Failures here are intentionally swallowed: metrics are
+        best-effort observability and a Redis blip at counter-write
+        time must not turn a clean ``TaskState.rejected`` into an
+        upstream-visible error. Mirrors the same tolerance the REST
+        path uses (see acn/routes/communication.py and
+        acn/routes/registry.py:_proxy_to_agent).
+
+        ``context`` is optional but strongly recommended — when
+        passed, the failure-warning carries ``context_id`` /
+        ``task_id`` so ops can correlate a metric-inc-failure
+        burst with the specific A2A tasks affected. Without it,
+        debugging requires cross-referencing log timestamps with
+        the route handler logs, which doesn't scale during a
+        Redis incident.
+        """
+        if self.metrics is None:
+            return
+        try:
+            await self.metrics.inc_counter(
+                "messages_rejected_by_policy_total",
+                labels={"path": "a2a", "reason": reason},
+            )
+        except Exception as metric_exc:
+            logger.warning(
+                "a2a_policy_metric_inc_failed",
+                reason=reason,
+                context_id=getattr(context, "context_id", None),
+                task_id=getattr(context, "task_id", None),
+                metric_error=str(metric_exc),
+            )
+
+    async def _send_policy_rejected_status(
+        self,
+        event_queue: EventQueue,
+        context: RequestContext,
+        *,
+        reason: str,
+        reject_reason: str | None,
+        target_id: str | None = None,
+    ) -> None:
+        """Send a structured ``TaskState.rejected`` event for a
+        ``communication_policy`` denial.
+
+        Why a dedicated path instead of ``_send_status(failed, str(e))``:
+
+        Pre-fix, PolicyRejected fell through to a generic
+        ``except Exception`` and the rejection details were
+        flattened into a free-form ``"Routing failed: <repr>"``
+        TextPart message. Clients that wanted to differentiate
+        "denied by recipient policy" from "upstream 500" had to
+        substring-match — fragile, locale-bound, and the policy
+        ``reject_reason`` (which is operator-controlled string)
+        was at the mercy of whatever `__str__` PolicyRejected
+        produced.
+
+        Post-fix, we emit ``TaskState.rejected`` (an A2A spec
+        state, not a string) with a ``DataPart`` containing the
+        same shape ``/communication/send`` returns over HTTP:
+
+            {"detail": "communication_rejected",
+             "reason": "policy_closed" | "policy_unknown_mode",
+             "reject_reason": <operator string or None>,
+             "target_id": <recipient agent id>}
+
+        That makes the rejection contract uniform across the
+        single-send REST path, the proxy reverse-call path, and
+        the A2A protocol path.
+        """
+        message_obj = Message(
+            role=Role.agent,
+            message_id=str(uuid.uuid4()),
+            parts=[
+                DataPart(
+                    data={
+                        "detail": "communication_rejected",
+                        "reason": reason,
+                        "reject_reason": reject_reason,
+                        **({"target_id": target_id} if target_id else {}),
+                    }
+                )
+            ],
+        )
+        status = TaskStatus(state=TaskState.rejected, message=message_obj)
+        event = TaskStatusUpdateEvent(
+            task_id=context.task_id,
+            context_id=context.context_id,
+            status=status,
+            final=True,
+        )
+        await event_queue.enqueue_event(event)
 
     async def _send_status(
         self,
@@ -294,7 +463,7 @@ class ACNAgentExecutor(AgentExecutor):
         strategy = params.get("strategy", "parallel")
         broadcast_message_text = params.get("message", "")
 
-        from_agent = context.metadata.get("from_agent", "unknown")
+        from_agent = _safe_a2a_from_agent(context)
 
         # Build broadcast message
         broadcast_msg = Message(
@@ -435,7 +604,7 @@ class ACNAgentExecutor(AgentExecutor):
             )
             return
 
-        from_agent = context.metadata.get("from_agent", "unknown")
+        from_agent = _safe_a2a_from_agent(context)
 
         # Build message to route
         route_msg = Message(
@@ -471,6 +640,23 @@ class ACNAgentExecutor(AgentExecutor):
                 event_queue, context, TaskState.completed, "Message routed", final=True
             )
 
+        except PolicyRejected as e:
+            # See _send_policy_rejected_status for why this is its
+            # own branch instead of falling through to ``failed``.
+            logger.info(
+                "routing_rejected_by_policy",
+                target=target_agent,
+                from_agent=from_agent,
+                reason=e.reason,
+            )
+            await self._inc_policy_rejected_metric(reason=e.reason, context=context)
+            await self._send_policy_rejected_status(
+                event_queue,
+                context,
+                reason=e.reason,
+                reject_reason=e.reject_reason,
+                target_id=target_agent,
+            )
         except Exception as e:
             logger.error("routing_failed", error=str(e), target=target_agent)
             await self._send_status(
@@ -502,10 +688,18 @@ class ACNAgentExecutor(AgentExecutor):
             )
             return
 
+        # Plumb the caller agent id from A2A request metadata so the
+        # subnet gateway can apply ``communication_policy``. We pass it
+        # through ``_safe_a2a_from_agent`` so a client-supplied
+        # ``system:`` value is demoted to ``unknown`` rather than
+        # forging the global exemption. The exemption rule is
+        # documented in PolicyCheckService.SYSTEM_SENDER_PREFIX.
+        from_agent = _safe_a2a_from_agent(context)
+
         try:
             # Forward through subnet
             response = await self.subnet_manager.forward_request(
-                subnet_id, agent_id, message_content
+                subnet_id, agent_id, message_content, from_agent=from_agent
             )
 
             artifact = Artifact(
@@ -531,6 +725,22 @@ class ACNAgentExecutor(AgentExecutor):
                 final=True,
             )
 
+        except PolicyRejected as e:
+            logger.info(
+                "subnet_routing_rejected_by_policy",
+                subnet=subnet_id,
+                target=agent_id,
+                from_agent=from_agent,
+                reason=e.reason,
+            )
+            await self._inc_policy_rejected_metric(reason=e.reason, context=context)
+            await self._send_policy_rejected_status(
+                event_queue,
+                context,
+                reason=e.reason,
+                reject_reason=e.reject_reason,
+                target_id=agent_id,
+            )
         except Exception as e:
             logger.error("subnet_routing_failed", error=str(e))
             await self._send_status(
@@ -569,6 +779,7 @@ def create_a2a_app(
     broadcast: BroadcastService,
     subnet_manager: SubnetManager,
     redis: Redis,
+    metrics: MetricsCollector | None = None,
 ) -> FastAPI:
     """Create A2A FastAPI application for ACN
 
@@ -578,6 +789,10 @@ def create_a2a_app(
         broadcast: Broadcast Service
         subnet_manager: Subnet Manager
         redis: Redis client for task persistence
+        metrics: Optional MetricsCollector — when set, the executor
+            increments ``acn_messages_rejected_by_policy_total`` on
+            policy denials, matching the dimension contract used by
+            the REST routes.
 
     Returns:
         FastAPI app with A2A endpoints at /a2a/jsonrpc
@@ -588,6 +803,7 @@ def create_a2a_app(
         router=router,
         broadcast=broadcast,
         subnet_manager=subnet_manager,
+        metrics=metrics,
     )
 
     # Use Redis-based task store for persistence

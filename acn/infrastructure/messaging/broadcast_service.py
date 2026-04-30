@@ -23,6 +23,7 @@ import redis.asyncio as redis
 # Official A2A SDK
 from a2a.types import Message  # type: ignore[import-untyped]
 
+from ...core.exceptions import PolicyRejected
 from ...security import safe_external_error
 from ..persistence.redis.registry import AgentRegistry
 from .message_router import MessageRouter
@@ -157,7 +158,36 @@ class BroadcastService:
             results = await self._send_best_effort(from_agent, to_agents, message)
 
         # Calculate stats
-        success = sum(1 for r in results.values() if "error" not in r)
+        # ----------------------------------------------------------------
+        # ``router.route()`` returns either:
+        #   - a dict like ``{"status": "inbox", ...}`` (offline target)
+        #   - an a2a SDK ``SendMessageResponse`` Pydantic model
+        #     (online target — the "happy path" return type)
+        #   - a dict ``{"error": ...}`` (delivery failure, see
+        #     ``send_one`` in this file)
+        #   - a dict ``{"status": "rejected", ...}`` (Phase 1 — see
+        #     ``PolicyRejected`` branches in this file)
+        #
+        # The pre-Phase-1 success rule was ``"error" not in r``, which
+        # implicitly counted Pydantic models as success because their
+        # default ``__contains__`` returns ``False`` for unknown keys.
+        # Phase 1 needs to *additionally* exclude policy rejections
+        # without breaking the SendMessageResponse case.
+        #
+        # The contract therefore: a result is "failed" only when it
+        # is a dict that *explicitly* signals failure (has ``"error"``
+        # OR ``status == "rejected"``). Any other shape — including
+        # SendMessageResponse — is treated as success, preserving the
+        # historical implicit invariant.
+        def _is_failed(r: object) -> bool:
+            if not isinstance(r, dict):
+                # SendMessageResponse / other Pydantic model — the
+                # only way ``router.route`` reaches here is via a
+                # successful in-line delivery, so this is success.
+                return False
+            return "error" in r or r.get("status") == "rejected"
+
+        success = sum(1 for r in results.values() if not _is_failed(r))
         failed = len(results) - success
 
         # Log broadcast complete
@@ -278,6 +308,28 @@ class BroadcastService:
                     message=message,
                 )
                 return agent_id, result
+            except PolicyRejected as e:
+                # Policy rejection is a *normal* fan-out outcome — a
+                # ``closed`` recipient in the target set is expected
+                # to be skipped, not treated as an error. We mirror
+                # MessageService.broadcast_message's per-target
+                # contract here so any client consuming either
+                # broadcast implementation sees the same shape:
+                #
+                #   {"status": "rejected", "reason": ..., "reject_reason": ...}
+                #
+                # No ``"error"`` key — that's reserved for actual
+                # delivery failures (network / 5xx / etc.) and feeds
+                # the BroadcastResult.success counter.
+                logger.info(
+                    f"Target {agent_id} rejected by policy: "
+                    f"reason={e.reason}"
+                )
+                return agent_id, {
+                    "status": "rejected",
+                    "reason": e.reason,
+                    "reject_reason": e.reject_reason,
+                }
             except Exception as e:
                 logger.error(f"Failed to send to {agent_id}: {e}")
                 # M12: per-target error goes into the broadcast result
@@ -298,7 +350,22 @@ class BroadcastService:
         to_agents: list[str],
         message: Message,
     ) -> dict[str, Any]:
-        """Send to agents one by one"""
+        """Send to agents one by one.
+
+        SEQUENTIAL semantics: stop on the first delivery *failure*
+        (the historical contract — e.g. a 5xx/timeout that may signal
+        a systemic issue and risks amplifying load by continuing).
+
+        Policy rejection is **not** a delivery failure: it's the
+        recipient explicitly opting out of inbound traffic, which is
+        expected for individual targets and not a signal that the
+        rest of the broadcast will also fail. So a PolicyRejected
+        target is recorded with ``status: "rejected"`` and the loop
+        moves on, matching MessageService.broadcast_message's
+        behaviour. Without this carve-out a single closed recipient
+        in a SEQUENTIAL set would silently abort delivery to every
+        target after it.
+        """
         results = {}
 
         for agent_id in to_agents:
@@ -309,12 +376,24 @@ class BroadcastService:
                     message=message,
                 )
                 results[agent_id] = result
+            except PolicyRejected as e:
+                logger.info(
+                    f"Target {agent_id} rejected by policy: "
+                    f"reason={e.reason}"
+                )
+                results[agent_id] = {
+                    "status": "rejected",
+                    "reason": e.reason,
+                    "reject_reason": e.reject_reason,
+                }
+                # Do NOT break — see method docstring for rationale.
+                continue
             except Exception as e:
                 logger.error(f"Failed to send to {agent_id}: {e}")
                 # M12: see _send_parallel.send_one — sanitise before the
                 # error reaches the API response.
                 results[agent_id] = {"error": safe_external_error(e)}
-                # Stop on first failure in sequential mode
+                # Stop on first delivery failure in sequential mode.
                 break
 
         return results
@@ -325,7 +404,7 @@ class BroadcastService:
         to_agents: list[str],
         message: Message,
     ) -> dict[str, Any]:
-        """Send to all agents, continue even on failures"""
+        """Send to all agents, continue even on failures."""
         results = {}
 
         for agent_id in to_agents:
@@ -336,6 +415,16 @@ class BroadcastService:
                     message=message,
                 )
                 results[agent_id] = result
+            except PolicyRejected as e:
+                logger.info(
+                    f"Target {agent_id} rejected by policy: "
+                    f"reason={e.reason}"
+                )
+                results[agent_id] = {
+                    "status": "rejected",
+                    "reason": e.reason,
+                    "reject_reason": e.reject_reason,
+                }
             except Exception as e:
                 logger.error(f"Failed to send to {agent_id}: {e}")
                 # M12: see _send_parallel.send_one — sanitise before the

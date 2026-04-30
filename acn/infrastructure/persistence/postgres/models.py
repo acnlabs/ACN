@@ -128,6 +128,11 @@ class AgentModel(Base):
     payment_methods: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     token_pricing: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     agent_card: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Gateway-level communication policy (see docs/features/acn-communication-economic-model.md).
+    # JSONB so we can extend the schema in Phase 2/3 (allowlist, rate_limit,
+    # attention_fee thresholds, ...) without another migration. NULL is treated
+    # as the implicit default {"mode": "open"} by the domain layer.
+    communication_policy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     agent_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     registered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)

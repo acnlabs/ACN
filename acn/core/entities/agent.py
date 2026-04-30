@@ -74,6 +74,13 @@ class Agent:
     # A2A Agent Card (stored as raw dict; provided by registrant or auto-generated on demand)
     agent_card: dict | None = None
 
+    # Communication policy (gateway-level access control)
+    # Default {"mode": "open"} backfilled in __post_init__ — keeps existing
+    # agents on open behavior. See docs/features/acn-communication-economic-model.md.
+    # Phase 1 supports modes: "open" | "closed".
+    # Phase 2+ will extend with "manifest" | "allowlist" + rate_limit / allowlist fields.
+    communication_policy: dict | None = None
+
     # Payment capabilities
     wallet_address: str | None = None  # Legacy single-address field (backward compat)
     wallet_addresses: dict[str, str] = field(default_factory=dict)  # Multi-chain: {network: address}
@@ -113,6 +120,21 @@ class Agent:
                 or self.wallet_addresses.get("base")
                 or next(iter(self.wallet_addresses.values()), None)
             )
+        # Normalize communication_policy so the gateway can always read
+        # `agent.communication_policy["mode"]` without guarding for None,
+        # empty dict, or a partial payload that forgot to set ``mode``.
+        # ``open`` is the legacy default and keeps existing agents on the
+        # original push-to-inbox behavior with no migration required.
+        # See docs/features/acn-communication-economic-model.md.
+        if not self.communication_policy:
+            self.communication_policy = {"mode": "open"}
+        elif "mode" not in self.communication_policy:
+            # Caller passed a partial policy (e.g. just a reject_reason);
+            # preserve their fields and fill in the missing mode.
+            self.communication_policy = {
+                "mode": "open",
+                **self.communication_policy,
+            }
 
     @property
     def primary_subnet(self) -> str:
@@ -245,6 +267,8 @@ class Agent:
             else None,
             # Agent Card
             "agent_card": self.agent_card,
+            # Communication policy (Phase 1: open|closed)
+            "communication_policy": self.communication_policy,
             # Payment
             "wallet_address": self.wallet_address,
             "wallet_addresses": self.wallet_addresses,

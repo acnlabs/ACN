@@ -33,7 +33,14 @@ from ..monitoring import (
     set_audit_singleton as _set_audit_singleton,
 )
 from ..protocols.ap2 import PaymentDiscoveryService, PaymentTaskManager, WebhookService
-from ..services import AgentService, BillingService, MessageService, SubnetService
+from ..services import (
+    AgentService,
+    BillingService,
+    FollowService,
+    MessageService,
+    PolicyCheckService,
+    SubnetService,
+)
 from ..services.activity_service import ActivityService
 
 settings = get_settings()
@@ -185,6 +192,15 @@ _payment_tasks: PaymentTaskManager | None = None
 _webhook_service: WebhookService | None = None
 _billing_service: BillingService | None = None
 _activity_service: ActivityService | None = None
+_follow_service: FollowService | None = None
+# Phase 1 communication_policy gateway. Shared with MessageRouter and
+# SubnetManager via lifespan wiring (see acn/api.py); routes layer holds
+# its own reference so the proxy paths in routes/registry.py — which
+# bypass MessageRouter — can still apply the gate. Without this dep the
+# four reverse-proxy endpoints (POST/PUT/PATCH /{agent_id} and the
+# /{agent_id}/{rest_path} catch-all) become a structural bypass of
+# communication_policy.
+_policy_service: PolicyCheckService | None = None
 
 
 def init_services(
@@ -204,6 +220,8 @@ def init_services(
     webhook_service: WebhookService,
     billing_service: BillingService | None = None,
     activity_service: ActivityService | None = None,
+    follow_service: FollowService | None = None,
+    policy_service: PolicyCheckService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -217,7 +235,7 @@ def init_services(
         _subnet_manager
     global _metrics, _audit, _analytics
     global _payment_discovery, _payment_tasks, _webhook_service, _billing_service
-    global _activity_service
+    global _activity_service, _follow_service, _policy_service
 
     _registry = registry
     _agent_service = agent_service
@@ -236,6 +254,8 @@ def init_services(
     _webhook_service = webhook_service
     _billing_service = billing_service
     _activity_service = activity_service
+    _follow_service = follow_service
+    _policy_service = policy_service
 
 
 # Dependency functions
@@ -351,6 +371,25 @@ def get_activity_service() -> ActivityService:
     return _activity_service
 
 
+def get_follow_service() -> FollowService:
+    """Get FollowService instance"""
+    if _follow_service is None:
+        raise RuntimeError("FollowService not initialized")
+    return _follow_service
+
+
+def get_policy_service() -> PolicyCheckService | None:
+    """Get the PolicyCheckService instance, or ``None`` if policy is not wired.
+
+    Returns ``None`` rather than raising when uninitialized so the four
+    reverse-proxy endpoints can degrade gracefully in environments that
+    haven't yet adopted Phase 1 (legacy CLI tools, smoke tests bringing
+    up partial app state). Production lifespan always installs an
+    instance — see the wiring assertion in ``acn/api.py``.
+    """
+    return _policy_service
+
+
 # Type aliases for cleaner dependency injection
 RegistryDep = Annotated[AgentRegistry, Depends(get_registry)]
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
@@ -368,6 +407,8 @@ PaymentTasksDep = Annotated[PaymentTaskManager, Depends(get_payment_tasks)]
 WebhookServiceDep = Annotated[WebhookService, Depends(get_webhook_service)]
 BillingServiceDep = Annotated[BillingService, Depends(get_billing_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
+FollowServiceDep = Annotated[FollowService, Depends(get_follow_service)]
+PolicyServiceDep = Annotated["PolicyCheckService | None", Depends(get_policy_service)]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]
@@ -515,6 +556,100 @@ def verify_internal_token(
 
 
 InternalTokenDep = Annotated[None, Depends(verify_internal_token)]
+
+
+# ---------------------------------------------------------------------------
+# Owner-or-internal authorization (Phase 1 L421)
+# ---------------------------------------------------------------------------
+#
+# Some agent-scoped endpoints (e.g. ``GET /agents/{id}/endpoint``,
+# ``PATCH /agents/{id}/policy``) reveal or mutate data that must NOT
+# be exposed to arbitrary callers — leaking an agent's real backend
+# URL defeats every gate ``communication_policy`` enforces, since a
+# caller who has the URL can reach the agent without ever entering
+# ACN. Concretely, the two acceptable principals are:
+#
+#   1. The agent itself, proving ownership via ``Authorization:
+#      Bearer <its-API-Key>`` — the API key bearer can already
+#      change its own metadata, so reading its own endpoint is
+#      strictly less privileged.
+#   2. ACN-internal / operator tooling, via ``X-Internal-Token``
+#      — the same gate already used by internal-only endpoints.
+#
+# We deliberately *don't* accept Auth0 owner JWTs here in Phase 1:
+# Auth0 ownership and agent ownership are distinct concepts (an
+# Auth0 user can own multiple agents but should request each
+# endpoint via that agent's own API key for least-privilege).
+# When Phase 2 adds an explicit owner-of-agent JWT scope, this
+# dependency is the natural place to extend.
+async def verify_owner_or_internal(
+    request: Request,
+    agent_id: AgentIdPath,
+    authorization: str | None = Header(None, alias="Authorization"),
+    x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
+    agent_service: AgentService = Depends(get_agent_service),
+) -> dict:
+    """Authorize as either the agent itself (API key) or ACN-internal.
+
+    Returns a dict tagging the caller principal so handlers can
+    log/audit which side of the OR matched:
+
+        {"caller_kind": "internal"} | {"caller_kind": "agent",
+                                        "agent_id": "<the agent>"}
+
+    The ``agent_id`` Path parameter is bound by FastAPI from the
+    same path the host route uses, so this dependency only mounts
+    cleanly on routes shaped ``/{agent_id}/...``.
+
+    Raises:
+        401: neither credential present, or both are malformed.
+        403: API key valid but for a different agent.
+    """
+    # X-Internal-Token has priority — if present and valid, the
+    # caller is platform infrastructure and we don't even need to
+    # look up the agent. Constant-time compare so a wrong token
+    # cannot be probed via timing.
+    if x_internal_token:
+        expected = settings.internal_api_token
+        if expected and secrets.compare_digest(x_internal_token, expected):
+            return {"caller_kind": "internal"}
+        # Internal token present but wrong — fail closed instead of
+        # falling through to owner-API-key auth: a half-correct
+        # internal token is much more likely to be a misconfigured
+        # ops tool than an attacker who *also* has a valid owner
+        # API key, and conflating the two would mask the misconfig.
+        _record_auth_failure(reason="internal_token_invalid", request=request)
+        raise HTTPException(status_code=403, detail="Invalid internal token")
+
+    # Fall back to owner-via-API-key.
+    if not authorization or not authorization.startswith("Bearer "):
+        _record_auth_failure(reason="owner_or_internal_missing_credential", request=request)
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Owner API key (Authorization: Bearer <API_KEY>) "
+                "or X-Internal-Token required"
+            ),
+        )
+    api_key = authorization[7:]
+    agent_info = await _resolve_agent_by_bearer(api_key, agent_service, request=request)
+    if agent_info["agent_id"] != agent_id:
+        # Don't leak whether the supplied key was valid for some
+        # *other* agent — same shape as wrong key for this agent.
+        _record_auth_failure(
+            reason="owner_api_key_wrong_agent",
+            request=request,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="API key does not match agent_id",
+        )
+    request.state.agent_id = agent_info["agent_id"]
+    request.state.rate_limit_key = f"agent:{agent_info['agent_id']}"
+    return {"caller_kind": "agent", "agent_id": agent_info["agent_id"]}
+
+
+OwnerOrInternalDep = Annotated[dict, Depends(verify_owner_or_internal)]
 
 
 # ---------------------------------------------------------------------------

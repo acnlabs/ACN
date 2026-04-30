@@ -123,11 +123,31 @@ class TestProxyHeaderSanitisation:
         making real HTTP calls."""
         captured: dict = {}
 
-        async def fake_proxy(request, agent_id, method, rest_path, agent_service, caller):
+        async def fake_proxy(
+            request,
+            agent_id,
+            method,
+            rest_path,
+            agent_service,
+            caller,
+            policy_service=None,
+            metrics=None,
+        ):
+            # ``policy_service`` (P0-1) and ``metrics`` (R1) were
+            # added in Phase 1 review fixes so the four reverse-proxy
+            # endpoints could enforce ``communication_policy`` and
+            # bump ``acn_messages_rejected_by_policy_total`` on
+            # rejection. The header-sanitisation contract this test
+            # pins is orthogonal — we only need to capture the args
+            # we actually assert on, and accept the rest as kw-args
+            # so a future helper signature change doesn't blow up
+            # this test for unrelated reasons.
             captured["agent_id"] = agent_id
             captured["method"] = method
             captured["rest_path"] = rest_path
             captured["caller"] = caller
+            captured["policy_service"] = policy_service
+            captured["metrics"] = metrics
             from fastapi import Response
 
             return Response(content=b"{}", media_type="application/json")

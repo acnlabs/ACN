@@ -53,7 +53,11 @@ from .infrastructure.persistence.postgres import (
     get_engine,
     get_session_factory,
 )
-from .infrastructure.persistence.redis import RedisAgentRepository, RedisSubnetRepository
+from .infrastructure.persistence.redis import (
+    RedisAgentRepository,
+    RedisFollowRepository,
+    RedisSubnetRepository,
+)
 from .infrastructure.persistence.redis.registry import AgentRegistry
 from .infrastructure.persistence.redis.task_repository import RedisTaskRepository
 from .infrastructure.task_pool import TaskPool
@@ -70,6 +74,7 @@ from .routes import (
     analytics,
     communication,
     dependencies,
+    follows,
     monitoring,
     onchain,
     payments,
@@ -80,7 +85,15 @@ from .routes import (
 )
 from .routes.dependencies import limiter
 from .security import check_tls_config
-from .services import AgentService, BillingService, MessageService, SubnetService, TaskService
+from .services import (
+    AgentService,
+    BillingService,
+    FollowService,
+    MessageService,
+    PolicyCheckService,
+    SubnetService,
+    TaskService,
+)
 from .services.activity_service import ActivityService
 from .services.auth0_client import Auth0CredentialClient
 from .services.erc8004_client import ERC8004Client
@@ -138,7 +151,20 @@ async def lifespan(app: FastAPI):
     )
     subnet_service_instance = SubnetService(subnet_repository)
 
-    router_instance = MessageRouter(registry_instance, registry_instance.redis)
+    # Phase 1 communication_policy gateway: a single PolicyCheckService
+    # instance is shared by both the HTTP-side MessageRouter and the
+    # WebSocket-side SubnetManager so the two paths are guaranteed to
+    # apply the same gate (see "Phase 1 网关执行点决策" in
+    # docs/features/acn-communication-economic-model.md). Sharing a
+    # single instance is intentional — having two would let the policy
+    # rules drift if a future caller mutated one of them.
+    policy_service_instance = PolicyCheckService()
+
+    router_instance = MessageRouter(
+        registry_instance,
+        registry_instance.redis,
+        policy_service=policy_service_instance,
+    )
     message_service_instance = MessageService(router_instance, agent_repository)
     broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
     ws_manager_instance = WebSocketManager(
@@ -149,6 +175,7 @@ async def lifespan(app: FastAPI):
         registry=registry_instance,
         redis_client=registry_instance.redis,
         gateway_base_url=settings.gateway_base_url,
+        policy_service=policy_service_instance,
     )
 
     # Initialize monitoring (Analytics is wired with activity_service below,
@@ -190,6 +217,19 @@ async def lifespan(app: FastAPI):
         redis=registry_instance.redis,
         repository=_activity_repository,
     )
+
+    # Initialize Follow Service.
+    # Follow data lives in Redis regardless of agent persistence backend
+    # (mirrors how heartbeat ``alive`` keys stay in Redis even when
+    # agents themselves are stored in PostgreSQL — both are ephemeral
+    # social-graph signals that don't need transactional durability).
+    follow_repository = RedisFollowRepository(registry_instance.redis)
+    follow_service_instance = FollowService(
+        follow_repository=follow_repository,
+        agent_repository=agent_repository,
+    )
+    # Cross-wire so AgentService can drop follow data on agent deletion.
+    agent_service_instance.follow_service = follow_service_instance
 
     # Analytics is constructed here (after ActivityService) so it can receive
     # activity_service via the constructor rather than a post-hoc attribute set.
@@ -249,7 +289,39 @@ async def lifespan(app: FastAPI):
         webhook_service=webhook_service_instance,
         billing_service=billing_service_instance,
         activity_service=activity_service_instance,
+        follow_service=follow_service_instance,
+        policy_service=policy_service_instance,
     )
+
+    # Phase 1 wiring guard
+    # ----------------------------------------------------------------
+    # The four reverse-proxy endpoints in routes/registry.py and the
+    # A2A protocol handlers in protocols/a2a/server.py both treat
+    # ``policy_service is None`` as "no gate" — a deliberate
+    # rollout-safety contract that lets unit tests / partial
+    # bring-ups skip the policy layer without crashing. The flip
+    # side is that a misconfigured production lifespan (e.g. a
+    # future refactor that forgets to wire ``policy_service``) would
+    # silently fail-open: closed agents would start receiving traffic
+    # they explicitly opted out of, with zero error signal.
+    #
+    # We use ``raise RuntimeError`` rather than ``assert`` here on
+    # purpose: ``assert`` bytecode is stripped under
+    # ``python -O`` / ``PYTHONOPTIMIZE=1`` (a perfectly reasonable
+    # production toggle for performance reasons), which would
+    # silently re-introduce the exact fail-open this guard exists
+    # to prevent. ``raise`` is unconditional and survives -O.
+    #
+    # Verbose error message is intentional — the next person to
+    # read it will likely be debugging at 3am.
+    if dependencies.get_policy_service() is None:
+        raise RuntimeError(
+            "PolicyCheckService is not wired — production lifespan must "
+            "always inject one via init_services(policy_service=...). "
+            "If you are intentionally bringing the app up without policy "
+            "(unit tests, smoke harness), construct the dependencies "
+            "manually instead of going through this lifespan."
+        )
 
     # Mount A2A Protocol - Infrastructure Agent
     try:
@@ -259,6 +331,7 @@ async def lifespan(app: FastAPI):
             broadcast=broadcast_instance,
             subnet_manager=subnet_manager_instance,
             redis=registry_instance.redis,
+            metrics=metrics_instance,
         )
         app.mount("/a2a", a2a_app)
         logger.info("a2a_mounted", path="/a2a")
@@ -580,6 +653,14 @@ app.add_middleware(
 )
 
 # Include routers
+#
+# ORDER MATTERS for the follows router. It shares the
+# ``/api/v1/agents`` prefix with ``registry.router`` and owns the
+# specific ``/{id}/follows/...`` sub-paths. It MUST be registered
+# before ``registry.router`` so the registry's catch-all reverse
+# proxy at ``/{agent_id}/{rest_path:path}`` does not greedily swallow
+# follow requests and forward them to the agent's real endpoint.
+app.include_router(follows.router)
 app.include_router(registry.router)
 app.include_router(onchain.router)
 app.include_router(communication.router)

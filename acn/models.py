@@ -45,6 +45,23 @@ class AgentInfo(BaseModel):
             "GET /.well-known/agent-card.json?agent_id=<id>."
         ),
     )
+    # Gateway-level access control policy. INTERNAL field — read by
+    # MessageRouter / SubnetManager before delivery to enforce
+    # ``communication_policy`` (Phase 1: open / closed). ``exclude=True``
+    # keeps it out of every Pydantic-driven API response (FastAPI's
+    # ``response_model`` honours field-level ``exclude``), so we can
+    # store the policy inline on the cached agent record without leaking
+    # ``reject_reason`` / future allowlist entries to public callers.
+    # See docs/features/acn-communication-economic-model.md
+    # "Phase 1 网关执行点决策".
+    communication_policy: dict | None = Field(
+        default=None,
+        exclude=True,
+        description=(
+            "Internal-only: gateway communication policy. Excluded from "
+            "API responses. ``None`` is treated as ``{'mode': 'open'}``."
+        ),
+    )
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
     registered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     last_heartbeat: datetime | None = Field(None)
@@ -59,6 +76,21 @@ class AgentInfo(BaseModel):
     payment_methods: list[str] = Field(
         default_factory=list,
         description="Accepted payment methods (e.g., 'usdc', 'eth', 'credit_card')",
+    )
+
+    # Follow graph counts (see docs/features/acn-follow-proposal.md).
+    # Defaults to 0 so existing clients stay happy when the follow
+    # subsystem is unwired or the count lookup is intentionally skipped
+    # (e.g. on hot list endpoints to avoid extra Redis round-trips).
+    followers_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of agents that follow this agent.",
+    )
+    follows_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of agents this agent follows.",
     )
 
     # [REMOVED] Agent Wallet fields (balance, total_earned, total_spent, owner_share)
@@ -112,6 +144,25 @@ class AgentRegisterRequest(BaseModel):
         max_length=64,
         description="[Deprecated] Single subnet to join. Use subnet_ids instead.",
     )
+    # Phase 1 L410: optional inbound policy. ``None`` keeps the
+    # legacy default (``open`` via ``Agent.__post_init__``).
+    communication_policy: dict | None = Field(
+        default=None,
+        description=(
+            "Inbound message policy. Phase 1 accepts "
+            "{'mode': 'open' | 'closed', 'reject_reason'?: str}. "
+            "Default: open."
+        ),
+    )
+
+    @field_validator("communication_policy")
+    @classmethod
+    def validate_communication_policy(cls, v):
+        # Single source of truth for policy schema — see
+        # ``acn.services.policy_service.validate_policy_dict``.
+        from .services.policy_service import validate_policy_dict
+
+        return validate_policy_dict(v)
 
     @field_validator("endpoint")
     @classmethod

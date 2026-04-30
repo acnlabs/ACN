@@ -58,6 +58,14 @@ class RedisAgentRepository(IAgentRepository):
             agent_dict["token_pricing"] = json.dumps(agent_dict["token_pricing"])
         if agent_dict.get("agent_card"):
             agent_dict["agent_card"] = json.dumps(agent_dict["agent_card"])
+        # communication_policy is materialized to {"mode": "open"} in
+        # Agent.__post_init__ even when callers pass None, so it should
+        # always serialize. Use json.dumps so the gateway can round-trip
+        # nested fields (allowlist, rate_limit, ...) introduced in later phases.
+        if agent_dict.get("communication_policy") is not None:
+            agent_dict["communication_policy"] = json.dumps(
+                agent_dict["communication_policy"]
+            )
 
         # Filter out None values (Redis doesn't accept None)
         # Also convert booleans to strings for Redis compatibility
@@ -364,6 +372,13 @@ class RedisAgentRepository(IAgentRepository):
             ),
             "agent_card": (
                 json.loads(agent_dict["agent_card"]) if agent_dict.get("agent_card") else None
+            ),
+            # Communication policy — older rows predate this field, so fall
+            # back to None and let Agent.__post_init__ default it to open.
+            "communication_policy": (
+                json.loads(agent_dict["communication_policy"])
+                if agent_dict.get("communication_policy")
+                else None
             ),
             # Auth0 M2M 凭证（client_secret 不持久化）
             "auth0_client_id": agent_dict.get("auth0_client_id"),

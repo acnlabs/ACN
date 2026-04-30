@@ -10,7 +10,7 @@ from a2a.types import Message, TextPart  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ..core.exceptions import AgentNotFoundException
+from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..monitoring.audit import AuditEventType
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
@@ -41,6 +41,42 @@ def _payload_to_a2a_message(payload: dict) -> Message:
         role="user",
         parts=[TextPart(text=str(payload))],
     )
+
+
+async def _record_broadcast_policy_rejections(
+    metrics,
+    responses: list[dict],
+    path: str,
+) -> None:
+    """Bump ``acn_messages_rejected_by_policy_total`` for each
+    per-target ``status == "rejected"`` entry in a broadcast response
+    set.
+
+    Aggregates by ``reason`` first so we make at most one Redis
+    `INCR` per reason bucket (typically 1) instead of one per
+    rejected target — a fan-out of N closed recipients turns into
+    O(unique_reasons) writes rather than O(N).
+
+    Falls back to ``policy_unknown_mode`` if a response somehow
+    omits the reason field, which keeps the metric label set
+    bounded (we never accept arbitrary reasons from the response
+    body — they would inflate cardinality and let a misbehaving
+    target define new metric series).
+    """
+    if not responses:
+        return
+    reason_counts: dict[str, int] = {}
+    for r in responses:
+        if r.get("status") != "rejected":
+            continue
+        reason = r.get("reason") or "policy_unknown_mode"
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    for reason, count in reason_counts.items():
+        await metrics.inc_counter(
+            "messages_rejected_by_policy_total",
+            value=count,
+            labels={"path": path, "reason": reason},
+        )
 
 
 class SendMessageRequest(BaseModel):
@@ -128,6 +164,58 @@ async def send_message(
         )
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+    except PolicyRejected as e:
+        # Recipient's communication_policy denied this sender. Phase 1
+        # mapping (see "Phase 1 网关执行点决策"): single-send returns
+        # HTTP 403 with a structured detail so clients can branch on
+        # the reason code without parsing free-form strings.
+        logger.info(
+            "message_rejected_by_policy",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            reason=e.reason,
+        )
+        # Two metric writes by design (see Step 2.5 in
+        # docs/features/acn-communication-economic-model.md):
+        #   * `messages_total{status="rejected"}` keeps existing
+        #     traffic-shape dashboards working without a schema change.
+        #   * `messages_rejected_by_policy_total{path,reason}` is the
+        #     new fine-grained signal — operators can split a spike
+        #     between single/internal/broadcast paths and policy_closed
+        #     vs. policy_unknown_mode without grepping logs.
+        await metrics.inc_message_count(
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            status="rejected",
+        )
+        await metrics.inc_counter(
+            "messages_rejected_by_policy_total",
+            labels={"path": "single", "reason": e.reason},
+        )
+        # Audit only on single-send paths — broadcast/subnet/DLQ paths
+        # would flood the audit stream at fan-out scale and rely on
+        # metrics + structured logs instead.
+        await audit.log_event(
+            event_type=AuditEventType.MESSAGE_REJECTED,
+            actor_id=body.from_agent,
+            actor_type="agent",
+            target_id=body.target_agent,
+            target_type="agent",
+            details={
+                "reason": e.reason,
+                "reject_reason": e.reject_reason,
+                "path": "single",
+            },
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "detail": "communication_rejected",
+                "reason": e.reason,
+                "reject_reason": e.reject_reason,
+            },
+        ) from e
+
     except Exception as e:
         logger.error("message_send_failed", error=str(e))
         await metrics.inc_message_count(
@@ -173,6 +261,14 @@ async def broadcast_message(
             "broadcast_sent",
             labels={"type": "broadcast", "status": "success"},
         )
+
+        # Per-target policy rejections are recorded as metric only
+        # (see Step 2.5 in the proposal): a broadcast can fan out to
+        # hundreds of targets, so emitting an audit event per rejected
+        # target would dominate the audit stream. The metric is
+        # bucketed by reason so a spike still tells the operator
+        # which policy mode is producing the rejections.
+        await _record_broadcast_policy_rejections(metrics, responses, "broadcast_target")
 
         logger.info(
             "message_broadcasted",
@@ -236,6 +332,11 @@ async def broadcast_by_tag(
         # what fits in the returned slice.
         total_sent = len(responses)
         success_count = len([r for r in responses if r.get("status") == "success"])
+        # Tally policy rejections from the *full* response set (i.e.
+        # before the optional ``body.limit`` truncation a few lines down)
+        # so the metric counts every rejection that actually happened,
+        # not just the ones that fit in the returned slice.
+        await _record_broadcast_policy_rejections(metrics, responses, "broadcast_target")
         if body.limit:
             responses = responses[: body.limit]
         await metrics.inc_counter(
@@ -484,6 +585,57 @@ async def internal_send_message(
             status="not_found",
         )
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+    except PolicyRejected as e:
+        # Defensive: ``assert_system_caller`` already guarantees
+        # ``from_agent`` lives in ``system:*``, and PolicyCheckService
+        # exempts that namespace, so this branch should be unreachable
+        # under correct configuration. We keep it for the edge case
+        # where the exemption rule is changed without updating this
+        # route — the structured 403 keeps the failure mode obvious
+        # rather than masquerading as a 500.
+        logger.error(
+            "internal_message_unexpectedly_rejected_by_policy",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            reason=e.reason,
+        )
+        await metrics.inc_message_count(
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            status="rejected",
+        )
+        await metrics.inc_counter(
+            "messages_rejected_by_policy_total",
+            labels={"path": "internal", "reason": e.reason},
+        )
+        # Audit at WARNING-level intent: a system: caller hitting
+        # a policy reject signals the exemption rule was changed
+        # without updating this route — analysts must see it.
+        # (AuditLogger doesn't take a log level via log_event; we
+        # rely on event_type=MESSAGE_REJECTED + actor_type="system"
+        # to make this distinguishable in the stream.)
+        await audit.log_event(
+            event_type=AuditEventType.MESSAGE_REJECTED,
+            actor_id=body.from_agent,
+            actor_type="system",
+            target_id=body.target_agent,
+            target_type="agent",
+            details={
+                "reason": e.reason,
+                "reject_reason": e.reject_reason,
+                "path": "internal",
+                "unexpected": True,
+            },
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "detail": "communication_rejected",
+                "reason": e.reason,
+                "reject_reason": e.reject_reason,
+            },
+        ) from e
 
     except Exception as e:
         logger.error("internal_message_send_failed", error=str(e))

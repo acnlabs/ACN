@@ -238,6 +238,20 @@ class AgentRegistry:
         else:
             subnet_ids = ["public"]
 
+        # Communication policy is co-stored with the agent hash by
+        # ``RedisAgentRepository.save`` (Step 1 of the policy rollout).
+        # Older rows predate this field — fall back to ``None`` and let
+        # the gateway treat it as ``{"mode": "open"}`` (legacy default).
+        # We deliberately swallow JSON errors here: a corrupted policy
+        # blob should not break agent discovery for unrelated callers.
+        communication_policy: dict | None = None
+        raw_policy = data.get("communication_policy")
+        if raw_policy:
+            try:
+                communication_policy = json.loads(raw_policy)
+            except (json.JSONDecodeError, TypeError):
+                communication_policy = None
+
         return AgentInfo(
             agent_id=data["agent_id"],
             owner=data.get("owner", "unknown"),
@@ -249,6 +263,7 @@ class AgentRegistry:
             status=data["status"],
             subnet_ids=subnet_ids,
             agent_card=agent_card,
+            communication_policy=communication_policy,
             metadata=metadata,
             registered_at=datetime.fromisoformat(data["registered_at"]),
             last_heartbeat=(

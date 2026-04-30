@@ -31,9 +31,20 @@ from a2a.types import (  # type: ignore[import-untyped]
     TextPart,
 )
 
+from typing import TYPE_CHECKING
+
 from ...config import get_settings
+from ...core.exceptions import PolicyRejected
 from ...security import SSRFViolation, safe_resolve_target
 from ..persistence.redis.registry import AgentRegistry
+
+# ``PolicyCheckService`` is only referenced for type hints; importing
+# the submodule directly (rather than ``from ...services import ...``)
+# avoids triggering ``services/__init__.py`` during this module's
+# import, which is what would cause a circular dependency
+# (services -> infrastructure -> services).
+if TYPE_CHECKING:
+    from ...services.policy_service import PolicyCheckService
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +101,7 @@ class MessageRouter:
         self,
         registry: AgentRegistry,
         redis_client: redis.Redis,
+        policy_service: "PolicyCheckService | None" = None,
     ):
         """
         Initialize Message Router
@@ -97,9 +109,19 @@ class MessageRouter:
         Args:
             registry: ACN Registry for agent discovery
             redis_client: Redis for logging and DLQ
+            policy_service: Optional gateway-level access control. When
+                provided, ``route()`` short-circuits inbound delivery
+                with ``PolicyRejected`` for recipients whose
+                ``communication_policy`` denies the sender. When
+                ``None`` (e.g. legacy tests, scripts), the policy gate
+                is bypassed and behaviour matches the pre-Phase-1
+                rollout — that explicit opt-out is preserved so this
+                change can land without rewiring every test fixture in
+                a single PR.
         """
         self.registry = registry
         self.redis = redis_client
+        self.policy_service = policy_service
 
         # Cache of A2A clients by endpoint (capped to prevent unbounded growth)
         self._clients: dict[str, A2AClient] = {}
@@ -108,7 +130,9 @@ class MessageRouter:
         # Message handlers for incoming messages
         self._handlers: dict[str, list[Callable]] = {}
 
-        logger.info("Message Router initialized (using official A2A SDK)")
+        logger.info(
+            "Message Router initialized (using official A2A SDK)",
+        )
 
     async def _get_client(self, endpoint: str) -> A2AClient:
         """
@@ -200,6 +224,25 @@ class MessageRouter:
         agent_info = await self.registry.get_agent(to_agent)
         if not agent_info:
             raise ValueError(f"Agent not found in ACN Registry: {to_agent}")
+
+        # 1.5. Gateway-level access control (Phase 1).
+        #
+        # We check policy as early as possible — *before* the offline
+        # inbox path and *before* any HTTP work — so a recipient with
+        # ``communication_policy.mode == "closed"`` cannot have messages
+        # parked in their inbox waiting for them to come online. The
+        # rejection is a hard short-circuit: no _log_message (kept for
+        # delivered traffic), no _store_inbox, no _store_dlq.
+        #
+        # ``policy_service`` is optional during the rollout window so
+        # legacy tests / scripts that build a router without one keep
+        # working unchanged. Production wiring (acn/api.py) installs it.
+        if self.policy_service is not None:
+            self.policy_service.check_inbound_or_raise(
+                sender_id=from_agent,
+                recipient_id=to_agent,
+                recipient_policy=agent_info.communication_policy,
+            )
 
         endpoint = agent_info.endpoint
         logger.debug(f"[{route_id}] Discovered endpoint: {endpoint}")
@@ -690,9 +733,23 @@ class MessageRouter:
                     elif part.get("kind") == "data":
                         parts.append(DataPart(data=part.get("data", {})))
 
+                # ``Message`` requires ``message_id``. ``_store_dlq`` writes
+                # ``model_dump()`` (snake_case) so the original id is in
+                # ``message_id``; older payloads written before the rename
+                # may carry the camelCase ``messageId``. Fall through to a
+                # fresh UUID only if both are absent (extremely rare —
+                # implies a hand-edited DLQ entry). Without this, any retry
+                # Pydantic-fails on Message construction and the entry
+                # bounces forever between rpop and lpush.
+                rebuilt_message_id = (
+                    msg_data.get("message_id")
+                    or msg_data.get("messageId")
+                    or f"dlq-{uuid4().hex[:12]}"
+                )
                 message = Message(
                     role=msg_data.get("role", "user"),
                     parts=parts,
+                    message_id=rebuilt_message_id,
                 )
 
                 await self.route(
@@ -703,6 +760,28 @@ class MessageRouter:
 
                 success_count += 1
                 logger.info(f"DLQ message {entry['route_id']} delivered")
+
+            except PolicyRejected as e:
+                # The recipient's communication_policy now denies this
+                # sender. We honor the recipient's *current* intent
+                # rather than the intent at the time the message
+                # entered DLQ: an agent that flips to ``closed`` while
+                # offline should not have stale messages forced into
+                # their inbox the moment retry_dlq runs.
+                #
+                # Drop without requeue, do not bump ``retry_count``
+                # (it would be observationally meaningless — the
+                # entry never re-enters the queue). The structured
+                # "dlq_dropped_by_policy" prefix lets operators grep
+                # this apart from genuine retry failures.
+                logger.warning(
+                    "dlq_dropped_by_policy"
+                    " route_id=%s from_agent=%s to_agent=%s reason=%s",
+                    entry.get("route_id"),
+                    entry.get("from_agent"),
+                    entry.get("to_agent"),
+                    e.reason,
+                )
 
             except Exception as e:
                 logger.error(f"DLQ retry failed: {e}")

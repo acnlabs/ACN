@@ -9,7 +9,7 @@ from typing import Any
 import structlog  # type: ignore[import-untyped]
 from a2a.types import Message  # type: ignore[import-untyped]
 
-from ..core.exceptions import AgentNotFoundException
+from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..core.interfaces import IAgentRepository
 from ..infrastructure.messaging import MessageRouter
 from ..security import safe_external_error
@@ -227,6 +227,34 @@ class MessageService:
                         "agent_id": agent.agent_id,
                         "status": "success",
                         "response": response,
+                    }
+                )
+            except PolicyRejected as e:
+                # Policy rejection is structurally different from a
+                # delivery failure: the recipient explicitly opted out
+                # of inbound traffic from this sender, which is a
+                # *normal* outcome of a fan-out (a closed agent in a
+                # broadcast set is expected to be skipped, not a fail).
+                # We therefore treat it as per-target rejected for ALL
+                # strategies — including the strict (non best_effort)
+                # ones — since raising would let one closed recipient
+                # abort delivery to the rest of the set.
+                #
+                # Per-target shape mirrors the Phase 1 doc decision:
+                # ``status: "rejected"`` keeps the field stable for
+                # client parsers; ``reason`` / ``reject_reason`` give
+                # the client enough to surface the specific decision.
+                logger.info(
+                    "broadcast_target_rejected_by_policy",
+                    target_agent=agent.agent_id,
+                    reason=e.reason,
+                )
+                responses.append(
+                    {
+                        "agent_id": agent.agent_id,
+                        "status": "rejected",
+                        "reason": e.reason,
+                        "reject_reason": e.reject_reason,
                     }
                 )
             except Exception as e:

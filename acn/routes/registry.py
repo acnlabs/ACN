@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import require_permission, verify_token
 from ..config import Settings, get_settings
-from ..core.exceptions import AgentNotFoundException
+from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from ..monitoring import AuditEventType, AuditLevel, fire_and_forget_event, get_audit_singleton
 from ..security import SSRFViolation, safe_resolve_target, validate_endpoint_url
@@ -40,8 +40,12 @@ from .dependencies import (  # type: ignore[import-untyped]
     AgentIdPath,
     AgentServiceDep,
     InternalTokenDep,
+    MetricsDep,
+    OwnerOrInternalDep,
+    PolicyServiceDep,
     ProxyCallerDep,
     SubnetManagerDep,
+    verify_owner_or_internal,
     # Underscore-prefixed crossing of module boundaries is intentional:
     # ``_get_real_ip`` is the canonical proxy-aware IP resolver and we
     # need the SSRF audit hook to attribute attacks to the real client,
@@ -124,6 +128,27 @@ class AgentJoinRequest(BaseModel):
         default=None,
         description="Token-based pricing, e.g. {'input_price_per_million': 3.0, 'output_price_per_million': 15.0, 'currency': 'USD'}",
     )
+    # Phase 1 L410: optional inbound policy. Defaults to ``open``
+    # backfill at the entity layer (``Agent.__post_init__``) so a
+    # missing field stays backwards compatible — agents who never
+    # opt in keep receiving traffic exactly as before.
+    communication_policy: dict | None = Field(
+        default=None,
+        description=(
+            "Inbound message policy. Phase 1 accepts "
+            "{'mode': 'open' | 'closed', 'reject_reason'?: str}. "
+            "Default: open."
+        ),
+    )
+
+    @field_validator("communication_policy")
+    @classmethod
+    def validate_communication_policy(cls, v):
+        # Centralized validator in PolicyCheckService keeps the join
+        # path, register path, and PATCH /policy endpoint in lockstep.
+        from ..services.policy_service import validate_policy_dict
+
+        return validate_policy_dict(v)
 
 
 class AgentJoinResponse(BaseModel):
@@ -244,6 +269,7 @@ async def dev_register_agent(
             tags=request.tags,
             subnet_ids=subnet_ids,
             agent_card=request.agent_card,
+            communication_policy=request.communication_policy,
         )
 
         # Return response
@@ -348,6 +374,7 @@ async def register_agent(
             description=getattr(request, "description", None),
             metadata=getattr(request, "metadata", {}),
             agent_card=request.agent_card,
+            communication_policy=request.communication_policy,
         )
 
         # Generate Agent Card URL
@@ -434,10 +461,27 @@ async def list_unclaimed_agents(
 @router.get("/{agent_id}", response_model=AgentInfo)
 @limiter.limit("120/minute")
 async def get_agent(request: Request, agent_id: AgentIdPath, agent_service: AgentServiceDep = None):
-    """Get agent information (public discovery; verification_code not included)."""
+    """Get agent information (public discovery; verification_code not included).
+
+    Populates ``followers_count`` / ``follows_count`` from the follow
+    graph (proposal §数据模型). Falls back to ``0`` if the follow
+    subsystem is not wired or its lookup fails — a missing count must
+    never block agent retrieval.
+    """
     try:
         agent = await agent_service.get_agent(agent_id)
-        return _agent_entity_to_info(agent, strip_sensitive=True)
+        info = _agent_entity_to_info(agent, strip_sensitive=True)
+        try:
+            from . import dependencies as _deps
+
+            follow_svc = _deps._follow_service
+            if follow_svc is not None:
+                following, followers = await follow_svc.get_counts(agent_id)
+                info.follows_count = following
+                info.followers_count = followers
+        except Exception as e:  # noqa: BLE001 — counts are best-effort
+            logger.warning("follow_counts_lookup_failed", agent_id=agent_id, error=str(e))
+        return info
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
 
@@ -465,6 +509,8 @@ async def _proxy_to_agent(
     rest_path: str,
     agent_service,
     caller: dict,
+    policy_service=None,
+    metrics=None,
 ) -> Response:
     """Generic reverse proxy: forward any HTTP method + optional sub-path to the agent's real endpoint.
 
@@ -475,11 +521,88 @@ async def _proxy_to_agent(
     Its ID is forwarded as ``X-ACN-Caller-Agent`` so the target endpoint
     can attribute the request even though all proxied traffic appears to
     come from ACN's egress IP.
+
+    ``policy_service`` (Phase 1) gates the proxy at the gateway boundary:
+    a recipient with ``communication_policy.mode == "closed"`` short-
+    circuits with HTTP 403 *before* any DNS/SSRF/HTTP work fires, so a
+    leaked ACN API key cannot push traffic at agents that opted out.
+    Without this hook the four reverse-proxy endpoints would be a
+    structural bypass of the policy gate that ``MessageRouter`` and
+    ``SubnetManager`` enforce on every other path.
     """
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
+
+    # Gateway-level access control. Mirrors MessageRouter.route() — same
+    # service, same exemption rules, same error shape — so a client that
+    # already handles 403/communication_rejected on /communication/send
+    # gets identical wire behaviour through the proxy. Done before
+    # endpoint discovery / SSRF resolution / HTTP client init: the
+    # rejection must produce zero observable side effects toward the
+    # recipient's network.
+    if policy_service is not None:
+        try:
+            policy_service.check_inbound_or_raise(
+                sender_id=caller.get("agent_id", "unknown"),
+                recipient_id=agent_id,
+                recipient_policy=getattr(agent, "communication_policy", None),
+            )
+        except PolicyRejected as e:
+            logger.info(
+                "proxy_rejected_by_policy",
+                from_agent=caller.get("agent_id"),
+                to_agent=agent_id,
+                method=method,
+                reason=e.reason,
+            )
+            # Inc the fine-grained policy-rejection counter here in
+            # the helper rather than in each of the four endpoint
+            # functions: the helper is the single point where every
+            # proxy path converges, so DRY-ing the inc avoids the
+            # four-way drift risk that the original missing-metric
+            # bug (v2 review R1) would have re-introduced anyway.
+            # ``path="proxy"`` matches the dimension contract
+            # documented next to the metric definition in
+            # acn/monitoring/metrics.py.
+            if metrics is not None:
+                try:
+                    await metrics.inc_counter(
+                        "messages_rejected_by_policy_total",
+                        labels={"path": "proxy", "reason": e.reason},
+                    )
+                except Exception as metric_exc:
+                    # Metrics are best-effort observability — never
+                    # let a Redis hiccup at counter-write time turn
+                    # a clean 403 into a 500. Mirrors the same
+                    # tolerance pattern in routes/communication.py.
+                    #
+                    # Log fields here are intentionally rich: when
+                    # this warning fires, ops needs to triage
+                    # "is the policy gate working but the counter
+                    # backend flaky?" vs "is something more
+                    # systemic broken?". Without ``from_agent`` /
+                    # ``method`` it's impossible to correlate the
+                    # metric-inc-failure burst against an actual
+                    # misbehaving caller.
+                    logger.warning(
+                        "proxy_policy_metric_inc_failed",
+                        from_agent=caller.get("agent_id"),
+                        to_agent=agent_id,
+                        method=method,
+                        rest_path=rest_path or None,
+                        reason=e.reason,
+                        metric_error=str(metric_exc),
+                    )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "detail": "communication_rejected",
+                    "reason": e.reason,
+                    "reject_reason": e.reject_reason,
+                },
+            ) from e
 
     real_endpoint = agent.endpoint
     if not real_endpoint:
@@ -603,6 +726,7 @@ async def _join_agent_impl(
             accepts_payment=body.accepts_payment,
             payment_methods=body.payment_methods,
             token_pricing=body.token_pricing,
+            communication_policy=body.communication_policy,
         )
 
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
@@ -697,13 +821,21 @@ async def proxy_post(
     agent_id: AgentIdPath,
     caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,
+    policy_service: PolicyServiceDep = None,
+    metrics: MetricsDep = None,
 ):
     """Proxy POST to agent's real endpoint — A2A JSON-RPC (message/send, message/stream, tasks/*).
 
     Requires ``X-ACN-Authorization: Bearer <ACN_API_KEY>`` to identify the calling
     agent; rate-limit is bucketed per-agent.
+
+    Subject to recipient ``communication_policy`` — a ``closed`` recipient
+    returns HTTP 403 ``communication_rejected`` instead of forwarding,
+    and increments ``acn_messages_rejected_by_policy_total{path="proxy"}``.
     """
-    return await _proxy_to_agent(request, agent_id, "POST", "", agent_service, caller)
+    return await _proxy_to_agent(
+        request, agent_id, "POST", "", agent_service, caller, policy_service, metrics
+    )
 
 
 @router.put("/{agent_id}")
@@ -713,9 +845,14 @@ async def proxy_put(
     agent_id: AgentIdPath,
     caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,
+    policy_service: PolicyServiceDep = None,
+    metrics: MetricsDep = None,
 ):
-    """Proxy PUT to agent's real endpoint. Requires ``X-ACN-Authorization``."""
-    return await _proxy_to_agent(request, agent_id, "PUT", "", agent_service, caller)
+    """Proxy PUT to agent's real endpoint. Requires ``X-ACN-Authorization``.
+    Subject to recipient ``communication_policy`` (see proxy_post)."""
+    return await _proxy_to_agent(
+        request, agent_id, "PUT", "", agent_service, caller, policy_service, metrics
+    )
 
 
 @router.patch("/{agent_id}")
@@ -725,9 +862,14 @@ async def proxy_patch(
     agent_id: AgentIdPath,
     caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,
+    policy_service: PolicyServiceDep = None,
+    metrics: MetricsDep = None,
 ):
-    """Proxy PATCH to agent's real endpoint. Requires ``X-ACN-Authorization``."""
-    return await _proxy_to_agent(request, agent_id, "PATCH", "", agent_service, caller)
+    """Proxy PATCH to agent's real endpoint. Requires ``X-ACN-Authorization``.
+    Subject to recipient ``communication_policy`` (see proxy_post)."""
+    return await _proxy_to_agent(
+        request, agent_id, "PATCH", "", agent_service, caller, policy_service, metrics
+    )
 
 
 @router.get("", response_model=AgentSearchResponse)
@@ -793,30 +935,69 @@ async def agent_heartbeat(
         raise HTTPException(status_code=404, detail="Agent not found") from e
 
 
+def _acn_proxy_url_for(agent_id: str) -> str:
+    """Return the canonical ACN-proxy URL for an agent.
+
+    This is the URL the public agent card must advertise instead of
+    the agent's real backend endpoint — every inbound request must
+    transit ACN so ``communication_policy`` (and future rate
+    limiting / billing) gates can run. Centralizing the format here
+    keeps it in lockstep with ``_agent_entity_to_info`` (which
+    already rewrites ``endpoint`` for the same reason).
+    """
+    base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
+    return f"{base_url}/api/v1/agents/{agent_id}"
+
+
 @router.get("/{agent_id}/.well-known/agent-card.json")
 async def get_agent_card(agent_id: AgentIdPath, agent_service: AgentServiceDep = None):
     """Get agent's A2A Agent Card (v0.3.0 compliant)
 
     Returns the card submitted at registration time if available.
     Falls back to auto-generating a minimal card from stored fields.
+
+    Phase 1 L422: the *public* card is sanitized so that the
+    top-level ``url`` advertises the **ACN proxy address**, not
+    the agent's real backend endpoint. Otherwise an attacker could
+    skip the entire ACN gate (proxy / router / subnet_manager) by
+    pulling the well-known card and dialing the backend directly,
+    nullifying every ``communication_policy`` decision.
+
+    Phase 1 deliberately stops at the top-level ``url`` — extension
+    fields (``services[]``, ``additionalInterfaces``, etc.) are not
+    deep-walked. Phase 2 adds field-level sanitization once we
+    survey what third-party cards actually embed (see
+    docs/features/acn-communication-economic-model.md L433).
     """
     try:
         agent = await agent_service.get_agent(agent_id)
 
-        # Return the complete card submitted at registration (e.g. OpenPersona-generated)
-        if agent.agent_card:
-            return agent.agent_card
+        proxy_url = _acn_proxy_url_for(agent_id)
 
-        # Fallback: auto-generate a minimal card from stored fields
+        # Path A: caller-supplied card (e.g. OpenPersona-generated).
+        # Repositories typically hand back a fresh dict, but we
+        # don't want to take that on faith — a shared reference
+        # would let a future mutation leak the rewritten URL into
+        # the cached entity. Shallow-copy the top-level dict and
+        # overwrite ``url``; nested fields (``services[]`` etc.)
+        # are out of scope for Phase 1 (see docstring above).
+        if agent.agent_card:
+            sanitized = dict(agent.agent_card)
+            sanitized["url"] = proxy_url
+            return sanitized
+
+        # Path B: fallback auto-generated card. Build it directly
+        # against the proxy URL — never persist or expose the real
+        # endpoint here.
         card = AgentCard(
             name=agent.name,
             version="0.1.0",
             description=agent.description or f"{agent.name} on ACN",
-            url=agent.endpoint or "",
+            url=proxy_url,
             capabilities=AgentCapabilities(streaming=False),
             default_input_modes=["text", "application/json"],
             default_output_modes=["text", "application/json"],
-            tags=[
+            skills=[
                 AgentSkill(
                     id=skill,
                     name=skill.replace("-", " ").replace("_", " ").title(),
@@ -854,16 +1035,187 @@ async def get_agent_registration_file(
 
 
 @router.get("/{agent_id}/endpoint")
-async def get_agent_endpoint(agent_id: AgentIdPath, agent_service: AgentServiceDep = None):
-    """Get agent endpoint
+async def get_agent_endpoint(
+    agent_id: AgentIdPath,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Return the agent's real backend endpoint URL.
 
-    Clean Architecture: Route → AgentService → Repository
+    Auth (Phase 1 L421): the response leaks the *one* piece of data
+    the ACN proxy was designed to hide. A caller who has it can
+    reach the agent without ever entering ACN, defeating every
+    ``communication_policy`` gate (proxy / router / subnet_manager).
+    Therefore we restrict access to:
+
+      - X-Internal-Token (ops / platform), OR
+      - Authorization: Bearer <API_KEY> matching ``agent_id``
+        (the agent introspecting its own endpoint).
+
+    Anyone else gets 401/403 — there's no anonymous read path
+    for the real endpoint anymore. Public agent metadata stays
+    available via the ACN-proxy-rewritten ``GET /agents/{id}``
+    response.
+
+    Clean Architecture: Route → AgentService → Repository.
     """
     try:
         agent = await agent_service.get_agent(agent_id)
+        # Audit the access at INFO level — knowing who pulled an
+        # agent's real endpoint is high signal for incident
+        # response (e.g. correlating a leaked-token incident with
+        # subsequent direct calls to the agent's backend).
+        logger.info(
+            "agent_endpoint_disclosed",
+            agent_id=agent_id,
+            caller_kind=caller.get("caller_kind"),
+            caller_agent_id=caller.get("agent_id"),
+        )
         return {"agent_id": agent_id, "endpoint": agent.endpoint}
     except AgentNotFoundException as e:
         raise HTTPException(status_code=404, detail="Agent not found") from e
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 L410-B: PATCH /api/v1/agents/{id}/policy
+# ---------------------------------------------------------------------------
+#
+# The user-facing knob for ``communication_policy``. Before this
+# existed, the field was reachable only at registration time —
+# meaning every already-registered agent was effectively pinned to
+# whatever they chose (or the default ``open``) with no migration
+# path short of re-registration. That made the entire ``closed``
+# capability **unreachable in production** for the existing agent
+# population, defeating the point of shipping it.
+#
+# Auth: ``OwnerOrInternalDep`` — same shape as
+# ``GET /{id}/endpoint``. Reasoning:
+#   - The agent itself (Bearer API key) toggling its own policy is
+#     the legitimate user flow — pinning to a more privileged
+#     identity (e.g. Auth0 owner JWT) would lock out CLI / scripted
+#     agents that authenticate via API key.
+#   - X-Internal-Token covers ops scenarios (e.g. emergency forced
+#     close on a misbehaving agent reported by abuse).
+class CommunicationPolicyPatchRequest(BaseModel):
+    """PATCH body for ``/agents/{id}/policy``.
+
+    Wraps the policy in a top-level ``communication_policy`` key so
+    the body shape mirrors the shape it has in
+    ``AgentRegisterRequest`` / ``AgentJoinRequest`` — same
+    validator, same error messages, same JSON path. ``None`` is
+    accepted as an explicit "reset to default open" signal so
+    operators have a way to clear a stuck custom policy.
+    """
+
+    communication_policy: dict | None = Field(
+        default=None,
+        description=(
+            "New inbound message policy. Phase 1 accepts "
+            "{'mode': 'open' | 'closed', 'reject_reason'?: str}. "
+            "Pass null to reset to the default open policy."
+        ),
+    )
+
+    @field_validator("communication_policy")
+    @classmethod
+    def validate_communication_policy(cls, v):
+        from ..services.policy_service import validate_policy_dict
+
+        return validate_policy_dict(v)
+
+
+@router.get(
+    "/{agent_id}/policy",
+    # Auth dependency mounted via ``dependencies=[...]`` rather
+    # than as a function argument: the read path doesn't need
+    # ``caller`` for any logging / audit signal (unlike PATCH and
+    # ``GET /endpoint`` which both record the principal). Owners
+    # frequently poll their own policy, so adding an INFO log per
+    # GET would just generate noise without forensic value, and
+    # cross-tenant reads are already blocked by the auth gate
+    # itself (a 403 attempt is recorded by ``_record_auth_failure``).
+    # Mounting via ``dependencies=`` keeps the signature minimal
+    # while preserving the same auth semantics as PATCH.
+    dependencies=[Depends(verify_owner_or_internal)],
+)
+async def get_agent_policy(
+    agent_id: AgentIdPath,
+    agent_service: AgentServiceDep = None,
+):
+    """Read an agent's current ``communication_policy``.
+
+    Symmetric counterpart to ``PATCH /{id}/policy``. Required
+    because ``AgentInfo.communication_policy`` is ``exclude=True``
+    (so the public ``GET /agents/{id}`` deliberately doesn't echo
+    the field — that's the right call for the public surface, but
+    leaves owners with no way to introspect their own policy).
+    Without this read endpoint, the only way an owner could check
+    "what's my current policy?" would be to issue a redundant
+    PATCH and read the response — clumsy and racy.
+
+    Auth matches PATCH (``verify_owner_or_internal``): policy is
+    *internal* configuration, not public metadata; only the owner
+    or platform tooling needs to see ``reject_reason`` (which can
+    be free-form and may carry sensitive context like a medical-
+    leave date).
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+
+    # ``Agent.__post_init__`` backfills ``{"mode": "open"}`` on
+    # entities that predate the field, so the response shape is
+    # always a non-null dict — clients don't need to handle the
+    # ``None`` case.
+    return {
+        "agent_id": agent_id,
+        "communication_policy": agent.communication_policy or {"mode": "open"},
+    }
+
+
+@router.patch("/{agent_id}/policy")
+async def update_agent_policy(
+    agent_id: AgentIdPath,
+    body: CommunicationPolicyPatchRequest,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Update an agent's ``communication_policy``.
+
+    See ``CommunicationPolicyPatchRequest`` for the accepted shape.
+    Returns the post-update policy so the caller can confirm the
+    persisted value (especially useful when passing ``null`` to
+    reset, since the response shows the entity-layer default).
+    """
+    try:
+        agent = await agent_service.update_communication_policy(
+            agent_id=agent_id,
+            communication_policy=body.communication_policy,
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+
+    # Log every policy mutation. Combined with the existing
+    # MESSAGE_REJECTED audit on the receive side, this gives a
+    # complete forensic trail of "who changed the policy when, and
+    # who was rejected as a result". We don't write a structured
+    # audit event for Phase 1 — INFO log is enough at the expected
+    # cardinality (rare operator action). If automation starts
+    # flipping policies frequently we'll promote this to an audit
+    # event in Phase 2.
+    logger.info(
+        "communication_policy_updated",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+        caller_agent_id=caller.get("agent_id"),
+        new_mode=(agent.communication_policy or {}).get("mode"),
+    )
+
+    return {
+        "agent_id": agent_id,
+        "communication_policy": agent.communication_policy,
+    }
 
 
 @router.delete("")
@@ -931,10 +1283,28 @@ async def admin_bulk_delete_agents(
     source_ip = request.client.host if request.client else None
     actor_id = request.headers.get("x-creator-id") or "admin@internal"
 
+    # Resolve the optional FollowService so we can drop the deleted
+    # agents' follow indexes alongside the agent rows. Look it up lazily
+    # (rather than via Depends) because admin bulk delete predates the
+    # follow subsystem and must not start 503-ing if the service was
+    # not yet wired.
+    from . import dependencies as _deps
+
+    follow_svc = _deps._follow_service
+
     deleted, failed = [], []
     for a in targets:
         try:
             await agent_service.repository.delete(a.agent_id)
+            if follow_svc is not None:
+                try:
+                    await follow_svc.cleanup_agent(a.agent_id)
+                except Exception as cleanup_exc:  # noqa: BLE001
+                    logger.warning(
+                        "follow_cleanup_failed_on_bulk_delete",
+                        agent_id=a.agent_id,
+                        error=str(cleanup_exc),
+                    )
             deleted.append(a.agent_id)
             logger.info("admin_bulk_delete", agent_id=a.agent_id, name=a.name)
             if audit is not None:
@@ -1316,6 +1686,8 @@ async def proxy_subpath(
     rest_path: str,
     caller: ProxyCallerDep,
     agent_service: AgentServiceDep = None,
+    policy_service: PolicyServiceDep = None,
+    metrics: MetricsDep = None,
 ):
     """Catch-all reverse proxy for agent sub-paths.
 
@@ -1326,7 +1698,20 @@ async def proxy_subpath(
 
     Requires ``X-ACN-Authorization: Bearer <ACN_API_KEY>``; rate-limit
     bucketed per calling agent.
+
+    Subject to recipient ``communication_policy`` — a ``closed`` recipient
+    returns HTTP 403 ``communication_rejected``. This is the highest-
+    surface-area inbound path: anything an agent exposes via REST is
+    routed through here, so policy gating must be uniform with the
+    A2A and message-send paths.
     """
     return await _proxy_to_agent(
-        request, agent_id, request.method, rest_path, agent_service, caller
+        request,
+        agent_id,
+        request.method,
+        rest_path,
+        agent_service,
+        caller,
+        policy_service,
+        metrics,
     )

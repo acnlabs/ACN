@@ -39,15 +39,22 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import redis.asyncio as redis
 from a2a.types import Message  # type: ignore[import-untyped]
 from fastapi import WebSocket, WebSocketDisconnect
 
+from ...core.exceptions import PolicyRejected
 from ...models import AgentInfo, SubnetInfo
 from ..persistence.redis.registry import AgentRegistry
+
+# ``PolicyCheckService`` is only referenced for type hints; importing
+# the submodule directly avoids triggering ``services/__init__.py``
+# during this module's import (services -> infrastructure -> services).
+if TYPE_CHECKING:
+    from ...services.policy_service import PolicyCheckService
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +135,7 @@ class SubnetManager:
         gateway_base_url: str = "https://gateway.agentplanet.com",
         heartbeat_interval: int = 30,
         heartbeat_timeout: int = 90,
+        policy_service: "PolicyCheckService | None" = None,
     ):
         """
         Initialize Subnet Manager
@@ -138,12 +146,19 @@ class SubnetManager:
             gateway_base_url: Public URL of this gateway
             heartbeat_interval: Seconds between heartbeat checks
             heartbeat_timeout: Seconds before disconnecting stale agent
+            policy_service: Optional gateway-level access control. When
+                provided, ``forward_request()`` short-circuits with
+                ``PolicyRejected`` for recipients whose
+                ``communication_policy`` denies the sender. ``None``
+                preserves pre-Phase-1 behaviour (rollout opt-out used
+                by legacy fixtures and the api.py wiring transition).
         """
         self.registry = registry
         self.redis = redis_client
         self.gateway_base_url = gateway_base_url.rstrip("/")
         self.heartbeat_interval = heartbeat_interval
         self.heartbeat_timeout = heartbeat_timeout
+        self.policy_service = policy_service
 
         # Subnets: {subnet_id: Subnet}
         self._subnets: dict[str, Subnet] = {}
@@ -626,6 +641,8 @@ class SubnetManager:
         agent_id: str,
         message: Message | dict[str, Any],
         timeout: float = 30.0,
+        *,
+        from_agent: str | None = None,
     ) -> dict[str, Any]:
         """
         Forward A2A request to subnet agent
@@ -635,9 +652,23 @@ class SubnetManager:
             agent_id: Target agent
             message: A2A message
             timeout: Response timeout
+            from_agent: Sender agent id (or reserved ``system:<slug>``
+                namespace). Optional + keyword-only — older callers
+                that predate Step 2.3 keep working; the policy gate
+                treats ``None`` as a non-system unknown sender, which
+                fails closed under ``closed`` and passes under ``open``.
+                A2A protocol callers should plumb the value from
+                ``context.metadata.from_agent``.
 
         Returns:
             A2A response from agent
+
+        Raises:
+            ValueError: subnet or agent not found / not connected.
+            PolicyRejected: recipient's ``communication_policy``
+                denies the sender. Raised before any WebSocket frame
+                is sent — the recipient never sees the rejected
+                request.
         """
         if subnet_id not in self._subnets:
             raise ValueError(f"Subnet not found: {subnet_id}")
@@ -645,6 +676,39 @@ class SubnetManager:
         subnet = self._subnets[subnet_id]
         if agent_id not in subnet.connections:
             raise ValueError(f"Agent not connected: {subnet_id}/{agent_id}")
+
+        # Gateway-level access control (Phase 1).
+        #
+        # The cached ``connection.agent_info`` is built from the
+        # client-supplied register payload at gateway-connect time and
+        # does NOT carry ``communication_policy``. We therefore re-fetch
+        # the canonical AgentInfo from the registry on every forward —
+        # this also ensures that policy changes (open ↔ closed) take
+        # effect immediately for already-connected agents, without
+        # requiring a reconnect.
+        #
+        # If the registry lookup misses (e.g. Redis flake or the
+        # connected agent has not yet been persisted), we fall back to
+        # ``policy=None`` which the service treats as ``open`` — the
+        # WebSocket connection itself already proves the agent's
+        # presence so failing closed here would manufacture outages.
+        if self.policy_service is not None:
+            policy: dict[str, Any] | None = None
+            try:
+                fresh_info = await self.registry.get_agent(agent_id)
+                if fresh_info is not None:
+                    policy = fresh_info.communication_policy
+            except Exception as exc:  # noqa: BLE001 — see fall-through note above
+                logger.warning(
+                    "subnet_policy_lookup_failed agent_id=%s error=%s",
+                    agent_id,
+                    exc,
+                )
+            self.policy_service.check_inbound_or_raise(
+                sender_id=from_agent or "unknown",
+                recipient_id=agent_id,
+                recipient_policy=policy,
+            )
 
         connection = subnet.connections[agent_id]
         request_id = str(uuid4())

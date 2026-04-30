@@ -111,6 +111,32 @@ class MetricsCollector:
             # backend, not a Redis counter grid.
             "labels": ["status"],
         },
+        "acn_messages_rejected_by_policy_total": {
+            "type": MetricType.COUNTER,
+            "help": (
+                "Inbound messages rejected by recipient communication_policy, "
+                "split by gateway path and reject reason"
+            ),
+            # `path` distinguishes which gateway entry rejected the
+            # message:
+            #   - "single"            POST /communication/send
+            #   - "internal"          POST /communication/internal/send
+            #   - "broadcast_target"  per-target rejection inside a broadcast
+            #   - "proxy"             reverse-proxy paths in
+            #                         routes/registry.py:_proxy_to_agent
+            #                         (POST/PUT/PATCH /{agent_id} +
+            #                         catch-all /{agent_id}/{rest_path})
+            #   - "a2a"               A2A protocol entry handlers
+            #                         (route / subnet_routing actions);
+            #                         broadcast action shares the
+            #                         broadcast_target path because it
+            #                         delegates to BroadcastService
+            # `reason` mirrors the PolicyDecision.reason set returned
+            # by PolicyCheckService — currently {policy_closed,
+            # policy_unknown_mode}. Cardinality stays bounded:
+            # ~5 × ~2 = O(10) combos.
+            "labels": ["path", "reason"],
+        },
         "acn_registrations_total": {
             "type": MetricType.COUNTER,
             "help": "Total number of agent registrations",

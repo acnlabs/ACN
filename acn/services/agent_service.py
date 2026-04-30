@@ -63,6 +63,12 @@ class AgentService:
         self.repository = agent_repository
         self.auth0_client = auth0_client
         self.payment_discovery = payment_discovery
+        # Optional FollowService — wired post-construction in lifespan
+        # because the follow subsystem depends on this service (would
+        # otherwise create a circular dependency).  When present,
+        # ``unregister_agent`` will additionally drop the deleted
+        # agent's follow indexes so dangling pointers cannot accumulate.
+        self.follow_service: object | None = None
 
     async def register_agent(
         self,
@@ -77,6 +83,7 @@ class AgentService:
         wallet_address: str | None = None,
         accepts_payment: bool = False,
         payment_methods: list[str] | None = None,
+        communication_policy: dict | None = None,
     ) -> Agent:
         """
         Register a new agent or update existing one
@@ -128,6 +135,12 @@ class AgentService:
             if payment_methods:
                 existing_agent.payment_methods = payment_methods
 
+            # Update communication policy only when the caller explicitly
+            # provides one. A heartbeat-style re-register that omits the
+            # field must NOT overwrite a previously configured policy.
+            if communication_policy is not None:
+                existing_agent.communication_policy = communication_policy
+
             existing_agent.update_heartbeat()
             existing_agent.mark_online()
 
@@ -151,6 +164,7 @@ class AgentService:
             wallet_address=wallet_address,
             accepts_payment=accepts_payment,
             payment_methods=payment_methods or [],
+            communication_policy=communication_policy,
         )
 
         logger.info("register_new_agent", agent_id=agent_id, name=name)
@@ -206,6 +220,55 @@ class AgentService:
         agent = await self.repository.find_by_id(agent_id)
         if not agent:
             raise AgentNotFoundException(f"Agent {agent_id} not found")
+        return agent
+
+    async def update_communication_policy(
+        self,
+        agent_id: str,
+        communication_policy: dict | None,
+    ) -> Agent:
+        """Update an agent's ``communication_policy``.
+
+        Phase 1 L410-B: this is the user-facing path agents/owners
+        use to flip themselves into ``closed`` mode (or back to
+        ``open``). Schema validation happens at the route layer
+        (``validate_policy_dict``), so by the time the value lands
+        here it's either ``None`` (reset to default) or a vetted
+        ``{"mode": ..., ["reject_reason": ...]}`` dict.
+
+        Why we shallow-copy the input dict: the route-layer
+        validator already hands us a fresh dict, but a future
+        non-route caller could pass a shared reference. A shallow
+        ``dict(...)`` is enough because the validated shape only
+        contains primitive values (``mode`` str, optional
+        ``reject_reason`` str) — no nested mutable structures to
+        worry about. Skipping ``deepcopy`` keeps the hot path
+        cheap; if Phase 2/3 introduces nested config (e.g.
+        ``manifest`` thresholds with sub-dicts), revisit.
+
+        Args:
+            agent_id: Agent identifier.
+            communication_policy: New policy dict, or ``None`` to
+                reset to the default open policy.
+
+        Returns:
+            The updated Agent entity (post-save, so any
+            entity-level normalization is reflected).
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+        """
+        agent = await self.get_agent(agent_id)
+        # Always assign through the field — assigning ``None`` lets
+        # the entity decide the default in ``__post_init__`` on
+        # subsequent rehydration; assigning a dict stores it
+        # verbatim. We normalize the in-memory ``agent`` here so
+        # the returned entity already shows what's persisted.
+        if communication_policy is None:
+            agent.communication_policy = {"mode": "open"}
+        else:
+            agent.communication_policy = dict(communication_policy)
+        await self.repository.save(agent)
         return agent
 
     async def search_agents(
@@ -277,7 +340,22 @@ class AgentService:
             raise PermissionError(f"Owner mismatch: {owner} != {agent.owner}")
 
         logger.info("unregister_agent", agent_id=agent_id)
-        return await self.repository.delete(agent_id)
+        deleted = await self.repository.delete(agent_id)
+        # Best-effort follow-graph cleanup AFTER successful deletion so a
+        # cleanup failure cannot leave the agent itself half-deleted.
+        # Stale follow entries are cosmetic (lists ignore dangling ids
+        # via the existence check in ``_resolve_agents_with_counts``)
+        # so we do not unwind the agent delete on a cleanup error.
+        if deleted and self.follow_service is not None:
+            try:
+                await self.follow_service.cleanup_agent(agent_id)  # type: ignore[union-attr]
+            except Exception as e:  # noqa: BLE001 — best-effort
+                logger.warning(
+                    "follow_cleanup_failed_on_unregister",
+                    agent_id=agent_id,
+                    error=str(e),
+                )
+        return deleted
 
     async def update_heartbeat(self, agent_id: str) -> Agent:
         """
@@ -357,6 +435,7 @@ class AgentService:
         accepts_payment: bool = False,
         payment_methods: list[str] | None = None,
         token_pricing: dict | None = None,
+        communication_policy: dict | None = None,
     ) -> tuple[Agent, str]:
         """
         Autonomous agent joins ACN (self-registration)
@@ -406,6 +485,7 @@ class AgentService:
             accepts_payment=accepts_payment,
             payment_methods=payment_methods or [],
             token_pricing=token_pricing,
+            communication_policy=communication_policy,
         )
 
         logger.info("agent_joined", agent_id=agent_id, name=name, referrer_id=referrer_id)

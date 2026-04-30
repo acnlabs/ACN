@@ -56,6 +56,14 @@ class AuditEventType(StrEnum):
     MESSAGE_RECEIVED = "message_received"
     MESSAGE_FAILED = "message_failed"
     MESSAGE_RETRY = "message_retry"
+    # Rejected by recipient's communication_policy at the gateway.
+    # Only emitted from single-send paths (`POST /communication/send` and
+    # `POST /communication/internal/send`) — see "Phase 1 metrics + audit 落点"
+    # in docs/features/acn-communication-economic-model.md for why broadcast
+    # per-target rejections, subnet WS rejections and DLQ drops deliberately
+    # don't write audit (volume would dominate the stream and the metric
+    # already covers them).
+    MESSAGE_REJECTED = "message_rejected"
     BROADCAST_SENT = "broadcast_sent"
 
     # Subnet

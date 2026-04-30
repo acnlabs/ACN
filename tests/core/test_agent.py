@@ -195,3 +195,98 @@ class TestAgentEntity:
         assert agent.owner == "user-456"
         assert agent.status == AgentStatus.ONLINE
         assert agent.tags == ["task-planning"]
+
+    # ========================================================================
+    # communication_policy (gateway-level access control, Phase 1)
+    # ========================================================================
+    #
+    # See docs/features/acn-communication-economic-model.md.
+    # The default {"mode": "open"} backfill is the contract gateway code
+    # depends on — without it every read site would need a None-guard and
+    # the "legacy agents stay open" promise becomes implicit instead of
+    # explicit. Locking it in here makes accidental regressions loud.
+
+    def test_communication_policy_default_open(self):
+        """New agents default to communication_policy={'mode': 'open'} so
+        legacy callers and gateway code can rely on the field always being
+        a dict with a mode."""
+        agent = Agent(agent_id="agent-1", name="Default")
+        assert agent.communication_policy == {"mode": "open"}
+
+    def test_communication_policy_explicit_value_preserved(self):
+        """An explicitly provided policy must round-trip unchanged — the
+        default backfill should only fire for None, not overwrite caller
+        intent."""
+        policy = {
+            "mode": "closed",
+            "reject_reason": "Only accepting task-related messages",
+        }
+        agent = Agent(
+            agent_id="agent-1",
+            name="Closed",
+            communication_policy=policy,
+        )
+        assert agent.communication_policy == policy
+
+    def test_communication_policy_round_trip(self):
+        """to_dict / from_dict must preserve the policy verbatim. Phase 2
+        will add allowlist + rate_limit nested fields; this test pins the
+        contract so those additions don't silently get dropped."""
+        policy = {
+            "mode": "closed",
+            "reject_reason": "busy",
+            "rate_limit": {"max_per_minute_per_sender": 5},
+        }
+        agent = Agent(
+            agent_id="agent-1",
+            name="Test",
+            communication_policy=policy,
+        )
+
+        restored = Agent.from_dict(agent.to_dict())
+        assert restored.communication_policy == policy
+
+    def test_communication_policy_empty_dict_backfilled(self):
+        """An empty dict (e.g. accidental ``{}`` from a misconfigured caller)
+        must be treated as "no policy set" and get the default mode, so the
+        gateway never KeyErrors on ``policy['mode']``."""
+        agent = Agent(
+            agent_id="agent-1",
+            name="Empty",
+            communication_policy={},
+        )
+        assert agent.communication_policy == {"mode": "open"}
+
+    def test_communication_policy_partial_payload_filled_with_default_mode(self):
+        """A partial policy that forgot ``mode`` (e.g. only ``reject_reason``
+        was sent over the wire) keeps caller fields and fills in the default
+        mode — gateway code can still read ``policy['mode']`` safely."""
+        agent = Agent(
+            agent_id="agent-1",
+            name="Partial",
+            communication_policy={"reject_reason": "busy"},
+        )
+        assert agent.communication_policy == {
+            "mode": "open",
+            "reject_reason": "busy",
+        }
+
+    def test_communication_policy_legacy_dict_backfilled(self):
+        """Dicts produced before this field existed (e.g. cached payloads in
+        Redis) must still hydrate, with the missing field defaulting to
+        open. Without this, deploying the gateway change would
+        retroactively close older agents."""
+        legacy = {
+            "agent_id": "legacy-1",
+            "name": "Legacy",
+            "endpoint": "https://legacy.example.com",
+            "status": "online",
+            "tags": [],
+            "subnet_ids": ["public"],
+            "metadata": {},
+            "registered_at": "2024-01-01T12:00:00",
+            "last_heartbeat": None,
+            # Note: no communication_policy key
+        }
+        agent = Agent.from_dict(legacy)
+        assert agent.communication_policy == {"mode": "open"}
