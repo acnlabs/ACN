@@ -966,7 +966,19 @@ def _acn_proxy_url_for(agent_id: str) -> str:
 
 
 @router.get("/{agent_id}/.well-known/agent-card.json")
-async def get_agent_card(agent_id: AgentIdPath, agent_service: AgentServiceDep = None):
+# Phase 1 integration review (P1-1): public, unauthenticated endpoint
+# — required by A2A discovery, so we can't gate it behind auth, but
+# without ANY rate limit it lets an attacker enumerate every agent_id
+# in O(N) DB reads with zero cost. 60/minute per IP key (the
+# unauthenticated fallback in ``_rate_limit_key``) keeps honest
+# discovery traffic comfortably under cap (one card fetch + 60s
+# client cache is the typical pattern) while throttling enumerators.
+@limiter.limit("60/minute")
+async def get_agent_card(
+    request: Request,
+    agent_id: AgentIdPath,
+    agent_service: AgentServiceDep = None,
+):
     """Get agent's A2A Agent Card (v0.3.0 compliant)
 
     Returns the card submitted at registration time if available.
@@ -1051,7 +1063,15 @@ async def get_agent_registration_file(
 
 
 @router.get("/{agent_id}/endpoint")
+# Phase 1 integration review (P1-1): owner-or-internal authenticated,
+# but every successful read writes an INFO ``agent_endpoint_disclosed``
+# audit log. Without a per-agent rate cap, a leaked owner API key
+# could be looped to drown the audit stream and obscure subsequent
+# attacks. 60/minute is far above any legitimate self-introspection
+# pattern (humans + scripts alike).
+@limiter.limit("60/minute")
 async def get_agent_endpoint(
+    request: Request,
     agent_id: AgentIdPath,
     caller: OwnerOrInternalDep,
     agent_service: AgentServiceDep = None,
@@ -1154,7 +1174,13 @@ class CommunicationPolicyPatchRequest(BaseModel):
     # while preserving the same auth semantics as PATCH.
     dependencies=[Depends(verify_owner_or_internal)],
 )
+# Phase 1 integration review (P1-1): same per-agent ceiling as
+# ``GET /endpoint``. Owners are expected to poll their own policy
+# (e.g. dashboard refreshes), so 60/minute is generous; the cap is
+# there to bound a leaked-key replay loop, not legitimate polling.
+@limiter.limit("60/minute")
 async def get_agent_policy(
+    request: Request,
     agent_id: AgentIdPath,
     agent_service: AgentServiceDep = None,
 ):
@@ -1191,7 +1217,18 @@ async def get_agent_policy(
 
 
 @router.patch("/{agent_id}/policy")
+# Phase 1 integration review (P1-1): tighter cap than the read paths
+# because PATCH is destructive — it writes DB (Postgres UPDATE +
+# Redis SET), invalidates the agent cache, and emits a structured
+# INFO ``communication_policy_updated`` log. A leaked owner API key
+# spamming PATCH could push the cache + audit stream hard. 30/minute
+# leaves ~one toggle per 2s, which is two orders of magnitude above
+# any legitimate operator pattern (humans rarely flip policy more
+# than a few times a day, automation a handful of times per minute
+# during incident response).
+@limiter.limit("30/minute")
 async def update_agent_policy(
+    request: Request,
     agent_id: AgentIdPath,
     body: CommunicationPolicyPatchRequest,
     caller: OwnerOrInternalDep,

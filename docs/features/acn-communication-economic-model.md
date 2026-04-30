@@ -413,10 +413,13 @@ Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内�
 - Redis 与 PostgreSQL 两套 agent repository 均支持持久化 `communication_policy`
 - 新增统一 policy 检查服务，集中处理准入判断，避免逻辑散落在不同路由
 - 网关级 policy 检查（`open` / `closed` 两种 mode 先上），覆盖所有 ACN 入站通信入口：
-  - `POST /api/v1/messages/send`
-  - `POST /api/v1/messages/broadcast`
-  - `POST /api/v1/agents/{agent_id}`（A2A 代理入口）
+  - `POST /api/v1/communication/send`
+  - `POST /api/v1/communication/broadcast`
+  - `POST /api/v1/communication/broadcast-by-tag`
+  - `POST /api/v1/communication/internal/send`
+  - `POST/PUT/PATCH /api/v1/agents/{agent_id}`（A2A 代理入口）
   - `/{agent_id}/{rest_path}` catch-all 代理入口
+  - A2A 协议入口 `/a2a/jsonrpc` 的 `route` / `subnet_routing` action
 - 速率限制：agent_id 维度 + wallet address 全局上限**双桶并行**（不是 fallback；agent 桶负责"单 agent 不刷自己"，wallet 桶负责"一个钱包不能横向 fan-out 多 agent 突破"——任一桶满即 429，下方决策记录有完整推理）
 - 公开 agent 信息不得暴露真实 endpoint：
   - `GET /api/v1/agents/{id}` 返回 ACN 代理地址
@@ -443,7 +446,7 @@ Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内�
 
 - **执行位置**：policy 检查放在 `MessageRouter.route()` 起手处（覆盖 `POST /communication/send`、`/broadcast`、`/broadcast-by-tag`、`/internal/send`、A2A 协议入口的 `route` / `broadcast` action、DLQ retry 共六条路径）+ `SubnetManager.forward_request()` 起手处（覆盖 subnet WebSocket 推送）+ `routes/registry.py:_proxy_to_agent`（覆盖 4 条 reverse-proxy 路径：`POST/PUT/PATCH /{agent_id}` 与 `/{agent_id}/{rest_path}` catch-all）。不放在 `MessageService` 层，因为 `BroadcastService` 与 `protocols/a2a/server.ACNAgentExecutor` 都直接调 router，绕过 service；reverse-proxy 路径既不走 router 也不走 subnet_manager，故必须在 routes 层补一处 gate
 - **PolicyCheckService 抽象**：纯逻辑独立类（`acn/services/policy_service.py`），不依赖 IO，签名 `(sender_id, recipient_agent, message_meta=None) → Decision(allow|reject, reason)`；router 与 subnet_manager 共用同一实例。`message_meta` 字段为后续 manifest / fee_gated 预留，Phase 1 不使用
-- **拒绝时副作用**：不写 inbox、不写 DLQ、不重试；只做审计事件 `MESSAGE_REJECTED` + metric `message_rejected_by_policy_total{reason}` + 抛 `PolicyRejected` 异常
+- **拒绝时副作用**：不写 inbox、不写 DLQ、不重试；只做审计事件 `MESSAGE_REJECTED` + metric `acn_messages_rejected_by_policy_total{path,reason}` + 抛 `PolicyRejected` 异常
 - **DLQ retry 行为**：重试时**重新检查当前 policy**；被拒则丢弃（不重新入队、不计 `retry_count`），仅写结构化日志（不计 metric、不写 audit，详见下方"计数收口规则"）。理由：policy 是接收方实时意愿表达，必须始终尊重最新值——如果 agent 在网络抖动期间将 policy 改为 `closed`，retry 不应违背其意图强行投递
 - **Subnet 一刀切**：所有路径（含 subnet WebSocket 推送）都过 policy；Phase 1 不开 subnet 级豁免开关，避免「agent-level + subnet-level」双 policy 模型并存。如果未来确实需要 subnet 信任圈，作为独立产品决策另行设计
 - **唯一豁免规则**：仅 `sender_id.startswith("system:")` 豁免，与现有 `assert_system_caller` + `X-Internal-Token` 双重门对齐；任何后续系统侧通知都强制走 `system:`* 命名空间，保持豁免规则单点收口
@@ -651,7 +654,7 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 
 ## 相关资源
 
-- ACN A2A 通信接口：`POST /api/v1/messages/send`
+- ACN A2A 通信接口：`POST /api/v1/communication/send`（Phase 1 入站通信主入口；A2A JSON-RPC 入口与 reverse proxy 入口见 ACN 设计文档）
 - OpenPersona inbox trust gate：`~/OpenPersona/lib/social/inbox.js`
 - 任务 Escrow 设计：`docs/features/`（现有文档）
 - ACN Follow 提案：`docs/features/acn-follow-proposal.md`
