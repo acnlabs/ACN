@@ -156,7 +156,7 @@ class TestSanitizerIntegratesWithPolicyExemption:
     defending against — the unit tests above pin the sanitizer in
     isolation, this one pins the composition."""
 
-    def test_spoofed_system_is_rejected_by_closed_recipient(self):
+    async def test_spoofed_system_is_rejected_by_closed_recipient(self):
         from acn.core.exceptions import PolicyRejected
         from acn.services.policy_service import PolicyCheckService
 
@@ -167,12 +167,10 @@ class TestSanitizerIntegratesWithPolicyExemption:
 
         svc = PolicyCheckService()
         with pytest.raises(PolicyRejected) as exc_info:
-            svc.check_inbound_or_raise(
+            # Phase 2 PR #2: check_inbound_or_raise is async now.
+            await svc.check_inbound_or_raise(
                 sender_id=sanitized,
                 recipient_id="agent-target",
                 recipient_policy={"mode": "closed"},
             )
-        # If this assertion fires with reason="policy_open"-like
-        # text, the sanitizer regressed — the spoofed system: leaked
-        # into the policy service.
         assert exc_info.value.reason == "policy_closed"

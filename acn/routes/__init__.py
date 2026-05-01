@@ -7,6 +7,7 @@ from . import (
     analytics,
     communication,
     dependencies,
+    follows,
     monitoring,
     payments,
     registry,
@@ -18,6 +19,7 @@ from . import (
 __all__ = [
     "dependencies",
     "registry",
+    "follows",
     "communication",
     "subnets",
     "monitoring",

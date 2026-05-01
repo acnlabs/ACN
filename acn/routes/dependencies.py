@@ -35,6 +35,7 @@ from ..monitoring import (
 from ..protocols.ap2 import PaymentDiscoveryService, PaymentTaskManager, WebhookService
 from ..services import (
     AgentService,
+    AllowlistService,
     BillingService,
     FollowService,
     ManifestService,
@@ -286,6 +287,11 @@ _policy_service: PolicyCheckService | None = None
 # ``None`` lets test harnesses bring the app up without manifest
 # wiring — same pattern as ``_policy_service`` above.
 _manifest_service: ManifestService | None = None
+# Phase 2 PR #2 allowlist service. Owns the dual-layer (PG + Redis)
+# trust list backing ``communication_policy.mode=allowlist``. ``None``
+# default keeps tests / CLI tools that don't depend on allowlist mode
+# operational without spinning up the storage layer.
+_allowlist_service: AllowlistService | None = None
 
 
 def init_services(
@@ -308,6 +314,7 @@ def init_services(
     follow_service: FollowService | None = None,
     policy_service: PolicyCheckService | None = None,
     manifest_service: ManifestService | None = None,
+    allowlist_service: AllowlistService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -322,6 +329,7 @@ def init_services(
     global _metrics, _audit, _analytics
     global _payment_discovery, _payment_tasks, _webhook_service, _billing_service
     global _activity_service, _follow_service, _policy_service, _manifest_service
+    global _allowlist_service
 
     _registry = registry
     _agent_service = agent_service
@@ -343,6 +351,7 @@ def init_services(
     _follow_service = follow_service
     _policy_service = policy_service
     _manifest_service = manifest_service
+    _allowlist_service = allowlist_service
 
 
 # Dependency functions
@@ -480,6 +489,35 @@ def get_manifest_service() -> ManifestService:
     return _manifest_service
 
 
+def get_allowlist_service() -> AllowlistService:
+    """Get the AllowlistService instance.
+
+    PR #2 v3 review P1-A3: when the deployment is missing PostgreSQL
+    (DATABASE_URL not set), ``api.py`` lifespan logs an
+    ``allowlist_service_disabled`` warning and leaves
+    ``_allowlist_service`` at None. Calling an allowlist endpoint
+    in that mode previously surfaced ``RuntimeError`` → FastAPI 500,
+    which falsely tells the client "transient failure, retry".
+    The correct semantic is HTTP 503 with a Retry-After hint — the
+    feature is *configured-disabled*, not crashed; clients should
+    surface the message to operators rather than retry blindly.
+
+    For wired environments (the production lifespan plus most tests)
+    this dependency returns the live service exactly as before.
+    """
+    if _allowlist_service is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Allowlist feature is unavailable — server is missing "
+                "PostgreSQL configuration (DATABASE_URL). Contact the "
+                "operator to enable allowlist mode."
+            ),
+            headers={"Retry-After": "300"},
+        )
+    return _allowlist_service
+
+
 def get_policy_service() -> PolicyCheckService | None:
     """Get the PolicyCheckService instance, or ``None`` if policy is not wired.
 
@@ -512,6 +550,7 @@ ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 FollowServiceDep = Annotated[FollowService, Depends(get_follow_service)]
 PolicyServiceDep = Annotated["PolicyCheckService | None", Depends(get_policy_service)]
 ManifestServiceDep = Annotated[ManifestService, Depends(get_manifest_service)]
+AllowlistServiceDep = Annotated[AllowlistService, Depends(get_allowlist_service)]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]

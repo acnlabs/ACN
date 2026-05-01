@@ -30,6 +30,7 @@ See docs/features/acn-communication-economic-model.md
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -61,12 +62,19 @@ SYSTEM_SENDER_PREFIX = "system:"
 #   gets a WS notification with sender_id + summary. Full content is
 #   pulled on demand via ``GET /communication/content/{mid}``.
 #
-# Phase 2 prototype PR #2 will add ``allowlist`` mode (gates on a
-# relational allow set; membership stored in a separate PG table —
-# *not* inside the policy dict). It is intentionally absent from
-# the validator until PR #2 is wired so users cannot store half-baked
-# allowlist policies that activate on upgrade.
-SUPPORTED_POLICY_MODES = frozenset({"open", "closed", "manifest"})
+# Phase 2 prototype PR #2 expansion (Group B #3):
+# - ``allowlist`` — sender-aware divert: senders in the recipient's
+#   ``agent_allowlist`` row set go to inbox; everyone else diverts
+#   to the manifest queue (the same path manifest mode established
+#   in PR #1). Membership is stored in a separate PG table
+#   (``agent_allowlist`` — see infrastructure/persistence/postgres/
+#   models.py:AgentAllowlistModel) — *not* inside the policy dict
+#   itself. Keeping members out of the policy JSONB preserves the
+#   strict-keys schema below (only ``mode`` / ``reject_reason`` are
+#   accepted in the dict; arbitrary half-baked keys are still
+#   422'd) and lets the relational layer cascade-clean on agent
+#   unregistration.
+SUPPORTED_POLICY_MODES = frozenset({"open", "closed", "manifest", "allowlist"})
 
 # Cap on user-supplied ``reject_reason`` strings. Long enough for a
 # short human explanation ("on vacation until 2026-05") but short
@@ -86,17 +94,25 @@ def validate_policy_dict(value: Any) -> dict[str, Any] | None:
     drift — adding a new mode requires touching this file in two
     aligned places.
 
-    Phase 1 + Phase 2 PR #1 accepted shape::
+    Phase 1 + Phase 2 PR #1 + PR #2 accepted shape::
 
-        {"mode": "open" | "closed" | "manifest",
+        {"mode": "open" | "closed" | "manifest" | "allowlist",
          "reject_reason"?: str (≤ MAX_REJECT_REASON_LEN chars)}
 
-    Note that ``mode=manifest`` does NOT take any extra config in the
-    policy dict (no per-agent summary length cap, no per-agent TTL):
-    those constants live in ``services/manifest_service.py`` and are
-    intentionally globally tuned in Phase 2 to avoid each agent owner
-    needing to discover a safe default. ``reject_reason`` is reused
-    as an optional human label for the manifest queue UI.
+    Note that ``mode=manifest`` and ``mode=allowlist`` do NOT take
+    any extra config in the policy dict (no per-agent summary
+    length cap, no per-agent TTL, no inline member list): those
+    constants live in ``services/manifest_service.py`` and are
+    intentionally globally tuned in Phase 2 to avoid each agent
+    owner needing to discover a safe default; allowlist members
+    live in the relational ``agent_allowlist`` table (see
+    AllowlistService). The strict-keys check below still rejects
+    raw ``allowlist: [...]`` / ``manifest_threshold`` /
+    ``attention_fee`` etc. inline — preserving "policy is the
+    explicit contract you opted into" against drive-by additions.
+
+    ``reject_reason`` is reused across modes as an optional human
+    label (manifest queue UI, allowlist denial 403 body).
 
     Returns:
         ``None`` if ``value`` is None (lets the caller decide whether
@@ -191,43 +207,78 @@ class PolicyDecision:
 class PolicyCheckService:
     """Decide whether an inbound message is allowed to reach the recipient.
 
-    Phase 1 + Phase 2 PR #1 supports three modes:
+    Phase 1 + Phase 2 (PR #1 + PR #2) supports four modes:
 
-    * ``open``     — accept and route to inbox (legacy default; the
+    * ``open``       — accept and route to inbox (legacy default; the
       field is backfilled to ``{"mode": "open"}`` on every ``Agent``
       instance, so an absent policy lands here too).
-    * ``closed``   — reject with ``reason="policy_closed"``.
-    * ``manifest`` — accept but route to the manifest queue
+    * ``closed``     — reject with ``reason="policy_closed"``.
+    * ``manifest``   — accept but route to the manifest queue
       (``decision.route_to == "manifest"``). The router writes a
       summary entry and pushes a WS notification; full content is
       pulled on demand by the recipient.
+    * ``allowlist``  — accept-and-route based on sender membership
+      in the recipient's relational allowlist (``agent_allowlist``
+      table, see PR #2). Senders on the list go to inbox; everyone
+      else diverts to manifest. The membership check happens via
+      an injected async callback (``is_in_allowlist`` parameter on
+      ``check_inbound``) — keeping this service free of repository
+      handles preserves its "pure logic" property: no IO except
+      what the caller explicitly threads in. See PR #2 plan P0-2
+      decision for the why.
 
-    Any other mode value (e.g. ``allowlist`` arriving before Phase 2
-    PR #2 is shipped, or a typo) is treated as **fail-closed** —
-    rejected with ``reason="policy_unknown_mode"`` and a warning log.
-    Rationale:
+      **Empty allowlist semantics**: if the recipient's allowlist
+      is empty the decision is "divert to manifest", NOT "fail
+      open" or "fail closed-as-rejection". This matches the user
+      intent of allowlist mode ("only people I explicitly trust go
+      straight to my inbox; the rest goes to a queue I check
+      periodically") and avoids two failure modes that were
+      considered:
 
-    * Unknown modes almost always mean a misconfiguration, and
-      silently accepting would hide it; the agent owner notices
-      immediately when their own test sends start failing.
-    * Forward-compatibility (e.g. ``allowlist`` shipping from a
-      future client before the server upgrade) is handled via
-      versioned releases, not via fail-open semantics — the server
-      upgrade installs the new branch in this method.
+      - Treating empty as "block all" would silently rejection-bomb
+        senders on the day after the recipient flipped to allowlist
+        mode, which is the worst possible UX for a fresh adopter.
+      - Treating empty as "open" defeats the security purpose.
 
-    The ``message_meta`` keyword-only parameter is unused in Phase 1
-    but reserved so Phase 2/3 (``manifest`` size threshold,
-    ``fee_gated`` attention_fee minimum) can extend the contract
-    without breaking call sites.
+      Diverting matches PR #1's manifest semantics (graceful
+      degradation, non-loss).
+
+      **Failure modes** (PR #2 plan P0-3): when ``is_in_allowlist``
+      raises (Redis outage, PG outage), this service does NOT
+      surface the exception to the caller as an error response.
+      Instead it logs the failure and **fail-closes to the
+      manifest queue**: the message is preserved (recipient can
+      still pull from manifest) but doesn't bypass the trust check
+      it should have failed. The alternative (fail-open to inbox)
+      would let an adversary deny-of-service the cache and
+      promote-bomb the recipient's inbox; the alternative
+      (reject-all) would lose messages. Manifest divert is the
+      least-bad failure mode.
+
+    Any other mode value (typo, future mode arriving from a
+    forward client) is treated as **fail-closed** rejection. Same
+    rationale as before: misconfiguration must be loudly visible,
+    not silently allowed.
+
+    The ``message_meta`` keyword-only parameter is reserved so
+    Phase 3 (``fee_gated`` attention_fee minimum) can extend the
+    contract without breaking call sites.
+
+    **Async-ness**: ``check_inbound`` is now ``async`` because the
+    ``allowlist`` branch awaits the membership callback. ``open``
+    / ``closed`` / ``manifest`` paths still return synchronously
+    via ``async def`` but cost no IO; the marginal coroutine
+    overhead is irrelevant against the per-message router work.
     """
 
-    def check_inbound(
+    async def check_inbound(
         self,
         sender_id: str,
         recipient_id: str,
         recipient_policy: dict[str, Any] | None,
         *,
         message_meta: dict[str, Any] | None = None,
+        is_in_allowlist: Callable[[str, str], Awaitable[bool]] | None = None,
     ) -> PolicyDecision:
         """Return the access decision for ``sender_id`` -> ``recipient_id``.
 
@@ -242,17 +293,23 @@ class PolicyCheckService:
                 dict. ``None`` is treated as ``{"mode": "open"}`` to
                 preserve the legacy default for agents that predate
                 Step 1 of the rollout.
-            message_meta: Reserved for Phase 2/3 extensions
-                (``manifest`` size threshold, ``fee_gated`` attention
-                minimum). Phase 1 ignores it; keyword-only so callers
-                cannot positionally bind to it accidentally.
+            message_meta: Reserved for Phase 3 extensions
+                (``fee_gated`` attention minimum).
+            is_in_allowlist: Async callback wired by the router /
+                subnet layer (typically
+                ``AllowlistService.is_member``). Required for
+                ``mode=allowlist``; ignored for other modes.
+                Injected (rather than holding a service handle on
+                self) so this class has no IO dependencies — keeps
+                unit tests trivial and lets non-router callers
+                supply a stub.
 
         Returns:
             ``PolicyDecision``. This method never raises for policy
             reasons; callers needing short-circuit semantics
             (router, subnet manager) use ``check_inbound_or_raise``.
         """
-        del message_meta  # Phase 1 ignores; reserved for Phase 2/3.
+        del message_meta  # reserved for Phase 3.
 
         if sender_id.startswith(SYSTEM_SENDER_PREFIX):
             return PolicyDecision(allow=True)
@@ -283,6 +340,42 @@ class PolicyCheckService:
             # inbox write and call ManifestService.write instead.
             return PolicyDecision(allow=True, route_to="manifest")
 
+        if mode == "allowlist":
+            # The router is responsible for wiring
+            # ``is_in_allowlist``; if it didn't, we cannot safely
+            # decide — treat as configuration error and fail-closed
+            # to manifest (same direction as the IO-failure path
+            # below; never lose a message).
+            if is_in_allowlist is None:
+                logger.error(
+                    "policy_allowlist_callback_missing",
+                    recipient_id=recipient_id,
+                    sender_id=sender_id,
+                )
+                return PolicyDecision(allow=True, route_to="manifest")
+
+            try:
+                is_member = await is_in_allowlist(recipient_id, sender_id)
+            except Exception as exc:  # noqa: BLE001
+                # PR #2 plan P0-3: fail-closed to manifest. We log
+                # at WARNING (operationally interesting but
+                # recoverable) rather than ERROR — repeated logs at
+                # ERROR would page on-call for a Redis blip that
+                # the next is_member miss would heal.
+                logger.warning(
+                    "policy_allowlist_check_failed_fail_closed_manifest",
+                    recipient_id=recipient_id,
+                    sender_id=sender_id,
+                    error=str(exc),
+                )
+                return PolicyDecision(allow=True, route_to="manifest")
+
+            if is_member:
+                return PolicyDecision(allow=True, route_to="inbox")
+            # Sender is not on the allowlist — divert to manifest.
+            # See class docstring for the empty-allowlist semantics.
+            return PolicyDecision(allow=True, route_to="manifest")
+
         logger.warning(
             "policy_unknown_mode",
             recipient_id=recipient_id,
@@ -294,24 +387,31 @@ class PolicyCheckService:
             reject_reason=policy.get("reject_reason"),
         )
 
-    def check_inbound_or_raise(
+    async def check_inbound_or_raise(
         self,
         sender_id: str,
         recipient_id: str,
         recipient_policy: dict[str, Any] | None,
         *,
         message_meta: dict[str, Any] | None = None,
+        is_in_allowlist: Callable[[str, str], Awaitable[bool]] | None = None,
     ) -> None:
         """Raise ``PolicyRejected`` if the recipient's policy denies the message.
 
         Convenience wrapper used by call sites that want short-circuit
         semantics (skip inbox/DLQ write, propagate rejection upward).
+
+        Note that ``allowlist`` mode never reaches the raise branch:
+        non-members divert to manifest (``allow=True``,
+        ``route_to="manifest"``) rather than reject. So this helper
+        is only useful for ``open`` / ``closed`` paths today.
         """
-        decision = self.check_inbound(
+        decision = await self.check_inbound(
             sender_id=sender_id,
             recipient_id=recipient_id,
             recipient_policy=recipient_policy,
             message_meta=message_meta,
+            is_in_allowlist=is_in_allowlist,
         )
         if decision.allow:
             return

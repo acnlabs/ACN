@@ -42,6 +42,7 @@ from ..persistence.redis.registry import AgentRegistry
 # import, which is what would cause a circular dependency
 # (services -> infrastructure -> services).
 if TYPE_CHECKING:
+    from ...services.allowlist_service import AllowlistService
     from ...services.policy_service import PolicyCheckService
     from .manifest_dispatcher import ManifestDispatcher
 
@@ -102,6 +103,7 @@ class MessageRouter:
         redis_client: redis.Redis,
         policy_service: "PolicyCheckService | None" = None,
         manifest_dispatcher: "ManifestDispatcher | None" = None,
+        allowlist_service: "AllowlistService | None" = None,
     ):
         """
         Initialize Message Router
@@ -128,11 +130,27 @@ class MessageRouter:
                 don't exercise manifest mode at all. The dispatcher
                 bundles ``ManifestService`` + WS + metrics, so this
                 router only needs one collaborator reference.
+            allowlist_service: Phase 2 PR #2 allowlist trust list.
+                Required when ``policy_service`` may emit
+                ``mode=allowlist`` decisions (i.e. once any agent has
+                set their policy to that mode). The router threads
+                ``AllowlistService.is_member`` into
+                ``PolicyCheckService.check_inbound`` as the
+                ``is_in_allowlist`` callback so the policy service
+                stays a pure function (no IO dependencies on its
+                own). When ``None`` and a recipient's policy is
+                ``allowlist``, the policy service falls back to
+                "divert to manifest" (its safety default) so the
+                router does NOT crash — same accept-but-divert
+                semantics as a normal non-member, just driven by the
+                missing-collaborator path. See PR #2 plan P0-2 for
+                the design rationale.
         """
         self.registry = registry
         self.redis = redis_client
         self.policy_service = policy_service
         self.manifest_dispatcher = manifest_dispatcher
+        self.allowlist_service = allowlist_service
 
         # Cache of A2A clients by endpoint (capped to prevent unbounded growth)
         self._clients: dict[str, A2AClient] = {}
@@ -257,10 +275,22 @@ class MessageRouter:
         # legacy tests / scripts that build a router without one keep
         # working unchanged. Production wiring (acn/api.py) installs it.
         if self.policy_service is not None:
-            decision = self.policy_service.check_inbound(
+            # Bind the allowlist callback only when the service is
+            # wired — keeping ``is_in_allowlist=None`` for the
+            # rollout-opt-out path lets ``PolicyCheckService`` apply
+            # its safety fallback (divert to manifest on
+            # ``mode=allowlist`` without a callback) instead of
+            # crashing on a config mismatch.
+            is_in_allowlist = (
+                self.allowlist_service.is_member
+                if self.allowlist_service is not None
+                else None
+            )
+            decision = await self.policy_service.check_inbound(
                 sender_id=from_agent,
                 recipient_id=to_agent,
                 recipient_policy=agent_info.communication_policy,
+                is_in_allowlist=is_in_allowlist,
             )
             if not decision.allow:
                 # Same surface as the Phase 1 ``check_inbound_or_raise``

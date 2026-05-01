@@ -54,6 +54,7 @@ from ..persistence.redis.registry import AgentRegistry
 # the submodule directly avoids triggering ``services/__init__.py``
 # during this module's import (services -> infrastructure -> services).
 if TYPE_CHECKING:
+    from ...services.allowlist_service import AllowlistService
     from ...services.policy_service import PolicyCheckService
     from .manifest_dispatcher import ManifestDispatcher
 
@@ -138,6 +139,7 @@ class SubnetManager:
         heartbeat_timeout: int = 90,
         policy_service: "PolicyCheckService | None" = None,
         manifest_dispatcher: "ManifestDispatcher | None" = None,
+        allowlist_service: "AllowlistService | None" = None,
     ):
         """
         Initialize Subnet Manager
@@ -165,6 +167,14 @@ class SubnetManager:
                 policy-only legacy fixtures working — manifest mode
                 will then surface a clear ``RuntimeError`` rather
                 than silently bypass.
+            allowlist_service: Phase 2 PR #2 allowlist trust list.
+                Threaded into ``PolicyCheckService.check_inbound``
+                as the ``is_in_allowlist`` callback so subnet-bound
+                ingress (gateway A2A path) honours allowlist mode
+                identically to the HTTP path. ``None`` falls back to
+                policy_service's "missing callback → divert to
+                manifest" safety branch — same shape as
+                ``MessageRouter`` for symmetry.
         """
         self.registry = registry
         self.redis = redis_client
@@ -173,6 +183,7 @@ class SubnetManager:
         self.heartbeat_timeout = heartbeat_timeout
         self.policy_service = policy_service
         self.manifest_dispatcher = manifest_dispatcher
+        self.allowlist_service = allowlist_service
 
         # Subnets: {subnet_id: Subnet}
         self._subnets: dict[str, Subnet] = {}
@@ -733,10 +744,21 @@ class SubnetManager:
                     exc,
                 )
 
-            decision = self.policy_service.check_inbound(
+            # Bind the allowlist callback only when wired. With the
+            # callback absent, ``check_inbound`` will fail-closed
+            # to manifest for ``mode=allowlist`` (see policy_service
+            # "missing callback" branch) — same direction as the
+            # HTTP path so behaviour is uniform across ingress.
+            is_in_allowlist = (
+                self.allowlist_service.is_member
+                if self.allowlist_service is not None
+                else None
+            )
+            decision = await self.policy_service.check_inbound(
                 sender_id=from_agent or "unknown",
                 recipient_id=agent_id,
                 recipient_policy=policy,
+                is_in_allowlist=is_in_allowlist,
             )
             if not decision.allow:
                 # Mirror ``check_inbound_or_raise`` semantics — the

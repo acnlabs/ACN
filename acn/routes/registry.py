@@ -552,7 +552,17 @@ async def _proxy_to_agent(
     # recipient's network.
     if policy_service is not None:
         try:
-            policy_service.check_inbound_or_raise(
+            # Phase 2 PR #2: ``check_inbound_or_raise`` is now ``async``.
+            # The proxy intentionally does NOT thread an
+            # ``is_in_allowlist`` callback here — proxy-mode is a
+            # closed/open gate only, and ``allowlist`` mode would be
+            # surfaced as "divert to manifest" which is meaningless for
+            # raw HTTP proxy semantics. With no callback,
+            # ``check_inbound`` falls back to "divert to manifest"
+            # internally, which the proxy then treats as "allow"
+            # (decision.allow=True, no raise) — matching the
+            # legacy proxy behaviour for non-closed modes.
+            await policy_service.check_inbound_or_raise(
                 sender_id=caller.get("agent_id", "unknown"),
                 recipient_id=agent_id,
                 recipient_policy=getattr(agent, "communication_policy", None),

@@ -209,29 +209,32 @@ class TestSchemaValidation:
     ``isinstance(dict)`` check)."""
 
     def test_unknown_mode_rejected(self, stub_agent_service):
-        """Phase 2 PR #1 supports ``open`` / ``closed`` / ``manifest``.
-        ``allowlist`` is reserved for Phase 2 PR #2 and must surface
-        422 here so a forward-shipped client can't store half-baked
-        allowlist policies that activate on PR #2 deploy."""
+        """PR #2 ships ``open`` / ``closed`` / ``manifest`` /
+        ``allowlist``. Modes outside this set (e.g. a half-baked
+        forward-shipped ``paid`` mode) must surface 422 so a
+        client cannot store a policy that "activates" on a future
+        deploy."""
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
             r = client.patch(
                 "/api/v1/agents/agent-target/policy",
-                json={"communication_policy": {"mode": "allowlist"}},
+                json={"communication_policy": {"mode": "paid"}},
                 headers={"Authorization": "Bearer owner-key"},
             )
 
         assert r.status_code == 422, r.text
         # Pin the wire-shape: error mentions all currently-supported
-        # modes and the one we tried, so a frontend can surface a
+        # modes plus the one we tried, so a frontend can surface a
         # useful message without parsing.
         body_text = r.text
-        assert "allowlist" in body_text
+        assert "paid" in body_text
         assert "open" in body_text and "closed" in body_text
-        # PR #1 supports manifest — make sure the error message
-        # reflects that, not a stale Phase 1 list.
+        # PR #1 added ``manifest`` and PR #2 added ``allowlist`` —
+        # make sure both appear in the diagnostic so the error
+        # message tracks the live supported set, not a stale list.
         assert "manifest" in body_text
+        assert "allowlist" in body_text
         stub_agent_service.update_communication_policy.assert_not_awaited()
 
     def test_unknown_top_level_key_rejected(self, stub_agent_service):
@@ -722,12 +725,13 @@ class TestRegistrationAcceptsPolicy:
         from acn.models import AgentRegisterRequest
         from acn.routes.registry import AgentJoinRequest
 
-        # Phase 2 PR #1: ``manifest`` is now a supported mode, so we
-        # use ``allowlist`` (reserved for PR #2) as the unsupported
-        # value. The shared-validator invariant is what's pinned —
-        # whichever mode is "currently rejected" is incidental.
+        # PR #2 added ``allowlist`` to the supported set, so we pick
+        # ``paid`` as a stand-in for "any mode that is not currently
+        # supported". The shared-validator invariant is what's pinned
+        # — whichever mode is "currently rejected" is incidental, the
+        # important property is that BOTH classes reject it identically.
         bad_payload = {
-            "communication_policy": {"mode": "allowlist"},
+            "communication_policy": {"mode": "paid"},
         }
 
         # Build the rest of the required fields just enough to
@@ -751,7 +755,7 @@ class TestRegistrationAcceptsPolicy:
 
         # The validator is the same — the error text contains the
         # same diagnostic substring on both sides.
-        assert "allowlist" in str(exc_register.value)
-        assert "allowlist" in str(exc_join.value)
+        assert "paid" in str(exc_register.value)
+        assert "paid" in str(exc_join.value)
         assert "open" in str(exc_register.value).lower()
         assert "open" in str(exc_join.value).lower()

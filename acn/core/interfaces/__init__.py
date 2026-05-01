@@ -5,12 +5,14 @@ Infrastructure layer implements these interfaces.
 """
 
 from .agent_repository import IAgentRepository
+from .allowlist_repository import AllowlistEntry, IAllowlistRepository
 from .escrow_provider import (
     EscrowDetailResult,
     EscrowResult,
     IEscrowProvider,
     ReleaseResult,
 )
+from .follow_repository import IFollowRepository
 from .subnet_repository import ISubnetRepository
 from .task_repository import ITaskRepository
 
@@ -18,6 +20,9 @@ from .task_repository import ITaskRepository
 # modules to avoid circular imports (they reference service-layer types).
 __all__ = [
     "IAgentRepository",
+    "IAllowlistRepository",
+    "AllowlistEntry",
+    "IFollowRepository",
     "ISubnetRepository",
     "ITaskRepository",
     "IEscrowProvider",

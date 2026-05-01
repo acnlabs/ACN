@@ -48,6 +48,7 @@ from .infrastructure.messaging import (
 from .infrastructure.persistence.postgres import (
     PostgresActivityRepository,
     PostgresAgentRepository,
+    PostgresAllowlistRepository,
     PostgresBillingRepository,
     PostgresSubnetRepository,
     PostgresTaskRepository,
@@ -56,6 +57,7 @@ from .infrastructure.persistence.postgres import (
 )
 from .infrastructure.persistence.redis import (
     RedisAgentRepository,
+    RedisAllowlistRepository,
     RedisFollowRepository,
     RedisSubnetRepository,
 )
@@ -64,7 +66,10 @@ from .infrastructure.persistence.redis.task_repository import RedisTaskRepositor
 from .infrastructure.task_pool import TaskPool
 from .middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .monitoring import Analytics, AuditLogger, MetricsCollector
-from .protocols.a2a.server import create_a2a_app
+from .protocols.a2a import (
+    A2AFromAgentValidationMiddleware,
+    create_a2a_app,
+)
 from .protocols.ap2 import (
     PaymentDiscoveryService,
     PaymentTaskManager,
@@ -72,6 +77,7 @@ from .protocols.ap2 import (
     create_webhook_config_from_settings,
 )
 from .routes import (
+    allowlist,
     analytics,
     communication,
     dependencies,
@@ -89,6 +95,7 @@ from .routes.dependencies import limiter
 from .security import check_tls_config
 from .services import (
     AgentService,
+    AllowlistService,
     BillingService,
     FollowService,
     ManifestService,
@@ -197,11 +204,50 @@ async def lifespan(app: FastAPI):
         metrics=metrics_instance,
     )
 
+    # Phase 2 PR #2: AllowlistService — dual-layer (PG + Redis).
+    # Built before MessageRouter / SubnetManager so it can be threaded
+    # in as the ``is_in_allowlist`` callback for both. The Redis
+    # cache repository takes a closure pointing at the PG repo's
+    # ``list_target_ids`` so cache misses can rebuild without
+    # holding a circular handle. AllowlistService falls back to
+    # PG-only when ``redis_repo=None``; we always pass the Redis
+    # cache in production for the 30s read-through that keeps the
+    # hot inbound check off PG. ``allowlist_service_instance`` may
+    # be ``None`` if the PG side isn't available (Redis-only
+    # deployments) — the Postgres repo NEEDS a session factory, so
+    # without DATABASE_URL we leave allowlist disabled and the
+    # policy validator already rejects ``mode=allowlist`` schema
+    # validation only when the row arrives, but the runtime path
+    # falls back to "divert to manifest" which is the safety
+    # default. Documented in PR #2 plan P1-B6.
+    allowlist_service_instance: AllowlistService | None = None
+    if _pg_engine is not None:
+        pg_allowlist_repo = PostgresAllowlistRepository(_pg_session)
+        redis_allowlist_repo = RedisAllowlistRepository(
+            registry_instance.redis,
+            pg_loader=pg_allowlist_repo.list_target_ids,
+        )
+        allowlist_service_instance = AllowlistService(
+            pg_repo=pg_allowlist_repo,
+            redis_repo=redis_allowlist_repo,
+            agent_repository=agent_repository,
+        )
+    else:
+        logger.warning(
+            "allowlist_service_disabled",
+            reason=(
+                "DATABASE_URL not set; allowlist trust list requires "
+                "PostgreSQL. Allowlist-mode policies will fall back "
+                "to 'divert to manifest' on every check."
+            ),
+        )
+
     router_instance = MessageRouter(
         registry_instance,
         registry_instance.redis,
         policy_service=policy_service_instance,
         manifest_dispatcher=manifest_dispatcher_instance,
+        allowlist_service=allowlist_service_instance,
     )
     message_service_instance = MessageService(router_instance, agent_repository)
     broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
@@ -211,6 +257,7 @@ async def lifespan(app: FastAPI):
         gateway_base_url=settings.gateway_base_url,
         policy_service=policy_service_instance,
         manifest_dispatcher=manifest_dispatcher_instance,
+        allowlist_service=allowlist_service_instance,
     )
 
     # Initialize payment services
@@ -322,6 +369,7 @@ async def lifespan(app: FastAPI):
         follow_service=follow_service_instance,
         policy_service=policy_service_instance,
         manifest_service=manifest_service_instance,
+        allowlist_service=allowlist_service_instance,
     )
 
     # Phase 1 wiring guard
@@ -364,8 +412,26 @@ async def lifespan(app: FastAPI):
             redis=registry_instance.redis,
             metrics=metrics_instance,
         )
-        app.mount("/a2a", a2a_app)
-        logger.info("a2a_mounted", path="/a2a")
+        # Phase 2 PR #2 P0-1: wrap the A2A app in the from_agent
+        # validation middleware so ``allowlist`` mode cannot be
+        # bypassed by spoofing ``metadata.from_agent``. The closure
+        # captures ``agent_service_instance`` directly rather than
+        # going through the dependency container — middleware
+        # binding happens before ``init_services`` finishes
+        # populating the ``get_*`` lookups, and we want this gate
+        # active from the first request. See
+        # protocols/a2a/auth_middleware.py docstring for the
+        # threat model and design rationale.
+        async def _a2a_agent_lookup(api_key: str) -> str | None:
+            agent = await agent_service_instance.get_agent_by_api_key(api_key)
+            return agent.agent_id if agent is not None else None
+
+        guarded_a2a_app = A2AFromAgentValidationMiddleware(
+            a2a_app,
+            agent_lookup=_a2a_agent_lookup,
+        )
+        app.mount("/a2a", guarded_a2a_app)
+        logger.info("a2a_mounted", path="/a2a", from_agent_validation=True)
     except Exception as e:
         logger.error("a2a_mount_failed", error=str(e))
 
@@ -597,6 +663,16 @@ async def _http_exception_handler(
         method=request.method,
         request_id=request_id,
     )
+    # Preserve standardized response headers from the exception
+    # (notably ``Retry-After`` on 503) while still scrubbing the
+    # response body. Retry-After is informational only — it tells
+    # clients "this is a known unavailable state, not a transient
+    # crash; back off ~N seconds before retrying" and leaks no
+    # internal context.
+    response_headers: dict[str, str] = {"X-Request-ID": request_id}
+    exc_headers = getattr(exc, "headers", None) or {}
+    if "Retry-After" in exc_headers:
+        response_headers["Retry-After"] = exc_headers["Retry-After"]
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -604,7 +680,7 @@ async def _http_exception_handler(
             "message": "An internal error occurred. Please try again later.",
             "request_id": request_id,
         },
-        headers={"X-Request-ID": request_id},
+        headers=response_headers,
     )
 
 
@@ -692,6 +768,12 @@ app.add_middleware(
 # proxy at ``/{agent_id}/{rest_path:path}`` does not greedily swallow
 # follow requests and forward them to the agent's real endpoint.
 app.include_router(follows.router)
+# Phase 2 PR #2: allowlist router shares ``/api/v1/agents`` with
+# registry & follows. Same precedence rule as follows — registered
+# before ``registry.router`` so the catch-all proxy at
+# ``/{agent_id}/{rest_path:path}`` does not greedily forward
+# allowlist requests to the agent's real endpoint.
+app.include_router(allowlist.router)
 app.include_router(registry.router)
 app.include_router(onchain.router)
 app.include_router(communication.router)

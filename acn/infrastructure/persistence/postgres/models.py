@@ -16,8 +16,10 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    ForeignKey,
     Index,
     Integer,
+    PrimaryKeyConstraint,
     String,
     Text,
 )
@@ -228,4 +230,71 @@ class ActivityModel(Base):
     event_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), index=True
+    )
+
+
+# =============================================================================
+# Agent Allowlist (Phase 2 PR #2)
+# =============================================================================
+#
+# Per-agent inbound trust list, paired with ``communication_policy.mode=
+# allowlist``. When that mode is active, only senders whose ``agent_id``
+# appears in the row's ``target_id`` column reach the recipient's inbox;
+# everyone else is diverted into the manifest queue (the "outside the
+# trust list, but worth surfacing later" path established by PR #1).
+#
+# Why a relational table rather than embedding the list inside
+# ``agents.communication_policy`` JSONB:
+#
+# * Schema simplicity. The policy JSONB is supposed to stay small and
+#   ``allowed_keys = {"mode", "reject_reason"}`` (see
+#   ``services/policy_service.py:validate_policy_dict``); adding a
+#   list-typed key would force every read of the policy to scan the
+#   members and would explode policy dict size for high-trust agents.
+# * Reverse lookups. ``INDEX(target_id)`` lets ops/anti-abuse queries
+#   ask "who has this agent in their allowlist" without table-scanning
+#   every JSONB row. Public API does not expose this lookup (privacy
+#   semantics: the recipient's allowlist is private), but it is
+#   essential for incident response.
+# * Cascade semantics. ON DELETE CASCADE on both columns means agent
+#   unregistration automatically cleans up dangling allowlist edges
+#   without an application-layer sweep. Redis SET cache (TTL 30s) is
+#   the eventual-consistency layer; a sweep job is unnecessary.
+class AgentAllowlistModel(Base):
+    __tablename__ = "agent_allowlist"
+
+    # ``owner_id`` and ``target_id`` are both ``agents.agent_id`` strings
+    # (NOT UUIDs — see PR #2 plan P0-1; the design doc previously said
+    # UUID but the canonical agent identifier in this codebase is
+    # String, e.g. ``agent-cursor-v1``). FK to ``agents.agent_id`` lets
+    # the database enforce existence + cascade clean-up; the service
+    # layer ALSO does an existence check up-front so it can return a
+    # clean 404 instead of a raw IntegrityError.
+    owner_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("agents.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("agents.agent_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    # Free-form note from the owner ("trusted partner agent", etc.).
+    # Surfaced in ``GET /agents/{id}/allowlist`` listing for owner
+    # convenience; never exposed to ``target_id``. Capped only by
+    # Postgres's TEXT (≈ 1 GB) — application layer truncates at 200
+    # chars before write.
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        # Composite primary key — (owner_id, target_id) uniqueness is
+        # the natural key, no surrogate id needed. SADD on a Redis SET
+        # mirrors this set-shaped semantic on the cache side.
+        PrimaryKeyConstraint("owner_id", "target_id"),
+        # Reverse lookup index. Not exposed via API; ops-only.
+        Index("ix_agent_allowlist_target_id", "target_id"),
     )

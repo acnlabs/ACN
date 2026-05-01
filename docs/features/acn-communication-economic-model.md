@@ -289,9 +289,12 @@ Session 层特性：
 
 ### communication_policy 与三层模型的映射
 
-每个 agent 可以设置通信策略，控制 Notify 层的准入：
+每个 agent 可以设置通信策略，控制 Notify 层的准入。
+
+> **PR #2 落地后的 drift 修正**：原 Phase 1 设计草稿在策略 dict 里直接放 `allowlist: [...]`，PR #2 实施时把白名单成员独立到 `agent_allowlist` PG 关系表（理由见 Group B #3），所以 dict 里**不再**承载成员列表——dict 只携带 `mode` + `reject_reason`，schema 仍是 strict-keys。下面这个示例是设计草稿形态（保留供历史参考），实际实施形态见后续 [Allowlist API](#allowlist-api) 与 Group B #3 章节。
 
 ```json
+// ❌ 已废弃形态（设计草稿；PR #2 实际不接受 inline allowlist 字段）
 {
   "communication_policy": {
     "mode": "manifest",
@@ -300,6 +303,15 @@ Session 层特性：
     "rate_limit": { "max_per_minute_per_sender": 5 }
   }
 }
+
+// ✅ PR #1 + PR #2 实际形态
+{
+  "communication_policy": {
+    "mode": "allowlist",
+    "reject_reason": "By invitation only"
+  }
+}
+// 成员通过 POST /api/v1/agents/{id}/allowlist/{target_id} 单独管理，见下文 Allowlist API
 ```
 
 > `mode` 枚举：`open | manifest | allowlist | closed`
@@ -336,12 +348,17 @@ Session 层特性：
 配合 `allowlist` 模式，新增管理接口（详细鉴权与一致性策略见 Group B #3）：
 
 ```
-GET    /api/v1/agents/{id}/allowlist             # 查看白名单（owner-only，需 Key）
-POST   /api/v1/agents/{id}/allowlist             # 加入白名单：body {target_id, reason?}
-DELETE /api/v1/agents/{id}/allowlist/{target_id} # 移出白名单
+GET    /api/v1/agents/{id}/allowlist                # 查看白名单（owner-only，需 Key）
+POST   /api/v1/agents/{id}/allowlist/{target_id}    # 加入白名单（owner-only）；可选 body {reason?}
+DELETE /api/v1/agents/{id}/allowlist/{target_id}    # 移出白名单（owner-only）
 ```
 
-> 容量上限 500 条；超出 `POST` 返回 422 `allowlist_capacity_exceeded`；不提供 `incoming` 反查接口（隐私语义）。
+> **PR #2 落地后的 drift 修正**：
+>
+> - `POST` 形状从 `POST /allowlist` + body 改为 RESTful `POST /allowlist/{target_id}` + 可选 body（仅 `reason`）。与 follow API 保持一致（`POST /follows/{target_id}`），客户端只用学一种形态。
+> - 容量上限仍为 500 条；超出返回 **429**（不是原设计的 422），与 follow `FollowLimitExceededError` 同语义同状态码。422 严格用于"请求体不合法"。
+> - 重复 `POST` / `DELETE` 是**幂等**的（200 + `changed=false`），不返回 409。
+> - 不提供 `incoming` 反查接口（隐私语义）。
 
 **动态信任建立**：allowlist 不只是手动维护，可以通过以下方式自动更新：
 
@@ -509,7 +526,7 @@ Module B 在三层模型之上叠加经济补偿机制，属于 ACN Layer 2 内�
     - **拉取不消耗 fee（Phase 3 联动）**：Phase 3 引入 `attention_fee` 后，"释放 fee 给接收方"的 trigger 是接收方**显式 ack**（如 `POST /communication/manifest/{agent_id}/{mid}/ack` 或调用方在 inbox 写回应），**不是 GET content**——拉取仅是"接收方查看通知"，不代表已处理；多次拉取也不会重复释放 fee。Phase 2 不实施这部分，但 schema 预留 `acked_at` 字段为 nullable（Phase 3 激活）
     - **过期后行为**：TTL 到期后 `acn:manifest:{<agent_id>}` ZSET + 详情 hash + content 三 key 同步过期（Group B #2 hash tag 保证），过期后任何 `GET /content/{mid}` 一律返 404（不区分"过期"和"不存在"，避免 mid 枚举侧信道）
     - **content 大小语义**：Phase 2 上限 10 KB（已在 Phase 2 内容暂存约束章节定义），超出 `POST /communication/send` 在 manifest 路径上直接 422 拒绝；Phase 3 引入 `content_url` 后，超过 10 KB 的内容由发送方自托管，ACN 仅存元数据 + url + hash
-    - **`POST /send` manifest 分流响应字段（PR #1 review fix P1-B2）**：recipient mode 触发 manifest 分流时，`POST /communication/send` 与 subnet `forward_request` 都返回 `{"status": "sent", "delivery_mode": "manifest", "mid": <hex32>, "ts": <ms>, "route_id": <8 hex>}`——**关键**：`status` 仍是 `sent`（不是 `manifest`），让现有 SDK 客户端的 `result["status"] == "sent"` 成功判断分支继续工作；`delivery_mode` 是新加字段，纯加性，老客户端 ignore 即可。inbox 路径同步也带 `delivery_mode: "inbox"`，让新 SDK 可以单字段判断投递路径而无需嵌套 status 枚举
+    - `**POST /send` manifest 分流响应字段（PR #1 review fix P1-B2）**：recipient mode 触发 manifest 分流时，`POST /communication/send` 与 subnet `forward_request` 都返回 `{"status": "sent", "delivery_mode": "manifest", "mid": <hex32>, "ts": <ms>, "route_id": <8 hex>}`——**关键**：`status` 仍是 `sent`（不是 `manifest`），让现有 SDK 客户端的 `result["status"] == "sent"` 成功判断分支继续工作；`delivery_mode` 是新加字段，纯加性，老客户端 ignore 即可。inbox 路径同步也带 `delivery_mode: "inbox"`，让新 SDK 可以单字段判断投递路径而无需嵌套 status 枚举
   - mode → 队列映射：`open` 写 inbox；`manifest` 写 manifest queue + 暂存 content；`allowlist` 名单内走 inbox / 名单外走 manifest（与上方路由表对齐）；`closed` 都不写（403）
   - 理由：①数据语义不同（完整正文 vs 元数据 + 内容指针），字段集 / TTL / ack 行为 / 容量上限完全不同；②向后兼容：现有 `open` mode 客户端只读 inbox，混队列会读到不认识的字段；③API 演进路径不同（manifest 后续要长出 attention_fee / from_agent 过滤 / expiry 排序，inbox 不需要）
   - 影响：新增 3 个 Redis key namespace + 3 套 API，Agent 实体不变，无迁移；**先做最小骨架原型验证数据模型**，再展开 sprint 实施
@@ -551,11 +568,14 @@ Group A 拍板架构契约层后，Group B 落地 manifest mode + allowlist 的�
   - PostgreSQL 镜像后台清理：Phase 3 引入 PG 镜像时再加 worker（按 `manifest.expires_at` 索引每分钟批量删）
   - Phase 3 联动点：attention_fee 接入后"未拉取自动过期 = 自动退款"策略需要重设计 TTL 行为；已在 Phase 3 待决策表登记
 - **#3 allowlist 存储：Redis SET（30s TTL）+ PostgreSQL 关系表 + 容量 500 + 砍 incoming API**
-  - PG 表 schema：`agent_allowlist(owner_id UUID NOT NULL, target_id UUID NOT NULL, created_at TIMESTAMPTZ DEFAULT now(), reason TEXT, PRIMARY KEY(owner_id, target_id)) + INDEX(target_id)`；`INDEX(target_id)` 仅供运维 / 反作弊检索使用，不暴露 API
+  - PG 表 schema：`agent_allowlist(owner_id String NOT NULL, target_id String NOT NULL, created_at TIMESTAMPTZ DEFAULT now(), reason TEXT, PRIMARY KEY(owner_id, target_id)) + INDEX(target_id) + ON DELETE CASCADE FK to agents.agent_id (双列)`；`INDEX(target_id)` 仅供运维 / 反作弊检索使用，不暴露 API
+  - **PR #2 落地后的 drift 修正**：列类型从 `UUID` 改为 `String`——本仓库 `agents.agent_id` 是 String（如 `agent-cursor-v1`，不是 UUID），不能跨类型 FK；同时双列加 `ON DELETE CASCADE` FK 让 agent 注销自动清理悬挂行（避免应用层 sweep）
   - Redis cache key：`acn:allowlist:{<owner_id>}` 类型 SET，TTL **30 秒**——撤销 allowlist = 拉黑场景，必须秒级生效；30s 是 fail-safe 兜底（写路径直接 SADD/SREM 同步更新 cache，正常路径不会 stale 30s）
+  - **双写顺序契约（PR #2 实施细节）**：`add` 走 PG → Redis（PG 失败终止，Redis 失败 best-effort log，下次 cache miss 自然重建）；`remove` 走 **Redis → PG**（反向）——PG-first remove 会留窗口让被撤销 sender 借 stale cache 继续投递最长 30s；Redis-first 关闭这个洞，cache 永远不会比 PG 更"信任"
+  - **fail-closed → manifest 兜底（PR #2 P0-3）**：`is_in_allowlist` 回调失败（Redis blip / PG down）时，`PolicyCheckService.check_inbound` 不传播异常，**降级为 "divert to manifest"**——保留消息（接收方仍可拉取），但不让攻击者通过打挂缓存来绕过白名单
   - 一致性策略：先 PG 事务写入 → 成功后 Redis SADD/SREM（best-effort，失败靠 30s TTL reload 兜底）；**不**采用"先写 PG → 整 key invalidate"模式（每次写都丢全集要重新加载）
-  - 容量上限：单 agent 默认 **500 条**（保守起点；文档标注"按观测调整"），超出 `POST /allowlist` 返回 422 `allowlist_capacity_exceeded`
-  - API 三个：`GET /agents/{id}/allowlist`（列表）、`POST /agents/{id}/allowlist`（add，body `{target_id, reason?}`）、`DELETE /agents/{id}/allowlist/{target_id}`（remove）
+  - 容量上限：单 agent 默认 **500 条**（保守起点；文档标注"按观测调整"），超出 `POST /allowlist/{target_id}` 返回 **429 `allowlist_capacity_exceeded`**（drift fix：与 follow `FollowLimitExceededError` 同语义同状态码；422 严格用于"请求体不合法"）
+  - API 三个（drift fix：RESTful 形态，与 follow API 对齐）：`GET /agents/{id}/allowlist`（列表 owner-only）、`POST /agents/{id}/allowlist/{target_id}`（add，可选 body `{reason?}`）、`DELETE /agents/{id}/allowlist/{target_id}`（remove）；POST/DELETE 都幂等（200 + `changed=false`）
   - **不提供** `GET /allowlist/incoming` 反查"谁把我加进了 allowlist"——allowlist 是接收方私有授权，target 不应该看到自己被谁拉白名单（隐私语义 + 无真实需求）；未来若要做"关注关系"按 `acn-follow-proposal.md` 单独设计
   - 路由层接入：`MessageRouter` 在 `mode=allowlist` 时先查 `SISMEMBER acn:allowlist:{<rcpt>} <sender>`，命中走 inbox / 不命中走 manifest queue（与 Group A #4 路由表一致）
   - 原型 PR 必验：PG 事务 + Redis SADD/SREM 的写后立即读、Redis 抖动时 fail-safe 行为
@@ -642,6 +662,36 @@ Phase 2 共 11 条决策（Group A 4 + Group B 5 + Group C 2）密集落地，�
   - 容量上限 500 的精确动态调整（写死 `MAX_ALLOWLIST_SIZE = 500` 即可）
   - incoming 反查替代品 `acn-follow-proposal` 联动
 - **预期产出**：1 个原型 PR + 7 条 unit/integration test 证明一致性边界；`agent_allowlist` PG 表 + alembic migration；`acn:allowlist:`* Redis SET cache 层
+- **PR #2 实施期吸收的关键决策（v2 review 后修订）**：
+  1. **P0-1 A2A `from_agent` 强校验同 PR 落地**：原计划"PR #2 之后单独做"，实施 review 时识别为阻塞——allowlist 模式让 sender 真伪决定路由，不在同 PR 修就构成可被利用的伪造攻击面。新增 `acn/protocols/a2a/auth_middleware.py:A2AFromAgentValidationMiddleware`：根据 Bearer api_key 解析出 caller_agent_id，与 `params.message.metadata.from_agent` 比对，不匹配返回 JSON-RPC `-32600` 错误；匿名调用方的 `from_agent` 改写为 `"unknown"`（不直接拒，因为 `open` / `closed` 模式不依赖 sender 真伪）；agent_lookup 失败时降级为匿名（拒绝会把 Redis blip 放大成 A2A 全瘫）
+  2. **P0-2 `is_in_allowlist` 注入而非内嵌**：`PolicyCheckService.check_inbound` 增加可选 `is_in_allowlist: Callable[[str, str], Awaitable[bool]]` kwarg；router / subnet 层注入 `AllowlistService.is_member`，policy service 自身保持纯函数无 IO 依赖
+  3. **P0-3 fail-closed → manifest（不是 reject）**：回调失败 / 回调缺失 / 名单为空 → 一律 `route_to="manifest"`，让消息进异步通知队列；理由见上方 Group B #3
+  4. **双写顺序契约固化**：`add` PG → Redis、`remove` Redis → PG；`AllowlistService` 加内嵌 docstring 把"为什么不能反过来"写清楚，防止未来被误改
+  5. **API 形态对齐 follow**：路径从 `POST /allowlist + body{target_id}` 改为 RESTful `POST /allowlist/{target_id} + body{reason?}`；容量超出从 422 改为 429；POST/DELETE 都幂等（200 + `changed=false`）
+  6. `**PolicyCheckService.check_inbound` 改 async**：因为 allowlist 分支需要 await 回调；同步分支（open / closed / manifest）开销可忽略；调用方 `MessageRouter.route` / `SubnetManager.forward_request` / `routes/registry.py` 同步加 `await`
+  7. `**agent_allowlist` PG 列类型 String（不是 UUID）**：本仓库 `agents.agent_id` 是 String，FK 类型必须对齐；ON DELETE CASCADE 双列让 agent 注销自动清理悬挂行
+  8. `**SubnetManager` 必须做集成测试（P0-4）**：PR #1 上线时 subnet manifest 静默 bypass 的同型 bug 不能在 allowlist 上复发；`tests/infrastructure/test_subnet_manager_allowlist.py` 覆盖 member / non-member / 空名单 / 缺 callback / IO 失败 / system bypass 6 个分支
+  9. `**validate_policy_dict` 必须做单元测试（P0-5）**：`SUPPORTED_POLICY_MODES` 接受 `allowlist` 后，strict-keys 仍要拒绝 `allowlist: [...]` inline 字段——这条不测就会被未来 review 漏掉
+- **PR #2 实测覆盖（与上面 9 条决策一一对应）**：
+  - `tests/services/test_policy_service.py`：补 7 条 allowlist 分支（member→inbox / non-member→manifest / empty→manifest / callback fail→manifest / no callback→manifest / system bypass / or_raise no-raise）+ 3 条 schema（accept allowlist / reject inline allowlist / reject 真未知 mode）
+  - `tests/services/test_allowlist_service.py`：双写顺序、自我拉黑、404、429、idempotent、reason 截断、Redis 失败 best-effort
+  - `tests/infrastructure/test_redis_allowlist_repository.py`：cache hit / cache miss read-through / 空名单 EXISTS=1 物化 / TTL 应用 / list_targets NotImplementedError
+  - `tests/infrastructure/test_message_router_allowlist.py`：member 走 inbox / non-member 走 dispatcher (path=router) / 空名单 fail-closed / 缺 service fail-closed / IO 失败 fail-closed / system bypass
+  - `tests/infrastructure/test_subnet_manager_allowlist.py`：与 router 6 分支镜像但 path=subnet
+  - `tests/protocols/test_a2a_from_agent_middleware.py`：匹配 / 不匹配返 -32600 / 缺失自动 backfill / 匿名改写为 unknown / lookup 失败降级 / malformed JSON 透传 / 非 HTTP 透传
+  - `tests/routes/test_allowlist_routes.py`：POST/DELETE/GET 三个端点的 owner-only 鉴权 + 幂等 + 400/404/429/422
+
+- **PR #2 实施期吸收的关键决策（v3 review 后修订）**：
+  1. **Redis 永久 sentinel 修复（实施期发现）**：`RedisAllowlistRepository._rebuild` 原本对空名单做 `SADD '__empty__' → SREM '__empty__'` 想要"留下一个空 SET"，但 Redis 在最后一个成员被 SREM 后会**自动删除空集合**——key 消失，下一次 `is_member` 又触发 cache miss + PG load，与 P0-3 fail-closed 设计冲突。修复方案：用永久哨兵成员 `__acn_allowlist_empty_sentinel__`（双下划线前缀，与 agent_id slug 校验规则不可能冲突），始终保留在 SET 内；`add()` co-add sentinel + target_id 保证幂等；`count_for_owner()` 用 `max(0, SCARD - 1)` 扣掉 sentinel
+  2. **P1-A1 容量上限 TOCTOU race 由 PG trigger 兜底**：service 层 `count_for_owner() < 500` 预检查与 INSERT 之间是两个独立 round-trip——并发 add 都看到 `count=499` 都 INSERT 就会突破上限。修复：新增 alembic 迁移 `f6a7b8c9d0e1` 安装 `BEFORE INSERT` trigger `trg_agent_allowlist_capacity`，trigger 内用 `pg_advisory_xact_lock(hashtext(NEW.owner_id))` 串行化同一 owner 的并发写、再次 count 后超额则 RAISE SQLSTATE 23514。`PostgresAllowlistRepository.add` catch IntegrityError(pgcode='23514') 转 `AllowlistCapacityExceededError`。service 层预检查保留（性能优化路径），trigger 是最后防线
+  3. **P1-A1 异常迁移到 `core.exceptions`**：`SelfAllowlistError` / `AllowlistCapacityExceededError` 从 `services/allowlist_service.py` 上移到 `core/exceptions/__init__.py`，避免 PG repo 层 raise 时反向 import service 层造成循环依赖；service 层从源头 re-export，调用方 import 路径无变化
+  4. **P1-A2 A2A `from_agent` mismatch 改用 HTTP 400**：原本 status=200（纯 JSON-RPC 惯例），但 mismatch 是安全事件，需要在标准 4xx access-log 告警里浮现；JSON-RPC 2.0 §5 允许 4xx 配 structured error body，spec-compliant client 仍能解析。`_send_jsonrpc_error` status 200 → 400
+  5. **P1-A3 `get_allowlist_service` PG 缺失返 503 + Retry-After**：原本 raise `RuntimeError` → FastAPI 默认 500，让客户端误判为临时故障并重试。改为 `HTTPException(503, headers={"Retry-After": "300"})`：503 在 nginx / Datadog / cloudwatch alerting 规则里能区分"feature 配置未启用"vs"临时崩溃"。同步调整全局 `_http_exception_handler`：5xx detail 仍统一抹除（不泄露内部状态），但**透传 `Retry-After` header**——它是标准化信息头、零内部上下文泄露
+  6. **P1-A4 `_extract_bearer_token` 用 case-insensitive regex**：原本 strict `startswith("Bearer ")` 把 `bearer x` / `Bearer  x`（双空格）/ `BEARER x` / `Bearer x\r\n` 全部静默降级为匿名→ `from_agent="unknown"`，对合规客户端的小拼写错误产生意外鉴权降级。改用 `re.compile(r"^\s*bearer\s+(\S+?)\s*$", re.IGNORECASE)`，覆盖 RFC 6750 §2.1 case-insensitive SHOULD + 多空格分隔 + 前后空白
+- **PR #2 v3 实测覆盖**：
+  - `tests/protocols/test_a2a_from_agent_middleware.py`：mismatch 断言 status=400（P1-A2）；新增 9 条 `_extract_bearer_token` 边角测试（小写 / 大写 / 混合大小写 / 多空格 / Tab 分隔 / 末尾空白 / 空 token / 非 Bearer scheme / 大小写不敏感 header name）（P1-A4）
+  - `tests/infrastructure/test_postgres_allowlist_repository.py`：新增 PG repo 层 IntegrityError 翻译测试（pgcode=23514 → AllowlistCapacityExceededError；pgcode=23503 不被吞，照原样抛 IntegrityError）（P1-A1）
+  - `tests/routes/test_allowlist_routes.py::TestAllowlistServiceDisabled`：PG 缺失 + 调用 allowlist 路由 → 503 + Retry-After=300（P1-A3）
 
 **原型阶段公共要求**：
 
