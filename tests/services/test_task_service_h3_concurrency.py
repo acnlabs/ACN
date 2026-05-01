@@ -354,7 +354,7 @@ class TestRepositoryContract:
         # Verify it's a coroutine function, not just an inherited stub
         import inspect
 
-        method = getattr(PostgresTaskRepository, "compare_and_save")
+        method = PostgresTaskRepository.compare_and_save
         assert inspect.iscoroutinefunction(method)
 
     def test_redis_repo_implements_it(self) -> None:
@@ -365,5 +365,5 @@ class TestRepositoryContract:
         assert "compare_and_save" in dir(RedisTaskRepository)
         import inspect
 
-        method = getattr(RedisTaskRepository, "compare_and_save")
+        method = RedisTaskRepository.compare_and_save
         assert inspect.iscoroutinefunction(method)

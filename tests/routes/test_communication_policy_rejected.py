@@ -35,7 +35,6 @@ from acn.routes.dependencies import (
     verify_agent_api_key,
 )
 
-
 VALID_INTERNAL_TOKEN = "test-internal-token-min-32-chars-padding"
 
 

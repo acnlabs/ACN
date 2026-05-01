@@ -251,6 +251,7 @@ async def test_fire_and_forget_retains_strong_task_reference():
     the task doesn't depend on test-frame locals to stay alive.
     """
     import gc
+
     import acn.monitoring.audit as audit_mod
 
     audit = _started_audit()

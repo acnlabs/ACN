@@ -31,7 +31,6 @@ from acn.monitoring.metrics import MetricsCollector
 from acn.protocols.ap2.core import PaymentDiscoveryService, PaymentTaskManager
 from acn.routes.dependencies import (
     get_agent_service,
-    get_analytics,
     get_audit,
     get_metrics,
     get_payment_discovery,
@@ -45,7 +44,6 @@ from acn.routes.tasks import get_task_service
 from acn.services import AgentService
 from acn.services.activity_service import ActivityService
 from acn.services.subnet_service import SubnetService
-
 
 # =============================================================================
 # Layer 1 — Method names still exist
@@ -279,9 +277,7 @@ class TestCommunicationContract:
         self, stub_metrics, stub_message_service, stub_audit
     ):
         from acn.routes.dependencies import (
-            get_audit,
             get_message_service,
-            get_metrics,
             verify_agent_api_key,
         )
 

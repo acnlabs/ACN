@@ -43,7 +43,6 @@ from redis.asyncio import Redis
 
 from ...config import get_settings
 from ...core.exceptions import PolicyRejected
-from ...monitoring import MetricsCollector
 from ...infrastructure.messaging import (
     BroadcastService,
     BroadcastStrategy,
@@ -52,6 +51,7 @@ from ...infrastructure.messaging import (
 )
 from ...infrastructure.persistence.redis.a2a_task_store import RedisTaskStore
 from ...infrastructure.persistence.redis.registry import AgentRegistry
+from ...monitoring import MetricsCollector
 
 settings = get_settings()
 

@@ -36,7 +36,6 @@ from fastapi.routing import APIRoute
 from acn.api import app
 from acn.routes.tasks import require_task_write_auth
 
-
 # ─────────────────────────────────────────────
 # Layer 1 — every write endpoint must have a rate limit
 # ─────────────────────────────────────────────

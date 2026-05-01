@@ -20,7 +20,6 @@ from pydantic import ValidationError
 
 from acn.config import Settings
 
-
 _DEFAULT_ENV: dict[str, str] = {
     "INTERNAL_API_TOKEN": "valid-token-that-is-32-chars-long-or-more",
     "DEV_MODE": "true",

@@ -114,7 +114,6 @@ class PostgresSubnetRepository(ISubnetRepository):
 
     async def list_subnets_for_agent(self, agent_id: str) -> list[Subnet]:
         """Return all subnets where the agent is a member (member_agent_ids contains agent_id)."""
-        from sqlalchemy import func
         async with self._session_factory() as session:
             # JSONB @> operator: member_agent_ids @> '["agent_id"]'
             result = await session.execute(

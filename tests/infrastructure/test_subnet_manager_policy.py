@@ -27,7 +27,6 @@ See docs/features/acn-communication-economic-model.md
 "Phase 1 网关执行点决策".
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -38,7 +37,6 @@ from acn.infrastructure.messaging.subnet_manager import (
     SubnetManager,
 )
 from acn.services.policy_service import PolicyCheckService
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

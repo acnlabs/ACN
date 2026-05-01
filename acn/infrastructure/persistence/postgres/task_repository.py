@@ -311,7 +311,7 @@ class PostgresTaskRepository(ITaskRepository):
         offset: int = 0,
         requesting_agent_id: str | None = None,
     ) -> list[Task]:
-        from sqlalchemy import or_, and_
+        from sqlalchemy import or_
 
         async with self._session_factory() as session:
             stmt = select(TaskModel).where(TaskModel.status == TaskStatus.OPEN.value)

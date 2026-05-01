@@ -17,7 +17,7 @@ a single `await pipe.execute()`.  Tests therefore:
 """
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -30,7 +30,6 @@ from acn.core.entities.task import (
 from acn.infrastructure.persistence.redis.task_repository import (
     RedisTaskRepository,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

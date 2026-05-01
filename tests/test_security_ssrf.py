@@ -35,7 +35,6 @@ from acn.security import (
     validate_endpoint_url,
 )
 
-
 # ─────────────────────────────────────────────
 # 1. validate_endpoint_url — registration-time
 # ─────────────────────────────────────────────

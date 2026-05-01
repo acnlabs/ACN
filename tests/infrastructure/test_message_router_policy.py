@@ -27,7 +27,6 @@ from acn.core.exceptions import PolicyRejected
 from acn.infrastructure.messaging.message_router import MessageRouter
 from acn.services.policy_service import PolicyCheckService
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (mirrors test_message_router_inbox.py so test infra stays uniform)
 # ---------------------------------------------------------------------------

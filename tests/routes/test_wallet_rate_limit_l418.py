@@ -46,7 +46,6 @@ from acn.routes.dependencies import (
     verify_proxy_caller,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Layer 1 — _wallet_rate_limit_key derives the right bucket
 # ─────────────────────────────────────────────────────────────────────────────
