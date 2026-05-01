@@ -46,6 +46,18 @@ v3 的 PG `BEFORE INSERT` trigger + `pg_advisory_xact_lock` 已在 staging verif
 当前 `exc_headers["Retry-After"]` 是大小写敏感查找。本仓库目前无小写 `"retry-after"` 写法所以无问题，但 HTTP 协议是 case-insensitive。改 `next((v for k, v in exc_headers.items() if k.lower() == "retry-after"), None)` 即可。
 影响文件：[acn/api.py](../acn/api.py) `_http_exception_handler`。
 
+### Alembic chain hygiene
+
+Context: 修 `7ee2ed3a177c`（`expand_verification_code_to_64chars`）的 fresh-DB upgrade fail 时连带发现 — `alembic downgrade base` 全链回滚会在 initial schema 阶段炸。
+
+- **`8d958bd38c11_initial_schema.py` participations FK 未命名导致 downgrade 不可用**（P2）
+  initial schema `participations` 表通过 `sa.ForeignKeyConstraint(["task_id"], ["tasks.task_id"], ondelete="CASCADE")` 建 FK，**没有显式 `name=...`**；PG 自动生成 `participations_task_id_fkey`，但 SQLAlchemy 元数据里这个约束 `.name is None`。
+  `alembic downgrade base` 在 initial schema 的 downgrade（`op.drop_table("participations")` 之前若有 drop_constraint）或 metadata 反向 emit 时报：
+  `sqlalchemy.exc.CompileError: Can't emit DROP CONSTRAINT for constraint ForeignKeyConstraint(...); it has no name`
+  影响：production 几乎不会用 downgrade 全链回滚，但 CI 跑 `alembic check` / 测试矩阵会卡住。
+  修法：给 initial schema 的 FK 加显式 `name="participations_task_id_fkey"`，或 downgrade 链改用 `op.execute("ALTER TABLE participations DROP CONSTRAINT IF EXISTS participations_task_id_fkey")`。
+  影响文件：[alembic/versions/8d958bd38c11_initial_schema.py](../alembic/versions/8d958bd38c11_initial_schema.py)。
+
 ---
 
 ## Task / Agent
