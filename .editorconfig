@@ -1,0 +1,36 @@
+root = true
+
+# Defensive baseline for editor / IDE auto-formatting noise.
+# Most modern editors honour .editorconfig. This file pins charset
+# and end-of-line behaviour so casual round-trips through editors
+# don't introduce churn.
+#
+# Note: .editorconfig does NOT protect markdown YAML frontmatter from
+# being rewritten by aggressive markdown formatters (e.g. some IDE
+# "format document" pipelines that treat frontmatter as body text).
+# For that, see scripts/check_skill_frontmatter.py — run it manually
+# or wire it into CI if you want hard guarantees.
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{py,pyi}]
+indent_style = space
+indent_size = 4
+
+[*.{js,ts,tsx,jsx,json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+# Trailing whitespace is sometimes meaningful in markdown
+# (two-space hard line break) — don't auto-strip it on save.
+trim_trailing_whitespace = false
+indent_style = space
+indent_size = 2
+
+[Makefile]
+indent_style = tab
