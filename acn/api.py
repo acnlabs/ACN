@@ -13,6 +13,7 @@ Based on A2A Protocol: https://github.com/a2aproject/A2A
 """
 
 import asyncio
+import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,6 +36,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from slowapi import _rate_limit_exceeded_handler  # type: ignore[import-untyped]
 from slowapi.errors import RateLimitExceeded  # type: ignore[import-untyped]
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import get_settings
@@ -112,6 +115,104 @@ from .services.escrow_client import AgentPlanetEscrowProvider
 # Settings
 settings = get_settings()
 logger = structlog.get_logger()
+
+
+# Module-level regex for the SQL ``cap`` constant inside the
+# ``enforce_agent_allowlist_capacity`` function body. Compiled once
+# so the lifespan check is cheap; the function definition is a
+# stable string emitted by alembic migration ``f6a7b8c9d0e1``.
+# Captures the integer literal — case-insensitive on the keywords,
+# tolerant of whitespace variations from ``pg_get_functiondef``.
+_ALLOWLIST_CAP_RE = re.compile(
+    r"\bcap\s+CONSTANT\s+integer\s*:=\s*(\d+)",
+    re.IGNORECASE,
+)
+
+
+async def _verify_allowlist_cap_alignment(
+    session_factory: async_sessionmaker,
+    python_cap: int,
+) -> None:
+    """Compare the trigger SQL ``cap`` constant with the Python constant.
+
+    PR #2 v3 P2-A6 — the Phase 2 PR #2 v3 capacity trigger
+    (``trg_agent_allowlist_capacity`` installed by alembic migration
+    ``f6a7b8c9d0e1``) hard-codes ``cap = 500`` inside its plpgsql body
+    while ``acn.services.allowlist_service.MAX_ALLOWLIST_SIZE`` is
+    independently set to 500 in Python. Future operators that bump
+    one but forget the other would either:
+
+    * raise ``AllowlistCapacityExceededError`` from the service layer
+      before the trigger ever fires (Python tighter), or
+    * let the service layer accept inserts that the trigger then
+      rejects with SQLSTATE 23514 (SQL tighter) — surfacing as
+      ``check_violation`` 500s after the API thought the request
+      was fine.
+
+    Either is a soft failure mode. Cross-check at startup so the
+    drift shows up in lifespan logs the first time the operator
+    deploys an environment with the mismatch, instead of being
+    discovered by users tripping the capacity edge case.
+
+    The check is intentionally **non-fatal**: if the trigger isn't
+    installed (older alembic head), or PG is in a degraded state, or
+    the introspection query fails for any reason, we log and move
+    on. The trigger itself remains the canonical guard; this is
+    purely a drift detector.
+    """
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT pg_get_functiondef(oid) "
+                    "FROM pg_proc "
+                    "WHERE proname = 'enforce_agent_allowlist_capacity' "
+                    "LIMIT 1"
+                )
+            )
+            row = result.scalar_one_or_none()
+    except Exception as exc:  # noqa: BLE001 — non-fatal drift check
+        logger.warning(
+            "allowlist_capacity_drift_check_failed",
+            reason=str(exc),
+        )
+        return
+
+    if row is None:
+        logger.info(
+            "allowlist_capacity_drift_check_skipped",
+            reason=(
+                "enforce_agent_allowlist_capacity function not present; "
+                "alembic head likely below f6a7b8c9d0e1"
+            ),
+        )
+        return
+
+    match = _ALLOWLIST_CAP_RE.search(row)
+    if match is None:
+        logger.warning(
+            "allowlist_capacity_drift_check_unparseable",
+            reason="cap constant not found in trigger body",
+        )
+        return
+
+    sql_cap = int(match.group(1))
+    if sql_cap != python_cap:
+        logger.warning(
+            "allowlist_capacity_drift",
+            sql_cap=sql_cap,
+            python_cap=python_cap,
+            advice=(
+                "trigger SQL and MAX_ALLOWLIST_SIZE disagree — "
+                "update both alembic migration f6a7b8c9d0e1 and "
+                "acn.services.allowlist_service.MAX_ALLOWLIST_SIZE"
+            ),
+        )
+    else:
+        logger.info(
+            "allowlist_capacity_aligned",
+            cap=sql_cap,
+        )
 
 
 @asynccontextmanager
@@ -232,6 +333,13 @@ async def lifespan(app: FastAPI):
             redis_repo=redis_allowlist_repo,
             agent_repository=agent_repository,
         )
+        # PR #2 v3 P2-A6: cross-check that the trigger SQL
+        # constant in alembic migration f6a7b8c9d0e1 still matches
+        # the Python ``MAX_ALLOWLIST_SIZE``. Non-fatal — see the
+        # helper docstring for the rationale.
+        from .services.allowlist_service import MAX_ALLOWLIST_SIZE
+
+        await _verify_allowlist_cap_alignment(_pg_session, MAX_ALLOWLIST_SIZE)
     else:
         logger.warning(
             "allowlist_service_disabled",
@@ -671,8 +779,17 @@ async def _http_exception_handler(
     # internal context.
     response_headers: dict[str, str] = {"X-Request-ID": request_id}
     exc_headers = getattr(exc, "headers", None) or {}
-    if "Retry-After" in exc_headers:
-        response_headers["Retry-After"] = exc_headers["Retry-After"]
+    # HTTP header names are case-insensitive (RFC 9110 §5.1) but a plain
+    # dict lookup is not. Iterate so any of ``Retry-After`` /
+    # ``retry-after`` / ``RETRY-AFTER`` is honoured — Starlette /
+    # Httpx / our own dependencies can produce any of these without
+    # warning. PR #2 v3 P2-A7.
+    retry_after = next(
+        (v for k, v in exc_headers.items() if k.lower() == "retry-after"),
+        None,
+    )
+    if retry_after is not None:
+        response_headers["Retry-After"] = retry_after
     return JSONResponse(
         status_code=exc.status_code,
         content={

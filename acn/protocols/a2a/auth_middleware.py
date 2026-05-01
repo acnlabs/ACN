@@ -81,12 +81,22 @@ P1-A2 made this swap.
 from __future__ import annotations
 
 import json
-import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-logger = logging.getLogger(__name__)
+import structlog
+
+# PR #2 v3 P2-A3: switched from stdlib ``logging`` to ``structlog``.
+# Other modules in the policy/allowlist call-stack
+# (``policy_service.py``, ``allowlist_service.py``, ``api.py``) all
+# emit structured key=value logs through ``structlog.get_logger``;
+# stdlib ``logging.getLogger(...).warning(extra={...})`` would dump
+# the structured fields into ``LogRecord.__dict__["extra"]`` where
+# common log aggregators (Datadog, Loki) skip them silently. Using
+# the same logger flavour across the whole pipeline keeps
+# ``a2a_from_agent_*`` events queryable alongside policy events.
+logger = structlog.get_logger(__name__)
 
 
 # RFC 6750 §2.1 leaves scheme matching as SHOULD case-insensitive,
@@ -116,7 +126,16 @@ _ANONYMOUS_FROM_AGENT = "unknown"
 # health, well-known discovery) skip the auth pipeline so anonymous
 # clients can still discover us. The "send" path is the only one
 # that creates network-visible side effects on the recipient.
-_ENFORCED_PATHS = ("/jsonrpc",)
+#
+# PR #2 v3 P2-A1: this is matched by **exact equality**, not
+# ``str.endswith``. ``endswith("/jsonrpc")`` would silently start
+# enforcing any future SDK path that happens to share the suffix
+# (e.g. ``/api/v1/jsonrpc``, ``/internal/jsonrpc``) — semantically
+# both are JSON-RPC entries, but the caller's intent for which
+# endpoints carry the from_agent contract should be explicit. New
+# routes belong in this tuple deliberately, never via inheritance
+# from a suffix match.
+_ENFORCED_PATHS: frozenset[str] = frozenset({"/jsonrpc"})
 
 
 class A2AFromAgentValidationMiddleware:
@@ -172,9 +191,7 @@ class A2AFromAgentValidationMiddleware:
 
         path = scope.get("path", "")
         method = scope.get("method", "")
-        if method != "POST" or not any(
-            path.endswith(suffix) for suffix in _ENFORCED_PATHS
-        ):
+        if method != "POST" or path not in _ENFORCED_PATHS:
             await self.app(scope, receive, send)
             return
 
@@ -188,7 +205,7 @@ class A2AFromAgentValidationMiddleware:
             # Let the downstream JSON-RPC handler return the
             # standard parse error — we don't want to swallow that
             # responsibility just because we touched the body.
-            await self._forward(scope, send, body)
+            await self._forward(scope, receive, send, body)
             return
 
         # ``Authorization`` is the canonical header name; ASGI gives
@@ -207,7 +224,7 @@ class A2AFromAgentValidationMiddleware:
                 # full A2A outage; we'd rather degrade to anonymous.
                 logger.warning(
                     "a2a_from_agent_lookup_failed",
-                    extra={"error": str(exc)},
+                    error=str(exc),
                 )
 
         # Locate metadata.from_agent in the JSON-RPC envelope. The
@@ -245,11 +262,9 @@ class A2AFromAgentValidationMiddleware:
             # pattern of impersonation attempts.
             logger.warning(
                 "a2a_from_agent_mismatch",
-                extra={
-                    "declared": declared,
-                    "authenticated": caller_agent_id,
-                    "path": path,
-                },
+                declared=declared,
+                authenticated=caller_agent_id,
+                path=path,
             )
             rejection = _build_rejection(
                 rpc_id=payload.get("id"),
@@ -267,15 +282,28 @@ class A2AFromAgentValidationMiddleware:
         # to preserve).
         forwarded_body = json.dumps(payload).encode("utf-8") if rewrote else body
 
-        await self._forward(scope, send, forwarded_body)
+        await self._forward(scope, receive, send, forwarded_body)
 
     async def _forward(
         self,
         scope: dict[str, Any],
+        receive: Callable[[], Awaitable[dict[str, Any]]],
         send: Callable[[dict[str, Any]], Awaitable[None]],
         body: bytes,
     ) -> None:
-        """Send ``body`` downstream as a single http.request event."""
+        """Send ``body`` downstream as a single http.request event.
+
+        After the synthesised http.request has been delivered once,
+        any further ``receive()`` call from downstream is delegated
+        to the **original** ASGI ``receive`` (PR #2 v3 P2-A2). The
+        upstream server holds the real client connection: it will
+        block this coroutine until the client actually disconnects
+        (yielding ``http.disconnect``), which is the proper ASGI
+        contract for "no more body, but the connection is still
+        open". The previous implementation returned a synthesised
+        ``http.disconnect`` on the second call, which falsely told
+        downstream that the client had hung up.
+        """
         # Adjust Content-Length if we rewrote the body. ASGI
         # downstream apps usually re-derive it but keeping headers
         # honest avoids surprising HTTP/1.1 reverse proxies.
@@ -285,19 +313,18 @@ class A2AFromAgentValidationMiddleware:
 
         async def replay() -> dict[str, Any]:
             nonlocal sent
-            if sent:
-                # ASGI contract: after more_body=False the next call
-                # must not return another http.request — it should
-                # block forever or signal disconnect. We mimic the
-                # standard behaviour by awaiting nothing; downstream
-                # never calls receive twice in normal flows.
-                return {"type": "http.disconnect"}
-            sent = True
-            return {
-                "type": "http.request",
-                "body": body,
-                "more_body": False,
-            }
+            if not sent:
+                sent = True
+                return {
+                    "type": "http.request",
+                    "body": body,
+                    "more_body": False,
+                }
+            # Body already replayed once. Hand off to the real
+            # ``receive`` so http.disconnect propagates from the
+            # upstream server when the client actually drops, rather
+            # than us synthesising it prematurely.
+            return await receive()
 
         await self.app(scope, replay, send)
 

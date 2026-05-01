@@ -20,6 +20,7 @@ each branch can verify call ordering with ``MagicMock.method_calls``.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -135,6 +136,81 @@ async def test_add_at_capacity_blocks_new_target(service, pg_repo):
     with pytest.raises(AllowlistCapacityExceededError):
         await service.add("owner-1", "new-target")
     pg_repo.add.assert_not_called()
+
+
+async def test_add_capacity_trigger_propagates_under_concurrency(
+    service, pg_repo, redis_repo
+):
+    """TOCTOU race regression (PR #2 v3 P2-A5).
+
+    The service-layer pre-check
+    ``count_for_owner() < MAX_ALLOWLIST_SIZE`` happens in a separate
+    round-trip from ``pg_repo.add``. With concurrent callers both
+    observing ``count = 499`` (one slot remaining), both proceed past
+    the service guard and both call into the PG repo. The PG trigger
+    ``trg_agent_allowlist_capacity`` (alembic ``f6a7b8c9d0e1``) closes
+    the hole at the database with ``pg_advisory_xact_lock`` per
+    owner: the lock-holder INSERTs, the contender re-counts under
+    the same lock, sees the cap is now breached, and ``RAISE``s
+    SQLSTATE 23514 — which the Postgres repo translates into
+    ``AllowlistCapacityExceededError``.
+
+    Real PostgreSQL TOCTOU coverage lives in the staging verify
+    script (``scripts/_tmp_verify_pr2_allowlist.py``) and was
+    confirmed 6/6 against PG 14.19. This test pins the **service
+    layer's contract** under that scenario without needing a real
+    DB:
+
+    1. Trigger-side ``AllowlistCapacityExceededError`` propagates
+       cleanly to the caller (no rewrap, no swallow).
+    2. The Redis dual-write does NOT fire when PG rejects — i.e.
+       a rejected sender never makes it into the cache. (Otherwise
+       the next ``is_member`` would falsely return ``True`` for the
+       30s TTL window, exactly the security regression PR #2 closes.)
+    3. Multiple concurrent callers settle into a deterministic mix
+       of one success + N capacity errors, never any other exception
+       type.
+    """
+    pg_repo.count_for_owner.return_value = MAX_ALLOWLIST_SIZE - 1
+    pg_repo.is_member.return_value = False
+
+    # Simulate the trigger: the first INSERT lands, every subsequent
+    # one is rejected by the cap re-check inside the advisory-lock.
+    call_counter = {"n": 0}
+
+    async def add_side_effect(*_args, **_kwargs):
+        call_counter["n"] += 1
+        if call_counter["n"] == 1:
+            return True
+        raise AllowlistCapacityExceededError(
+            "agent_allowlist capacity exceeded for owner owner-1 (limit 500)"
+        )
+
+    pg_repo.add.side_effect = add_side_effect
+
+    results = await asyncio.gather(
+        *(service.add("owner-1", f"target-{i}") for i in range(5)),
+        return_exceptions=True,
+    )
+
+    successes = [r for r in results if r is True]
+    failures = [r for r in results if isinstance(r, AllowlistCapacityExceededError)]
+    others = [
+        r for r in results
+        if r is not True and not isinstance(r, AllowlistCapacityExceededError)
+    ]
+
+    assert len(successes) == 1, f"expected 1 winner, got {successes!r}"
+    assert len(failures) == 4, f"expected 4 capacity errors, got {failures!r}"
+    assert others == [], f"unexpected exception types: {others!r}"
+
+    # The 4 rejections never reach the cache layer — Redis must stay
+    # consistent with PG's rejected state, otherwise we'd materialise
+    # phantom trusted senders for the 30s TTL window.
+    assert redis_repo.add.await_count == 1, (
+        f"Redis must not be written for capacity-rejected adds; "
+        f"got {redis_repo.add.await_count} cache writes"
+    )
 
 
 async def test_add_at_capacity_allows_idempotent_readd(service, pg_repo):
