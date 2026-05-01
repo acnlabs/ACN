@@ -24,6 +24,28 @@ Context: commits `8c540a9` / `bc5b331` / `c71da67` 把消息存储从 "per-agent
 
 `acn/scripts/cleanup_legacy_message_keys.py`：dry-run 默认，`--execute` 真删。SCAN + UNLINK 批量处理两类 key；`acn:messages:log:stream` 在 PRESERVE 集合里，不会被误删。
 
+### Phase 2 PR #2（allowlist + A2A `from_agent`）follow-ups
+
+Context: commits `39c0ed0`（PR #2 v1+v2+v3）+ `d928a06`（ruff sweep）。3 轮 audit 后所有 P0/P1 已修；本地 PG 14.19 上 6/6 staging verify 通过（schema / cap=500 / idempotent skip / per-owner isolation / advisory-lock 严格守住 / FK CASCADE）。以下是 non-blocking 的 P2 改进项。
+
+- **A2A middleware 路径用 `endswith("/jsonrpc")` 而非精确匹配**（v2 P2-A1）
+未来 SDK 若加 `/api/v1/jsonrpc` 会被同样拦截——语义上对（都是 JSON-RPC entry），但**意外覆盖**。改为精确等于 `/jsonrpc`，或在 `_ENFORCED_PATHS` 维护一份完整规则集。
+影响文件：[acn/protocols/a2a/auth_middleware.py](../acn/protocols/a2a/auth_middleware.py)。
+- **`_forward.replay()` 第二次调用返回 `http.disconnect` 偏激进**（v2 P2-A2）
+ASGI 规范是"阻塞直到客户端真的断"。当前实现让下游误以为 client 已断开。实际影响 0（FastAPI/Starlette 正常路径只读 body 一次），理想做法是用 `asyncio.Event` 真正 block 直到外层 disconnect。
+影响文件：[acn/protocols/a2a/auth_middleware.py](../acn/protocols/a2a/auth_middleware.py) `replay()` 闭包。
+- **`auth_middleware.py` 用 `logging.getLogger` 而非 `structlog`**（v2 P2-A3）
+跟项目其它模块（`policy_service.py`、`allowlist_service.py`）的 `structlog.get_logger()` 不一致，结构化字段会被丢进 stdlib logging 的 `extra`，部分 log aggregator 不会扁平化。1 行替换。
+影响文件：[acn/protocols/a2a/auth_middleware.py](../acn/protocols/a2a/auth_middleware.py)。
+- **单元测试侧未验证 TOCTOU race**（v2 P2-A5）
+v3 的 PG `BEFORE INSERT` trigger + `pg_advisory_xact_lock` 已在 staging verify 实测严格守住 cap=500，但 `tests/services/test_allowlist_service.py` 没有 `asyncio.gather` 并发 `add` fixture。补一个 race 测试既能 lock-in 行为，也方便未来 trigger 改动时回归（mock pgcode=23514 即可，不需要真 PG）。
+影响文件：[tests/services/test_allowlist_service.py](../tests/services/test_allowlist_service.py)。
+- **Trigger SQL `cap=500` 与 Python `MAX_ALLOWLIST_SIZE=500` 双源真值**（v3 P2-A6）
+`alembic/versions/f6a7b8c9d0e1_add_agent_allowlist_capacity_trigger.py` 内 SQL 硬编码 `cap=500`，`acn/services/allowlist_service.py` 模块级也写 `MAX_ALLOWLIST_SIZE=500`。未来调整需**两处同时改**——service docstring 已写提醒，但无自动 enforce。最低成本：lifespan 启动期跑一次 `SHOW pg_function_definition` 比对两边数值，不一致时 `logger.warning("allowlist_capacity_drift", ...)`。
+- **`_http_exception_handler` 的 `Retry-After` lookup 大小写敏感**（v3 P2-A7）
+当前 `exc_headers["Retry-After"]` 是大小写敏感查找。本仓库目前无小写 `"retry-after"` 写法所以无问题，但 HTTP 协议是 case-insensitive。改 `next((v for k, v in exc_headers.items() if k.lower() == "retry-after"), None)` 即可。
+影响文件：[acn/api.py](../acn/api.py) `_http_exception_handler`。
+
 ---
 
 ## Task / Agent
