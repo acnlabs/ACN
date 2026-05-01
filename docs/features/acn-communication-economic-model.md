@@ -605,13 +605,14 @@ Group A 拍板架构契约层后，Group B 落地 manifest mode + allowlist 的�
 
 Group C 与架构契约层 / 模式实现层不耦合，是 Phase 1 遗留的工程债。两条都属于"先继续观测、条件触发后再做"的延后决策，**不阻塞 Group B 原型 PR 启动**。
 
-- **#9 BroadcastService 与 MessageService.broadcast_message 双轨清理：反向方案 = HTTP 广播改走 `BroadcastService`，删 `MessageService.broadcast_message`**
+- **#9 BroadcastService 与 MessageService.broadcast_message 双轨清理：反向方案 = HTTP 广播改走 `BroadcastService`，删 `MessageService.broadcast_message`** ✅ 已完成
   - 现状：HTTP `/communication/broadcast` → `MessageService.broadcast_message`（简化版，strategy 字段实际无差异）；A2A 协议入口 → `BroadcastService`（含 `asyncio.gather` 真并行 + `broadcast_id` 持久化 + 聚合返回）。Phase 1 policy 检查放在 `MessageRouter` 层，对两套自动生效，P0 风险为 0
   - 决议：**反向收敛**——`BroadcastService` 已是更完整的实现（真并行 + broadcast_id 持久化 + 聚合），HTTP `/communication/broadcast` 改为内部调用 `BroadcastService.broadcast`；删除 `MessageService.broadcast_message` 和 strategy 死字段
   - 反向 vs 正向：正向（把 BroadcastService 能力上提到 MessageService）需要重新设计 `MessageService` 签名 + 加 broadcast_id 持久化 + 改 A2A 入口接线，工作量大；反向只是删薄壳 + 改 HTTP 路由层接线点，工作量约 1/3
   - 影响：删 `MessageService.broadcast_message` 方法 + 相关测试；HTTP `/communication/broadcast` route handler 改调 `BroadcastService.broadcast`；返回 schema 对齐 A2A 路径（broadcast_id 暴露给 HTTP 调用方，便于追踪）
   - 验收：HTTP 广播必须返回 `broadcast_id`，且与 A2A 路径一致；现有 HTTP 广播 e2e 测试全过；新加一条"HTTP 广播路径必须经 BroadcastService"的契约测试
   - 不阻塞 Group B 原型；可作为 Group B 之后的独立小 PR
+  - **落地（commit `<this PR>`）**：`BroadcastService` 加 `agent_repository` 构造参数 + 新 `broadcast()` 统一入口（target_agents | subnet_id | tags | all 选择器，sender 自动过滤）；HTTP `/communication/broadcast` 与 `/broadcast-by-tag` 切到 `BroadcastDep` 并返回 `broadcast_id`；`responses[]` 适配器（`_broadcast_result_to_http_responses`）保留 `agent_id`-IN-item 的旧 wire 形状以保 SDK 兼容；删 `MessageService.broadcast_message` 与 `tests/services/test_message_service_broadcast_policy.py`（语义已被 `tests/infrastructure/test_broadcast_service_policy.py` 覆盖）；新增 `tests/routes/test_broadcast_service_convergence.py`（11 tests：架构守卫 + 路由契约 + 适配器分支）；A2A 路径未触（`send` / `send_by_tag` 仍是 lower-level API，被 `ACNAgentExecutor._handle_broadcast` 直接调用）。全套 901 tests 通过
 - **#10 WALLET_RATE_LIMIT 升格时机：Phase 2 不升格，先埋点观测**
   - Phase 2 不升格 = 在没数据时升格属于"提前抽象"——Settings 设计 + 文档 + migration 都要做，结果可能还要改名
   - Phase 2 同步动作（manifest mode 上线时一并交付）：加埋点 `acn_rate_limit_hits_total{bucket,result}`（bucket = `agent` / `wallet`，result = `pass` / `throttle`）；约 5 行 prometheus instrumentation
@@ -861,7 +862,7 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 | 6     | Internal Token 调用是否绕过 policy？                                | ✅ **已决（Group A）**：绕过 policy + 强制写 audit；豁免严格限定 `system:<slug>`，`assert_system_caller` 把关；audit 必带 `actor_type="system"`                                                                                                                                                                 |
 | 7     | WebSocket 实时投递在 manifest 模式下推什么？                             | ✅ **已决（Group B）**：新 WS event `manifest_notification`，payload `{mid, sender, summary, ts, expires_at}`，**不带 content**；manifest queue 用 ZSET（score=expires_at）+ 详情 hash 双 key 结构（倒灌补 #4 数据结构）；离线补推 `?since=<ts>` 增量；mode 切换到 manifest/allowlist 返回 `X-ACN-SDK-Min-Version` warning header |
 | 8     | A2A 协议入口 `from_agent` 是否要强校验？                                | ✅ **已决（Group A）**：Phase 2 强校验。`/a2a/jsonrpc` 加 `verify_a2a_caller` dep（仿 `verify_proxy_caller` 用 `X-ACN-Authorization`）；`from_agent` 必填 + 与 caller 真实 agent_id 严格相等，否则 `TaskState.rejected` + `from_agent_mismatch`；30 天 SDK warning 过渡期                                                |
-| 9     | `BroadcastService` 与 `MessageService.broadcast_message` 双轨清理 | ✅ **已决（Group C）**：**反向收敛**——HTTP `/communication/broadcast` 改走 `BroadcastService.broadcast`，删 `MessageService.broadcast_message` 与 strategy 死字段；HTTP 路径返回 `broadcast_id` 与 A2A 对齐；可作为 Group B 之后独立小 PR                                                                                  |
+| 9     | `BroadcastService` 与 `MessageService.broadcast_message` 双轨清理 | ✅ **已完成（Group C）**：HTTP `/communication/broadcast` 与 `/broadcast-by-tag` 改走 `BroadcastService.broadcast`（新统一入口，集中处理 sender 校验 / target 解析 / sender 过滤）；删 `MessageService.broadcast_message` + strategy 死字段；HTTP 响应顶层暴露 `broadcast_id`，`responses[]` 旧形状通过 adapter 保兼容；新增 `tests/routes/test_broadcast_service_convergence.py` 11 项契约测试；A2A 路径未触                                                                                  |
 | 10    | `WALLET_RATE_LIMIT` 何时从代码常量升格为 `Settings` 字段                 | ✅ **已决（Group C）**：Phase 2 不升格——manifest mode 上线时同步加埋点 `acn_rate_limit_hits_total{bucket,result}`，1~2 周采数后任一条件成立（P95 接近上限 / 运维需热调参 / Phase 3 多 plan）即升格为 `Settings.wallet_rate_limit`；Phase 3 启动前必须升格                                                                                    |
 
 

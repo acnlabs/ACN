@@ -9,10 +9,9 @@ from typing import Any
 import structlog  # type: ignore[import-untyped]
 from a2a.types import Message  # type: ignore[import-untyped]
 
-from ..core.exceptions import AgentNotFoundException, PolicyRejected
+from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
 from ..infrastructure.messaging import MessageRouter
-from ..security import safe_external_error
 
 logger = structlog.get_logger()
 
@@ -154,131 +153,17 @@ class MessageService:
 
         return response
 
-    async def broadcast_message(
-        self,
-        from_agent_id: str,
-        message: Message,
-        subnet_id: str | None = None,
-        tags: list[str] | None = None,
-        strategy: str = "parallel",
-        **kwargs: Any,
-    ) -> list[dict]:
-        """
-        Broadcast message to multiple agents
-
-        Args:
-            from_agent_id: Sender agent ID
-            message: A2A Message object
-            subnet_id: Optional subnet filter
-            tags: Optional tag filter
-            strategy: Broadcast strategy (parallel/sequential/best_effort)
-            **kwargs: Additional parameters
-
-        Returns:
-            List of responses from agents
-
-        Raises:
-            AgentNotFoundException: If sender not found
-        """
-        # Verify sender exists
-        sender = await self.agent_repository.find_by_id(from_agent_id)
-        if not sender:
-            raise AgentNotFoundException(f"Sender agent {from_agent_id} not found")
-
-        # Find target agents
-        if subnet_id:
-            agents = await self.agent_repository.find_by_subnet(subnet_id)
-        elif tags:
-            agents = await self.agent_repository.find_by_tags(tags)
-        else:
-            agents = await self.agent_repository.find_all()
-
-        # Filter out sender
-        target_agents = [a for a in agents if a.agent_id != from_agent_id]
-
-        if not target_agents:
-            logger.warning(
-                "broadcast_no_targets",
-                from_agent=from_agent_id,
-                subnet_id=subnet_id,
-                tags=tags,
-            )
-            return []
-
-        logger.info(
-            "broadcasting_message",
-            from_agent=from_agent_id,
-            target_count=len(target_agents),
-            strategy=strategy,
-        )
-
-        # Broadcast to all targets
-        responses = []
-        for agent in target_agents:
-            try:
-                response = await self.router.route(
-                    from_agent=from_agent_id,
-                    to_agent=agent.agent_id,
-                    message=message,
-                    **kwargs,
-                )
-                responses.append(
-                    {
-                        "agent_id": agent.agent_id,
-                        "status": "success",
-                        "response": response,
-                    }
-                )
-            except PolicyRejected as e:
-                # Policy rejection is structurally different from a
-                # delivery failure: the recipient explicitly opted out
-                # of inbound traffic from this sender, which is a
-                # *normal* outcome of a fan-out (a closed agent in a
-                # broadcast set is expected to be skipped, not a fail).
-                # We therefore treat it as per-target rejected for ALL
-                # strategies — including the strict (non best_effort)
-                # ones — since raising would let one closed recipient
-                # abort delivery to the rest of the set.
-                #
-                # Per-target shape mirrors the Phase 1 doc decision:
-                # ``status: "rejected"`` keeps the field stable for
-                # client parsers; ``reason`` / ``reject_reason`` give
-                # the client enough to surface the specific decision.
-                logger.info(
-                    "broadcast_target_rejected_by_policy",
-                    target_agent=agent.agent_id,
-                    reason=e.reason,
-                )
-                responses.append(
-                    {
-                        "agent_id": agent.agent_id,
-                        "status": "rejected",
-                        "reason": e.reason,
-                        "reject_reason": e.reject_reason,
-                    }
-                )
-            except Exception as e:
-                logger.error(
-                    "broadcast_failed",
-                    target_agent=agent.agent_id,
-                    error=str(e),
-                )
-                if strategy != "best_effort":
-                    raise
-                # M12: sanitise the per-target error before it goes into
-                # the 200 response body. ``str(e)`` would otherwise leak
-                # the agent's internal endpoint (URL, IP, port) and any
-                # raw upstream response body that httpx echoes into
-                # ``ConnectError`` / ``HTTPStatusError`` messages.
-                responses.append(
-                    {
-                        "agent_id": agent.agent_id,
-                        "status": "failed",
-                        "error": safe_external_error(e),
-                    }
-                )
-
-        return responses
+    # NOTE: ``broadcast_message`` was deleted in the Phase 2 Group C #9 /
+    # review v2 P1 #7 convergence (see
+    # ``docs/features/acn-communication-economic-model.md`` L608–L614).
+    # All HTTP broadcast traffic now flows through
+    # ``BroadcastService.broadcast`` — same path the A2A protocol
+    # entry was already using. The reverse-collapse direction was
+    # chosen because ``BroadcastService`` is the more complete
+    # implementation (real ``asyncio.gather`` parallelism +
+    # Redis-persisted ``broadcast_id`` + aggregated stats), and
+    # rewriting the HTTP routes was ~1/3 the cost of upgrading
+    # ``MessageService.broadcast_message`` to match.
 
     async def ack_message_history(
         self,

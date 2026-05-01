@@ -23,7 +23,8 @@ import redis.asyncio as redis
 # Official A2A SDK
 from a2a.types import Message  # type: ignore[import-untyped]
 
-from ...core.exceptions import PolicyRejected
+from ...core.exceptions import AgentNotFoundException, PolicyRejected
+from ...core.interfaces import IAgentRepository
 from ...security import safe_external_error
 from ..persistence.redis.registry import AgentRegistry
 from .message_router import MessageRouter
@@ -98,20 +99,147 @@ class BroadcastService:
         router: MessageRouter,
         redis_client: redis.Redis,
         registry: AgentRegistry | None = None,
+        agent_repository: IAgentRepository | None = None,
     ):
         """
-        Initialize Broadcast Service
+        Initialize Broadcast Service.
 
         Args:
-            router: Message Router for delivery
-            redis_client: Redis for logging
-            registry: ACN Registry (optional, uses router's if not provided)
+            router: Message Router for delivery.
+            redis_client: Redis for broadcast log persistence.
+            registry: ACN Registry (optional — uses router's if omitted).
+                Drives the legacy ``send_by_tag`` / ``send_to_project``
+                paths that resolve agents through Redis search.
+            agent_repository: Clean-architecture agent repository
+                (PG or Redis impl). Enables the unified
+                :py:meth:`broadcast` entry that replaced
+                ``MessageService.broadcast_message`` (Phase 2 Group C
+                #9 / review v2 P1 #7 — see
+                ``docs/features/acn-communication-economic-model.md``
+                L608–L614). When ``None``, only the lower-level
+                ``send`` / ``send_by_tag`` / ``send_to_project`` APIs
+                are usable; calls to :py:meth:`broadcast` will raise.
         """
         self.router = router
         self.redis = redis_client
         self.registry = registry or router.registry
+        self.agent_repository = agent_repository
 
         logger.info("Broadcast Service initialized")
+
+    async def broadcast(
+        self,
+        *,
+        from_agent: str,
+        message: Message,
+        target_agents: list[str] | None = None,
+        subnet_id: str | None = None,
+        tags: list[str] | None = None,
+        strategy: BroadcastStrategy = BroadcastStrategy.PARALLEL,
+    ) -> "BroadcastResult":
+        """Unified broadcast entry — used by the HTTP communication routes.
+
+        Phase 2 Group C #9 / review v2 P1 #7 (see
+        ``docs/features/acn-communication-economic-model.md``
+        L608–L614) collapsed the previous double-track:
+
+        * ``MessageService.broadcast_message`` (HTTP path — sequential,
+          no ``broadcast_id``, no Redis log persistence) — DELETED in
+          this convergence.
+        * ``BroadcastService.send`` / ``send_by_tag`` (A2A path — real
+          parallel + ``broadcast_id`` + persistence) — kept as the
+          lower-level API, still used directly by
+          ``ACNAgentExecutor._handle_broadcast``.
+
+        This method is the high-level entry the HTTP routes now call.
+        It performs the same target resolution that
+        ``MessageService.broadcast_message`` used to do (so existing
+        HTTP clients keep observing the same fan-out semantics) but
+        gets the BroadcastResult contract for free — including a
+        first-class ``broadcast_id`` exposed to the HTTP caller for
+        traceability.
+
+        Selector precedence (matches the old HTTP behaviour exactly):
+
+        1. ``target_agents`` — explicit list, used verbatim;
+        2. ``subnet_id`` — resolved via
+           ``agent_repository.find_by_subnet``;
+        3. ``tags`` — resolved via ``agent_repository.find_by_tags``
+           (defaults to ``status="online"``);
+        4. none of the above — broadcast to **all** agents
+           (``find_all``).
+
+        The sender is auto-filtered out of the resolved target set so
+        a ``broadcast`` from an agent that happens to be in its own
+        subnet/tag does not echo back to itself.
+
+        Args:
+            from_agent: Sender agent id. Existence is verified up
+                front; missing senders get ``AgentNotFoundException``
+                (mapped to HTTP 404 by the route).
+            message: A2A message to deliver.
+            target_agents: Explicit recipient list (highest priority).
+            subnet_id: Restrict fan-out to one subnet.
+            tags: Restrict fan-out to agents matching tags.
+            strategy: Delivery strategy (parallel / sequential /
+                best_effort). See :py:class:`BroadcastStrategy`.
+
+        Returns:
+            :py:class:`BroadcastResult` — with persisted
+            ``broadcast_id``, per-target ``results`` dict, and stats.
+        """
+        if self.agent_repository is None:
+            raise RuntimeError(
+                "BroadcastService.broadcast() requires agent_repository "
+                "to be wired at construction time. Production lifespan "
+                "must inject it via init_services(); test fixtures "
+                "should pass the same mock used elsewhere."
+            )
+
+        sender = await self.agent_repository.find_by_id(from_agent)
+        if sender is None:
+            raise AgentNotFoundException(f"Sender agent {from_agent} not found")
+
+        if target_agents:
+            to_ids = list(target_agents)
+        elif subnet_id:
+            agents = await self.agent_repository.find_by_subnet(subnet_id)
+            to_ids = [a.agent_id for a in agents]
+        elif tags:
+            agents = await self.agent_repository.find_by_tags(tags)
+            to_ids = [a.agent_id for a in agents]
+        else:
+            agents = await self.agent_repository.find_all()
+            to_ids = [a.agent_id for a in agents]
+
+        # Filter sender from the resolved set — same as the legacy
+        # MessageService.broadcast_message behaviour. Explicit
+        # ``target_agents=[from_agent]`` still gets filtered (caller
+        # asked to message themselves; broadcast semantics say no).
+        to_ids = [aid for aid in to_ids if aid != from_agent]
+
+        if not to_ids:
+            logger.warning(
+                "broadcast_no_targets "
+                f"from={from_agent} subnet={subnet_id!r} tags={tags!r}"
+            )
+            # Empty fan-out still produces a BroadcastResult so callers
+            # have a stable shape (and a broadcast_id for the audit
+            # trail, even though nothing was actually sent).
+            return BroadcastResult(
+                broadcast_id=uuid4().hex[:12],
+                total=0,
+                success=0,
+                failed=0,
+                results={},
+            )
+
+        return await self.send(
+            from_agent=from_agent,
+            to_agents=to_ids,
+            message=message,
+            strategy=strategy,
+        )
 
     async def send(
         self,

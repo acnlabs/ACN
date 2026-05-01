@@ -11,11 +11,16 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
+from ..infrastructure.messaging.broadcast_service import (
+    BroadcastResult,
+    BroadcastStrategy,
+)
 from ..monitoring.audit import AuditEventType
 from .dependencies import (  # type: ignore[import-untyped]
     WALLET_RATE_LIMIT,
     AgentApiKeyDep,
     AuditDep,
+    BroadcastDep,
     InternalTokenDep,
     MessageServiceDep,
     MetricsDep,
@@ -43,6 +48,69 @@ def _payload_to_a2a_message(payload: dict) -> Message:
         role="user",
         parts=[TextPart(text=str(payload))],
     )
+
+
+def _broadcast_result_to_http_responses(result: BroadcastResult) -> list[dict]:
+    """Adapt a ``BroadcastResult`` to the legacy HTTP per-target shape.
+
+    The previous HTTP path (``MessageService.broadcast_message``)
+    returned ``list[{"agent_id": ..., "status": ..., ...}]`` — agent
+    id was *inside* each item. ``BroadcastService`` keeps results
+    keyed by agent id (``dict[agent_id, per_target]``) because it's
+    a richer in-memory shape. The HTTP wire contract still uses the
+    list form to preserve backward-compat with existing SDK clients
+    parsing ``responses[]``.
+
+    Per-target normalisation maps ``BroadcastService`` shapes back
+    to the historical ``status`` taxonomy:
+
+    * dict with ``error`` key → ``{status: "failed", error: ...}``
+      (network / 5xx / etc.).
+    * dict with ``status == "rejected"`` → kept verbatim, the
+      ``reason`` / ``reject_reason`` fields are already aligned.
+    * any other dict (e.g. inbox short-circuit
+      ``{"status": "inbox", "route_id": ...}``) → forwarded under
+      ``status: "success"`` with ``response`` carrying the dict —
+      same shape callers used to see.
+    * Pydantic-style ``SendMessageResponse`` model →
+      ``status: "success"`` and ``response`` carrying the
+      ``model_dump()`` representation.
+    """
+    out: list[dict] = []
+    for agent_id, per_target in result.results.items():
+        if isinstance(per_target, dict):
+            if "error" in per_target:
+                out.append(
+                    {
+                        "agent_id": agent_id,
+                        "status": "failed",
+                        "error": per_target["error"],
+                    }
+                )
+            elif per_target.get("status") == "rejected":
+                out.append({"agent_id": agent_id, **per_target})
+            else:
+                out.append(
+                    {
+                        "agent_id": agent_id,
+                        "status": "success",
+                        "response": per_target,
+                    }
+                )
+        else:
+            response_dump = (
+                per_target.model_dump()
+                if hasattr(per_target, "model_dump")
+                else per_target
+            )
+            out.append(
+                {
+                    "agent_id": agent_id,
+                    "status": "success",
+                    "response": response_dump,
+                }
+            )
+    return out
 
 
 async def _record_broadcast_policy_rejections(
@@ -244,13 +312,19 @@ async def broadcast_message(
     request: Request,
     body: BroadcastRequest,
     agent_info: AgentApiKeyDep,
-    message_service: MessageServiceDep = None,
+    broadcast_service: BroadcastDep = None,
     metrics: MetricsDep = None,
 ):
     """Broadcast message to multiple agents (requires Agent API Key, 10/min per IP)
 
-    The authenticated agent must match the `from_agent` field to prevent spoofing.
-    Clean Architecture: Route → MessageService → Repository + MessageRouter
+    The authenticated agent must match the ``from_agent`` field to prevent spoofing.
+
+    Phase 2 Group C #9 / review v2 P1 #7: this route now goes through
+    ``BroadcastService.broadcast`` (was ``MessageService.broadcast_message``).
+    The legacy double-track is collapsed — HTTP and A2A entries share
+    the same parallel fan-out + Redis-persisted broadcast log + first-class
+    ``broadcast_id`` traceability. See
+    ``docs/features/acn-communication-economic-model.md`` L608–L614.
     """
     if agent_info["agent_id"] != body.from_agent:
         raise HTTPException(
@@ -260,15 +334,27 @@ async def broadcast_message(
     try:
         message = _payload_to_a2a_message(body.message)
 
-        responses = await message_service.broadcast_message(
-            from_agent_id=body.from_agent,
+        try:
+            strategy = BroadcastStrategy(body.strategy)
+        except ValueError as ve:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Unknown strategy {body.strategy!r}; "
+                    f"expected one of: parallel, sequential, best_effort"
+                ),
+            ) from ve
+
+        result = await broadcast_service.broadcast(
+            from_agent=body.from_agent,
             message=message,
             subnet_id=body.target_subnet,
             tags=body.target_tags,
-            strategy=body.strategy,
+            strategy=strategy,
         )
 
-        success_count = len([r for r in responses if r.get("status") == "success"])
+        responses = _broadcast_result_to_http_responses(result)
+
         await metrics.inc_counter(
             "broadcast_sent",
             labels={"type": "broadcast", "status": "success"},
@@ -285,21 +371,29 @@ async def broadcast_message(
         logger.info(
             "message_broadcasted",
             from_agent=body.from_agent,
-            target_count=len(responses),
-            success_count=success_count,
+            broadcast_id=result.broadcast_id,
+            target_count=result.total,
+            success_count=result.success,
         )
 
         return {
             "status": "broadcasted",
+            "broadcast_id": result.broadcast_id,
             "from_agent": body.from_agent,
             "responses": responses,
-            "total": len(responses),
-            "successful": success_count,
+            "total": result.total,
+            "successful": result.success,
         }
 
     except AgentNotFoundException as e:
         logger.error("broadcast_failed", error=str(e))
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+    except HTTPException:
+        # 422 strategy-validation surfaced from inside the try block
+        # — let FastAPI translate it directly without the generic
+        # 500 wrapper below.
+        raise
 
     except Exception as e:
         logger.error("broadcast_failed", error=str(e))
@@ -320,13 +414,16 @@ async def broadcast_by_tag(
     request: Request,
     body: BroadcastByTagRequest,
     agent_info: AgentApiKeyDep,
-    message_service: MessageServiceDep = None,
+    broadcast_service: BroadcastDep = None,
     metrics: MetricsDep = None,
 ):
     """Broadcast to agents with specific tags (requires Agent API Key, 10/min per IP)
 
-    The authenticated agent must match the `from_agent` field to prevent spoofing.
-    Clean Architecture: Route → MessageService → Repository
+    The authenticated agent must match the ``from_agent`` field to prevent spoofing.
+
+    Phase 2 Group C #9 / review v2 P1 #7: same convergence as
+    ``/broadcast`` — uses ``BroadcastService.broadcast(tags=...)``,
+    returns ``broadcast_id``.
     """
     if agent_info["agent_id"] != body.from_agent:
         raise HTTPException(
@@ -336,18 +433,20 @@ async def broadcast_by_tag(
     try:
         message = _payload_to_a2a_message(body.message)
 
-        responses = await message_service.broadcast_message(
-            from_agent_id=body.from_agent,
+        result = await broadcast_service.broadcast(
+            from_agent=body.from_agent,
             message=message,
             tags=body.tags,
-            strategy="parallel",
+            strategy=BroadcastStrategy.PARALLEL,
         )
+
+        responses = _broadcast_result_to_http_responses(result)
 
         # Record total_sent and success_count before truncation so the
         # response accurately reflects actual delivery outcomes, not just
         # what fits in the returned slice.
-        total_sent = len(responses)
-        success_count = len([r for r in responses if r.get("status") == "success"])
+        total_sent = result.total
+        success_count = result.success
         # Tally policy rejections from the *full* response set (i.e.
         # before the optional ``body.limit`` truncation a few lines down)
         # so the metric counts every rejection that actually happened,
@@ -363,6 +462,7 @@ async def broadcast_by_tag(
         logger.info(
             "tag_broadcast_completed",
             from_agent=body.from_agent,
+            broadcast_id=result.broadcast_id,
             tags=body.tags,
             total_sent=total_sent,
             returned=len(responses),
@@ -370,6 +470,7 @@ async def broadcast_by_tag(
 
         return {
             "status": "broadcasted",
+            "broadcast_id": result.broadcast_id,
             "from_agent": body.from_agent,
             "tags": body.tags,
             "responses": responses,

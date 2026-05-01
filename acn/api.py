@@ -358,7 +358,15 @@ async def lifespan(app: FastAPI):
         allowlist_service=allowlist_service_instance,
     )
     message_service_instance = MessageService(router_instance, agent_repository)
-    broadcast_instance = BroadcastService(router_instance, registry_instance.redis)
+    # Phase 2 Group C #9: BroadcastService now requires agent_repository
+    # because the unified ``broadcast()`` entry point (used by HTTP routes)
+    # resolves subnet/tag/all filters via the same Clean-Architecture
+    # repository previously hit by ``MessageService.broadcast_message``.
+    broadcast_instance = BroadcastService(
+        router_instance,
+        registry_instance.redis,
+        agent_repository=agent_repository,
+    )
     subnet_manager_instance = SubnetManager(
         registry=registry_instance,
         redis_client=registry_instance.redis,

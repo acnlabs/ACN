@@ -256,9 +256,13 @@ class TestCommunicationContract:
 
     @pytest.fixture
     def stub_message_service(self):
+        # NOTE: ``broadcast_message`` was deleted in the Phase 2 Group C #9
+        # convergence (HTTP broadcast routes now go through
+        # ``BroadcastService.broadcast``). The contract tests in this
+        # class only exercise the single-send path, so a sender-only
+        # stub is sufficient.
         svc = AsyncMock()
         svc.send_message = AsyncMock(return_value={"message_id": "msg-1", "status": "sent"})
-        svc.broadcast_message = AsyncMock(return_value=[])
         return svc
 
     @pytest.fixture
