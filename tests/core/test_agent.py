@@ -290,3 +290,114 @@ class TestAgentEntity:
         }
         agent = Agent.from_dict(legacy)
         assert agent.communication_policy == {"mode": "open"}
+
+
+class TestSocialCardUrl:
+    """Cover the SOCIAL.md pointer added on the Agent entity.
+
+    Why these tests live next to the entity (not the route): we
+    want the *entity-layer* invariants — validation, round-trip,
+    legacy-payload tolerance — pinned independently of any route
+    plumbing, because all four entry points (POST /register, POST
+    /join, PATCH /social-card-url, raw repository writes during
+    migration) eventually funnel through ``Agent.__post_init__``
+    and ``Agent.from_dict``.
+    """
+
+    def test_default_is_none(self):
+        """Agents created without specifying a URL must default
+        to ``None``. This is the implicit contract every existing
+        caller relies on — adding a new field with a non-None
+        default would silently change the meaning of every
+        already-written ``Agent(...)`` call."""
+        agent = Agent(
+            agent_id="agent-1",
+            name="No card",
+            endpoint="https://example.com",
+        )
+        assert agent.social_card_url is None
+
+    def test_https_url_accepted(self):
+        agent = Agent(
+            agent_id="agent-1",
+            name="Has card",
+            endpoint="https://example.com",
+            social_card_url="https://acme.example.com/.well-known/social.md",
+        )
+        assert agent.social_card_url == (
+            "https://acme.example.com/.well-known/social.md"
+        )
+
+    def test_http_url_accepted_for_dev(self):
+        """Why http:// is allowed: dev / preview environments
+        often serve plaintext (localhost, pull-request preview
+        URLs without TLS). The route layer enforces production-
+        appropriate constraints separately; the entity layer
+        stays permissive so unit tests against in-memory fixtures
+        don't need to mint TLS certs."""
+        agent = Agent(
+            agent_id="agent-1",
+            name="Dev card",
+            endpoint="http://localhost:8080",
+            social_card_url="http://localhost:3000/social.md",
+        )
+        assert agent.social_card_url == "http://localhost:3000/social.md"
+
+    def test_empty_string_normalized_to_none(self):
+        """Empty input collapses to ``None`` so downstream code
+        can rely on a single sentinel for "no card published"."""
+        agent = Agent(
+            agent_id="agent-1",
+            name="Empty card",
+            endpoint="https://example.com",
+            social_card_url="   ",
+        )
+        assert agent.social_card_url is None
+
+    def test_non_http_scheme_rejected(self):
+        """Same reasoning as the route layer: the URL is meant
+        to be HTTP-fetched. Allowing other schemes here would
+        let raw repository writes (migrations, admin scripts)
+        bypass route validation."""
+        with pytest.raises(ValueError, match="https://"):
+            Agent(
+                agent_id="agent-1",
+                name="Bad scheme",
+                endpoint="https://example.com",
+                social_card_url="ftp://example.com/social.md",
+            )
+
+    def test_round_trip_to_dict_from_dict(self):
+        """Round-trip through serialization is the contract Redis
+        relies on — agents persist via ``to_dict`` and rehydrate
+        via ``from_dict``, so the URL must survive both
+        directions byte-identical."""
+        original = Agent(
+            agent_id="agent-1",
+            name="Round trip",
+            endpoint="https://example.com",
+            social_card_url="https://acme.example.com/social.md",
+        )
+        rehydrated = Agent.from_dict(original.to_dict())
+        assert rehydrated.social_card_url == original.social_card_url
+
+    def test_legacy_dict_without_field_hydrates_to_none(self):
+        """Cached payloads written before this field existed
+        (Redis hashes mid-migration) must still hydrate cleanly,
+        with the missing field defaulting to ``None``. Without
+        this, a single deploy would crash every running gateway
+        trying to read pre-existing agents."""
+        legacy = {
+            "agent_id": "legacy-1",
+            "name": "Legacy",
+            "endpoint": "https://legacy.example.com",
+            "status": "online",
+            "tags": [],
+            "subnet_ids": ["public"],
+            "metadata": {},
+            "registered_at": "2024-01-01T12:00:00",
+            "last_heartbeat": None,
+            # Note: no social_card_url key
+        }
+        agent = Agent.from_dict(legacy)
+        assert agent.social_card_url is None

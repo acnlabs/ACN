@@ -70,7 +70,13 @@ class RedisAgentRepository(IAgentRepository):
         # Filter out None values (Redis doesn't accept None)
         # Also convert booleans to strings for Redis compatibility
         # Track which keys were explicitly set to None — these must be deleted from the hash
-        nullable_fields = {"verification_code", "owner", "endpoint", "referrer_id"}
+        nullable_fields = {
+            "verification_code",
+            "owner",
+            "endpoint",
+            "referrer_id",
+            "social_card_url",
+        }
         clean_dict = {}
         fields_to_delete = []
         for k, v in agent_dict.items():
@@ -393,6 +399,8 @@ class RedisAgentRepository(IAgentRepository):
                 if agent_dict.get("erc8004_registered_at")
                 else None
             ),
+            # SOCIAL.md pointer (older rows predate this field).
+            "social_card_url": agent_dict.get("social_card_url") or None,
         }
 
         return Agent(**data)

@@ -130,6 +130,11 @@ class AgentModel(Base):
     payment_methods: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     token_pricing: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     agent_card: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # SOCIAL.md pointer (URL only; body is fetched on demand by clients).
+    # See https://agentsocial.one — clients honor Cache-Control / ETag from
+    # the source URL; ACN deliberately does NOT cache the body to avoid
+    # turning into a stale mirror of every agent's social profile.
+    social_card_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Gateway-level communication policy (see docs/features/acn-communication-economic-model.md).
     # JSONB so we can extend the schema in Phase 2/3 (allowlist, rate_limit,
     # attention_fee thresholds, ...) without another migration. NULL is treated
