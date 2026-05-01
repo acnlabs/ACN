@@ -334,8 +334,21 @@ async def broadcast_message(
     try:
         message = _payload_to_a2a_message(body.message)
 
+        # Normalise to lowercase before the enum lookup. The pre-Group-C
+        # ``MessageService.broadcast_message`` matched ``best_effort``
+        # via raw string equality (``if strategy != "best_effort"``)
+        # which silently accepted ``"BEST_EFFORT"`` only insofar as it
+        # consistently fell into the *non*-best_effort branch — i.e.
+        # uppercase users never got real best-effort behaviour. The
+        # convergence's strict ``BroadcastStrategy(body.strategy)`` is
+        # technically more correct (loud 422) but would break SDKs
+        # that happened to send uppercase. ``.lower()`` is strictly
+        # more permissive than the legacy contract and matches HTTP
+        # convention — no regression risk, the only "lost" behaviour
+        # is "uppercase silently maps to wrong branch", which was a
+        # bug. P2-2 in the 9fb38b9 audit.
         try:
-            strategy = BroadcastStrategy(body.strategy)
+            strategy = BroadcastStrategy(body.strategy.lower())
         except ValueError as ve:
             raise HTTPException(
                 status_code=422,

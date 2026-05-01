@@ -41,6 +41,29 @@ Context: commits `39c0ed0`（PR #2 v1+v2+v3）+ `d928a06`（ruff sweep）+ `<P2-
 - ~~**`_http_exception_handler` 的 `Retry-After` lookup 大小写敏感**（v3 P2-A7）~~ ✅
   `next((v for k, v in exc_headers.items() if k.lower() == "retry-after"), None)`。HTTP header 名 case-insensitive（RFC 9110 §5.1）的语义对齐。
 
+### Phase 2 Group C #9 — wire-level behaviour change announcement
+
+Context: commit `9fb38b9` collapsed `MessageService.broadcast_message` →
+`BroadcastService.broadcast`. One **wire-level behaviour change** that's
+strictly an improvement but worth telling SDK / dashboard owners about
+before they notice it via a silent metric shift:
+
+- **Before**：HTTP `/communication/broadcast` with `strategy="parallel"` (or `"sequential"`) — first non-`PolicyRejected` delivery error (`ConnectionError` / 5xx / timeout) **raised out of the service** → HTTP 500 + remaining targets in the fan-out **never contacted**. The old `for` loop aborted on the first exception.
+- **After**：`BroadcastService._send_parallel` runs all targets via `asyncio.gather` and converts per-target exceptions to `results[agent_id] = {"error": <safe>}`. **Never raises**. Result: HTTP 200 with `responses[]` showing per-target `status: "failed"` for the broken ones and `status: "success"` for the rest.
+
+Why this is an improvement, not a regression:
+- All targets are reached (no partial fan-out)
+- Per-target outcome is observable (clients can decide what to do per-recipient)
+- Aligns HTTP path with the A2A path's existing semantics (which already used `BroadcastService`)
+- Matches the `best_effort` strategy's spirit — and `best_effort` was the only strategy the deleted code actually distinguished
+
+Action items (none blocking, but worth doing before next release):
+- ~~**Strategy case-insensitivity**~~ ✅ 已完成（同 P2-2 sweep）
+  Route now `.lower()`-normalises before `BroadcastStrategy(...)`. SDKs sending uppercase no longer 422.
+- **Dashboard owners**: any alert that fires on `acn_broadcast_sent{status="error"}` or HTTP 5xx rate from `/broadcast` will see lower-than-before fire rate. The signal moved into `responses[].status == "failed"` (new) and `acn_messages_rejected_by_policy_total{path="broadcast_target"}` (already existed for policy denials).
+- **SDK release notes**: mention the 500→200 shift; recommend clients inspect `responses[].status` rather than HTTP status to detect per-target failures.
+- **OpenAPI / docs**: `/broadcast` response schema now includes top-level `broadcast_id: str` (12-hex). `/broadcast-by-tag` same.
+
 ### Alembic chain hygiene
 
 Context: 修 `7ee2ed3a177c`（`expand_verification_code_to_64chars`）的 fresh-DB upgrade fail 时连带发现 — `alembic downgrade base` 全链回滚会在 initial schema 阶段炸。

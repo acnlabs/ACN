@@ -221,6 +221,53 @@ class TestBroadcastRouteUsesBroadcastService:
         assert kwargs.get("subnet_id") is None
         assert kwargs.get("target_agents") is None
 
+    def test_strategy_is_case_insensitive(self):
+        """SDKs occasionally send uppercase strategies (matches the
+        Python enum *member* name rather than its *value*). The
+        deleted ``MessageService.broadcast_message`` was silently
+        permissive about case (``if strategy != "best_effort"``
+        treated ``"BEST_EFFORT"`` as non-best-effort), and the
+        convergence's strict ``BroadcastStrategy(body.strategy)``
+        would have made that a wire break. The route normalises
+        via ``.lower()`` so any of these spellings work — covers
+        SDKs that used the old shape and any new ones that copy
+        the StrEnum member name verbatim. P2-2 in the 9fb38b9 audit.
+        """
+        broadcast_svc = _stub_broadcast_service(
+            broadcast_return=BroadcastResult(
+                broadcast_id="bcast-case", total=0, success=0, failed=0, results={},
+            )
+        )
+        metrics = _stub_metrics()
+
+        app.dependency_overrides[get_broadcast] = lambda: broadcast_svc
+        app.dependency_overrides[get_metrics] = lambda: metrics
+        app.dependency_overrides[verify_agent_api_key] = lambda: _make_agent_info("agent-a")
+
+        try:
+            with TestClient(app) as client:
+                # Mixed-case + all-caps both work; the route's .lower()
+                # normalisation feeds either into BroadcastStrategy.
+                for strategy_input in ("PARALLEL", "Best_Effort", "Sequential"):
+                    r = client.post(
+                        "/api/v1/communication/broadcast",
+                        json={
+                            "from_agent": "agent-a",
+                            "message": {"text": "x"},
+                            "strategy": strategy_input,
+                        },
+                    )
+                    assert r.status_code == 200, (
+                        f"strategy {strategy_input!r} should be accepted "
+                        f"after .lower() normalisation; got {r.status_code} "
+                        f"with detail {r.json()}"
+                    )
+        finally:
+            app.dependency_overrides.clear()
+
+        # All three calls reached the service (stub records every call).
+        assert broadcast_svc.broadcast.await_count == 3
+
     def test_unknown_strategy_returns_422_before_calling_service(self):
         """Strategy validation happens at the route layer, not at the
         service layer. An unknown strategy must short-circuit to
