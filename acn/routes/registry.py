@@ -68,6 +68,28 @@ logger = structlog.get_logger()
 settings = get_settings()
 
 
+# Phase 2 review v2 P1 #10 — modes that carry an implicit SDK-version
+# contract. When a PATCH /policy resolves to one of these, the agent
+# becomes deaf to the legacy ``agent_message`` WS event and instead
+# only receives ``manifest_notification`` (manifest mode) or
+# inbox-suppressed traffic that the SDK must consult by polling
+# ``/communication/manifest/{id}`` (allowlist non-member targets).
+# An old SDK that doesn't implement those handlers silently misses
+# every inbound message, which is a near-impossible-to-diagnose
+# breakage from the agent author's perspective.
+#
+# We surface ``X-ACN-SDK-Min-Version`` on every PATCH that *resolves*
+# to one of these modes — including idempotent re-applications —
+# rather than only on a transition (open→manifest). Idempotent calls
+# are the most common form of "deploy script confirms desired state",
+# so always emitting the header makes the SDK contract observable
+# from any single PATCH the operator inspects, not only the first
+# one. See L601 of
+# ``docs/features/acn-communication-economic-model.md``.
+_MODES_REQUIRING_SDK_NOTIFY: frozenset[str] = frozenset({"manifest", "allowlist"})
+_SDK_MIN_VERSION_HEADER = "X-ACN-SDK-Min-Version"
+
+
 # ========== Request/Response Models ==========
 
 
@@ -1239,6 +1261,7 @@ async def get_agent_policy(
 @limiter.limit("30/minute")
 async def update_agent_policy(
     request: Request,
+    response: Response,
     agent_id: AgentIdPath,
     body: CommunicationPolicyPatchRequest,
     caller: OwnerOrInternalDep,
@@ -1315,6 +1338,24 @@ async def update_agent_policy(
             caller_agent_id=caller.get("agent_id"),
             old_mode=old_mode,
             new_mode=new_mode,
+        )
+
+    # Phase 2 review v2 P1 #10: emit ``X-ACN-SDK-Min-Version`` whenever
+    # the post-update mode requires an SDK that understands
+    # ``manifest_notification`` (manifest mode) or polls the manifest
+    # queue for allowlist non-member fan-outs. Old clients without
+    # those handlers won't see any of the upcoming traffic — surfacing
+    # the requirement as a response header lets dashboards / SDK
+    # release tooling pick it up automatically (compared to documenting
+    # it only in release notes, which gets missed).
+    #
+    # Header is emitted on EVERY PATCH that resolves to one of the
+    # gated modes — including no-op ``manifest -> manifest``
+    # idempotency. See ``_MODES_REQUIRING_SDK_NOTIFY`` for the full
+    # rationale on always-emit vs transition-only emit.
+    if new_mode in _MODES_REQUIRING_SDK_NOTIFY:
+        response.headers[_SDK_MIN_VERSION_HEADER] = (
+            settings.policy_manifest_min_sdk_version
         )
 
     return {

@@ -64,6 +64,30 @@ Action items (none blocking, but worth doing before next release):
 - **SDK release notes**: mention the 500→200 shift; recommend clients inspect `responses[].status` rather than HTTP status to detect per-target failures.
 - **OpenAPI / docs**: `/broadcast` response schema now includes top-level `broadcast_id: str` (12-hex). `/broadcast-by-tag` same.
 
+### Phase 2 review v2 P1 #10 — `X-ACN-SDK-Min-Version` warning header (✅ shipped)
+
+`PATCH /api/v1/agents/{id}/policy` now emits the `X-ACN-SDK-Min-Version`
+response header whenever the resolved mode is `manifest` or
+`allowlist`. Default value `0.5.0` is configurable via
+`Settings.policy_manifest_min_sdk_version` (env: `POLICY_MANIFEST_MIN_SDK_VERSION`).
+
+Action items for surrounding tooling (none blocking; signal what to
+do BEFORE Phase 3 default-mode flip in
+[`acn-communication-economic-model.md`](features/acn-communication-economic-model.md)):
+- **SDK release notes**: clearly call out the contract — any client
+  pinned below `policy_manifest_min_sdk_version` that PATCHes its
+  policy to `manifest` / `allowlist` will silently miss every
+  inbound message until upgraded. Recommend clients READ the header
+  and surface a fail-fast error / log warning.
+- **Dashboards / ops scripts**: capture the header for any policy
+  PATCH; alert if a fleet of agents is on a client version below
+  the advertised minimum AFTER a `manifest` / `allowlist` flip.
+- **Versioning policy**: bump
+  `Settings.policy_manifest_min_sdk_version` each time the ACN
+  python client adds a contractually-required handler (currently
+  needs both `manifest_notification` and `policy_changed`). Keep
+  this ≤ the lowest published client version that implements both.
+
 ### Alembic chain hygiene
 
 Context: 修 `7ee2ed3a177c`（`expand_verification_code_to_64chars`）的 fresh-DB upgrade fail 时连带发现 — `alembic downgrade base` 全链回滚会在 initial schema 阶段炸。

@@ -598,7 +598,7 @@ Group A 拍板架构契约层后，Group B 落地 manifest mode + allowlist 的�
   - manifest queue Redis 数据结构：**ZSET（score = `expires_at` ts）+ 详情 hash 双 key**——ZSET 唯一同时支持 `since` 增量查询（`ZRANGEBYSCORE since=<ts> +inf`）+ 过期清理（`ZREMRANGEBYSCORE -inf now`）；详情 hash 存 `summary / sender / ts`（ZSET member 仅是 manifest_id）。**此项倒灌补充至 Group A #4 manifest queue 数据结构**
   - WS 离线补推：连接重建后客户端 `GET /communication/manifest/{agent_id}?since=<ts>` 增量补，由路由层 `ZRANGEBYSCORE` 实现
   - 客户端兼容：老 SDK 收到不认识 event_type 直接 ignore（Phase 1 协议约定）；推送时机与 manifest queue 写入同步（`MessageRouter.route` 内部判断 recipient mode == `manifest` / `allowlist 名单外` 时调 `ws_manager.send_to_agent(recipient, {"type": "manifest_notification", ...})`，与 inbox 写入是 fire-and-forget 关系——WS 发送失败不影响 manifest queue 已落库）
-  - **mode 切换 SDK 版本警卫**：`PATCH /agents/{id}/policy` 切到 `manifest` / `allowlist` 时返回 warning header `X-ACN-SDK-Min-Version: <version>`；运维文档单独写一节"开启 manifest mode 前必须 SDK ≥ x.y.z（必须实现 `manifest_notification` handler，否则 agent 收不到任何新通知）"——这是隐性 breaking change，不显式提示会让 agent 静默"哑巴"
+  - **mode 切换 SDK 版本警卫** ✅ 已落地（Phase 2 review v2 P1 #10）：`PATCH /agents/{id}/policy` 解析后的 mode 落到 `manifest` / `allowlist`（含幂等重设）时返回 warning header `X-ACN-SDK-Min-Version: <version>`；阈值经 `Settings.policy_manifest_min_sdk_version`（缺省 `0.5.0`）配置，可经环境变量 `POLICY_MANIFEST_MIN_SDK_VERSION` 覆盖（无需 code rebuild，便于灰度阶段不同 fleet 各自钉住版本）；切到 `open` / `closed` 不发 header（无 SDK 契约变化）；404 / 403 等非 200 路径也不发（route handler 都没机会跑）；落地代码：`acn/routes/registry.py:update_agent_policy`；测试：`tests/routes/test_agent_policy_patch.py::TestSDKVersionWarningHeader`（8 项契约：emit/non-emit/idempotent/404/internal-token/configurable）。运维文档需单独写一节"开启 manifest mode 前必须 SDK ≥ 此版本（必须实现 `manifest_notification` handler，否则 agent 收不到任何新通知）"——这是隐性 breaking change，不显式提示会让 agent 静默"哑巴"
   - inbox event 不变（Phase 1 `agent_message` 兼容；manifest mode 不再推 `agent_message`，只推 `manifest_notification`）
 
 **Phase 2 Group C 决策记录（独立技术债）**：
@@ -698,7 +698,7 @@ Phase 2 共 11 条决策（Group A 4 + Group B 5 + Group C 2）密集落地，�
 
 - 两个原型可并行开发（不同 namespace、不同 PG 表、不同 API 路径，无代码耦合）
 - 原型期间不做 metrics / audit 完整 wire-up（Phase 1 风格的最少埋点即可）；这些在原型通过后的正式 sprint 补全
-- 原型 review pass 标准：6 / 7 个验收点全部 ✅；review 时一并消化 Phase 2 review v2 剩余 P1（#7 BroadcastService 反向收敛、#10 mode 切换 SDK 版本灰度、#11 错误码 schema 规范）
+- 原型 review pass 标准：6 / 7 个验收点全部 ✅；review 时一并消化 Phase 2 review v2 剩余 P1（✅ #7 BroadcastService 反向收敛已收敛入 Group C #9、✅ #10 mode 切换 SDK 版本灰度已落地（`X-ACN-SDK-Min-Version` 响应 header）、⏳ #11 错误码 schema 规范）
 
 ### Phase 3：经济闭环与默认迁移
 

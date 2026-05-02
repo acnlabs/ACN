@@ -37,6 +37,24 @@ class Settings(BaseSettings):
     # A2A Protocol
     a2a_protocol_version: str = "0.3.0"
 
+    # Phase 2 review v2 P1 #10 — mode-switch SDK version warning.
+    # When ``PATCH /agents/{id}/policy`` resolves to ``manifest`` or
+    # ``allowlist`` mode, the response carries
+    # ``X-ACN-SDK-Min-Version: <this value>``. Old SDKs without a
+    # ``manifest_notification`` WS handler will silently miss every
+    # subsequent inbound message — the header is the explicit warning
+    # gate so operators / clients catch the implicit breaking change
+    # before agents go "deaf".
+    #
+    # Default is forward-looking — bumped each time the ACN python
+    # client adds a contractually-required handler. Must match (or
+    # be ≤) the lowest published client version that implements both
+    # ``manifest_notification`` and ``policy_changed`` events.
+    # Ops can override per-deployment via ``POLICY_MANIFEST_MIN_SDK_VERSION``
+    # without a code rebuild — useful for staging fleets pinned to
+    # an older client during a phased rollout.
+    policy_manifest_min_sdk_version: str = "0.5.0"
+
     # Gateway
     gateway_base_url: str = "http://localhost:8000"
 
