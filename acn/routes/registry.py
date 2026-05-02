@@ -1139,6 +1139,9 @@ async def proxy_patch(
     )
 
 
+_VISIBILITY_VALUES = frozenset({"real", "test", "demo", "spam", "archived", "all"})
+
+
 @router.get("", response_model=AgentSearchResponse)
 @limiter.limit("60/minute")
 async def search_agents(
@@ -1149,6 +1152,16 @@ async def search_agents(
         default="online",
         description="Filter by status: online (recent heartbeat), offline, or all (all registered agents)",
     ),
+    visibility: str = Query(
+        default="real",
+        description=(
+            "Data-hygiene filter on metadata.visibility. "
+            "'real' (default) shows only production agents. "
+            "'all' returns every registered agent regardless of visibility. "
+            "Other values: test, demo, spam, archived. "
+            "Agents without an explicit visibility tag are treated as 'real'."
+        ),
+    ),
     owner: str | None = None,
     name: str | None = None,
     agent_service: AgentServiceDep = None,
@@ -1157,6 +1170,12 @@ async def search_agents(
 
     Clean Architecture: Route → AgentService → Repository
     """
+    if visibility not in _VISIBILITY_VALUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"visibility must be one of: {', '.join(sorted(_VISIBILITY_VALUES))}",
+        )
+
     tag_param = tag or skill  # accept both; `tag` takes precedence
     tag_list = tag_param.split(",") if tag_param else None
 
@@ -1165,6 +1184,15 @@ async def search_agents(
         tags=tag_list,
         status=status,
     )
+
+    # Apply visibility hygiene filter.
+    # Agents without metadata.visibility are treated as "real" (open-world
+    # assumption: all pre-existing agents are real unless explicitly marked).
+    if visibility != "all":
+        agents = [
+            a for a in agents
+            if (a.metadata or {}).get("visibility", "real") == visibility
+        ]
 
     # Apply additional filters (owner, name)
     if owner:
