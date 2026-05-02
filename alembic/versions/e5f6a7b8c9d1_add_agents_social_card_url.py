@@ -19,7 +19,7 @@ fall back to defaults — same semantics as a missing file at the
 well-known path).
 
 Revision ID: e5f6a7b8c9d1
-Revises: d4e5f6a7b8c9
+Revises: f6a7b8c9d0e1
 Create Date: 2026-05-01 00:00:00.000000
 
 """
@@ -30,7 +30,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e5f6a7b8c9d1"
-down_revision: str | None = "d4e5f6a7b8c9"
+down_revision: str | None = "f6a7b8c9d0e1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
