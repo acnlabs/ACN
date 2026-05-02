@@ -142,6 +142,28 @@ and `_unhandled_exception_handler` in `acn/api.py`; update
 update section 1 of `acn-error-schema.md` to remove the deprecation
 note. Single-PR change.
 
+#### P3 — OpenAPI schema visibility for ACN flat error response
+
+`ACNErrorResponse` is defined in [`acn/core/errors.py`](../acn/core/errors.py) but is not advertised in `/openapi.json` for pilot routes today: FastAPI cannot statically infer which routes raise `ACNHTTPError`, so SDK type-gen consumers see `HTTPValidationError` / generic `dict` for 4xx responses instead of the canonical flat shape.
+
+Path forward — for each pilot or migrated route, add an explicit `responses=` block on the route decorator:
+
+```python
+from acn.core.errors import ACNErrorResponse
+
+@router.post(
+    "/send",
+    responses={
+        403: {"model": ACNErrorResponse, "description": "policy / auth rejection"},
+        404: {"model": ACNErrorResponse, "description": "agent not found"},
+    },
+)
+```
+
+Suggested batching: do this *atomically* with each row of the sprint roadmap above (route migration + OpenAPI advertisement in the same PR), so the doc and the matrix flip together. Pilot routes (already ✅ in the matrix) can be retro-fitted in a single follow-up PR — estimated 1-2 hours, no new tests required.
+
+Out of scope for this ticket: regenerating downstream SDK type-gen artefacts. That is the SDK release-notes owner's responsibility.
+
 #### P3 — `RequestValidationError` alignment
 
 FastAPI's automatic 422 (pydantic body / query / path validation)

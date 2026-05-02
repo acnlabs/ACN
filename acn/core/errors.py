@@ -71,26 +71,34 @@ class ErrorCode(StrEnum):
     any SDK that pinned a branch on it — treat additions as easy and
     renames as hard.
 
-    Pilot use (communication routes) is annotated below; codes
-    without a "pilot" annotation are reserved for future routes
-    and only need a ``_DEFAULT_MESSAGES`` entry.
+    Members are visually grouped into three sections — *pilot use*,
+    *5xx fallback*, and *reserved* — to keep the catalog readable as
+    it grows. The grouping is comment-only; ``StrEnum`` member order
+    has no runtime semantics for any current consumer (the test suite
+    asserts ``set(_DEFAULT_MESSAGES) == set(ErrorCode)``).
     """
 
+    # ===== Pilot use (communication routes — Phase 2 review v2 P1 #11) =====
     AGENT_NOT_FOUND = "agent_not_found"
-
     API_KEY_AGENT_MISMATCH = "api_key_agent_mismatch"
     FROM_AGENT_MISMATCH = "from_agent_mismatch"
-    AUTHENTICATION_REQUIRED = "authentication_required"
-    INTERNAL_TOKEN_INVALID = "internal_token_invalid"
-
     COMMUNICATION_REJECTED = "communication_rejected"
-
     UNKNOWN_STRATEGY = "unknown_strategy"
 
-    WALLET_RATE_LIMIT_EXCEEDED = "wallet_rate_limit_exceeded"
-
+    # ===== 5xx fallback (sanitised handler chain) =====
     INTERNAL_SERVER_ERROR = "internal_server_error"
 
+    # ===== Reserved (declared, not yet raised by any route) =====
+    # Auth/dependency layer codes — will be wired when the
+    # ``dependencies`` module is migrated (sprint #10 in BACKLOG).
+    AUTHENTICATION_REQUIRED = "authentication_required"
+    INTERNAL_TOKEN_INVALID = "internal_token_invalid"
+    # Rate-limit code — slowapi's ``_rate_limit_exceeded_handler``
+    # currently owns 429 responses; this code is reserved for when
+    # rate limit emission converges with the flat schema.
+    WALLET_RATE_LIMIT_EXCEEDED = "wallet_rate_limit_exceeded"
+    # Per-resource codes — picked up as each module flips ⏳ → ✅
+    # in section 4 of ``docs/features/acn-error-schema.md``.
     SUBNET_NOT_FOUND = "subnet_not_found"
     TASK_NOT_FOUND = "task_not_found"
     ALLOWLIST_CAPACITY_EXCEEDED = "allowlist_capacity_exceeded"

@@ -58,8 +58,8 @@ The `ErrorCode` enum in [`acn/core/errors.py`](../../acn/core/errors.py) is a **
 
 | `error_code`               | HTTP status | Used by                                                | `details` schema                                         |
 | -------------------------- | ----------- | ------------------------------------------------------ | -------------------------------------------------------- |
-| `agent_not_found`          | 404         | `/send` `/broadcast` `/broadcast-by-tag` `/history` `/history/ack` `/internal/send` | `{ agent_id: string }`                            |
-| `api_key_agent_mismatch`   | 403         | `/history` `/history/ack`                              | `{ path_agent: string, key_agent: string }`              |
+| `agent_not_found`          | 404         | `/send` `/broadcast` `/broadcast-by-tag` `/history` `/history/{agent_id}/ack` `/internal/send` | `{ agent_id: string }`                            |
+| `api_key_agent_mismatch`   | 403         | `/history` `/history/{agent_id}/ack`                   | `{ path_agent: string, key_agent: string }`              |
 | `from_agent_mismatch`      | 403         | `/send` `/broadcast` `/broadcast-by-tag`               | `{ authenticated_as: string, from_agent: string }`       |
 | `communication_rejected`   | 403         | `/send` `/internal/send` (defensive)                   | `{ reason: string, reject_reason: string \| null }`      |
 | `unknown_strategy`         | 422         | `/broadcast`                                           | `{ strategy: string, expected: string[] }`               |
@@ -101,7 +101,7 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 
 | Route group                                                                                  | Exception class    | 4xx body shape                                                                          | Status |
 | -------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------- | ------ |
-| Pilot — `/communication/send`, `/broadcast`, `/broadcast-by-tag`, `/history`, `/history/ack`, `/internal/send` | `ACNHTTPError`     | `{ error_code, message, details, request_id }` (flat)                                   | ✅ Migrated |
+| Pilot — `/communication/send`, `/broadcast`, `/broadcast-by-tag`, `/history`, `/history/{agent_id}/ack`, `/internal/send` [^1] | `ACNHTTPError`     | `{ error_code, message, details, request_id }` (flat)                                   | ✅ Migrated |
 | `/api/v1/allowlist/*`                                                                        | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/subnets/*`                                                                          | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/tasks/*`                                                                            | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
@@ -116,6 +116,8 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 | All routes — 5xx                                                                             | `HTTPException` (sanitised) | `{ error, error_code, message, details, request_id }` (flat, with deprecation `error`) | ✅ Aligned |
 
 Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can depend on this matrix as the source of truth for which response shape a given endpoint emits.
+
+[^1]: **Pilot routes are migrated at the route handler body level only.** 4xx errors raised by the *route handler function body* go through `ACNHTTPError` and emit the flat schema. 4xx errors raised by *shared dependencies* invoked before the handler body — `OwnerOrInternalDep`, `InternalTokenDep`, `AgentApiKeyDep`, the `A2AFromAgentValidationMiddleware` ASGI middleware — still raise `HTTPException` and emit the legacy `{"detail": "..."}` shape. They flip to flat schema when the `dependencies` module is migrated (sprint row #10 in [`docs/BACKLOG.md`](../BACKLOG.md)). SDK clients hitting a pilot endpoint must therefore keep both parsers in scope until row #10 lands; the parsing template below already does this via the `if "error_code" in body` branch.
 
 ### SDK parsing template
 
@@ -236,7 +238,34 @@ After all rows in Section 4 flip to ✅, the SDK fallback `else` branch in Secti
 
 ---
 
-## 8. Cross-references
+## 8. OpenAPI schema visibility
+
+The `ACNErrorResponse` Pydantic model in [`acn/core/errors.py`](../../acn/core/errors.py) defines the *contract*, but it is **not** automatically attached to pilot routes' OpenAPI documentation. `acn/api.py` registers a generic `app.exception_handler(ACNHTTPError)`; FastAPI cannot statically infer which routes raise `ACNHTTPError` at which status codes, so `/openapi.json` does not advertise the flat schema for pilot endpoints today.
+
+Practical impact for SDK type-gen consumers (e.g. `openapi-python-client`, `openapi-typescript`):
+
+- The generated type for pilot 4xx responses falls back to `HTTPValidationError` / generic `dict`, not `ACNErrorResponse`.
+- `error_code` / `message` / `details` / `request_id` field types must be modelled by hand in SDK code today.
+
+To advertise the schema in OpenAPI, a route author can add an explicit `responses=` block:
+
+```python
+from acn.core.errors import ACNErrorResponse
+
+@router.post(
+    "/send",
+    responses={
+        403: {"model": ACNErrorResponse, "description": "policy / auth rejection"},
+        404: {"model": ACNErrorResponse, "description": "agent not found"},
+    },
+)
+```
+
+Doing this for every pilot route is tracked as a separate ticket in [`docs/BACKLOG.md`](../BACKLOG.md) ("OpenAPI schema visibility for ACN flat error response") and is intentionally **not** part of #11's pilot scope — the contract test (`tests/core/test_error_schema.py`) is sufficient to enforce the runtime shape today, and OpenAPI advertisement is best done atomically with each route migration so the doc and the migration matrix stay in lockstep.
+
+---
+
+## 9. Cross-references
 
 - [`acn/core/errors.py`](../../acn/core/errors.py) — `ErrorCode` / `ACNHTTPError` / `ACNErrorResponse` source
 - [`acn/api.py`](../../acn/api.py) — `_acn_http_error_handler` central handler + sanitised 5xx handlers
