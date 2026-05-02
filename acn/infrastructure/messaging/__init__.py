@@ -53,7 +53,7 @@ Architecture:
     └─────────────────────────────────────────────────┘
 
 Usage:
-    from a2a.types import Message, TextPart, DataPart
+    from a2a.compat.v0_3.types import Message, TextPart, DataPart
     from acn.communication import (
         MessageRouter,
         BroadcastService,
@@ -100,7 +100,7 @@ Usage:
 """
 
 # Re-export official A2A types for convenience
-from a2a.types import DataPart, Message, Part, Role, TextPart
+from a2a.compat.v0_3.types import DataPart, Message, Part, Role, TextPart
 
 from .broadcast_service import BroadcastResult, BroadcastService, BroadcastStrategy
 from .manifest_dispatcher import ManifestDispatcher

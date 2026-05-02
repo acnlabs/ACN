@@ -14,16 +14,13 @@ import uuid
 from typing import Any
 
 import structlog  # type: ignore[import-untyped]
-from a2a.server.agent_execution import (  # type: ignore[import-untyped]
-    AgentExecutor,
-    RequestContext,
+from a2a.compat.v0_3.conversions import (  # type: ignore[import-untyped]
+    to_compat_message,
+    to_core_agent_card,
+    to_core_task_artifact_update_event,
+    to_core_task_status_update_event,
 )
-from a2a.server.apps import A2AFastAPIApplication  # type: ignore[import-untyped]
-from a2a.server.events import EventQueue  # type: ignore[import-untyped]
-from a2a.server.request_handlers import (  # type: ignore[import-untyped]
-    DefaultRequestHandler,
-)
-from a2a.types import (  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
     AgentCapabilities,
     AgentCard,
     AgentProvider,
@@ -37,6 +34,18 @@ from a2a.types import (  # type: ignore[import-untyped]
     TaskStatus,
     TaskStatusUpdateEvent,
     TextPart,
+)
+from a2a.server.agent_execution import (  # type: ignore[import-untyped]
+    AgentExecutor,
+    RequestContext,
+)
+from a2a.server.events import EventQueue  # type: ignore[import-untyped]
+from a2a.server.request_handlers import (  # type: ignore[import-untyped]
+    DefaultRequestHandler,
+)
+from a2a.server.routes import (  # type: ignore[import-untyped]
+    create_agent_card_routes,
+    create_jsonrpc_routes,
 )
 from fastapi import FastAPI
 from redis.asyncio import Redis
@@ -84,6 +93,26 @@ logger = structlog.get_logger()
 #   entry — they use ``/communication/internal/send`` (token-gated).
 #   Demoting ``system:`` here therefore breaks no real flow.
 _A2A_SAFE_FROM_AGENT_FALLBACK = "unknown"
+
+
+async def _enqueue_status_event(
+    event_queue: EventQueue,
+    event: TaskStatusUpdateEvent,
+) -> None:
+    if isinstance(event_queue, EventQueue):
+        await event_queue.enqueue_event(to_core_task_status_update_event(event))
+        return
+    await event_queue.enqueue_event(event)
+
+
+async def _enqueue_artifact_event(
+    event_queue: EventQueue,
+    event: TaskArtifactUpdateEvent,
+) -> None:
+    if isinstance(event_queue, EventQueue):
+        await event_queue.enqueue_event(to_core_task_artifact_update_event(event))
+        return
+    await event_queue.enqueue_event(event)
 
 
 def _safe_a2a_from_agent(context: RequestContext) -> str:
@@ -177,8 +206,8 @@ class ACNAgentExecutor(AgentExecutor):
         """
         try:
             # Get message from context
-            message = context.message
-            if not message:
+            core_message = context.message
+            if not core_message:
                 await self._send_status(
                     event_queue,
                     context,
@@ -187,6 +216,7 @@ class ACNAgentExecutor(AgentExecutor):
                     final=True,
                 )
                 return
+            message = to_compat_message(core_message)
 
             # Determine action
             action = self._extract_action(message, context)
@@ -357,7 +387,7 @@ class ACNAgentExecutor(AgentExecutor):
             status=status,
             final=True,
         )
-        await event_queue.enqueue_event(event)
+        await _enqueue_status_event(event_queue, event)
 
     async def _send_status(
         self,
@@ -394,7 +424,7 @@ class ACNAgentExecutor(AgentExecutor):
             status=status,
             final=final,
         )
-        await event_queue.enqueue_event(event)
+        await _enqueue_status_event(event_queue, event)
 
     async def _send_artifact(
         self,
@@ -417,7 +447,7 @@ class ACNAgentExecutor(AgentExecutor):
             artifact=artifact,
             last_chunk=last_chunk,
         )
-        await event_queue.enqueue_event(event)
+        await _enqueue_artifact_event(event_queue, event)
 
     def _extract_action(self, message: Message, context: RequestContext) -> str:
         """Extract ACN action from message
@@ -809,14 +839,9 @@ def create_a2a_app(
     # Use Redis-based task store for persistence
     task_store = RedisTaskStore(redis, key_prefix="a2a:tasks:")
 
-    # Create request handler
-    request_handler = DefaultRequestHandler(
-        agent_executor=executor,
-        task_store=task_store,
-    )
-
-    # Create ACN Agent Card (A2A Protocol v0.3.0 compliant)
-    agent_card = AgentCard(
+    # Create ACN Agent Card in the v0.3 compatibility model, then convert
+    # it to the protobuf shape expected by a2a-sdk 1.x server routes.
+    compat_agent_card = AgentCard(
         protocol_version=settings.a2a_protocol_version,
         name="ACN Infrastructure Agent",
         version=settings.service_version,
@@ -837,7 +862,7 @@ def create_a2a_app(
         ),
         default_input_modes=["text", "application/json"],
         default_output_modes=["text", "application/json"],
-        tags=[
+        skills=[
             AgentSkill(
                 id="acn:broadcast",
                 name="Multi-Agent Broadcasting",
@@ -872,18 +897,29 @@ def create_a2a_app(
             ),
         ],
     )
+    agent_card = to_core_agent_card(compat_agent_card)
 
-    # Create A2A FastAPI application
-    a2a_app_builder = A2AFastAPIApplication(
+    # Create request handler
+    request_handler = DefaultRequestHandler(
         agent_card=agent_card,
-        http_handler=request_handler,
+        agent_executor=executor,
+        task_store=task_store,
     )
 
-    # Build the FastAPI app
-    a2a_app = a2a_app_builder.build(
-        agent_card_url="/.well-known/agent-card.json",
-        rpc_url="/jsonrpc",
-    )
+    # Build the FastAPI app using the a2a-sdk 1.x Starlette routes.
+    a2a_app = FastAPI()
+    for route in [
+        *create_agent_card_routes(
+            agent_card=agent_card,
+            card_url="/.well-known/agent-card.json",
+        ),
+        *create_jsonrpc_routes(
+            request_handler=request_handler,
+            rpc_url="/jsonrpc",
+            enable_v0_3_compat=True,
+        ),
+    ]:
+        a2a_app.router.routes.append(route)
 
     logger.info(
         "a2a_app_created",

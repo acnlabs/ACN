@@ -6,7 +6,7 @@ Clean Architecture implementation: Route → MessageService → MessageRouter
 import uuid
 
 import structlog  # type: ignore[import-untyped]
-from a2a.types import Message, TextPart  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import Message, TextPart  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 

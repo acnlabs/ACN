@@ -21,7 +21,7 @@ from uuid import uuid4
 import redis.asyncio as redis
 
 # Official A2A SDK
-from a2a.types import Message  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import Message  # type: ignore[import-untyped]
 
 from ...core.exceptions import AgentNotFoundException, PolicyRejected
 from ...core.interfaces import IAgentRepository

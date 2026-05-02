@@ -74,7 +74,9 @@ class RedisAgentRepository(IAgentRepository):
             "verification_code",
             "owner",
             "endpoint",
+            "a2a_endpoint",
             "referrer_id",
+            "agent_card_url",
             "social_card_url",
         }
         clean_dict = {}
@@ -341,6 +343,7 @@ class RedisAgentRepository(IAgentRepository):
             "owner": agent_dict.get("owner"),
             # endpoint is now optional
             "endpoint": agent_dict.get("endpoint"),
+            "a2a_endpoint": agent_dict.get("a2a_endpoint") or agent_dict.get("endpoint"),
             "status": AgentStatus(agent_dict["status"]),
             "description": agent_dict.get("description"),
             # Read: support both new "tags" and legacy "skills" key
@@ -379,6 +382,7 @@ class RedisAgentRepository(IAgentRepository):
             "agent_card": (
                 json.loads(agent_dict["agent_card"]) if agent_dict.get("agent_card") else None
             ),
+            "agent_card_url": agent_dict.get("agent_card_url") or None,
             # Communication policy — older rows predate this field, so fall
             # back to None and let Agent.__post_init__ default it to open.
             "communication_policy": (

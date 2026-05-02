@@ -75,6 +75,7 @@ class AgentService:
         owner: str,
         name: str,
         endpoint: str,
+        a2a_endpoint: str | None = None,
         tags: list[str] | None = None,
         subnet_ids: list[str] | None = None,
         description: str | None = None,
@@ -84,6 +85,7 @@ class AgentService:
         accepts_payment: bool = False,
         payment_methods: list[str] | None = None,
         communication_policy: dict | None = None,
+        agent_card_url: str | None = None,
         social_card_url: str | None = None,
     ) -> Agent:
         """
@@ -95,7 +97,8 @@ class AgentService:
         Args:
             owner: Agent owner identifier
             name: Agent name
-            endpoint: Agent A2A endpoint URL
+            endpoint: Direct Agent A2A JSON-RPC endpoint URL
+            a2a_endpoint: Explicit direct Agent A2A JSON-RPC endpoint URL
             tags: List of capability tag IDs
             subnet_ids: Subnets to join
             description: Agent description
@@ -114,11 +117,14 @@ class AgentService:
             # Update existing agent
             logger.info("update_existing_agent", agent_id=existing_agent.agent_id)
             existing_agent.name = name
+            existing_agent.a2a_endpoint = a2a_endpoint or endpoint
             existing_agent.description = description
             existing_agent.tags = tags or []
             existing_agent.metadata = metadata or {}
             if agent_card is not None:
                 existing_agent.agent_card = agent_card
+            if agent_card_url is not None:
+                existing_agent.agent_card_url = agent_card_url
 
             # Update subnets if provided
             if subnet_ids:
@@ -165,6 +171,7 @@ class AgentService:
             owner=owner,
             name=name,
             endpoint=endpoint,
+            a2a_endpoint=a2a_endpoint or endpoint,
             description=description,
             tags=tags or [],
             subnet_ids=subnet_ids or ["public"],
@@ -174,6 +181,7 @@ class AgentService:
             accepts_payment=accepts_payment,
             payment_methods=payment_methods or [],
             communication_policy=communication_policy,
+            agent_card_url=agent_card_url,
             social_card_url=social_card_url,
         )
 
@@ -470,6 +478,7 @@ class AgentService:
         description: str,
         tags: list[str],
         endpoint: str,
+        a2a_endpoint: str | None = None,
         referrer_id: str | None = None,
         metadata: dict | None = None,
         agent_card: dict | None = None,
@@ -478,6 +487,7 @@ class AgentService:
         payment_methods: list[str] | None = None,
         token_pricing: dict | None = None,
         communication_policy: dict | None = None,
+        agent_card_url: str | None = None,
         social_card_url: str | None = None,
     ) -> tuple[Agent, str]:
         """
@@ -494,7 +504,8 @@ class AgentService:
             name: Agent name
             description: Agent description
             tags: List of capability tag IDs
-            endpoint: A2A endpoint URL (optional for pull mode)
+            endpoint: Direct A2A JSON-RPC endpoint URL
+            a2a_endpoint: Explicit direct A2A JSON-RPC endpoint URL
             referrer_id: ID of agent who referred this one
             metadata: Additional metadata
             agent_card: A2A Agent Card (v0.3.0) to store at registration time
@@ -515,6 +526,7 @@ class AgentService:
             name=name,
             owner=None,  # No owner initially
             endpoint=endpoint,
+            a2a_endpoint=a2a_endpoint or endpoint,
             description=description,
             tags=tags or [],
             subnet_ids=["public"],
@@ -529,6 +541,7 @@ class AgentService:
             payment_methods=payment_methods or [],
             token_pricing=token_pricing,
             communication_policy=communication_policy,
+            agent_card_url=agent_card_url,
             social_card_url=social_card_url,
         )
 

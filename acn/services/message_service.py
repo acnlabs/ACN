@@ -7,7 +7,7 @@ Wraps MessageRouter with additional business rules and validation.
 from typing import Any
 
 import structlog  # type: ignore[import-untyped]
-from a2a.types import Message  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import Message  # type: ignore[import-untyped]
 
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository

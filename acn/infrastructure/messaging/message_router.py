@@ -13,6 +13,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -20,8 +21,12 @@ import httpx
 import redis.asyncio as redis
 
 # Official A2A SDK
-from a2a.client import A2AClient  # type: ignore[import-untyped]
-from a2a.types import (  # type: ignore[import-untyped]
+from a2a.client import Client, ClientConfig, ClientFactory  # type: ignore[import-untyped]
+from a2a.compat.v0_3.conversions import (  # type: ignore[import-untyped]
+    to_compat_stream_response,
+    to_core_send_message_request,
+)
+from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
     DataPart,
     Message,
     MessageSendParams,
@@ -29,6 +34,11 @@ from a2a.types import (  # type: ignore[import-untyped]
     Role,
     SendMessageRequest,
     TextPart,
+)
+from a2a.types.a2a_pb2 import (  # type: ignore[import-untyped]
+    AgentCapabilities,
+    AgentCard,
+    AgentInterface,
 )
 
 from ...config import get_settings
@@ -47,6 +57,15 @@ if TYPE_CHECKING:
     from .manifest_dispatcher import ManifestDispatcher
 
 logger = logging.getLogger(__name__)
+
+
+def _agent_delivery_endpoint(agent_info: Any) -> str:
+    """Return the direct A2A JSON-RPC delivery URL from new or legacy fields."""
+    a2a_endpoint = getattr(agent_info, "a2a_endpoint", None)
+    if isinstance(a2a_endpoint, str) and a2a_endpoint:
+        return a2a_endpoint
+    return agent_info.endpoint
+
 
 # Global message audit trail. Stored as a Redis stream (not one string
 # key per route_id) so memory is bounded by MAXLEN regardless of
@@ -153,7 +172,7 @@ class MessageRouter:
         self.allowlist_service = allowlist_service
 
         # Cache of A2A clients by endpoint (capped to prevent unbounded growth)
-        self._clients: dict[str, A2AClient] = {}
+        self._clients: dict[str, Client] = {}
         self._clients_max: int = 256
 
         # Message handlers for incoming messages
@@ -163,7 +182,7 @@ class MessageRouter:
             "Message Router initialized (using official A2A SDK)",
         )
 
-    async def _get_client(self, endpoint: str) -> A2AClient:
+    async def _get_client(self, endpoint: str) -> Client:
         """
         Get or create A2A client for endpoint
 
@@ -171,7 +190,7 @@ class MessageRouter:
             endpoint: Agent A2A endpoint URL
 
         Returns:
-            A2AClient instance
+            A2A client instance
         """
         # SSRF guard: resolve and verify the endpoint hostname BEFORE caching
         # the A2A client. Even though clients are cached per-endpoint URL,
@@ -194,8 +213,7 @@ class MessageRouter:
                 oldest = next(iter(self._clients))
                 try:
                     old_client = self._clients.pop(oldest)
-                    if hasattr(old_client, "httpx_client") and old_client.httpx_client:
-                        await old_client.httpx_client.aclose()
+                    await old_client.close()
                 except Exception:
                     pass
             # ``follow_redirects=False``: a 3xx pointing to a private
@@ -205,20 +223,58 @@ class MessageRouter:
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
                 follow_redirects=False,
             )
-            self._clients[endpoint] = A2AClient(
+            client_config = ClientConfig(
                 httpx_client=httpx_client,
-                url=endpoint,
+                streaming=False,
+                supported_protocol_bindings=["JSONRPC"],
+            )
+            # Registered ACN endpoints are direct JSON-RPC targets, not
+            # discovery base URLs. Build a minimal legacy card locally so the
+            # a2a-sdk 1.x client uses its v0.3 compatibility transport without
+            # first fetching endpoint/.well-known/agent-card.json.
+            agent_card = AgentCard(
+                supported_interfaces=[
+                    AgentInterface(
+                        url=endpoint,
+                        protocol_binding="JSONRPC",
+                        protocol_version="0.3.0",
+                    )
+                ],
+                capabilities=AgentCapabilities(extended_agent_card=False),
+                default_input_modes=[],
+                default_output_modes=[],
+                description="",
+                skills=[],
+                version="",
+                name="",
+            )
+            self._clients[endpoint] = ClientFactory(client_config).create(
+                agent_card,
             )
             logger.debug(f"Created A2A client for {endpoint}")
 
         return self._clients[endpoint]
 
+    async def _send_message_with_client(
+        self,
+        client: Client,
+        request: SendMessageRequest,
+    ) -> Any:
+        """Send a compat request through either a 1.x client or legacy test stub."""
+        result = client.send_message(to_core_send_message_request(request))
+        if hasattr(result, "__aiter__"):
+            async for event in result:
+                return to_compat_stream_response(event, request_id=request.id)
+            return None
+        if isawaitable(result):
+            return await result
+        return result
+
     async def close(self) -> None:
         """Close all cached A2A clients and their underlying httpx connections"""
         for endpoint, client in self._clients.items():
             try:
-                if hasattr(client, "httpx_client") and client.httpx_client:
-                    await client.httpx_client.aclose()
+                await client.close()
             except Exception as e:
                 logger.warning("failed_to_close_a2a_client", endpoint=endpoint, error=str(e))
         self._clients.clear()
@@ -312,7 +368,7 @@ class MessageRouter:
                     message=message,
                 )
 
-        endpoint = agent_info.endpoint
+        endpoint = _agent_delivery_endpoint(agent_info)
         logger.debug(f"[{route_id}] Discovered endpoint: {endpoint}")
 
         # 2. Offline pre-check — skip the HTTP round-trip when the registry
@@ -383,7 +439,7 @@ class MessageRouter:
                 id=route_id,
                 params=MessageSendParams(message=message),
             )
-            response = await client.send_message(request)
+            response = await self._send_message_with_client(client, request)
 
             # 5. Log response
             logger.debug(f"[{route_id}] Received response: {type(response)}")
@@ -488,14 +544,25 @@ class MessageRouter:
         if not agent_info:
             raise ValueError(f"Agent not found: {to_agent}")
 
-        endpoint = agent_info.endpoint
+        endpoint = _agent_delivery_endpoint(agent_info)
         logger.info(f"Starting stream: {from_agent} -> {to_agent}")
 
         # Get A2A client and stream
         client = await self._get_client(endpoint)
 
-        async for event in client.send_message_streaming(message):
-            yield event
+        request = SendMessageRequest(
+            id=str(uuid4()),
+            params=MessageSendParams(message=message),
+        )
+        result = client.send_message(to_core_send_message_request(request))
+        if hasattr(result, "__aiter__"):
+            async for event in result:
+                yield to_compat_stream_response(event, request_id=request.id)
+            return
+        if isawaitable(result):
+            yield await result
+            return
+        yield result
 
     async def register_handler(
         self,

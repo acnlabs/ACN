@@ -44,6 +44,9 @@ class Agent:
 
     # Endpoint is optional for pull-mode agents
     endpoint: str | None = None
+    # Explicit direct A2A JSON-RPC delivery URL. During the transition this
+    # mirrors endpoint; keeping the named field makes the semantics visible.
+    a2a_endpoint: str | None = None
 
     status: AgentStatus = AgentStatus.ONLINE
     description: str | None = None
@@ -73,6 +76,9 @@ class Agent:
 
     # A2A Agent Card (stored as raw dict; provided by registrant or auto-generated on demand)
     agent_card: dict | None = None
+    # Optional A2A Agent Card discovery URL. Persisted separately from the
+    # direct delivery URL so ACN does not have to guess endpoint semantics.
+    agent_card_url: str | None = None
 
     # Communication policy (gateway-level access control)
     # Default {"mode": "open"} backfilled in __post_init__ — keeps existing
@@ -114,6 +120,10 @@ class Agent:
         if not self.name:
             raise ValueError("name cannot be empty")
         # Note: owner and endpoint are now optional
+        if self.a2a_endpoint and not self.endpoint:
+            self.endpoint = self.a2a_endpoint
+        elif self.endpoint and not self.a2a_endpoint:
+            self.a2a_endpoint = self.endpoint
         if not self.subnet_ids:
             self.subnet_ids = ["public"]
         # Backward compat: if legacy wallet_address is set but wallet_addresses is empty,
@@ -266,6 +276,7 @@ class Agent:
             "name": self.name,
             "owner": self.owner,
             "endpoint": self.endpoint,
+            "a2a_endpoint": self.a2a_endpoint,
             "status": self.status.value,
             "description": self.description,
             "tags": self.tags,
@@ -286,6 +297,7 @@ class Agent:
             else None,
             # Agent Card
             "agent_card": self.agent_card,
+            "agent_card_url": self.agent_card_url,
             # Communication policy (Phase 1: open|closed)
             "communication_policy": self.communication_policy,
             # Payment

@@ -5,12 +5,16 @@ Provides persistent task storage using Redis, replacing InMemoryTaskStore.
 
 from __future__ import annotations
 
-import json
-
 import structlog  # type: ignore[import-untyped]
 from a2a.server.context import ServerCallContext  # type: ignore[import-untyped]
 from a2a.server.tasks import TaskStore  # type: ignore[import-untyped]
-from a2a.types import Task, TaskState  # type: ignore[import-untyped]
+from a2a.types.a2a_pb2 import (  # type: ignore[import-untyped]
+    ListTasksRequest,
+    ListTasksResponse,
+    Task,
+    TaskState,
+)
+from google.protobuf.json_format import MessageToJson, Parse
 from redis.asyncio import Redis
 
 logger = structlog.get_logger()
@@ -53,8 +57,11 @@ class RedisTaskStore(TaskStore):
             return None
 
         try:
-            task_data = json.loads(task_json)
-            return Task(**task_data)
+            if isinstance(task_json, bytes):
+                task_json = task_json.decode()
+            task = Task()
+            Parse(task_json, task)
+            return task
         except Exception as e:
             logger.error("task_load_failed", task_id=task_id, error=str(e))
             return None
@@ -69,8 +76,11 @@ class RedisTaskStore(TaskStore):
         task_key = f"{self.key_prefix}{task.id}"
 
         try:
-            # Serialize task
-            task_json = task.model_dump_json(by_alias=True, exclude_none=True)
+            # Serialize protobuf task with stable field names for readability.
+            task_json = MessageToJson(
+                task,
+                preserving_proto_field_name=True,
+            )
 
             # Save to Redis
             await self.redis.set(task_key, task_json)
@@ -85,7 +95,7 @@ class RedisTaskStore(TaskStore):
                 "task_saved",
                 task_id=task.id,
                 context_id=task.context_id,
-                status=task.status.state.value,
+                status=task.status.state,
             )
 
         except Exception as e:
@@ -112,6 +122,32 @@ class RedisTaskStore(TaskStore):
             await self._remove_from_indexes(task)
 
         logger.debug("task_deleted", task_id=task_id)
+
+    async def list(
+        self,
+        params: ListTasksRequest,
+        context: ServerCallContext | None = None,
+    ) -> ListTasksResponse:
+        """List tasks using the a2a-sdk 1.x TaskStore interface."""
+        task_ids = await self._get_task_ids(
+            params.context_id or None,
+            params.status or None,
+        )
+        tasks = []
+        for task_id in task_ids:
+            task = await self.get(task_id, context)
+            if task:
+                tasks.append(task)
+
+        total_size = len(tasks)
+        page_size = params.page_size or 100
+        paginated_tasks = tasks[:page_size]
+
+        return ListTasksResponse(
+            tasks=paginated_tasks,
+            total_size=total_size,
+            page_size=page_size,
+        )
 
     async def list_tasks(
         self,
@@ -159,7 +195,7 @@ class RedisTaskStore(TaskStore):
         """
         if context_id and status:
             # Intersection of context and status
-            index_key = f"{self.key_prefix}index:context:{context_id}:status:{status.value}"
+            index_key = f"{self.key_prefix}index:context:{context_id}:status:{status}"
             task_ids = await self.redis.smembers(index_key)
         elif context_id:
             # All tasks in context
@@ -167,7 +203,7 @@ class RedisTaskStore(TaskStore):
             task_ids = await self.redis.smembers(index_key)
         elif status:
             # All tasks with status
-            index_key = f"{self.key_prefix}index:status:{status.value}"
+            index_key = f"{self.key_prefix}index:status:{status}"
             task_ids = await self.redis.smembers(index_key)
         else:
             # All tasks - scan all task keys
@@ -197,13 +233,13 @@ class RedisTaskStore(TaskStore):
         await self.redis.expire(context_index, 30 * 24 * 3600)
 
         # Index by status
-        status_index = f"{self.key_prefix}index:status:{task.status.state.value}"
+        status_index = f"{self.key_prefix}index:status:{task.status.state}"
         await self.redis.sadd(status_index, task.id)
         await self.redis.expire(status_index, 30 * 24 * 3600)
 
         # Index by context + status
         context_status_index = (
-            f"{self.key_prefix}index:context:{task.context_id}:status:{task.status.state.value}"
+            f"{self.key_prefix}index:context:{task.context_id}:status:{task.status.state}"
         )
         await self.redis.sadd(context_status_index, task.id)
         await self.redis.expire(context_status_index, 30 * 24 * 3600)
@@ -219,12 +255,12 @@ class RedisTaskStore(TaskStore):
         await self.redis.srem(context_index, task.id)
 
         # Remove from status index
-        status_index = f"{self.key_prefix}index:status:{task.status.state.value}"
+        status_index = f"{self.key_prefix}index:status:{task.status.state}"
         await self.redis.srem(status_index, task.id)
 
         # Remove from context + status index
         context_status_index = (
-            f"{self.key_prefix}index:context:{task.context_id}:status:{task.status.state.value}"
+            f"{self.key_prefix}index:context:{task.context_id}:status:{task.status.state}"
         )
         await self.redis.srem(context_status_index, task.id)
 

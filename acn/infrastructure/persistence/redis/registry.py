@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import redis.asyncio as redis
-from a2a.types import (  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
     AgentCapabilities,
     AgentCard,
     AgentSkill,
