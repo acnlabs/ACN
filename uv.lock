@@ -68,7 +68,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.2.0" },
+    { name = "a2a-sdk", extras = ["http-server"], specifier = ">=0.3.24,<0.3.25,<1.0.0" },
     { name = "alembic", specifier = ">=1.13" },
     { name = "ap2", git = "https://github.com/google-agentic-commerce/AP2.git?rev=61f5de49f47d0517182d664bd05b7df1ff1f4e40" },
     { name = "asyncpg", specifier = ">=0.29" },
