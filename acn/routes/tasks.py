@@ -92,7 +92,11 @@ def require_task_write_auth():
         if credentials and credentials.credentials.startswith("acn_"):
             agent = await agent_service.get_agent_by_api_key(credentials.credentials)
             if not agent:
-                raise HTTPException(status_code=401, detail="Invalid agent API key")
+                raise ACNHTTPError(
+                    ErrorCode.AUTHENTICATION_REQUIRED,
+                    401,
+                    details={"reason": "invalid_agent_api_key"},
+                )
             request.state.rate_limit_key = f"agent:{agent.agent_id}"
             return {
                 "sub": agent.agent_id,
@@ -105,7 +109,11 @@ def require_task_write_auth():
         payload = await verify_token(request, credentials)
         perms: list[str] = payload.get("permissions", [])
         if "acn:write" not in perms:
-            raise HTTPException(status_code=403, detail="Missing required permission: acn:write")
+            raise ACNHTTPError(
+                ErrorCode.MISSING_PERMISSION,
+                403,
+                details={"required_permission": "acn:write"},
+            )
         request.state.rate_limit_key = f"jwt:{payload.get('sub', 'unknown')}"
         return {**payload, "type": "jwt"}
 
@@ -508,7 +516,16 @@ async def list_tasks(
         try:
             task_status = TaskStatus(status)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {status}") from None
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                400,
+                message=f"Invalid status: {status}",
+                details={
+                    "field": "status",
+                    "value": status,
+                    "allowed": [s.value for s in TaskStatus],
+                },
+            ) from None
 
     # Parse tags
     tag_list = tags.split(",") if tags else None
@@ -552,7 +569,12 @@ async def match_tasks_for_agent(
     tag_list = [s.strip() for s in tags.split(",") if s.strip()]
 
     if not tag_list:
-        raise HTTPException(status_code=400, detail="At least one tag is required") from None
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            message="At least one tag is required.",
+            details={"field": "tags", "reason": "tag_list_empty"},
+        ) from None
 
     tasks = await task_service.get_tasks_for_agent(tag_list, limit)
 
@@ -591,10 +613,28 @@ async def get_task(
     if task.subnet_id:
         requesting_agent_id = await _resolve_caller_identity(request, credentials)
         if not requesting_agent_id:
-            raise HTTPException(status_code=403, detail="Authentication required to view this task")
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                message="Authentication required to view this task.",
+                details={
+                    "task_id": task_id,
+                    "subnet_id": task.subnet_id,
+                    "reason": "anonymous_caller",
+                },
+            )
         is_member = await task_service.is_subnet_member(task.subnet_id, requesting_agent_id)
         if not is_member:
-            raise HTTPException(status_code=403, detail="Not a subnet member")
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                details={
+                    "task_id": task_id,
+                    "subnet_id": task.subnet_id,
+                    "agent_id": requesting_agent_id,
+                    "reason": "not_member",
+                },
+            )
 
     return _task_to_response(task)
 
@@ -707,9 +747,17 @@ async def accept_task(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/{task_id}/invite", response_model=TaskResponse)
@@ -743,9 +791,17 @@ async def invite_solver(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/{task_id}/submit", response_model=TaskResponse)
@@ -777,9 +833,17 @@ async def submit_task(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/{task_id}/review", response_model=TaskResponse)
@@ -826,9 +890,17 @@ async def review_task(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse)
@@ -856,9 +928,17 @@ async def cancel_task(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 # ========== Participation Endpoints ==========
@@ -939,9 +1019,17 @@ async def cancel_participation(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/{task_id}/participations/{participation_id}/approve", response_model=TaskResponse)
@@ -970,9 +1058,17 @@ async def approve_applicant(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/{task_id}/participations/{participation_id}/reject", response_model=TaskResponse)
@@ -1001,9 +1097,17 @@ async def reject_applicant(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 # ========== Internal Endpoints ==========
@@ -1103,9 +1207,17 @@ async def agent_accept_task(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/agent/{task_id}/submit", response_model=TaskResponse)
@@ -1135,6 +1247,14 @@ async def agent_submit_task(
             details={"task_id": task_id},
         ) from None
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"task_id": task_id, "reason": str(e)},
+        ) from e
