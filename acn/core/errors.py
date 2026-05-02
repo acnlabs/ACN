@@ -288,7 +288,74 @@ class ACNHTTPError(Exception):
         super().__init__(self.message)
 
 
+# =============================================================================
+# OpenAPI ``responses=`` default (P3 schema-visibility ticket)
+# =============================================================================
+#
+# Single-source-of-truth default ``responses`` mapping that every ACN
+# router which raises ``ACNHTTPError`` should pass to ``APIRouter(...,
+# responses=ACN_DEFAULT_RESPONSES)``. FastAPI cannot statically infer
+# which routes raise ``ACNHTTPError`` (the exception type is opaque to
+# the OpenAPI generator), so without this advertisement SDK type-gen
+# consumers see ``HTTPValidationError`` / generic ``dict`` for 4xx
+# bodies instead of the canonical ``ACNErrorResponse`` flat shape.
+#
+# Granularity choice (router-level default, NOT per-endpoint)
+# ----------------------------------------------------------
+# The trade-off was discussed in the P3 ticket; the conclusion was
+# that per-endpoint precision (listing only the status codes that a
+# specific endpoint actually raises) carries near-zero practical
+# benefit for SDK consumers — generated client code branches on the
+# response *body* (``error_code``) and HTTP status, not on which set
+# of status codes a single endpoint *might* return. The maintenance
+# cost, however, is high: every new ``ACNHTTPError`` raise site needs
+# a matching decorator update, with drift risk on every refactor.
+# Router-level default eliminates the drift, costs zero ongoing
+# attention, and over-specifies a few unused status codes per
+# endpoint — pure spec noise, never a correctness issue.
+#
+# 422 is intentionally NOT in this map: FastAPI auto-emits 422 with
+# its own ``HTTPValidationError`` schema for pydantic body / query /
+# path validation failures, and that schema is not (yet) aligned with
+# ``ACNErrorResponse``. A separate P3 ticket tracks the alignment.
+#
+# 5xx codes are also intentionally absent: the central
+# ``_http_exception_handler`` and ``_unhandled_exception_handler`` in
+# ``acn/api.py`` emit a 5xx body that *also* matches
+# ``ACNErrorResponse`` shape (during the deprecation window the body
+# additionally carries a legacy ``error`` field), but advertising 5xx
+# in this map is misleading: 5xx are sanitised, opaque, and not
+# branched on by SDK clients the same way 4xx are.
+ACN_DEFAULT_RESPONSES: dict[int | str, dict[str, Any]] = {
+    400: {
+        "model": ACNErrorResponse,
+        "description": "Bad request — invalid input or constraint violation.",
+    },
+    401: {
+        "model": ACNErrorResponse,
+        "description": "Authentication required or credentials invalid.",
+    },
+    403: {
+        "model": ACNErrorResponse,
+        "description": "Permission denied — caller is authenticated but not authorised.",
+    },
+    404: {
+        "model": ACNErrorResponse,
+        "description": "Resource not found.",
+    },
+    409: {
+        "model": ACNErrorResponse,
+        "description": "Conflict with the current state of the resource.",
+    },
+    429: {
+        "model": ACNErrorResponse,
+        "description": "Rate limited — caller exceeded the per-bucket budget.",
+    },
+}
+
+
 __all__ = [
+    "ACN_DEFAULT_RESPONSES",
     "ACNErrorResponse",
     "ACNHTTPError",
     "ErrorCode",

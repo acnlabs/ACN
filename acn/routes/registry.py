@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..auth.middleware import require_permission, verify_token
 from ..config import Settings, get_settings
-from ..core.errors import ACNHTTPError, ErrorCode
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from ..monitoring import AuditEventType, AuditLevel, fire_and_forget_event, get_audit_singleton
@@ -68,7 +68,11 @@ from .dependencies import (  # type: ignore[import-untyped]
     verify_owner_or_internal,
 )
 
-router = APIRouter(prefix="/api/v1/agents", tags=["registry"])
+router = APIRouter(
+    prefix="/api/v1/agents",
+    tags=["registry"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 settings = get_settings()
 

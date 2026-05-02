@@ -153,7 +153,83 @@ remove the deprecation note. Single-PR change.
 > should be communicated through the same channel as the original
 > announcement, not silently shipped.
 
-#### P3 — OpenAPI schema visibility for ACN flat error response
+#### ~~P3 — OpenAPI schema visibility for ACN flat error response~~ ✅ Landed
+
+**Resolution** (commit landing this entry): all 5 already-migrated
+routers (`communication` pilot + sprint #1 `allowlist` + sprint #2
+`registry` + sprint #3 `subnets` + sprint #4 `tasks`) now opt into a
+shared default ``responses=`` block via:
+
+```python
+from acn.core.errors import ACN_DEFAULT_RESPONSES
+
+router = APIRouter(
+    prefix=...,
+    tags=[...],
+    responses=ACN_DEFAULT_RESPONSES,
+)
+```
+
+The constant is defined once in `acn/core/errors.py` and covers
+status codes 400 / 401 / 403 / 404 / 409 / 429 — each mapped to
+`{"model": ACNErrorResponse, "description": ...}`. SDK type-gen
+consumers now see the canonical flat schema for every 4xx response
+across all migrated modules.
+
+**Granularity choice — router-level default, NOT per-endpoint**.
+The original ticket text below suggested per-endpoint `responses=`
+blocks listing only the status codes a specific endpoint actually
+raises. We chose router-level default instead because:
+- per-endpoint precision has near-zero practical benefit for SDK
+  consumers (generated client code branches on the response *body*,
+  not on which subset of status codes a single endpoint might emit)
+- per-endpoint maintenance cost is high (every new ``ACNHTTPError``
+  raise site needs a matching decorator update with drift risk on
+  every refactor)
+- router-level default is drift-proof, costs zero ongoing attention,
+  and over-specifies a few unused status codes per endpoint — pure
+  spec noise, never a correctness issue
+- if a specific endpoint ever needs to advertise a *narrower* set
+  (or an additional non-default code), FastAPI supports per-endpoint
+  override on top of the router-level default — `add when needed,
+  not in advance`.
+
+**422 is intentionally NOT in the default**. FastAPI auto-emits 422
+for pydantic validation failures with its own `HTTPValidationError`
+schema. Aligning that with `ACNErrorResponse` is a separate P3
+ticket below ("`RequestValidationError` alignment"); the default
+here would prematurely pin a schema we explicitly chose not to
+align yet.
+
+**5xx codes are also absent**. The central
+`_http_exception_handler` and `_unhandled_exception_handler` in
+`acn/api.py` emit a 5xx body that *also* matches `ACNErrorResponse`
+shape (during the deprecation window the body additionally carries
+a legacy `error` field — see deprecation ticket above), but
+advertising 5xx in `responses=` is misleading: 5xx are sanitised,
+opaque, and not branched on by SDK clients the same way 4xx are.
+
+**Forward-looking contract for sprint #5-#11**. New schema migration
+sprints SHOULD pass `responses=ACN_DEFAULT_RESPONSES` when creating
+their `APIRouter(...)`. The constant is the single source of truth;
+adding a status code (e.g. 451) is a one-line edit that propagates
+to every router that opted in.
+
+**Tests**. `tests/test_openapi_acn_error_response.py` (15 tests):
+- `ACNErrorResponse` is in `components.schemas` with the four-field
+  flat shape and `error_code` / `message` / `request_id` required.
+- One representative endpoint per migrated router advertises all 6
+  default status codes, each referencing
+  `#/components/schemas/ACNErrorResponse`. (Per-endpoint sampling
+  is sufficient because the router-level mechanism is uniform — if
+  the representative endpoint has the spec, all do.)
+
+Out of scope: regenerating downstream SDK type-gen artefacts. That
+is the SDK release-notes owner's responsibility.
+
+**Original ticket text retained below for archeology / context.**
+
+---
 
 `ACNErrorResponse` is defined in [`acn/core/errors.py`](../acn/core/errors.py) but is not advertised in `/openapi.json` for pilot routes today: FastAPI cannot statically infer which routes raise `ACNHTTPError`, so SDK type-gen consumers see `HTTPValidationError` / generic `dict` for 4xx responses instead of the canonical flat shape.
 

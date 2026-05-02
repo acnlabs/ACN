@@ -10,7 +10,7 @@ from a2a.compat.v0_3.types import Message, TextPart  # type: ignore[import-untyp
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ..core.errors import ACNHTTPError, ErrorCode
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..infrastructure.messaging.broadcast_service import (
     BroadcastResult,
@@ -31,7 +31,11 @@ from .dependencies import (  # type: ignore[import-untyped]
     limiter,
 )
 
-router = APIRouter(prefix="/api/v1/communication", tags=["communication"])
+router = APIRouter(
+    prefix="/api/v1/communication",
+    tags=["communication"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 
 

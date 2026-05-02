@@ -9,7 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
 from ..config import get_settings
-from ..core.errors import ACNHTTPError, ErrorCode
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
 from .dependencies import (  # type: ignore[import-untyped]
@@ -22,7 +22,11 @@ from .dependencies import (  # type: ignore[import-untyped]
 
 _optional_bearer = HTTPBearer(auto_error=False)
 
-router = APIRouter(prefix="/api/v1/subnets", tags=["subnets"])
+router = APIRouter(
+    prefix="/api/v1/subnets",
+    tags=["subnets"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 settings = get_settings()
 

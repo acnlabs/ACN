@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, model_validator
 from ..auth.middleware import require_permission, verify_token
 from ..config import get_settings
 from ..core.entities import TaskStatus
-from ..core.errors import ACNHTTPError, ErrorCode
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..services import TaskNotFoundException, TaskService
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
@@ -28,7 +28,11 @@ from .dependencies import (  # type: ignore[import-untyped]
 
 settings = get_settings()
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+router = APIRouter(
+    prefix="/api/v1/tasks",
+    tags=["tasks"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 
 _bearer_scheme = HTTPBearer(auto_error=False)

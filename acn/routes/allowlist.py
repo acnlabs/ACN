@@ -40,7 +40,7 @@ import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
-from ..core.errors import ACNHTTPError, ErrorCode
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException
 from ..services import (
     AllowlistCapacityExceededError,
@@ -54,7 +54,11 @@ from .dependencies import (
     limiter,
 )
 
-router = APIRouter(prefix="/api/v1/agents", tags=["allowlist"])
+router = APIRouter(
+    prefix="/api/v1/agents",
+    tags=["allowlist"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 
 
