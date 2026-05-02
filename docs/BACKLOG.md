@@ -122,7 +122,7 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 | 4 | `tasks` (partial — safe migration)    | reuse `TASK_NOT_FOUND` (×13 — every `except TaskNotFoundException` site, 3 different auth surfaces) | ✅ |
 | 4-followup | `tasks` (auth/permission/validation) | reuse cross-module catalog: 10× `OWNERSHIP_MISMATCH` (`PermissionError` sites, `replace_all=true` cohort), 10× `INVALID_REQUEST` (`ValueError` sites, paired with PermissionError cohort), 1× `AUTHENTICATION_REQUIRED` (`require_task_write_auth` agent-key 401), 1× `MISSING_PERMISSION` (`require_task_write_auth` JWT 403), 2× `INVALID_REQUEST` (`list_tasks` invalid status + `match_tasks_for_agent` empty tags), 2× `NOT_SUBNET_MEMBER` (`get_task` private-subnet gate, `reason` distinguishes anonymous vs non-member). | ✅ |
 | 5 | `payments`                            | new: `PAYMENT_CAPABILITY_NOT_FOUND` / `PAYMENT_TASK_NOT_FOUND` / `TOKEN_PRICING_NOT_CONFIGURED` (×3 sites) / `BILLING_TRANSACTION_NOT_FOUND`. reuse `AGENT_NOT_FOUND` (×2 — `AgentNotFoundException` catch + `registry.get_agent`-returns-None path), `API_KEY_AGENT_MISMATCH` (×4 — `set_payment_capability`, `get_agent_payment_tasks`, `get_agent_payment_stats`, `set_token_pricing` path-mismatch sites), `FROM_AGENT_MISMATCH` (×1 — `create_payment_task` body-field mismatch). 13 4xx sites total; 3 catch-all 5xx sites stay `HTTPException(500)` with `except ACNHTTPError: raise` + `except HTTPException: raise` defence (sanitised by central handler). 13 contract tests pin every raise site (1:1 coverage). **Note**: pre-sprint roadmap row read "reuse `INSUFFICIENT_BALANCE`" — that was wrong. `INSUFFICIENT_BALANCE` stays reserved (declared, not raised) until the wallet / billing subsystem genuinely surfaces "insufficient balance" at the route layer; the current `payments.py` only surfaces resource-existence failures (capability / task / pricing / transaction not found), not balance failures. | ✅ |
-| 6 | `follows`                             | new: `FOLLOW_LIMIT_EXCEEDED` / `SELF_FOLLOW_FORBIDDEN`           | ⏳ |
+| 6 | `follows`                             | new: `FOLLOW_LIMIT_EXCEEDED` / `SELF_FOLLOW_FORBIDDEN`. reuse `AGENT_NOT_FOUND` (×1 — followee lookup miss in `follow_agent`), `API_KEY_AGENT_MISMATCH` (×2 — `follow_agent` POST + `unfollow_agent` DELETE path-mismatch gates). 5 4xx sites total; **0 catch-all 5xx sites** in this router (no `except Exception:` in `follow_agent` / `unfollow_agent` — the three caught exceptions are domain-specific: `SelfFollowError` / `AgentNotFoundException` / `FollowLimitExceededError`). 5 contract tests pin every raise site (1:1 coverage). `details.follower_id` / `details.max_follows` chosen over allowlist's `owner_id` / `max_size` because follow has no ownership semantics — service-layer exception names and `acn-follow-proposal.md` response bodies all use `follower`; semantically parallel to sprint #1, field-name divergent on purpose. | ✅ |
 | 7 | `onchain`                             | new: ERC-8004 specific failures                                  | ⏳ |
 | 8 | `manifest`                            | small surface — existing 4xx mostly auth-shared                 | ⏳ |
 | 9 | `analytics`                           | small surface                                                    | ⏳ |
@@ -223,14 +223,17 @@ to every router that opted in.
   `#/components/schemas/ACNErrorResponse`. (Per-endpoint sampling
   is sufficient because the router-level mechanism is uniform — if
   the representative endpoint has the spec, all do.)
-- **Negative coverage** for two not-yet-migrated routers (`follows`
-  and `manifest`) pinning the contract that they do *not* advertise
+- **Negative coverage** for the not-yet-migrated `manifest` router
+  (sprint #8) pinning the contract that it does *not* advertise
   the default 4xx block. Drift detection: if a future commit adds
   `responses=ACN_DEFAULT_RESPONSES` to a router whose endpoints
   still raise raw `HTTPException`, the OpenAPI spec would
   over-promise (`ACNErrorResponse` shape) while runtime emits the
   legacy `{"detail": ...}` shape — the negative test forces the
-  contributor to flip both at once.
+  contributor to flip both at once. (Sprint #6 `follows` was in
+  this list at sprint #5; it migrated atomically with sprint #6,
+  flipping from negative to positive coverage in the same commit
+  — the canonical use case for this drift-detection class.)
 
 **Caveat — 5 routers ≠ 5 URL prefixes**. The "5 migrated modules"
 framing is at the *router* layer, not the URL prefix layer. The

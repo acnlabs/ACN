@@ -107,6 +107,20 @@ class ErrorCode(StrEnum):
     # gate) pick up cross-module codes from the section below.
     TASK_NOT_FOUND = "task_not_found"
 
+    # ===== Follows routes (sprint row #6) =====
+    # ``AGENT_NOT_FOUND`` (×1 — followee lookup miss) and
+    # ``API_KEY_AGENT_MISMATCH`` (×2 — follow / unfollow path-mismatch
+    # gates) are reused from the pilot group; the two codes below are
+    # follows-specific. Naming mirrors sprint #1 ``allowlist`` (which
+    # has the same shape: a per-agent capacity ceiling + a
+    # self-reference forbidden) but uses ``follower_id`` instead of
+    # ``owner_id`` because follow has no ownership semantics — the
+    # service-layer exception names (``FollowLimitExceededError``,
+    # ``SelfFollowError``) and the ``acn-follow-proposal.md`` response
+    # bodies all use ``follower`` as the entity.
+    FOLLOW_LIMIT_EXCEEDED = "follow_limit_exceeded"
+    SELF_FOLLOW_FORBIDDEN = "self_follow_forbidden"
+
     # ===== Payments routes (sprint row #5) =====
     # ``AGENT_NOT_FOUND`` (×2), ``API_KEY_AGENT_MISMATCH`` (×4), and
     # ``FROM_AGENT_MISMATCH`` (×1 — body.from_agent vs auth-key
@@ -177,6 +191,11 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.SUBNET_NOT_FOUND: "The requested subnet could not be found.",
     ErrorCode.TASK_NOT_FOUND: "The requested task could not be found.",
+    ErrorCode.FOLLOW_LIMIT_EXCEEDED: (
+        "The follower has reached the per-agent follow ceiling. "
+        "Unfollow some agents first."
+    ),
+    ErrorCode.SELF_FOLLOW_FORBIDDEN: "An agent cannot follow itself.",
     ErrorCode.PAYMENT_CAPABILITY_NOT_FOUND: (
         "No payment capability is registered for this agent."
     ),

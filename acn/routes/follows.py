@@ -19,9 +19,10 @@ sub-paths would be silently forwarded to the agent's real endpoint.
 """
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException
 from ..models import AgentInfo, AgentSearchResponse
 from ..services import (
@@ -30,6 +31,7 @@ from ..services import (
     FollowService,
     SelfFollowError,
 )
+from ..services.follow_service import MAX_FOLLOWS
 from .dependencies import (
     AgentApiKeyDep,
     AgentIdPath,
@@ -39,7 +41,11 @@ from .dependencies import (
 )
 from .registry import _agent_entity_to_info
 
-router = APIRouter(prefix="/api/v1/agents", tags=["follows"])
+router = APIRouter(
+    prefix="/api/v1/agents",
+    tags=["follows"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 
 
@@ -166,20 +172,39 @@ async def follow_agent(
     against retry storms.
     """
     if caller["agent_id"] != agent_id:
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
             status_code=403,
-            detail="API key does not match path agent_id",
+            details={
+                "path_agent": agent_id,
+                "key_agent": caller["agent_id"],
+            },
         )
 
     try:
         created = await follow_service.follow(agent_id, target_id)
     except SelfFollowError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.SELF_FOLLOW_FORBIDDEN,
+            status_code=400,
+            details={"follower_id": agent_id},
+        ) from e
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": target_id},
+        ) from e
     except FollowLimitExceededError as e:
         # 429 per proposal — "超出返回 429".
-        raise HTTPException(status_code=429, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.FOLLOW_LIMIT_EXCEEDED,
+            status_code=429,
+            details={
+                "follower_id": agent_id,
+                "max_follows": MAX_FOLLOWS,
+            },
+        ) from e
 
     return FollowActionResponse(
         follower_id=agent_id,
@@ -208,9 +233,13 @@ async def unfollow_agent(
     existed. Same auth rules as POST.
     """
     if caller["agent_id"] != agent_id:
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
             status_code=403,
-            detail="API key does not match path agent_id",
+            details={
+                "path_agent": agent_id,
+                "key_agent": caller["agent_id"],
+            },
         )
 
     removed = await follow_service.unfollow(agent_id, target_id)

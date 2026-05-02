@@ -124,6 +124,17 @@ class TestRouterLevelResponsesCoverage:
         ("/api/v1/subnets", "post", "subnets (#3)"),
         ("/api/v1/tasks", "post", "tasks (#4)"),
         ("/api/v1/payments/tasks", "post", "payments (#5)"),
+        # follows (#6) shares the ``/api/v1/agents`` prefix with both
+        # ``allowlist`` and ``registry``, but registers its own
+        # ``APIRouter`` with its own ``responses=ACN_DEFAULT_RESPONSES``
+        # — sample one follow-specific path so a regression on
+        # follows.py's router config is caught even when allowlist /
+        # registry remain healthy.
+        (
+            "/api/v1/agents/{agent_id}/follows/{target_id}",
+            "post",
+            "follows (#6) — POST follow",
+        ),
     ]
 
     @pytest.mark.parametrize(
@@ -195,29 +206,24 @@ class TestNonMigratedRoutersDoNotAdvertiseDefault:
     SDK / client deserialisation layer.
 
     Sampled non-migrated routers (matrix as of this commit):
-    - ``follows`` (sprint #6, pending) — owns the agent → agent
-      follow-graph endpoints.
     - ``manifest`` (sprint #8, pending) — owns the
       ``/api/v1/communication/manifest/*`` and ``/content/*``
       endpoints. Notably this one shares the
       ``/api/v1/communication`` URL prefix with the ✅-migrated
       ``communication`` router (see "5 routers ≠ 5 URL prefixes"
       caveat in BACKLOG); the negative test pins the
-      heterogeneity.
+      heterogeneity — a single shared URL prefix can host
+      heterogeneously-migrated routers, and OpenAPI tracks the
+      router (where ``responses=`` is declared), not the prefix.
 
-    When sprint #6 / #8 lands, move the corresponding entry from
-    here up into ``REPRESENTATIVE_ENDPOINTS`` above and the
-    drift-detection contract converts to a positive coverage
+    When sprint #8 / #9 / #10 / #11 land, move the corresponding
+    entry from here up into ``REPRESENTATIVE_ENDPOINTS`` above and
+    the drift-detection contract converts to a positive coverage
     contract atomically.
     """
 
     NON_MIGRATED_ENDPOINTS = [
         # (path, method, module name for failure messages)
-        (
-            "/api/v1/agents/{agent_id}/follows/{target_id}",
-            "post",
-            "follows (sprint #6 — NOT YET migrated)",
-        ),
         (
             "/api/v1/communication/content/{mid}",
             "get",
