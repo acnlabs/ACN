@@ -176,3 +176,78 @@ class TestRouterLevelResponsesCoverage:
                 f"This is the contract SDK type-gen reads — drift here "
                 f"silently changes generated client types."
             )
+
+
+class TestNonMigratedRoutersDoNotAdvertiseDefault:
+    """Negative coverage — drift detection for the migration matrix.
+
+    The positive tests above prove that *migrated* routers advertise
+    the default 4xx block. This class proves the converse: routers
+    that have *not* been migrated to ``ACNHTTPError`` do *not*
+    advertise the default block. Without this guard, a contributor
+    who slaps ``responses=ACN_DEFAULT_RESPONSES`` onto a router
+    without flipping its raise sites to ``ACNHTTPError`` would
+    silently make the OpenAPI spec over-promise: SDK type-gen would
+    emit ``ACNErrorResponse`` typings while the runtime still emits
+    the legacy ``{"detail": ...}`` shape — the worst kind of
+    contract bug because it only surfaces in production at the
+    SDK / client deserialisation layer.
+
+    Sampled non-migrated routers (matrix as of this commit):
+    - ``follows`` (sprint #6, pending) — owns the agent → agent
+      follow-graph endpoints.
+    - ``manifest`` (sprint #8, pending) — owns the
+      ``/api/v1/communication/manifest/*`` and ``/content/*``
+      endpoints. Notably this one shares the
+      ``/api/v1/communication`` URL prefix with the ✅-migrated
+      ``communication`` router (see "5 routers ≠ 5 URL prefixes"
+      caveat in BACKLOG); the negative test pins the
+      heterogeneity.
+
+    When sprint #6 / #8 lands, move the corresponding entry from
+    here up into ``REPRESENTATIVE_ENDPOINTS`` above and the
+    drift-detection contract converts to a positive coverage
+    contract atomically.
+    """
+
+    NON_MIGRATED_ENDPOINTS = [
+        # (path, method, module name for failure messages)
+        (
+            "/api/v1/agents/{agent_id}/follows/{target_id}",
+            "post",
+            "follows (sprint #6 — NOT YET migrated)",
+        ),
+        (
+            "/api/v1/communication/content/{mid}",
+            "get",
+            "manifest (sprint #8 — NOT YET migrated)",
+        ),
+    ]
+
+    @pytest.mark.parametrize(
+        "path,method,module",
+        NON_MIGRATED_ENDPOINTS,
+        ids=[m for _, _, m in NON_MIGRATED_ENDPOINTS],
+    )
+    def test_non_migrated_router_has_no_default_4xx_block(
+        self, openapi_spec, path: str, method: str, module: str
+    ):
+        op = openapi_spec["paths"][path][method]
+        responses = op.get("responses", {})
+        unexpected_4xx = (
+            TestRouterLevelResponsesCoverage.EXPECTED_STATUSES
+            & set(responses.keys())
+        )
+        assert not unexpected_4xx, (
+            f"{module}: {method.upper()} {path} unexpectedly advertises "
+            f"default 4xx codes {sorted(unexpected_4xx)}. Either:\n"
+            f"  (a) this module just got migrated to ACNHTTPError + "
+            f"``responses=ACN_DEFAULT_RESPONSES`` — congrats, move this "
+            f"entry from NON_MIGRATED_ENDPOINTS up into "
+            f"REPRESENTATIVE_ENDPOINTS in the class above; or\n"
+            f"  (b) someone added ``responses=ACN_DEFAULT_RESPONSES`` to "
+            f"the router without flipping the raise sites — that's a "
+            f"contract bug (spec promises ACNErrorResponse, runtime "
+            f"emits legacy ``{{detail}}``); revert the responses= until "
+            f"the raise sites are migrated."
+        )

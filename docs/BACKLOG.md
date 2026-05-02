@@ -215,7 +215,7 @@ their `APIRouter(...)`. The constant is the single source of truth;
 adding a status code (e.g. 451) is a one-line edit that propagates
 to every router that opted in.
 
-**Tests**. `tests/test_openapi_acn_error_response.py` (15 tests):
+**Tests**. `tests/test_openapi_acn_error_response.py` (17 tests):
 - `ACNErrorResponse` is in `components.schemas` with the four-field
   flat shape and `error_code` / `message` / `request_id` required.
 - One representative endpoint per migrated router advertises all 6
@@ -223,6 +223,34 @@ to every router that opted in.
   `#/components/schemas/ACNErrorResponse`. (Per-endpoint sampling
   is sufficient because the router-level mechanism is uniform — if
   the representative endpoint has the spec, all do.)
+- **Negative coverage** for two not-yet-migrated routers (`follows`
+  and `manifest`) pinning the contract that they do *not* advertise
+  the default 4xx block. Drift detection: if a future commit adds
+  `responses=ACN_DEFAULT_RESPONSES` to a router whose endpoints
+  still raise raw `HTTPException`, the OpenAPI spec would
+  over-promise (`ACNErrorResponse` shape) while runtime emits the
+  legacy `{"detail": ...}` shape — the negative test forces the
+  contributor to flip both at once.
+
+**Caveat — 5 routers ≠ 5 URL prefixes**. The "5 migrated modules"
+framing is at the *router* layer, not the URL prefix layer. The
+`/api/v1/communication/*` namespace in particular is split across
+two routers:
+
+- `acn/routes/communication.py` (✅ migrated, this commit) — owns
+  `POST /send`, `POST /broadcast`, `POST /broadcast-by-tag`, `GET
+  /history/{agent_id}`, `POST /ack`, `POST /internal/send`
+- `acn/routes/manifest.py` (⏳ sprint #8) — owns `GET
+  /manifest/{agent_id}`, `DELETE /manifest/{agent_id}/{mid}`, `GET
+  /content/{mid}`
+
+So SDK consumers parsing `/openapi.json` today will see *mixed* 4xx
+type-gen across the `/api/v1/communication/*` namespace:
+`ACNErrorResponse` for `/send` and `/broadcast`, generic `dict` for
+`/manifest/*` and `/content/*`. This is intentional and converges
+once sprint #8 (manifest module) lands; SDK release-notes authors
+should describe the migration as "communication send + broadcast"
+rather than "all `/communication/*` endpoints" until then.
 
 Out of scope: regenerating downstream SDK type-gen artefacts. That
 is the SDK release-notes owner's responsibility.
