@@ -4,7 +4,7 @@ Clean Architecture implementation: Route → Service → Repository
 """
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, Depends, HTTPException, Request, Security, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
@@ -85,7 +85,11 @@ async def create_subnet(
             gateway_a2a_url=gateway_a2a_url,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"reason": str(e)},
+        ) from e
     except Exception as e:
         logger.error("subnet_creation_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create subnet") from e
@@ -108,18 +112,22 @@ async def list_subnets(
         if owner:
             # Require auth when filtering by owner to prevent private subnet enumeration
             if not credentials:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Authentication required when filtering by owner",
+                raise ACNHTTPError(
+                    ErrorCode.AUTHENTICATION_REQUIRED,
+                    401,
+                    message="Authentication required when filtering by owner.",
+                    details={"reason": "owner_filter_requires_auth"},
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             payload = await verify_token(request, credentials)
             requester = payload.get("sub", "")
             permissions = payload.get("permissions", [])
             if requester != owner and "acn:admin" not in permissions:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Cannot list subnets for another user",
+                raise ACNHTTPError(
+                    ErrorCode.OWNERSHIP_MISMATCH,
+                    403,
+                    message="Cannot list subnets for another user.",
+                    details={"requested_owner": owner, "token_owner": requester},
                 )
             subnets = await subnet_service.list_subnets(owner=owner)
         else:
@@ -129,6 +137,17 @@ async def list_subnets(
         subnet_infos = [_subnet_entity_to_info(s) for s in subnets]
 
         return {"subnets": subnet_infos, "count": len(subnet_infos)}
+    except ACNHTTPError:
+        # Defence layer (sprint #3-followup): the owner-filter auth /
+        # ownership gates above raise ACNHTTPError, which is NOT a
+        # HTTPException subclass — without this re-raise the trailing
+        # ``except Exception`` would silently rewrite both 401 and 403
+        # as 500. The same defence applies to the other 7 catch-all
+        # blocks in subnets.py + 3 in registry.py once the
+        # cross-module catch-all defence P3 ticket lands; we apply
+        # it locally here only because the migration would be
+        # immediately broken without it.
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -183,18 +202,22 @@ async def get_subnet_agents(
     # Enforce auth for private subnets
     if getattr(subnet, "is_private", False):
         if not credentials:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication required to view private subnet members",
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
+                401,
+                message="Authentication required to view private subnet members.",
+                details={"subnet_id": subnet_id, "reason": "private_subnet"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
         payload = await verify_token(request, credentials)
         requester = payload.get("sub", "")
         permissions = payload.get("permissions", [])
         if requester != subnet.owner and "acn:admin" not in permissions:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: private subnet",
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                message="Access denied: private subnet.",
+                details={"subnet_id": subnet_id, "agent_id": requester},
             )
 
     try:
@@ -381,7 +404,11 @@ async def delete_subnet(
         ) from e
     except PermissionError as e:
         logger.warning("delete_subnet_permission_denied", subnet_id=subnet_id, error=str(e))
-        raise HTTPException(status_code=403, detail="Permission denied") from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"subnet_id": subnet_id, "reason": str(e)},
+        ) from e
     except Exception as e:
         logger.error("delete_subnet_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to delete subnet") from e

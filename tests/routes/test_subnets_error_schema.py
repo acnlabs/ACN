@@ -1,22 +1,29 @@
 """Subnets routes — flat ACN error schema contract tests.
 
-Phase 2 review v2 P1 #11 sprint row #3 — pin the migrated 4xx
-sites in ``acn/routes/subnets.py`` to the canonical
+Phase 2 review v2 P1 #11 sprint rows #3 + #3-followup — pin the
+migrated 4xx sites in ``acn/routes/subnets.py`` to the canonical
 ``ACNHTTPError`` flat schema after their conversion from raw
 ``HTTPException``.
 
-#3 scope (this file): the 13 4xx sites that map directly to
+Sprint #3 scope (legacy): the 13 4xx sites that map directly to
 existing catalog codes — 7 ``SUBNET_NOT_FOUND`` + 3
 ``AGENT_NOT_FOUND`` + 3 ``API_KEY_AGENT_MISMATCH``.
 
-Out of scope (deferred to later sprints, see BACKLOG)
-  * 6 4xx sites that need new catalog codes — 2 auth (401), 3
-    permission (403), 1 ``ValueError`` (400 on ``create_subnet``).
+Sprint #3-followup scope (cross-module catalog from sprint #2b):
+the 6 deferred 4xx sites picking up new catalog codes —
+``INVALID_REQUEST`` (1× create_subnet ``ValueError``),
+``AUTHENTICATION_REQUIRED`` (2× owner-filter + private-subnet auth
+gates), ``OWNERSHIP_MISMATCH`` (2× cross-tenant list_subnets +
+delete_subnet PermissionError), ``NOT_SUBNET_MEMBER`` (1× private
+subnet member list).
+
+Out of scope (still deferred)
   * 1 4xx site (``delete_subnet`` ``success=False`` short-circuit
-    *inside* ``try``) that today is already silently rewritten to
-    500 by the catch-all ``except Exception`` — this is a
-    pre-existing bug, fixing it requires the ``except ACNHTTPError:
-    raise`` defence ticket and is intentionally not in #3 scope.
+    *inside* ``try``) — pre-existing latent bug silently rewritten
+    to 500 by the catch-all ``except Exception``. Fixing it
+    requires the ``except ACNHTTPError: raise`` cross-module
+    defence P3 ticket and is intentionally not in #3-followup
+    scope.
   * 8 5xx sites — kept on raw ``HTTPException`` per the
     sanitisation contract documented in ``acn.core.errors``.
 
@@ -279,3 +286,237 @@ class TestSubnetsFlatErrorSchema:
         _assert_flat_shape(body)
         assert body["error_code"] == "agent_not_found"
         assert body["details"] == {"agent_id": "agent-target"}
+
+
+class TestSubnetsFlatErrorSchemaCrossModule:
+    """Sprint #3-followup — pin the 6 cross-module ErrorCode raises.
+
+    Coverage choice rationale
+        Six raise sites spanning four cross-module ErrorCode members
+        (``AUTHENTICATION_REQUIRED`` × 2, ``OWNERSHIP_MISMATCH`` × 2,
+        ``NOT_SUBNET_MEMBER`` × 1, ``INVALID_REQUEST`` × 1). One
+        representative test per site so each site's
+        ``details.reason`` and field set is pinned independently —
+        unlike registry's `replace_all=true` cohorts, the subnets
+        sites differ in payload shape (``subnet_id`` vs
+        ``requested_owner`` vs free-form ``reason``) so per-site
+        pinning is more useful here.
+
+    list_subnets safety net
+        The owner-filter / cross-tenant gates at the top of
+        ``list_subnets`` raise ``ACNHTTPError`` from inside a
+        ``try`` body whose surrounding ``except Exception`` would
+        silently rewrite the 401/403 to 500 if not for the new
+        ``except ACNHTTPError: raise`` defence layer added in this
+        sprint. The two list_subnets tests below double as
+        regression pins for that defence — if a future refactor
+        drops the new ``except ACNHTTPError: raise`` line, the
+        tests will start seeing 500 responses with
+        ``error_code: internal_server_error`` and fail loudly.
+    """
+
+    def test_create_subnet_value_error_returns_invalid_request(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """``POST /api/v1/subnets`` with a body that the service
+        rejects with ``ValueError`` — pins ``INVALID_REQUEST``.
+
+        Auth bypass note
+            ``create_subnet`` is gated by
+            ``require_internal_or_permission("acn:write")``; the
+            JWT path uses dev-mode bypass like
+            ``test_unregister_returns_404_with_flat_shape`` in
+            registry. See that test's docstring for rationale.
+        """
+        stub_subnet_service.create_subnet = AsyncMock(
+            side_effect=ValueError("subnet name already taken")
+        )
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/v1/subnets",
+                headers={"Authorization": "Bearer dev-mode-any-token"},
+                json={
+                    "subnet_id": "test-subnet",
+                    "name": "Test Subnet",
+                },
+            )
+
+        assert r.status_code == 400
+        body = r.json()
+        _assert_flat_shape(body)
+        assert body["error_code"] == "invalid_request"
+        assert body["details"] == {"reason": "subnet name already taken"}
+
+    def test_list_subnets_owner_filter_no_auth_returns_authentication_required(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """``GET /api/v1/subnets?owner=...`` without an
+        ``Authorization`` header — pins ``AUTHENTICATION_REQUIRED``
+        with the owner-filter reason."""
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.get("/api/v1/subnets", params={"owner": "user-1"})
+
+        assert r.status_code == 401
+        body = r.json()
+        _assert_flat_shape(body)
+        assert body["error_code"] == "authentication_required"
+        assert body["details"] == {"reason": "owner_filter_requires_auth"}
+        assert r.headers.get("WWW-Authenticate") == "Bearer"
+
+    def test_list_subnets_cross_tenant_returns_ownership_mismatch(
+        self, stub_agent_service, stub_subnet_service, monkeypatch
+    ):
+        """``GET /api/v1/subnets?owner=user-2`` with a non-admin
+        token whose ``sub`` is ``user-1`` — pins
+        ``OWNERSHIP_MISMATCH``.
+
+        Why monkeypatch instead of dependency_overrides
+            ``list_subnets`` calls ``verify_token`` *directly*
+            (``payload = await verify_token(request, credentials)``)
+            rather than via ``Depends(...)`` — so
+            ``app.dependency_overrides[verify_token] = stub`` would
+            NOT intercept the call. We monkeypatch the route
+            module's reference instead, which IS what gets called.
+
+            Dev-mode bypass would also satisfy the gate (its
+            synthetic payload includes ``acn:admin``), so we
+            replace the function entirely with one returning a
+            non-admin payload to exercise the cross-tenant 403
+            branch deterministically.
+        """
+
+        async def _fake_verify_token(*args, **kwargs):
+            return {"sub": "user-1", "permissions": ["acn:read"]}
+
+        monkeypatch.setattr(
+            "acn.routes.subnets.verify_token", _fake_verify_token
+        )
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.get(
+                "/api/v1/subnets",
+                params={"owner": "user-2"},
+                headers={"Authorization": "Bearer non-admin-token"},
+            )
+
+        assert r.status_code == 403
+        body = r.json()
+        _assert_flat_shape(body)
+        assert body["error_code"] == "ownership_mismatch"
+        assert body["details"] == {
+            "requested_owner": "user-2",
+            "token_owner": "user-1",
+        }
+
+    def test_get_subnet_agents_private_no_auth_returns_authentication_required(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """``GET /api/v1/subnets/{id}/agents`` against a private
+        subnet without auth — pins ``AUTHENTICATION_REQUIRED`` with
+        the ``private_subnet`` reason and ``subnet_id`` in details.
+
+        Distinct from the owner-filter ``AUTHENTICATION_REQUIRED``
+        test above: same ErrorCode but the SDK can branch on
+        ``details.reason`` to give a more specific UX (e.g. "join
+        this subnet" vs "log in to filter by owner").
+        """
+        # Override stub to mark the subnet as private so the auth
+        # check fires.
+        stub_subnet_service.get_subnet.side_effect = None
+        target_subnet = MagicMock()
+        target_subnet.subnet_id = "subnet-private"
+        target_subnet.owner = "user-1"
+        target_subnet.is_private = True
+        stub_subnet_service.get_subnet.return_value = target_subnet
+
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.get("/api/v1/subnets/subnet-private/agents")
+
+        assert r.status_code == 401
+        body = r.json()
+        _assert_flat_shape(body)
+        assert body["error_code"] == "authentication_required"
+        assert body["details"] == {
+            "subnet_id": "subnet-private",
+            "reason": "private_subnet",
+        }
+
+    def test_get_subnet_agents_private_cross_tenant_returns_not_subnet_member(
+        self, stub_agent_service, stub_subnet_service, monkeypatch
+    ):
+        """``GET /api/v1/subnets/{id}/agents`` against a private
+        subnet with a non-owner non-admin token — pins
+        ``NOT_SUBNET_MEMBER``. Same monkeypatch pattern as the
+        cross-tenant list_subnets test above (``verify_token`` is
+        called directly, not via Depends)."""
+        stub_subnet_service.get_subnet.side_effect = None
+        target_subnet = MagicMock()
+        target_subnet.subnet_id = "subnet-private"
+        target_subnet.owner = "user-1"
+        target_subnet.is_private = True
+        stub_subnet_service.get_subnet.return_value = target_subnet
+
+        async def _fake_verify_token(*args, **kwargs):
+            return {"sub": "user-2", "permissions": ["acn:read"]}
+
+        monkeypatch.setattr(
+            "acn.routes.subnets.verify_token", _fake_verify_token
+        )
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.get(
+                "/api/v1/subnets/subnet-private/agents",
+                headers={"Authorization": "Bearer non-member-token"},
+            )
+
+        assert r.status_code == 403
+        body = r.json()
+        _assert_flat_shape(body)
+        assert body["error_code"] == "not_subnet_member"
+        assert body["details"] == {
+            "subnet_id": "subnet-private",
+            "agent_id": "user-2",
+        }
+
+    def test_delete_subnet_permission_error_returns_ownership_mismatch(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """``DELETE /api/v1/subnets/{id}`` when the service raises
+        ``PermissionError`` — pins ``OWNERSHIP_MISMATCH`` with
+        ``subnet_id`` and the underlying reason in ``details``.
+
+        Auth bypass note
+            ``delete_subnet`` is gated by ``require_permission("acn:write")``;
+            dev-mode bypass like the registry tests.
+        """
+        stub_subnet_service.delete_subnet = AsyncMock(
+            side_effect=PermissionError("Only the subnet owner can delete it.")
+        )
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.delete(
+                "/api/v1/subnets/subnet-1",
+                headers={"Authorization": "Bearer dev-mode-any-token"},
+            )
+
+        assert r.status_code != 401, (
+            "DELETE /subnets/{id} returned 401 — dev_mode auth bypass "
+            "is no longer in effect."
+        )
+        assert r.status_code == 403
+        body = r.json()
+        _assert_flat_shape(body)
+        assert body["error_code"] == "ownership_mismatch"
+        assert body["details"] == {
+            "subnet_id": "subnet-1",
+            "reason": "Only the subnet owner can delete it.",
+        }
