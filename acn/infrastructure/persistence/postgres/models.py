@@ -12,7 +12,6 @@ Design decisions:
 from datetime import UTC, datetime
 
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     DateTime,
     Float,
@@ -23,7 +22,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
