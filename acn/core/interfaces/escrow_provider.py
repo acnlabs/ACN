@@ -106,8 +106,10 @@ class IEscrowProvider(ABC):
         creator_id: str,
         creator_type: str,
         amount: float,
+        currency: str = "points",
         auto_release_days: int = 7,
         description: str | None = None,
+        escrow_config: dict | None = None,
     ) -> EscrowDetailResult:
         """Lock funds when a task is created (supports both human and agent creators)."""
         ...

@@ -267,14 +267,18 @@ class TaskCreateRequest(BaseModel):
         try:
             float(self.reward)
         except (ValueError, TypeError):
-            raise ValueError("reward must be a valid numeric string (e.g. '50' or '0')")
+            raise ValueError(
+                "reward must be a valid numeric string (e.g. '50' or '0')"
+            ) from None
         if self.max_total_budget is not None and self.max_participants is not None:
             raise ValueError("max_total_budget is only valid when max_participants=None (unlimited/bounty mode)")
         if self.max_total_budget is not None:
             try:
                 float(self.max_total_budget)
             except (ValueError, TypeError):
-                raise ValueError("max_total_budget must be a valid numeric string")
+                raise ValueError(
+                    "max_total_budget must be a valid numeric string"
+                ) from None
         if self.max_participants is not None and self.max_participants < 1:
             raise ValueError("max_participants must be >= 1")
         if self.completion_mode not in ("independent", "competitive", "collaborative"):

@@ -591,6 +591,186 @@ class TestPolicyChangedAudit:
 
 
 # --------------------------------------------------------------------------- #
+# X-ACN-SDK-Min-Version warning header (Phase 2 review v2 P1 #10)
+# --------------------------------------------------------------------------- #
+
+
+class TestSDKVersionWarningHeader:
+    """``PATCH /policy`` resolving to ``manifest`` or ``allowlist`` is
+    an implicit breaking change for any SDK that doesn't implement
+    ``manifest_notification`` (and, for allowlist mode, the manifest
+    queue polling path). Old clients silently miss every inbound
+    message — a near-impossible-to-diagnose breakage from the agent
+    author's perspective.
+
+    The ``X-ACN-SDK-Min-Version`` response header is the warning
+    gate: dashboards / SDK release tooling can pick it up
+    automatically rather than relying on operators reading release
+    notes. These tests pin five contracts:
+
+    1. Switching INTO ``manifest`` emits the header.
+    2. Switching INTO ``allowlist`` emits the header.
+    3. Switching INTO ``open`` / ``closed`` does NOT emit (no SDK
+       contract change).
+    4. Idempotent re-application (``manifest`` → ``manifest``) STILL
+       emits — operators inspecting any single PATCH must see the
+       requirement, not just the first transition.
+    5. 404 paths (unknown agent) must NOT emit — the header would
+       advertise a contract for an entity that doesn't exist.
+
+    See ``_MODES_REQUIRING_SDK_NOTIFY`` in ``acn/routes/registry.py``
+    for the full rationale on always-emit vs transition-only.
+    """
+
+    SDK_HEADER = "X-ACN-SDK-Min-Version"
+
+    def _patch_to(
+        self,
+        stub_agent_service,
+        target_mode: str,
+        *,
+        existing_mode: str = "open",
+        as_agent: bool = True,
+    ):
+        """Helper: drive a PATCH to ``target_mode`` from
+        ``existing_mode``. ``as_agent`` switches between the
+        owner-key path and the internal-token path so we can confirm
+        the header logic is auth-channel-agnostic.
+
+        For the ``as_agent=False`` branch we MUST also patch
+        ``settings.internal_api_token`` to ``VALID_INTERNAL_TOKEN``
+        — without it the dependency rejects the header as
+        misconfigured (matches the existing
+        ``test_invalid_internal_token_fails_closed`` pattern).
+        """
+        async def _get_with_mode(agent_id):
+            if agent_id == "agent-target":
+                existing = MagicMock()
+                existing.agent_id = agent_id
+                existing.communication_policy = {"mode": existing_mode}
+                return existing
+            raise AgentNotFoundException(agent_id)
+
+        stub_agent_service.get_agent = AsyncMock(side_effect=_get_with_mode)
+
+        _wire(stub_agent_service)
+
+        body_policy = {"mode": target_mode}
+        if as_agent:
+            with TestClient(app) as client:
+                return client.patch(
+                    "/api/v1/agents/agent-target/policy",
+                    json={"communication_policy": body_policy},
+                    headers={"Authorization": "Bearer owner-key"},
+                )
+        with patch(
+            "acn.routes.dependencies.settings.internal_api_token",
+            VALID_INTERNAL_TOKEN,
+        ):
+            with TestClient(app) as client:
+                return client.patch(
+                    "/api/v1/agents/agent-target/policy",
+                    json={"communication_policy": body_policy},
+                    headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+                )
+
+    def test_open_to_manifest_emits_header(self, stub_agent_service):
+        r = self._patch_to(stub_agent_service, "manifest")
+        assert r.status_code == 200, r.text
+        # Default value matches ``Settings.policy_manifest_min_sdk_version``.
+        assert r.headers.get(self.SDK_HEADER) == "0.5.0"
+
+    def test_open_to_allowlist_emits_header(self, stub_agent_service):
+        r = self._patch_to(stub_agent_service, "allowlist")
+        assert r.status_code == 200, r.text
+        assert r.headers.get(self.SDK_HEADER) == "0.5.0"
+
+    def test_open_to_closed_does_not_emit(self, stub_agent_service):
+        """``closed`` is a tightening but doesn't change the WS
+        contract — closed recipients reject inbound on the policy
+        layer; old SDKs lose nothing they were getting before. No
+        header."""
+        r = self._patch_to(stub_agent_service, "closed")
+        assert r.status_code == 200, r.text
+        assert self.SDK_HEADER not in r.headers, (
+            f"closed mode must not advertise SDK requirement; got "
+            f"{r.headers.get(self.SDK_HEADER)!r}"
+        )
+
+    def test_open_to_open_does_not_emit(self, stub_agent_service):
+        """No-op transition. Header stays absent."""
+        r = self._patch_to(stub_agent_service, "open")
+        assert r.status_code == 200, r.text
+        assert self.SDK_HEADER not in r.headers
+
+    def test_manifest_to_manifest_idempotent_still_emits(self, stub_agent_service):
+        """Idempotent re-apply still emits — the contract is "the
+        resulting mode requires this SDK", not "this PATCH transitioned
+        to a new mode". Deploy scripts confirming desired state must
+        still see the requirement on any single PATCH they inspect."""
+        r = self._patch_to(stub_agent_service, "manifest", existing_mode="manifest")
+        assert r.status_code == 200, r.text
+        assert r.headers.get(self.SDK_HEADER) == "0.5.0"
+
+    def test_unknown_agent_404_does_not_emit(self, stub_agent_service):
+        """404 path: pre-fetch fails before any update runs. The
+        header would advertise a contract for an entity that doesn't
+        exist — confusing to clients and to dashboards correlating
+        headers with audit events.
+
+        We use the internal-token auth channel here on purpose:
+        the owner-key channel rejects with 403 ("API key does not
+        match agent_id") before the route handler ever runs, which
+        wouldn't exercise the route-layer 404 mapping at all.
+        Internal-token bypasses the per-agent ownership check so
+        the request reaches ``update_agent_policy`` and the
+        ``AgentNotFoundException`` from ``get_agent`` is what
+        produces the 404 — that's the path we want to pin.
+        """
+        _wire(stub_agent_service)
+
+        with patch(
+            "acn.routes.dependencies.settings.internal_api_token",
+            VALID_INTERNAL_TOKEN,
+        ):
+            with TestClient(app) as client:
+                r = client.patch(
+                    "/api/v1/agents/agent-ghost/policy",
+                    json={"communication_policy": {"mode": "manifest"}},
+                    headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+                )
+
+        assert r.status_code == 404, r.text
+        assert self.SDK_HEADER not in r.headers
+
+    def test_internal_token_caller_also_emits_header(self, stub_agent_service):
+        """The header is auth-channel-agnostic — internal-token
+        callers (ops scripts) must see the SDK requirement just as
+        owner callers do, since the resulting policy state is what
+        downstream agents will need to handle."""
+        r = self._patch_to(stub_agent_service, "manifest", as_agent=False)
+        assert r.status_code == 200, r.text
+        assert r.headers.get(self.SDK_HEADER) == "0.5.0"
+
+    def test_header_value_reads_from_settings(self, stub_agent_service):
+        """The min version is configurable via
+        ``Settings.policy_manifest_min_sdk_version`` so ops can pin
+        a different threshold per deployment without a code rebuild.
+        Pin that the route reads the live settings value rather than
+        baking the default into a module-level constant — otherwise
+        env-var overrides would be silently ignored."""
+        from acn.routes import registry as registry_module
+
+        original = registry_module.settings.policy_manifest_min_sdk_version
+        registry_module.settings.policy_manifest_min_sdk_version = "9.9.9"
+        try:
+            r = self._patch_to(stub_agent_service, "manifest")
+            assert r.headers.get(self.SDK_HEADER) == "9.9.9"
+        finally:
+            registry_module.settings.policy_manifest_min_sdk_version = original
+
+
+# --------------------------------------------------------------------------- #
 # GET /policy: symmetric counterpart so owners can read their own policy
 # --------------------------------------------------------------------------- #
 
