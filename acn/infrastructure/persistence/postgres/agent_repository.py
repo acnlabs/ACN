@@ -88,9 +88,14 @@ class PostgresAgentRepository(IAgentRepository):
         )
 
     def _agent_to_model(self, agent: Agent) -> AgentModel:
+        # Ensure every persisted agent has a visibility tag in extra_metadata.
+        # New registrations default to "test" so they don't pollute the main
+        # graph until an owner explicitly upgrades to "real".
+        extra_metadata = dict(agent.metadata or {})
+        extra_metadata.setdefault("visibility", "test")
         extra_meta: dict = {
             "description": agent.description,
-            "extra_metadata": agent.metadata,
+            "extra_metadata": extra_metadata,
             "a2a_endpoint": agent.a2a_endpoint,
             "agent_card_url": agent.agent_card_url,
             "erc8004_agent_id": agent.erc8004_agent_id,
