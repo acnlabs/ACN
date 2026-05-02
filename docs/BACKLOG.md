@@ -164,6 +164,22 @@ Suggested batching: do this *atomically* with each row of the sprint roadmap abo
 
 Out of scope for this ticket: regenerating downstream SDK type-gen artefacts. That is the SDK release-notes owner's responsibility.
 
+#### P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py`
+
+Each error-schema migration sprint row produces a `tests/routes/test_<module>_error_schema.py` that re-defines roughly the same three fixtures:
+
+- `_reset_state` (autouse) — disables `slowapi.limiter`, clears `_api_key_cache`, clears `app.dependency_overrides`
+- `stub_agent_service` — wires owner + cross-tenant API keys
+- `stub_<resource>_service` — `AsyncMock` with sensible defaults
+
+By the time the sprint reaches row #3 we'll have ~3 × 50 LOC of duplication. Hoisting to `tests/routes/conftest.py` is a one-shot ~80 LOC dedup that future sprint rows pick up for free.
+
+Why not now (sprint row #1):
+- Touching `conftest.py` cross-cuts every existing route test file. Doing it inside a feature commit risks subtle collisions with existing route-test fixtures (`test_allowlist_routes.py`, `test_communication_*.py`, `test_registry_*.py` already each have their own `_reset_state`-shaped fixture).
+- The audit-preferred sequence is: land 2-3 schema test files first (so the *real* duplication shape is observable), then dedup in a focused PR with no behavioural changes.
+
+Suggested trigger: after sprint row #3 lands, open a single PR that introduces the shared fixtures and converts the three existing files. Estimated effort: 2-3 hours; one of those is reading the existing route tests to confirm the shared fixtures don't collide.
+
 #### P3 — `RequestValidationError` alignment
 
 FastAPI's automatic 422 (pydantic body / query / path validation)

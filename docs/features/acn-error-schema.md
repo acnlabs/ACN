@@ -80,6 +80,25 @@ The `ErrorCode` enum in [`acn/core/errors.py`](../../acn/core/errors.py) is a **
 
 Reserved codes will be picked up by the migration sprint as each route is converted (see Section 7).
 
+### `details` field semantics
+
+The catalog tables above show field *names and types*; this section pins the precise *semantics* the SDK contract guarantees, since several details fields use the same name across codes.
+
+| Field path                                           | Semantics                                                                                                                                           |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent_not_found.details.agent_id`                   | The ID of the **missing** agent — i.e. the agent the request was trying to reference. Differs by route: it is `target_agent` for `/send`, `path agent_id` for `/history`, `target_id` for allowlist POST/DELETE. |
+| `from_agent_mismatch.details.authenticated_as`       | The agent ID that the API key authenticated as (server-trusted).                                                                                    |
+| `from_agent_mismatch.details.from_agent`             | The agent ID that the request body claimed (caller-supplied, untrusted).                                                                            |
+| `api_key_agent_mismatch.details.path_agent`          | The agent ID extracted from the URL path.                                                                                                           |
+| `api_key_agent_mismatch.details.key_agent`           | The agent ID associated with the API key the caller presented.                                                                                      |
+| `self_allowlist_forbidden.details.owner_id`          | The owner / target agent ID — they are equal here by definition (this is what *makes* the call self-referential).                                   |
+| `allowlist_capacity_exceeded.details.owner_id`       | The owner whose allowlist hit the cap. Always equal to the path agent_id.                                                                           |
+| `allowlist_capacity_exceeded.details.max_size`       | The configured maximum entries per allowlist (currently the system-wide constant `MAX_ALLOWLIST_SIZE = 500`). If ACN later moves to per-owner caps, the response will carry the *effective* cap for that owner — SDK clients should always read this field rather than hardcoding 500. |
+| `unknown_strategy.details.strategy`                  | The unrecognised value the caller supplied (case-preserved for diagnostic clarity, even though strategy parsing is case-insensitive at the boundary). |
+| `unknown_strategy.details.expected`                  | The list of accepted strategy names. Stable order, lowercase.                                                                                        |
+| `communication_rejected.details.reason`              | A short server-classified reason code (e.g. `policy_closed`, `not_in_allowlist`).                                                                  |
+| `communication_rejected.details.reject_reason`       | Recipient-supplied free-form prose, may be `null`. **Treat as untrusted user content** — do not log verbatim or render as HTML.                    |
+
 ---
 
 ## 3. Out of scope
@@ -97,6 +116,27 @@ This shape is **not covered by this schema**. Overriding `RequestValidationError
 Consumers in pilot routes that pose a body schema (e.g. `AckInboxRequest`) will continue to see FastAPI's default 422 shape on validation failures. SDK clients should keep their existing `RequestValidationError` parser.
 
 A P3 BACKLOG ticket is open for "align RequestValidationError with ACN flat schema" — estimated 1 PR, not blocking #11.
+
+### Slowapi rate-limit 429
+
+`@limiter.limit("...")` decorators on routes (e.g. `60/minute` on the allowlist routes) emit a different shape via `slowapi._rate_limit_exceeded_handler`:
+
+```json
+{ "error": "Rate limit exceeded: 60 per 1 minute" }
+```
+
+This means HTTP 429 has **two distinct shapes** depending on which handler emitted it:
+
+| Trigger                                            | Shape                                                          | Handler                          |
+| -------------------------------------------------- | -------------------------------------------------------------- | -------------------------------- |
+| `@limiter.limit(...)` quota exhausted              | `{ "error": "Rate limit exceeded: ..." }` (slowapi)            | `_rate_limit_exceeded_handler`   |
+| Migrated route raising `ACNHTTPError(..., 429, …)` | `{ error_code, message, details, request_id }` (flat)          | `_acn_http_error_handler`        |
+
+`allowlist_capacity_exceeded` (sprint row #1) is the first migrated 429 so the contrast bites here first; future sprint rows that emit 429 (e.g. follow limits) will be on the same flat side.
+
+SDK clients **must not** branch on `status_code == 429` alone. The parsing template in section 4 (`if "error_code" in body`) already routes both shapes correctly; no SDK code change is needed beyond keeping that check in place.
+
+Realigning slowapi to the flat schema is reserved as `WALLET_RATE_LIMIT_EXCEEDED` in the catalog — see the BACKLOG roadmap; it is intentionally not bundled with the per-module migration sprint because slowapi handler replacement affects every limited route at once.
 
 ### Non-pilot routes
 
@@ -126,7 +166,7 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 
 Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can depend on this matrix as the source of truth for which response shape a given endpoint emits.
 
-[^1]: **Pilot routes are migrated at the route handler body level only.** 4xx errors raised by the *route handler function body* go through `ACNHTTPError` and emit the flat schema. 4xx errors raised by *shared dependencies* invoked before the handler body — `OwnerOrInternalDep`, `InternalTokenDep`, `AgentApiKeyDep`, the `A2AFromAgentValidationMiddleware` ASGI middleware — still raise `HTTPException` and emit the legacy `{"detail": "..."}` shape. They flip to flat schema when the `dependencies` module is migrated (sprint row #10 in [`docs/BACKLOG.md`](../BACKLOG.md)). SDK clients hitting a pilot endpoint must therefore keep both parsers in scope until row #10 lands; the parsing template below already does this via the `if "error_code" in body` branch.
+[^1]: **Migrated routes are converted at the route handler body level only.** 4xx errors raised by the *route handler function body* go through `ACNHTTPError` and emit the flat schema. 4xx errors raised by *shared dependencies* invoked before the handler body — `OwnerOrInternalDep`, `InternalTokenDep`, `AgentApiKeyDep`, the `A2AFromAgentValidationMiddleware` ASGI middleware — still raise `HTTPException` and emit the legacy `{"detail": "..."}` shape. They flip to flat schema when the `dependencies` module is migrated (sprint row #10 in [`docs/BACKLOG.md`](../BACKLOG.md)). SDK clients hitting a migrated endpoint must therefore keep both parsers in scope until row #10 lands; the parsing template below already does this via the `if "error_code" in body` branch.
 
 ### SDK parsing template
 
