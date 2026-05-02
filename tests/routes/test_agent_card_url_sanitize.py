@@ -45,8 +45,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from acn.api import app
+from acn.core.entities.agent import Agent
 from acn.core.exceptions import AgentNotFoundException
 from acn.routes.dependencies import get_agent_service, limiter
+from acn.routes.registry import _agent_entity_to_info
 
 
 @pytest.fixture(autouse=True)
@@ -111,6 +113,33 @@ def _proxy_url(agent_id: str) -> str:
 
     base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
     return f"{base_url}/api/v1/agents/{agent_id}"
+
+
+def test_public_agent_info_rewrites_card_url_and_omits_raw_card():
+    agent = Agent(
+        agent_id="agent-target",
+        name="Target",
+        owner="user-1",
+        endpoint="https://real-backend.example.com:9443/a2a",
+        agent_card_url="https://real-backend.example.com/.well-known/agent-card.json",
+        agent_card={
+            "name": "Target",
+            "url": "https://real-backend.example.com:9443/a2a",
+            "supportedInterfaces": [
+                {
+                    "protocolBinding": "JSONRPC",
+                    "url": "https://real-backend.example.com:9443/a2a",
+                }
+            ],
+        },
+    )
+
+    info = _agent_entity_to_info(agent, strip_sensitive=True)
+
+    assert info.endpoint == _proxy_url("agent-target")
+    assert info.a2a_endpoint == _proxy_url("agent-target")
+    assert info.agent_card_url == f"{_proxy_url('agent-target')}/.well-known/agent-card.json"
+    assert info.agent_card is None
 
 
 # --------------------------------------------------------------------------- #

@@ -30,7 +30,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from a2a.types import Message, Role, TextPart
+from a2a.compat.v0_3.types import Message, Role, TextPart
 
 from acn.core.exceptions import PolicyRejected
 from acn.infrastructure.messaging.broadcast_service import (
@@ -236,7 +236,7 @@ class TestNonDictResultRegression:
     @pytest.mark.asyncio
     async def test_send_message_response_counts_as_success(self):
         """The realistic happy-path: real a2a SDK return type."""
-        from a2a.types import SendMessageResponse
+        from a2a.compat.v0_3.types import SendMessageResponse
 
         # Construct a SendMessageResponse the same way the SDK does
         # for a successful message delivery. The exact body shape
@@ -276,7 +276,7 @@ class TestNonDictResultRegression:
     async def test_send_message_response_alongside_rejected(self):
         """Mixed: real SendMessageResponse for one target, policy
         rejection for another. Counters must bucket each correctly."""
-        from a2a.types import SendMessageResponse
+        from a2a.compat.v0_3.types import SendMessageResponse
 
         real_response = SendMessageResponse(
             root={

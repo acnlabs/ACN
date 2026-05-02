@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from a2a.types import Message  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import Message  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from ...services.manifest_service import ManifestEntry, ManifestService

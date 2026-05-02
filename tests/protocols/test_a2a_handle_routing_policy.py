@@ -31,7 +31,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from a2a.types import (
+from a2a.compat.v0_3.types import (
     DataPart,
     Message,
     Role,

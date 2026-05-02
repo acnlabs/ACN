@@ -26,7 +26,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from a2a.types import (  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
     DataPart,
     Message,
     Part,

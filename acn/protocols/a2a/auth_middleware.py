@@ -51,14 +51,14 @@ Implementation choice: ASGI middleware vs FastAPI dependency
 ============================================================
 
 A FastAPI dependency would be the path of least resistance, but the
-A2A FastAPI app is built by ``A2AFastAPIApplication`` from the
-``a2a-sdk`` library — its routes are not declared with our Depends
-annotations and we can't easily inject. ASGI middleware sits at the
-HTTP layer, before the SDK's routing, and works regardless of how
-the SDK structures its endpoints. The price is that we have to
-replay the request body manually after reading it (Starlette / ASGI
-``receive`` is single-shot by default); the helper below caches the
-body and synthesises a fresh ``receive`` for the downstream call.
+A2A endpoints are assembled from ``a2a-sdk`` Starlette routes — their
+handlers are not declared with our Depends annotations and we can't
+easily inject. ASGI middleware sits at the HTTP layer, before the
+SDK's routing, and works regardless of how the SDK structures its
+endpoints. The price is that we have to replay the request body
+manually after reading it (Starlette / ASGI ``receive`` is single-shot
+by default); the helper below caches the body and synthesises a fresh
+``receive`` for the downstream call.
 
 Why JSON-RPC error response with HTTP 400 (PR #2 v3)
 =====================================================

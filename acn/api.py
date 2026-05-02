@@ -20,15 +20,15 @@ from pathlib import Path
 
 import redis.asyncio as aioredis
 import structlog  # type: ignore[import-untyped]
-from a2a.types import (  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
     AgentCapabilities,
     AgentProvider,
     AgentSkill,
 )
-from a2a.types import (  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
     AgentCard as A2AAgentCard,
 )
-from a2a.types import (  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
     SecurityScheme as A2ASecurityScheme,
 )
 from fastapi import FastAPI, HTTPException, Request
@@ -1112,7 +1112,7 @@ async def get_acn_agent_card():
             default_output_modes=["text", "application/json"],
             security_schemes=security_schemes,
             security=security,
-            tags=[
+            skills=[
                 AgentSkill(
                     id="acn:discovery",
                     name="Agent Discovery",

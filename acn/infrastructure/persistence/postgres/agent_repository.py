@@ -55,6 +55,7 @@ class PostgresAgentRepository(IAgentRepository):
             name=row.name,
             owner=row.owner,
             endpoint=row.endpoint,
+            a2a_endpoint=meta.get("a2a_endpoint") or row.endpoint,
             status=AgentStatus(row.status),
             # Prefer dedicated SQL column; fall back to JSONB for rows saved before this fix
             description=row.description or meta.get("description"),
@@ -71,6 +72,7 @@ class PostgresAgentRepository(IAgentRepository):
             referrer_id=row.referrer_id,
             owner_changed_at=row.owner_changed_at,
             agent_card=row.agent_card,
+            agent_card_url=meta.get("agent_card_url"),
             wallet_address=row.wallet_address,
             wallet_addresses=dict(row.wallet_addresses or {}),
             accepts_payment=row.accepts_payment,
@@ -89,6 +91,8 @@ class PostgresAgentRepository(IAgentRepository):
         extra_meta: dict = {
             "description": agent.description,
             "extra_metadata": agent.metadata,
+            "a2a_endpoint": agent.a2a_endpoint,
+            "agent_card_url": agent.agent_card_url,
             "erc8004_agent_id": agent.erc8004_agent_id,
             "erc8004_chain": agent.erc8004_chain,
             "erc8004_tx_hash": agent.erc8004_tx_hash,

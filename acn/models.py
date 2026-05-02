@@ -7,8 +7,8 @@ Pydantic models for ACN service
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from a2a.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
-from a2a.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Re-export SDK types as canonical Agent Card / Skill for ACN
@@ -29,7 +29,18 @@ class AgentInfo(BaseModel):
     owner: str = Field(..., description="Agent owner (system/user-{id}/provider-{id})")
     name: str = Field(..., description="Agent name")
     description: str | None = Field(None, description="Agent description")
-    endpoint: str = Field(..., description="Agent A2A endpoint URL")
+    endpoint: str = Field(..., description="Agent A2A JSON-RPC endpoint URL")
+    a2a_endpoint: str | None = Field(
+        None,
+        description=(
+            "Explicit A2A JSON-RPC delivery URL. Mirrors endpoint during the "
+            "field-name transition."
+        ),
+    )
+    agent_card_url: str | None = Field(
+        None,
+        description="A2A Agent Card discovery URL, if provided by the registrant.",
+    )
     tags: list[str] = Field(default_factory=list, description="Agent capability tags (e.g. ['coding', 'search'])")
     status: AgentStatus = Field(default=AgentStatus.ONLINE, description="Agent status")
     # 支持多子网归属
@@ -137,7 +148,24 @@ class AgentRegisterRequest(BaseModel):
         description="Agent owner (system/user-{id}/provider-{id})",
     )
     name: str = Field(..., min_length=1, max_length=128, description="Agent name")
-    endpoint: str = Field(..., max_length=512, description="Agent A2A endpoint URL")
+    endpoint: str | None = Field(
+        None,
+        max_length=512,
+        description="[Deprecated] Direct A2A JSON-RPC endpoint URL. Use a2a_endpoint.",
+    )
+    a2a_endpoint: str | None = Field(
+        None,
+        max_length=512,
+        description="Direct A2A JSON-RPC endpoint URL used for message delivery.",
+    )
+    agent_card_url: str | None = Field(
+        None,
+        max_length=512,
+        description=(
+            "A2A Agent Card discovery URL. If a2a_endpoint is omitted, ACN "
+            "fetches this card and extracts the JSON-RPC endpoint."
+        ),
+    )
     tags: list[str] = Field(default_factory=list, max_length=50, description="Agent capability tags")
     agent_card: dict | None = Field(
         None,
@@ -203,11 +231,13 @@ class AgentRegisterRequest(BaseModel):
 
         return validate_policy_dict(v)
 
-    @field_validator("endpoint")
+    @field_validator("endpoint", "a2a_endpoint", "agent_card_url")
     @classmethod
-    def endpoint_must_be_url(cls, v: str) -> str:
+    def endpoint_must_be_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         if not (v.startswith("http://") or v.startswith("https://")):
-            raise ValueError("endpoint must start with http:// or https://")
+            raise ValueError("URL must start with http:// or https://")
         # SSRF guard: forbid IP-literal endpoints in private/reserved ranges
         # at registration time. Hostname → DNS rebinding is checked at
         # request-dispatch time in _proxy_to_agent / MessageRouter.
@@ -219,6 +249,16 @@ class AgentRegisterRequest(BaseModel):
         except SSRFViolation as e:
             raise ValueError(str(e)) from e
         return v
+
+    @model_validator(mode="after")
+    def require_delivery_or_discovery_url(self):
+        if not (self.a2a_endpoint or self.endpoint or self.agent_card_url):
+            raise ValueError("a2a_endpoint, endpoint, or agent_card_url is required")
+        return self
+
+    def get_direct_a2a_endpoint(self) -> str | None:
+        """Return the explicit direct delivery URL, if provided."""
+        return self.a2a_endpoint or self.endpoint
 
     @field_validator("tags", mode="before")
     @classmethod

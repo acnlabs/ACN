@@ -14,7 +14,11 @@ from typing import Literal
 
 import httpx
 import structlog  # type: ignore[import-untyped]
-from a2a.types import AgentCapabilities, AgentCard, AgentSkill  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
+    AgentCapabilities,
+    AgentCard,
+    AgentSkill,
+)
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -26,7 +30,7 @@ from fastapi import (
     Response,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..auth.middleware import require_permission, verify_token
 from ..config import Settings, get_settings
@@ -100,7 +104,24 @@ class AgentJoinRequest(BaseModel):
     name: str = Field(..., min_length=2, max_length=100, description="Agent name")
     description: str = Field(..., min_length=10, max_length=500, description="What this agent does (required)")
     tags: list[str] = Field(default_factory=list, max_length=20, description="Capability tags (e.g. ['coding', 'search']). Optional but recommended for discoverability.")
-    endpoint: str = Field(..., max_length=500, description="Agent A2A endpoint URL (must be http/https)")
+    endpoint: str | None = Field(
+        None,
+        max_length=500,
+        description="[Deprecated] Direct A2A JSON-RPC endpoint URL. Use a2a_endpoint.",
+    )
+    a2a_endpoint: str | None = Field(
+        None,
+        max_length=500,
+        description="Direct A2A JSON-RPC endpoint URL used for message delivery.",
+    )
+    agent_card_url: str | None = Field(
+        None,
+        max_length=500,
+        description=(
+            "A2A Agent Card discovery URL. If a2a_endpoint is omitted, ACN "
+            "fetches this card and extracts the JSON-RPC endpoint."
+        ),
+    )
     referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
     # `agent_card` is a structured A2A Agent Card; total payload size is
     # bounded by BodySizeLimitMiddleware (security audit H6) — we don't
@@ -125,9 +146,11 @@ class AgentJoinRequest(BaseModel):
             raise ValueError("Name must contain at least one letter.")
         return v
 
-    @field_validator("endpoint")
+    @field_validator("endpoint", "a2a_endpoint", "agent_card_url")
     @classmethod
-    def validate_endpoint(cls, v: str) -> str:
+    def validate_endpoint(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
         v = v.strip()
         if not re.match(r"^https?://", v, re.IGNORECASE):
             raise ValueError("Endpoint must be an http:// or https:// URL.")
@@ -139,6 +162,16 @@ class AgentJoinRequest(BaseModel):
         except SSRFViolation as e:
             raise ValueError(str(e)) from e
         return v
+
+    @model_validator(mode="after")
+    def require_delivery_or_discovery_url(self):
+        if not (self.a2a_endpoint or self.endpoint or self.agent_card_url):
+            raise ValueError("a2a_endpoint, endpoint, or agent_card_url is required")
+        return self
+
+    def get_direct_a2a_endpoint(self) -> str | None:
+        """Return the explicit direct delivery URL, if provided."""
+        return self.a2a_endpoint or self.endpoint
     # Payment capability (optional — can be set later via POST /payments/{id}/payment-capability)
     wallet_addresses: dict[str, str] = Field(
         default_factory=dict,
@@ -219,6 +252,81 @@ class AgentJoinResponse(BaseModel):
     tasks_endpoint: str = Field(..., description="Endpoint to fetch tasks")
     heartbeat_endpoint: str = Field(..., description="Heartbeat endpoint")
     agent_card_url: str = Field(..., description="URL to retrieve the stored Agent Card")
+
+
+def _extract_jsonrpc_endpoint_from_agent_card(agent_card: dict) -> str | None:
+    """Return the direct JSON-RPC URL from v1 interfaces or legacy v0.3 url."""
+    interfaces = (
+        agent_card.get("supportedInterfaces")
+        or agent_card.get("supported_interfaces")
+        or []
+    )
+    for interface in interfaces:
+        protocol_binding = (
+            interface.get("protocolBinding")
+            or interface.get("protocol_binding")
+            or ""
+        )
+        if protocol_binding.upper() == "JSONRPC" and interface.get("url"):
+            return interface["url"]
+
+    # Legacy v0.3 cards expose the direct delivery URL as `url`.
+    url = agent_card.get("url")
+    return url if isinstance(url, str) and url else None
+
+
+def _validate_resolved_a2a_endpoint(endpoint: str) -> None:
+    """Apply registration-time endpoint validation to URLs parsed from cards."""
+    try:
+        validate_endpoint_url(endpoint, allow_loopback=settings.dev_mode)
+    except SSRFViolation as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+async def _resolve_registration_endpoint(
+    *,
+    direct_endpoint: str | None,
+    agent_card_url: str | None,
+    agent_card: dict | None,
+) -> tuple[str, dict | None]:
+    """Resolve the direct A2A endpoint while preserving the discovery card."""
+    if direct_endpoint:
+        _validate_resolved_a2a_endpoint(direct_endpoint)
+        return direct_endpoint, agent_card
+
+    if agent_card:
+        direct_endpoint = _extract_jsonrpc_endpoint_from_agent_card(agent_card)
+        if direct_endpoint:
+            _validate_resolved_a2a_endpoint(direct_endpoint)
+            return direct_endpoint, agent_card
+
+    if not agent_card_url:
+        raise HTTPException(
+            status_code=422,
+            detail="a2a_endpoint, endpoint, or agent_card_url is required",
+        )
+
+    try:
+        await safe_resolve_target(agent_card_url, allow_loopback=settings.dev_mode)
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            response = await client.get(agent_card_url)
+            response.raise_for_status()
+            fetched_card = response.json()
+    except (httpx.HTTPError, ValueError, SSRFViolation) as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unable to fetch A2A Agent Card: {e}",
+        ) from e
+
+    direct_endpoint = _extract_jsonrpc_endpoint_from_agent_card(fetched_card)
+    if not direct_endpoint:
+        raise HTTPException(
+            status_code=400,
+            detail="A2A Agent Card does not include a JSON-RPC delivery URL",
+        )
+    _validate_resolved_a2a_endpoint(direct_endpoint)
+
+    return direct_endpoint, fetched_card
 
 
 class AgentClaimRequest(BaseModel):
@@ -317,15 +425,22 @@ async def dev_register_agent(
             )
 
     try:
+        endpoint, agent_card = await _resolve_registration_endpoint(
+            direct_endpoint=request.get_direct_a2a_endpoint(),
+            agent_card_url=request.agent_card_url,
+            agent_card=request.agent_card,
+        )
         # Use AgentService (Clean Architecture)
         agent = await agent_service.register_agent(
             owner=request.owner,
             name=request.name,
-            endpoint=request.endpoint,
+            endpoint=endpoint,
+            a2a_endpoint=endpoint,
             tags=request.tags,
             subnet_ids=subnet_ids,
-            agent_card=request.agent_card,
+            agent_card=agent_card,
             communication_policy=request.communication_policy,
+            agent_card_url=request.agent_card_url,
             social_card_url=request.social_card_url,
         )
 
@@ -364,8 +479,12 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
     if strip_sensitive:
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
         exposed_endpoint = f"{base_url}/api/v1/agents/{agent.agent_id}"
+        exposed_agent_card_url = f"{exposed_endpoint}/.well-known/agent-card.json"
+        exposed_agent_card = None
     else:
         exposed_endpoint = agent.endpoint or ""
+        exposed_agent_card_url = getattr(agent, "agent_card_url", None)
+        exposed_agent_card = agent.agent_card
 
     return AgentInfo(
         agent_id=agent.agent_id,
@@ -373,10 +492,12 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
         name=agent.name,
         description=agent.description,
         endpoint=exposed_endpoint,
+        a2a_endpoint=exposed_endpoint,
+        agent_card_url=exposed_agent_card_url,
         tags=agent.tags,
         status=agent.status.value,
         subnet_ids=agent.subnet_ids,
-        agent_card=agent.agent_card,
+        agent_card=exposed_agent_card,
         metadata=metadata,
         registered_at=agent.registered_at,
         last_heartbeat=agent.last_heartbeat,
@@ -431,17 +552,24 @@ async def register_agent(
             )
 
     try:
+        endpoint, agent_card = await _resolve_registration_endpoint(
+            direct_endpoint=request.get_direct_a2a_endpoint(),
+            agent_card_url=request.agent_card_url,
+            agent_card=request.agent_card,
+        )
         # Use AgentService (Clean Architecture)
         agent = await agent_service.register_agent(
             owner=request.owner,
             name=request.name,
-            endpoint=request.endpoint,
+            endpoint=endpoint,
+            a2a_endpoint=endpoint,
             tags=request.tags,
             subnet_ids=subnet_ids,
             description=getattr(request, "description", None),
             metadata=getattr(request, "metadata", {}),
-            agent_card=request.agent_card,
+            agent_card=agent_card,
             communication_policy=request.communication_policy,
+            agent_card_url=request.agent_card_url,
             social_card_url=request.social_card_url,
         )
 
@@ -811,18 +939,26 @@ async def _join_agent_impl(
         if body.wallet_address and "ethereum" not in wallet_addresses:
             wallet_addresses["ethereum"] = body.wallet_address
 
+        endpoint, agent_card = await _resolve_registration_endpoint(
+            direct_endpoint=body.get_direct_a2a_endpoint(),
+            agent_card_url=body.agent_card_url,
+            agent_card=body.agent_card,
+        )
+
         agent, api_key = await agent_service.join_agent(
             name=body.name,
             description=body.description,
             tags=body.tags,
-            endpoint=body.endpoint,
+            endpoint=endpoint,
+            a2a_endpoint=endpoint,
             referrer_id=referrer_id,
-            agent_card=body.agent_card,
+            agent_card=agent_card,
             wallet_addresses=wallet_addresses,
             accepts_payment=body.accepts_payment,
             payment_methods=body.payment_methods,
             token_pricing=body.token_pricing,
             communication_policy=body.communication_policy,
+            agent_card_url=body.agent_card_url,
             social_card_url=getattr(body, "social_card_url", None),
         )
 

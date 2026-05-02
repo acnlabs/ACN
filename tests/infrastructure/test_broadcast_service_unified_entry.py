@@ -26,7 +26,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from a2a.types import Message, Role, TextPart
+from a2a.compat.v0_3.types import Message, Role, TextPart
 
 from acn.core.exceptions import AgentNotFoundException
 from acn.infrastructure.messaging.broadcast_service import (
