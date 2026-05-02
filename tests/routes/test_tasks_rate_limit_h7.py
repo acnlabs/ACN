@@ -281,16 +281,16 @@ class TestRateLimitKeyAssignment:
         self, stub_request, stub_agent_service
     ) -> None:
         """Negative case: when JWT verification fails or permissions are
-        missing, the checker raises ``HTTPException`` before assigning a
-        key. The rate-limit decorator never even runs in this path —
-        FastAPI short-circuits on the failed dependency and returns 403
-        directly, so the request is not counted toward any bucket. That
-        is a *known* gap (BACKLOG: dependency-stage abuse), and this
-        test's job is just to pin down "we don't accidentally bucket a
-        rejected caller under the previous successful caller's key" —
+        missing, the checker raises ``ACNHTTPError`` (sprint #4-followup
+        migrated this from ``HTTPException``) before assigning a key. The
+        rate-limit decorator never even runs in this path — FastAPI's
+        exception handler maps the ACN error to 403 directly, so the
+        request is not counted toward any bucket. That is a *known* gap
+        (BACKLOG: dependency-stage abuse), and this test's job is just
+        to pin down "we don't accidentally bucket a rejected caller
+        under the previous successful caller's key" —
         ``request.state.rate_limit_key`` must remain unset."""
-        from fastapi import HTTPException
-
+        from acn.core.errors import ACNHTTPError, ErrorCode
         from acn.routes import tasks as tasks_module
 
         creds = SimpleNamespace(scheme="Bearer", credentials="eyJ.fake.jwt")
@@ -303,7 +303,7 @@ class TestRateLimitKeyAssignment:
         ):
             req = stub_request()
             checker = require_task_write_auth()
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ACNHTTPError) as exc:
                 await checker(
                     request=req,
                     credentials=creds,
@@ -311,5 +311,6 @@ class TestRateLimitKeyAssignment:
                     agent_service=stub_agent_service,
                 )
             assert exc.value.status_code == 403
+            assert exc.value.code is ErrorCode.MISSING_PERMISSION
 
         assert not hasattr(req.state, "rate_limit_key")

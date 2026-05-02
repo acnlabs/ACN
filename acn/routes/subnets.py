@@ -387,14 +387,18 @@ async def delete_subnet(
             logger.info("subnet_deleted", subnet_id=subnet_id, owner=owner)
             return {"status": "deleted", "subnet_id": subnet_id}
         else:
-            # NOTE (sprint #3): this in-try raise is intentionally NOT migrated
-            # to ``ACNHTTPError`` — it would fall through to the catch-all
-            # ``except Exception`` below and be silently rewritten as 500.
-            # The same fragility exists today for the legacy ``HTTPException``
-            # form (also ``Exception``-typed). Tracked as a P3 ticket in
-            # ``docs/BACKLOG.md`` ("Add ``except ACNHTTPError: raise``
-            # defence on registry's catch-all 5xx blocks") — to be fixed
-            # holistically alongside sprint row #2b.
+            # NOTE (sprint #3-followup): this in-try raise is intentionally
+            # NOT migrated to ``ACNHTTPError`` — it would fall through to
+            # the catch-all ``except Exception`` below and be silently
+            # rewritten as 500. The same fragility exists today for the
+            # legacy ``HTTPException`` form (also ``Exception``-typed).
+            # Tracked as a P3 ticket in ``docs/BACKLOG.md``
+            # ("Cross-module catch-all defence") — the holistic fix adds
+            # ``except ACNHTTPError: raise`` to ALL remaining catch-all
+            # 5xx blocks across the codebase. The same local defence has
+            # already been applied to ``list_subnets`` above (where new
+            # ACN raises *were* introduced and a fall-through was an
+            # active bug rather than a latent one).
             raise HTTPException(status_code=404, detail="Subnet not found")
     except SubnetNotFoundException as e:
         raise ACNHTTPError(

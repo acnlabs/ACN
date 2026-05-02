@@ -348,7 +348,17 @@ class TestBulkDeleteAudit:
                     )
 
                 assert r.status_code == 400
-                assert "name_prefix" in r.json()["detail"]
+                # Sprint #2b migrated this raise from ``HTTPException`` to
+                # ``ACNHTTPError(INVALID_REQUEST, …)`` — the body is the
+                # flat ACN schema (``error_code`` / ``message`` / ``details``)
+                # instead of the legacy ``{"detail": "..."}`` shape. The
+                # operator-facing prose explaining the safety guard is now
+                # in ``body["message"]`` and the structured reason marker
+                # in ``body["details"]["reason"]``.
+                body = r.json()
+                assert body["error_code"] == "invalid_request"
+                assert body["details"]["reason"] == "bulk_delete_filter_required"
+                assert "name_prefix" in body["message"]
                 # Guard must short-circuit BEFORE we read agents or delete
                 # anything — both would be observable side effects in prod.
                 svc.search_agents.assert_not_awaited()

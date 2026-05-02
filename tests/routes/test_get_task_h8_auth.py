@@ -147,7 +147,14 @@ class TestAnonymous:
         task_svc.get_task.return_value = _private_task()
         r = client.get("/api/v1/tasks/task-private")
         assert r.status_code == 403
-        assert "Authentication required" in r.json()["detail"]
+        # Sprint #4-followup: this raise migrated from ``HTTPException`` to
+        # ``ACNHTTPError(NOT_SUBNET_MEMBER, …)`` — the body is now the flat
+        # ACN schema. The H8 contract preserves status 403 (NOT 401) so
+        # an anonymous caller cannot probe whether a private task exists;
+        # ``details.reason`` carries the disambiguation marker.
+        body = r.json()
+        assert body["error_code"] == "not_subnet_member"
+        assert body["details"]["reason"] == "anonymous_caller"
 
 
 # ─────────────────────────────────────────────
@@ -190,7 +197,9 @@ class TestJwtCaller:
             )
 
         assert r.status_code == 403
-        assert "Not a subnet member" in r.json()["detail"]
+        body = r.json()
+        assert body["error_code"] == "not_subnet_member"
+        assert body["details"]["reason"] == "not_member"
 
 
 # ─────────────────────────────────────────────
@@ -247,7 +256,9 @@ class TestAgentApiKeyCaller:
         )
 
         assert r.status_code == 403
-        assert "Not a subnet member" in r.json()["detail"]
+        body = r.json()
+        assert body["error_code"] == "not_subnet_member"
+        assert body["details"]["reason"] == "not_member"
 
     def test_invalid_acn_key_treated_as_anonymous(
         self,
@@ -268,7 +279,9 @@ class TestAgentApiKeyCaller:
         )
 
         assert r.status_code == 403
-        assert "Authentication required" in r.json()["detail"]
+        body = r.json()
+        assert body["error_code"] == "not_subnet_member"
+        assert body["details"]["reason"] == "anonymous_caller"
         # Crucially: we should never even attempt subnet membership — there's
         # no identity to check against
         task_svc.is_subnet_member.assert_not_awaited()

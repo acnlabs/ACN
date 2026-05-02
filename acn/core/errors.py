@@ -92,16 +92,19 @@ class ErrorCode(StrEnum):
     ALLOWLIST_CAPACITY_EXCEEDED = "allowlist_capacity_exceeded"
     SELF_ALLOWLIST_FORBIDDEN = "self_allowlist_forbidden"
 
-    # ===== Registry routes (sprint row #2a — partial) =====
-    # The pilot codes ``AGENT_NOT_FOUND``, ``API_KEY_AGENT_MISMATCH``,
-    # and ``COMMUNICATION_REJECTED`` are also raised by registry —
-    # only the registry-specific code appears in this group.
+    # ===== Subnets routes (sprint rows #3 + #3-followup) =====
+    # ``AGENT_NOT_FOUND`` and ``API_KEY_AGENT_MISMATCH`` above are also
+    # raised by ``subnets`` — only the subnet-specific code appears in
+    # this group. ``OWNERSHIP_MISMATCH``, ``NOT_SUBNET_MEMBER``,
+    # ``AUTHENTICATION_REQUIRED``, and ``INVALID_REQUEST`` (used by the
+    # owner-filter / private-subnet / create_subnet gates) live in the
+    # cross-module group below.
     SUBNET_NOT_FOUND = "subnet_not_found"
 
-    # ===== Tasks routes (sprint row #4 — partial) =====
-    # ``TASK_NOT_FOUND`` is the only currently-raised tasks code; the
-    # remaining 26 4xx sites pick up cross-module auth/permission/
-    # validation codes in the section below.
+    # ===== Tasks routes (sprint rows #4 + #4-followup) =====
+    # ``TASK_NOT_FOUND`` is the only tasks-specific code; the remaining
+    # 26 4xx sites (auth / permission / validation / private-subnet
+    # gate) pick up cross-module codes from the section below.
     TASK_NOT_FOUND = "task_not_found"
 
     # ===== Cross-module auth/permission/validation (sprint row #2b) =====
