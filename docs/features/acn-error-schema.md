@@ -110,6 +110,21 @@ Sprint #3-followup completed the migration of the 6 deferred 4xx sites (auth / p
 
 > **Local catch-all defence**: sprint #3-followup added an `except ACNHTTPError: raise` line to the top of `list_subnets`'s catch-all block as a *local* application of the P3 defence ticket — without it, the new `AUTHENTICATION_REQUIRED` / `OWNERSHIP_MISMATCH` raises in the `try` body would have been swallowed by the trailing `except Exception` and rewritten to 500. The ticket still applies to the other 7 catch-all blocks in `subnets.py` and the 3 in `registry.py` that have no `ACNHTTPError`-emitting code in their `try` bodies (yet).
 
+### Payments routes (sprint row #5)
+
+
+| `error_code`                    | HTTP status | Used by                                                                                                                            | `details` schema             |
+| ------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `payment_capability_not_found`  | 404         | `GET /payments/{agent_id}/payment-capability`                                                                                      | `{ agent_id: string }`       |
+| `payment_task_not_found`        | 404         | `GET /payments/tasks/{task_id}` (internal-token)                                                                                   | `{ task_id: string }`        |
+| `token_pricing_not_configured`  | 404         | `GET /payments/{agent_id}/token-pricing`, `POST /payments/billing/estimate`, `POST /payments/billing/charge` (internal-token)      | `{ agent_id: string }`       |
+| `billing_transaction_not_found` | 404         | `GET /payments/billing/transactions/{transaction_id}` (internal-token)                                                             | `{ transaction_id: string }` |
+
+
+Pilot codes `agent_not_found`, `api_key_agent_mismatch`, and `from_agent_mismatch` are also raised by payments — see the *Used by* column on the pilot table. The 3 remaining 5xx sites (`set_payment_capability`, `create_payment_task`, `set_token_pricing` catch-alls) stay on raw `HTTPException(500)` per the sanitisation contract; all three carry the `except ACNHTTPError: raise` + `except HTTPException: raise` defence layers (P3 cross-module catch-all defence).
+
+`INSUFFICIENT_BALANCE` stays in the reserved group of the `ErrorCode` catalog: `payments.py` only surfaces *resource-existence* failures (the four codes above), not balance failures. Balance failures live one layer deeper (wallet / billing subsystem) and may surface at a different boundary in a future sprint.
+
 ### Cross-module catalog (sprint row #2b)
 
 Six `ErrorCode` members designed to be **shared by `registry`, `subnets`, and `tasks`** so an SDK consumer can write one set of fallback handlers regardless of which module emitted the error. The cross-module set is the deliverable that unblocked rows #3-followup and #4-followup; see [`docs/BACKLOG.md`](../BACKLOG.md) for the per-row status.
