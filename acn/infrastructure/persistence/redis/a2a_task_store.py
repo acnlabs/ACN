@@ -18,6 +18,7 @@ from google.protobuf.json_format import MessageToJson, Parse
 from redis.asyncio import Redis
 
 logger = structlog.get_logger()
+_List = list
 
 
 class RedisTaskStore(TaskStore):
@@ -155,7 +156,7 @@ class RedisTaskStore(TaskStore):
         status: TaskState | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[Task]:
+    ) -> _List[Task]:
         """List tasks with optional filters
 
         Args:
@@ -183,7 +184,7 @@ class RedisTaskStore(TaskStore):
 
     async def _get_task_ids(
         self, context_id: str | None = None, status: TaskState | None = None
-    ) -> list[str]:
+    ) -> _List[str]:
         """Get task IDs based on filters
 
         Args:
