@@ -271,6 +271,8 @@ class AgentRegistry:
                 if data.get("last_heartbeat")
                 else None
             ),
+            # SOCIAL.md pointer (older rows predate this field — None is fine)
+            social_card_url=data.get("social_card_url") or None,
         )
 
     async def get_agent_card(self, agent_id: str) -> AgentCard | None:

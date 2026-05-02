@@ -171,6 +171,16 @@ class AgentJoinRequest(BaseModel):
             "Default: open."
         ),
     )
+    # Optional SOCIAL.md pointer — see https://agentsocial.one. ACN stores
+    # only the URL; the body lives at the URL and consumers fetch on demand.
+    social_card_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description=(
+            "URL to this agent's SOCIAL.md (https://agentsocial.one spec). "
+            "Body is fetched on demand by consumers — ACN never caches it."
+        ),
+    )
 
     @field_validator("communication_policy")
     @classmethod
@@ -180,6 +190,18 @@ class AgentJoinRequest(BaseModel):
         from ..services.policy_service import validate_policy_dict
 
         return validate_policy_dict(v)
+
+    @field_validator("social_card_url")
+    @classmethod
+    def validate_social_card_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not (v.lower().startswith("https://") or v.lower().startswith("http://")):
+            raise ValueError("social_card_url must start with https:// or http://")
+        return v
 
 
 class AgentJoinResponse(BaseModel):
@@ -302,6 +324,7 @@ async def dev_register_agent(
             subnet_ids=subnet_ids,
             agent_card=request.agent_card,
             communication_policy=request.communication_policy,
+            social_card_url=request.social_card_url,
         )
 
         # Return response
@@ -359,6 +382,7 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
         wallet_addresses=agent.wallet_addresses or None,
         accepts_payment=agent.accepts_payment,
         payment_methods=agent.payment_methods,
+        social_card_url=agent.social_card_url,
     )
 
 
@@ -408,6 +432,7 @@ async def register_agent(
             metadata=getattr(request, "metadata", {}),
             agent_card=request.agent_card,
             communication_policy=request.communication_policy,
+            social_card_url=request.social_card_url,
         )
 
         # Generate Agent Card URL
@@ -778,6 +803,7 @@ async def _join_agent_impl(
             payment_methods=body.payment_methods,
             token_pricing=body.token_pricing,
             communication_policy=body.communication_policy,
+            social_card_url=getattr(body, "social_card_url", None),
         )
 
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
@@ -1407,6 +1433,118 @@ async def update_agent_policy(
     return {
         "agent_id": agent_id,
         "communication_policy": agent.communication_policy,
+    }
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/v1/agents/{id}/social-card-url
+# ---------------------------------------------------------------------------
+#
+# User-facing knob for the SOCIAL.md pointer. We intentionally don't piggy-
+# back on the registration endpoint for two reasons:
+#
+#   1. SOCIAL.md is a separate concern from registration metadata. An owner
+#      might publish their SOCIAL.md weeks after the agent first joins
+#      (especially relevant during the spec's bootstrapping phase).
+#   2. A dedicated endpoint matches the policy-PATCH pattern, which keeps
+#      ops/audit tooling uniform: every "owner mutates one configuration
+#      knob" event has the same shape.
+#
+# Auth: ``verify_owner_or_internal`` (same as policy PATCH).
+#   - Owner can update their own agent's URL.
+#   - X-Internal-Token covers ops scenarios (e.g. revoking a stale URL after
+#     an agent operator's domain has been hijacked).
+#
+# Validation:
+#   - Pydantic field validator strips whitespace, enforces https/http prefix
+#     and the 2048-char cap (mirrors AgentInfo / AgentRegisterRequest).
+#   - Empty string is normalized to None (clears the field).
+#
+# What this endpoint does NOT do:
+#   - Fetch the URL. The body lives at the URL and consumers fetch on
+#     demand per https://agentsocial.one/consumption-model. Validating the
+#     body here would (a) couple ACN to the SOCIAL.md spec version, (b)
+#     create an SSRF surface, and (c) duplicate work consumers must do
+#     anyway.
+#   - Mirror the body anywhere. ACN holds only the pointer.
+class SocialCardUrlPatchRequest(BaseModel):
+    """PATCH body for ``/agents/{id}/social-card-url``.
+
+    Wraps the URL in a top-level ``social_card_url`` key so the body
+    shape mirrors the field name everywhere else (``Agent``,
+    ``AgentInfo``, ``AgentRegisterRequest``). Pass ``null`` to clear.
+    """
+
+    social_card_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description=(
+            "URL to the agent's SOCIAL.md, or null to clear. Must start "
+            "with https:// (or http:// in dev)."
+        ),
+    )
+
+    @field_validator("social_card_url")
+    @classmethod
+    def validate_social_card_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not (v.lower().startswith("https://") or v.lower().startswith("http://")):
+            raise ValueError("social_card_url must start with https:// or http://")
+        return v
+
+
+@router.patch("/{agent_id}/social-card-url")
+# Same per-agent rate limit ceiling as the policy PATCH: destructive-ish
+# (writes DB + invalidates cache + emits audit log) and a leaked owner
+# key spamming PATCH would push the cache + audit stream hard. 30/min
+# leaves ~one update per 2s, two orders of magnitude above any
+# legitimate operator pattern (humans rarely change their published
+# SOCIAL.md URL more than a handful of times).
+@limiter.limit("30/minute")
+async def update_agent_social_card_url(
+    request: Request,
+    agent_id: AgentIdPath,
+    body: SocialCardUrlPatchRequest,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Update an agent's ``social_card_url`` pointer.
+
+    See ``SocialCardUrlPatchRequest`` for the accepted shape. Returns
+    the post-update URL so the caller can confirm the persisted value
+    (especially useful when passing ``null`` to clear, since the
+    response shows the cleared state).
+    """
+    try:
+        agent = await agent_service.update_social_card_url(
+            agent_id=agent_id,
+            social_card_url=body.social_card_url,
+        )
+    except AgentNotFoundException as e:
+        raise HTTPException(status_code=404, detail="Agent not found") from e
+
+    # Log every URL mutation. SOCIAL.md content can change semantics
+    # (mode flip from open → closed, fee changes, retention policy
+    # changes) without the URL changing — but the URL itself
+    # changing means the agent has switched their entire social
+    # identity surface, which is worth tracking for forensic /
+    # anti-impersonation purposes. Same INFO-log-not-audit choice as
+    # the policy endpoint: low cardinality at expected operator rates.
+    logger.info(
+        "social_card_url_updated",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+        caller_agent_id=caller.get("agent_id"),
+        new_url=agent.social_card_url,
+    )
+
+    return {
+        "agent_id": agent_id,
+        "social_card_url": agent.social_card_url,
     }
 
 

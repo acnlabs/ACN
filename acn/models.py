@@ -102,6 +102,19 @@ class AgentInfo(BaseModel):
     erc8004_tx_hash: str | None = Field(None, description="On-chain registration tx hash")
     erc8004_registered_at: datetime | None = Field(None, description="On-chain registration timestamp")
 
+    # SOCIAL.md pointer (https://agentsocial.one). URL only — body lives at
+    # the URL and consumers fetch on demand. ACN deliberately does NOT cache
+    # the body so each agent owner remains the single source of truth for
+    # their own contact terms (see consumption-model in the spec).
+    social_card_url: str | None = Field(
+        None,
+        max_length=2048,
+        description=(
+            "URL to this agent's SOCIAL.md (https://agentsocial.one spec). "
+            "Body is fetched on demand by consumers; ACN stores only the URL."
+        ),
+    )
+
     @property
     def subnet_id(self) -> str:
         """Primary subnet (for backward compatibility)"""
@@ -154,6 +167,32 @@ class AgentRegisterRequest(BaseModel):
             "Default: open."
         ),
     )
+    # Optional SOCIAL.md pointer — see https://agentsocial.one. The body
+    # is fetched on demand by clients; ACN stores ONLY the URL.
+    social_card_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description=(
+            "URL to this agent's SOCIAL.md (https://agentsocial.one spec). "
+            "Must start with https:// (or http:// in dev). Body is never "
+            "stored by ACN — clients fetch from the URL on demand."
+        ),
+    )
+
+    @field_validator("social_card_url")
+    @classmethod
+    def validate_social_card_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        # RFC 3986: URI schemes are case-insensitive. Match the entity
+        # layer (Agent.__post_init__) and SocialCardUrlPatchRequest.
+        scheme = v.lower()
+        if not (scheme.startswith("https://") or scheme.startswith("http://")):
+            raise ValueError("social_card_url must start with https:// or http://")
+        return v
 
     @field_validator("communication_policy")
     @classmethod

@@ -84,6 +84,7 @@ class AgentService:
         accepts_payment: bool = False,
         payment_methods: list[str] | None = None,
         communication_policy: dict | None = None,
+        social_card_url: str | None = None,
     ) -> Agent:
         """
         Register a new agent or update existing one
@@ -141,6 +142,14 @@ class AgentService:
             if communication_policy is not None:
                 existing_agent.communication_policy = communication_policy
 
+            # Same explicit-only semantics for the SOCIAL.md pointer:
+            # a heartbeat re-register that omits the field must not blow
+            # away a previously published URL. To clear the URL, callers
+            # use the dedicated PATCH /agents/{id}/social-card-url
+            # endpoint.
+            if social_card_url is not None:
+                existing_agent.social_card_url = social_card_url
+
             existing_agent.update_heartbeat()
             existing_agent.mark_online()
 
@@ -165,6 +174,7 @@ class AgentService:
             accepts_payment=accepts_payment,
             payment_methods=payment_methods or [],
             communication_policy=communication_policy,
+            social_card_url=social_card_url,
         )
 
         logger.info("register_new_agent", agent_id=agent_id, name=name)
@@ -220,6 +230,38 @@ class AgentService:
         agent = await self.repository.find_by_id(agent_id)
         if not agent:
             raise AgentNotFoundException(f"Agent {agent_id} not found")
+        return agent
+
+    async def update_social_card_url(
+        self,
+        agent_id: str,
+        social_card_url: str | None,
+    ) -> Agent:
+        """Update an agent's ``social_card_url`` pointer.
+
+        Mirrors ``update_communication_policy`` semantics: explicit
+        ``None`` clears the URL (agent publishes nothing), any other
+        value replaces the current pointer. Schema validation
+        (``https://`` prefix, length cap) lives in ``AgentInfo`` /
+        ``AgentRegisterRequest`` field validators and in
+        ``Agent.__post_init__`` — by the time we get here, the value
+        is either ``None`` or a vetted URL string.
+
+        We deliberately do NOT fetch the URL or validate the body.
+        That responsibility lives with consumers per the consumption
+        model at https://agentsocial.one/consumption-model. ACN's
+        contract is "we hold the pointer; the agent owns the body".
+
+        Args:
+            agent_id: Agent identifier.
+            social_card_url: New URL, or ``None`` to clear.
+
+        Raises:
+            AgentNotFoundException: If agent not found.
+        """
+        agent = await self.get_agent(agent_id)
+        agent.social_card_url = social_card_url or None
+        await self.repository.save(agent)
         return agent
 
     async def update_communication_policy(
@@ -436,6 +478,7 @@ class AgentService:
         payment_methods: list[str] | None = None,
         token_pricing: dict | None = None,
         communication_policy: dict | None = None,
+        social_card_url: str | None = None,
     ) -> tuple[Agent, str]:
         """
         Autonomous agent joins ACN (self-registration)
@@ -486,6 +529,7 @@ class AgentService:
             payment_methods=payment_methods or [],
             token_pricing=token_pricing,
             communication_policy=communication_policy,
+            social_card_url=social_card_url,
         )
 
         logger.info("agent_joined", agent_id=agent_id, name=name, referrer_id=referrer_id)

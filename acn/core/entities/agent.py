@@ -100,6 +100,13 @@ class Agent:
     erc8004_tx_hash: str | None = None        # registration tx hash (informational)
     erc8004_registered_at: datetime | None = None
 
+    # SOCIAL.md pointer (https://agentsocial.one spec).
+    # Body is NEVER stored here — we only persist the URL and let consumers
+    # fetch + cache per the consumption model defined at
+    # https://agentsocial.one/consumption-model. Clients are expected to honor
+    # Cache-Control / ETag from the source server.
+    social_card_url: str | None = None
+
     def __post_init__(self):
         """Validate invariants"""
         if not self.agent_id:
@@ -135,6 +142,18 @@ class Agent:
                 "mode": "open",
                 **self.communication_policy,
             }
+
+        # Light validation for social_card_url. We accept None or any
+        # https URL; we deliberately don't fetch it here (that's the
+        # consumer's job) and we don't validate beyond the scheme to
+        # avoid accidentally rejecting legitimate IDN / port forms.
+        if self.social_card_url is not None:
+            if not isinstance(self.social_card_url, str):
+                raise ValueError("social_card_url must be a string or None")
+            url = self.social_card_url.strip()
+            if url and not url.lower().startswith(("https://", "http://")):
+                raise ValueError("social_card_url must start with https:// or http://")
+            self.social_card_url = url or None
 
     @property
     def primary_subnet(self) -> str:
@@ -286,6 +305,8 @@ class Agent:
             "erc8004_registered_at": (
                 self.erc8004_registered_at.isoformat() if self.erc8004_registered_at else None
             ),
+            # SOCIAL.md pointer (https://agentsocial.one)
+            "social_card_url": self.social_card_url,
         }
 
     def has_token_pricing(self) -> bool:
