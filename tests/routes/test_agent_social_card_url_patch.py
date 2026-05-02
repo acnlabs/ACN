@@ -53,7 +53,6 @@ from acn.routes.dependencies import (
     limiter,
 )
 
-
 VALID_INTERNAL_TOKEN = "test-internal-token-min-32-chars-padding"
 
 
