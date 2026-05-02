@@ -117,7 +117,8 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 | 2a | `registry` (partial — safe migration) | reuse `AGENT_NOT_FOUND` (×17), `API_KEY_AGENT_MISMATCH`, `SUBNET_NOT_FOUND` (×2 — promoted from reserved), `COMMUNICATION_REJECTED` (also flattens proxy nested-detail) | ✅ |
 | 2b | `registry` (auth/ownership)           | new: `AGENT_NOT_OWNED` (or similar) for `PermissionError` (×3), `INVALID_AUTHORIZATION_HEADER` for the 2 `Authorization` rejects, `INTERNAL_TOKEN_REQUIRED` for `/join/internal` 401, `INVALID_CLAIM_REQUEST` for `ValueError` claim path | ⏳ |
 | 2c | `registry` (registration policy)      | new: `DEV_MODE_DISABLED`, `OWNER_TOKEN_MISMATCH`, `AGENT_ALREADY_EXISTS` (if domain raises one), `BULK_DELETE_FILTER_REQUIRED` | ⏳ |
-| 3 | `subnets`                             | reuse `SUBNET_NOT_FOUND`                                        | ⏳ |
+| 3 | `subnets` (partial — safe migration)  | reuse `SUBNET_NOT_FOUND` (×7), `AGENT_NOT_FOUND` (×3), `API_KEY_AGENT_MISMATCH` (×3) | ✅ |
+| 3-followup | `subnets` (auth/permission/validation) | depends on #2b auth code naming — 2× 401 *authentication required* (listing / private-subnet view), 3× 403 *permission denied* (same paths + `delete_subnet`'s `except PermissionError`), 1× 400 *invalid request* (`ValueError` on `POST /subnets`) | ⏳ |
 | 4 | `tasks`                               | reuse `TASK_NOT_FOUND`                                          | ⏳ |
 | 5 | `payments`                            | reuse `INSUFFICIENT_BALANCE`                                    | ⏳ |
 | 6 | `follows`                             | new: `FOLLOW_LIMIT_EXCEEDED` / `SELF_FOLLOW_FORBIDDEN`           | ⏳ |
@@ -166,11 +167,13 @@ Suggested batching: do this *atomically* with each row of the sprint roadmap abo
 
 Out of scope for this ticket: regenerating downstream SDK type-gen artefacts. That is the SDK release-notes owner's responsibility.
 
-#### P3 — Add `except ACNHTTPError: raise` defence on registry's catch-all 5xx blocks
+#### P3 — Add `except ACNHTTPError: raise` defence on catch-all 5xx blocks
 
-`acn/routes/registry.py` has 3 catch-all `except Exception as e: raise HTTPException(500, str(e))` blocks at L316 (`register` / dev), L425 (`register_protected`), L807 (`_join_agent_impl`). Sprint #2a's audit confirmed that **today** no `ACNHTTPError` is raised inside any of these `try` blocks — the migrated raises all live either *before* the `try` (subnet validation) or in *specific* `except` clauses (`AgentNotFoundException`, `PolicyRejected`).
+**Affected files**:
+- `acn/routes/registry.py` — 3 catch-all `except Exception as e: raise HTTPException(500, str(e))` blocks at L316 (`register` / dev), L425 (`register_protected`), L807 (`_join_agent_impl`).
+- `acn/routes/subnets.py` — 5 catch-all `except Exception` blocks (`create_subnet`, `list_subnets`, `get_subnet_agents`, `join_subnet`, `leave_subnet`, `delete_subnet`, plus the two internal admin endpoints — 8 in total). Sprint #3's audit also surfaced one **active fragility**: the `else: raise HTTPException(404, "Subnet not found")` short-circuit *inside* `delete_subnet`'s `try` body (line ≈367) is silently rewritten to 500 by the surrounding `except Exception`. This is a pre-existing latent bug in the legacy `HTTPException` form already; a future migration of that site to `ACNHTTPError` would have the same fate (since `ACNHTTPError` is intentionally `Exception`-typed, not `HTTPException`-typed — see `acn/core/errors.py` docstring rationale). The fix is the same `except ACNHTTPError: raise` defence; for `delete_subnet` specifically the defence must also include a separate `except HTTPException: raise` line to repair the pre-existing 404 → 500 silent rewrite.
 
-The fragility is forward-looking: sprints #2b and #2c will modify these same functions to add `ACNHTTPError(DEV_MODE_DISABLED, …)`, `ACNHTTPError(OWNER_TOKEN_MISMATCH, …)`, `ACNHTTPError(INVALID_CLAIM_REQUEST, …)`, etc. If any of those raises lands *inside* a try block (even temporarily during refactor), the `except Exception` will silently swallow it and convert a caller-actionable 4xx into a sanitised 500.
+For registry, sprints #2a and #3 confirmed no `ACNHTTPError` is currently raised *inside* any of these `try` blocks — the migrated raises all live either *before* the `try` or in *specific* `except` clauses. The fragility is forward-looking: sprints #2b, #2c, and #3-followup will add new `ACNHTTPError(...)` raises to these handlers (`DEV_MODE_DISABLED`, `OWNER_TOKEN_MISMATCH`, auth/permission codes, `INVALID_CLAIM_REQUEST`). If any of those raises lands *inside* a try block (even temporarily during refactor), the `except Exception` will silently swallow it and convert a caller-actionable 4xx into a sanitised 500.
 
 Defence (low cost):
 
@@ -186,14 +189,14 @@ except Exception as e:
     raise HTTPException(status_code=500, detail=str(e)) from e
 ```
 
-Three locations × 3 lines each = ≈10-line change. Best landed atomically with sprint #2b (which will be the first sprint to put `ACNHTTPError` in proximity of these catch-alls, so the defence stops being theoretical at exactly the same moment).
+Combined ≈11 locations × 3 lines each = ≈35-line change. Best landed atomically with sprint #2b (which will be the first sprint to put `ACNHTTPError` in proximity of these catch-alls, so the defence stops being theoretical at exactly the same moment for registry; subnets gets the same treatment in the same PR for symmetry, plus the active `delete_subnet` bug fix).
 
-Why not now (sprint #2a):
-- The audit confirms zero current breakage paths.
-- Adding the defence preemptively without a triggering raise inside the try block is over-engineering — the `except ACNHTTPError: raise` line would have no observable behaviour today.
-- Co-locating the fix with sprint #2b keeps the migration commit message accurately describing why the defence is being added.
+Why not now (sprint #2a / #3):
+- For registry: the audits confirm zero current breakage paths there.
+- For subnets `delete_subnet`: the bug pre-dates the migration; bundling the fix with sprint #3 would creep beyond "safe migration" scope. A separate PR keeps the bug fix loud in the commit history (instead of buried in a multi-purpose migration commit).
+- Co-locating both defences with sprint #2b keeps the migration commit message accurately describing why the defence is being added at exactly the right moment.
 
-#### P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py`
+#### P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py` *(ready to pick up — trigger met)*
 
 Each error-schema migration sprint row produces a `tests/routes/test_<module>_error_schema.py` that re-defines roughly the same three fixtures:
 
@@ -201,13 +204,23 @@ Each error-schema migration sprint row produces a `tests/routes/test_<module>_er
 - `stub_agent_service` — wires owner + cross-tenant API keys
 - `stub_<resource>_service` — `AsyncMock` with sensible defaults
 
-By the time the sprint reaches row #3 we'll have ~3 × 50 LOC of duplication. Hoisting to `tests/routes/conftest.py` is a one-shot ~80 LOC dedup that future sprint rows pick up for free.
+**Trigger condition reached as of sprint row #3 (this commit)** — three concrete duplicates now exist:
+- `tests/routes/test_allowlist_error_schema.py` (sprint row #1)
+- `tests/routes/test_registry_error_schema.py` (sprint row #2a)
+- `tests/routes/test_subnets_error_schema.py` (sprint row #3, this commit)
 
-Why not now (sprint row #1):
-- Touching `conftest.py` cross-cuts every existing route test file. Doing it inside a feature commit risks subtle collisions with existing route-test fixtures (`test_allowlist_routes.py`, `test_communication_*.py`, `test_registry_*.py` already each have their own `_reset_state`-shaped fixture).
-- The audit-preferred sequence is: land 2-3 schema test files first (so the *real* duplication shape is observable), then dedup in a focused PR with no behavioural changes.
+Each file ships its own copy of `_reset_state`, the `_FLAT_SCHEMA_FIELDS` constant, and the `_assert_flat_shape` helper — totalling ~120 LOC of duplication. The duplication shape is now stable enough that hoisting will not require speculative API design.
 
-Suggested trigger: after sprint row #3 lands, open a single PR that introduces the shared fixtures and converts the three existing files. Estimated effort: 2-3 hours; one of those is reading the existing route tests to confirm the shared fixtures don't collide.
+Why not bundled with row #3 (this commit):
+- Touching `tests/routes/conftest.py` cross-cuts every existing route test file beyond the schema tests (`test_allowlist_routes.py`, `test_communication_*.py`, `test_registry_*.py` each have their own `_reset_state`-shaped fixture). The audit-preferred sequence is to land the migration tests first (so the *real* duplication shape is observable across three modules), then dedup in a focused PR with no behavioural changes.
+- Bundling would conflate "behaviour: subnets routes now emit flat schema" with "test infra: dedup fixtures" — two reviewable concerns deserving two commits.
+
+Suggested follow-up PR scope:
+1. Move `_FLAT_SCHEMA_FIELDS`, `_assert_flat_shape`, and the `_reset_state` autouse fixture to `tests/routes/conftest.py`.
+2. Replace the per-file copies in the three schema test files with imports / fixture inheritance.
+3. Audit the non-schema route test files for collisions with the now-shared fixture name; rename if needed (preferable to silently overriding).
+
+Estimated effort: 2-3 hours; one of those is reading the existing route tests to confirm the shared fixtures don't collide.
 
 #### P3 — `RequestValidationError` alignment
 

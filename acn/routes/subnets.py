@@ -9,6 +9,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
 from ..config import get_settings
+from ..core.errors import ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
 from .dependencies import (  # type: ignore[import-untyped]
@@ -148,7 +149,11 @@ async def get_subnet(
         subnet = await subnet_service.get_subnet(subnet_id)
         return _subnet_entity_to_info(subnet)
     except SubnetNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Subnet not found") from e
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
 
 
 @router.get("/{subnet_id}/agents")
@@ -169,7 +174,11 @@ async def get_subnet_agents(
     try:
         subnet = await subnet_service.get_subnet(subnet_id)
     except SubnetNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Subnet not found") from e
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
 
     # Enforce auth for private subnets
     if getattr(subnet, "is_private", False):
@@ -218,13 +227,24 @@ async def join_subnet(
     Clean Architecture: Route → Service → Repository
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
+        )
 
     # Verify subnet exists
     try:
         await subnet_service.get_subnet(subnet_id)
     except SubnetNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Subnet not found") from e
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
 
     # Verify agent exists and join subnet
     try:
@@ -237,7 +257,11 @@ async def join_subnet(
 
         return {"status": "joined", "agent_id": agent_id, "subnet_id": subnet_id}
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
     except Exception as e:
         logger.error("join_subnet_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to join subnet") from e
@@ -257,7 +281,14 @@ async def leave_subnet(
     Clean Architecture: Route → Service → Repository
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
+        )
 
     try:
         await agent_service.leave_subnet(agent_id, subnet_id)
@@ -267,9 +298,17 @@ async def leave_subnet(
 
         return {"status": "left", "agent_id": agent_id, "subnet_id": subnet_id}
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
     except SubnetNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Subnet not found") from e
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
     except Exception as e:
         logger.error("leave_subnet_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to leave subnet") from e
@@ -287,12 +326,23 @@ async def get_agent_subnets(
     Clean Architecture: Route → AgentService → Repository
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
+        )
     try:
         agent = await agent_service.get_agent(agent_id)
         return {"agent_id": agent_id, "subnets": agent.subnet_ids}
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
 
 @router.delete("/{subnet_id}")
@@ -314,9 +364,21 @@ async def delete_subnet(
             logger.info("subnet_deleted", subnet_id=subnet_id, owner=owner)
             return {"status": "deleted", "subnet_id": subnet_id}
         else:
+            # NOTE (sprint #3): this in-try raise is intentionally NOT migrated
+            # to ``ACNHTTPError`` — it would fall through to the catch-all
+            # ``except Exception`` below and be silently rewritten as 500.
+            # The same fragility exists today for the legacy ``HTTPException``
+            # form (also ``Exception``-typed). Tracked as a P3 ticket in
+            # ``docs/BACKLOG.md`` ("Add ``except ACNHTTPError: raise``
+            # defence on registry's catch-all 5xx blocks") — to be fixed
+            # holistically alongside sprint row #2b.
             raise HTTPException(status_code=404, detail="Subnet not found")
     except SubnetNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Subnet not found") from e
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
     except PermissionError as e:
         logger.warning("delete_subnet_permission_denied", subnet_id=subnet_id, error=str(e))
         raise HTTPException(status_code=403, detail="Permission denied") from e
@@ -347,8 +409,12 @@ async def admin_add_subnet_member(
         await subnet_service.add_member(subnet_id, agent_id)
         logger.info("admin_subnet_member_added", subnet_id=subnet_id, agent_id=agent_id)
         return {"status": "added", "subnet_id": subnet_id, "agent_id": agent_id}
-    except SubnetNotFoundException:
-        raise HTTPException(status_code=404, detail="Subnet not found") from None
+    except SubnetNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
     except Exception as e:
         logger.error("admin_add_subnet_member_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to add subnet member") from e
@@ -371,8 +437,12 @@ async def admin_remove_subnet_member(
         await subnet_service.remove_member(subnet_id, agent_id)
         logger.info("admin_subnet_member_removed", subnet_id=subnet_id, agent_id=agent_id)
         return {"status": "removed", "subnet_id": subnet_id, "agent_id": agent_id}
-    except SubnetNotFoundException:
-        raise HTTPException(status_code=404, detail="Subnet not found") from None
+    except SubnetNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
     except Exception as e:
         logger.error("admin_remove_subnet_member_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to remove subnet member") from e
