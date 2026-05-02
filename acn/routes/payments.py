@@ -4,6 +4,7 @@ import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..protocols.ap2 import (
     CREDITS_PER_USD,
     NETWORK_FEE_RATE,
@@ -25,7 +26,11 @@ from .dependencies import (  # type: ignore[import-untyped]
     limiter,
 )
 
-router = APIRouter(prefix="/api/v1/payments", tags=["payments"])
+router = APIRouter(
+    prefix="/api/v1/payments",
+    tags=["payments"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 
 
@@ -101,14 +106,25 @@ async def set_payment_capability(
     Persists wallet_addresses and token_pricing to PostgreSQL and indexes in Redis.
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            status_code=403,
+            details={
+                "path_agent_id": agent_id,
+                "authenticated_agent_id": agent_info["agent_id"],
+            },
+        )
 
     from ..core.exceptions import AgentNotFoundException
 
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException:
-        raise HTTPException(status_code=404, detail="Agent not found") from None
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id},
+        ) from None
 
     try:
         # Build wallet_addresses: merge request.wallet_addresses with legacy wallet_address
@@ -135,7 +151,15 @@ async def set_payment_capability(
             agent.payment_methods = [m.value for m in request.supported_methods]
         await agent_service.repository.save(agent)
 
+    except ACNHTTPError:
+        # P3 cross-module catch-all defence: ``ACNHTTPError`` is
+        # ``Exception``-typed (not ``HTTPException``-typed); without
+        # this re-raise, any caller-actionable 4xx raised inside the
+        # try body would be silently rewritten as a sanitised 500.
+        raise
     except HTTPException:
+        # Mirror defence for legacy ``HTTPException`` raises — same
+        # swallow risk via the catch-all below.
         raise
     except Exception as e:
         logger.error(
@@ -178,7 +202,11 @@ async def get_payment_capability(
     """Get payment capability for agent"""
     capability = await payment_discovery.get_agent_payment_capability(agent_id)
     if not capability:
-        raise HTTPException(status_code=404, detail="Payment capability not found")
+        raise ACNHTTPError(
+            ErrorCode.PAYMENT_CAPABILITY_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id},
+        )
     return capability
 
 
@@ -207,9 +235,13 @@ async def create_payment_task(
     The authenticated agent must match the `from_agent` field to prevent spoofing.
     """
     if agent_info["agent_id"] != request.from_agent:
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.FROM_AGENT_MISMATCH,
             status_code=403,
-            detail="Authenticated agent does not match from_agent field",
+            details={
+                "from_agent": request.from_agent,
+                "authenticated_agent_id": agent_info["agent_id"],
+            },
         )
     try:
         task_metadata = dict(request.metadata or {})
@@ -228,6 +260,10 @@ async def create_payment_task(
 
         return {"task_id": task.task_id, "status": "created"}
 
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("create_payment_task_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create payment task") from e
@@ -238,7 +274,11 @@ async def get_payment_task(task_id: str, _: InternalTokenDep, payment_tasks: Pay
     """Get payment task status (internal only)"""
     task = await payment_tasks.get_task(task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="Payment task not found")
+        raise ACNHTTPError(
+            ErrorCode.PAYMENT_TASK_NOT_FOUND,
+            status_code=404,
+            details={"task_id": task_id},
+        )
     return task
 
 
@@ -252,7 +292,14 @@ async def get_agent_payment_tasks(
 ):
     """Get payment tasks for agent (requires Agent API Key matching agent_id)"""
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            status_code=403,
+            details={
+                "path_agent_id": agent_id,
+                "authenticated_agent_id": agent_info["agent_id"],
+            },
+        )
     tasks = await payment_tasks.get_tasks_by_agent(
         agent_id=agent_id,
         status=status,
@@ -269,7 +316,14 @@ async def get_agent_payment_stats(
 ):
     """Get payment statistics for agent (requires Agent API Key matching agent_id)"""
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            status_code=403,
+            details={
+                "path_agent_id": agent_id,
+                "authenticated_agent_id": agent_info["agent_id"],
+            },
+        )
     stats = await payment_tasks.get_payment_stats(agent_id)
     return stats
 
@@ -305,10 +359,21 @@ async def set_token_pricing(
     This enables OpenAI-style per-token billing for the agent.
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            status_code=403,
+            details={
+                "path_agent_id": agent_id,
+                "authenticated_agent_id": agent_info["agent_id"],
+            },
+        )
     agent = await registry.get_agent(agent_id)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id},
+        )
 
     try:
         # Create token pricing
@@ -342,6 +407,10 @@ async def set_token_pricing(
             "network_fee_rate": NETWORK_FEE_RATE,
         }
 
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("set_token_pricing_failed", agent_id=agent_id, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to set token pricing") from e
@@ -355,7 +424,11 @@ async def get_token_pricing(
     """Get token-based pricing for an agent"""
     capability = await payment_discovery.get_agent_payment_capability(agent_id)
     if not capability or not capability.token_pricing:
-        raise HTTPException(status_code=404, detail="Token pricing not configured for this agent")
+        raise ACNHTTPError(
+            ErrorCode.TOKEN_PRICING_NOT_CONFIGURED,
+            status_code=404,
+            details={"agent_id": agent_id},
+        )
 
     return {
         "agent_id": agent_id,
@@ -383,7 +456,11 @@ async def estimate_cost(
     """
     capability = await payment_discovery.get_agent_payment_capability(body.agent_id)
     if not capability or not capability.token_pricing:
-        raise HTTPException(status_code=404, detail="Token pricing not configured for this agent")
+        raise ACNHTTPError(
+            ErrorCode.TOKEN_PRICING_NOT_CONFIGURED,
+            status_code=404,
+            details={"agent_id": body.agent_id},
+        )
 
     # Calculate cost breakdown
     breakdown = capability.token_pricing.calculate_cost_with_network_fee(
@@ -416,7 +493,11 @@ async def bill_usage(
     # Get agent's token pricing
     capability = await payment_discovery.get_agent_payment_capability(request.agent_id)
     if not capability or not capability.token_pricing:
-        raise HTTPException(status_code=404, detail="Token pricing not configured for this agent")
+        raise ACNHTTPError(
+            ErrorCode.TOKEN_PRICING_NOT_CONFIGURED,
+            status_code=404,
+            details={"agent_id": request.agent_id},
+        )
 
     # Get agent owner
     agent = await registry.get_agent(request.agent_id)
@@ -462,7 +543,11 @@ async def get_billing_transaction(
     """Get a billing transaction by ID (requires X-Internal-Token)"""
     transaction = await billing_service.get_transaction(transaction_id)
     if not transaction:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+        raise ACNHTTPError(
+            ErrorCode.BILLING_TRANSACTION_NOT_FOUND,
+            status_code=404,
+            details={"transaction_id": transaction_id},
+        )
 
     return transaction
 

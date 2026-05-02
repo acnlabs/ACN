@@ -123,6 +123,7 @@ class TestRouterLevelResponsesCoverage:
         ("/api/v1/agents/register", "post", "registry (#2)"),
         ("/api/v1/subnets", "post", "subnets (#3)"),
         ("/api/v1/tasks", "post", "tasks (#4)"),
+        ("/api/v1/payments/tasks", "post", "payments (#5)"),
     ]
 
     @pytest.mark.parametrize(

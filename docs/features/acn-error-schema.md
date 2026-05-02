@@ -203,7 +203,7 @@ Realigning slowapi to the flat schema is reserved as `WALLET_RATE_LIMIT_EXCEEDED
 
 ### Non-pilot routes
 
-The route modules `follows`, `payments`, `onchain`, `dependencies`, `manifest`, `analytics`, and `websocket` still raise vanilla `HTTPException` and are caught by the existing `_http_exception_handler` 4xx pass-through, which emits the legacy `{"detail": "..."}` / `{"detail": {...}}` shape. The `registry`, `subnets`, and `tasks` modules are fully migrated as of sprints #2b, #3-followup, and #4-followup respectively. See the coexistence matrix below. These routes are NOT broken, they just speak the old contract until the migration sprint reaches them.
+The route modules `follows`, `onchain`, `dependencies`, `manifest`, `analytics`, and `websocket` still raise vanilla `HTTPException` and are caught by the existing `_http_exception_handler` 4xx pass-through, which emits the legacy `{"detail": "..."}` / `{"detail": {...}}` shape. The `registry`, `subnets`, `tasks`, and `payments` modules are fully migrated as of sprints #2b, #3-followup, #4-followup, and #5 respectively. See the coexistence matrix below. These routes are NOT broken, they just speak the old contract until the migration sprint reaches them.
 
 ---
 
@@ -220,7 +220,7 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 | `/api/v1/subnets/*` [^1] [^3]                                                                                                  | `ACNHTTPError` (4xx) + `HTTPException` (5xx, 1× latent bug)             | flat (except 1 latent-bug site silently rewritten to 500)                              | ✅ Aligned (#3 + #3-followup, modulo latent bug) |
 | `/api/v1/tasks/*` [^1] [^4]                                                                                                    | `ACNHTTPError` (4xx) + `HTTPException` (5xx)             | flat                                                                                   | ✅ Aligned (#4 + #4-followup) |
 | `/api/v1/follows/*`                                                                                                            | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
-| `/api/v1/payments/*`                                                                                                           | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
+| `/api/v1/payments/*` [^1] [^5]                                                                                                 | `ACNHTTPError` (4xx) + `HTTPException` (5xx) | flat                                                                                   | ✅ Aligned (#5)   |
 | `/api/v1/onchain/*`                                                                                                            | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
 | `/api/v1/communication/manifest/*`                                                                                             | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
 | `/api/v1/analytics/*`                                                                                                          | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
@@ -269,6 +269,20 @@ Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can 
         * 2× `NOT_SUBNET_MEMBER` (403) — `get_task`'s private-subnet gate; `details.reason="anonymous_caller"` for the no-auth branch and `"not_member"` for the resolved-but-non-member branch. Both keep status 403 (rather than 401 for the anonymous case) so an attacker cannot probe for private tasks via auth-gate behaviour — `details.reason` gives the SDK enough context to disambiguate without leaking task existence to anonymous callers.
 
     The 1 5xx site (`create_task` catch-all) stays on `HTTPException` by design (sanitised-5xx handler chain).
+
+[^5]: **Payments full migration (sprint #5).** All 13 4xx raise sites in `acn/routes/payments.py` are migrated:
+
+    * **4× `API_KEY_AGENT_MISMATCH`** (403) — every site that gates on path `agent_id` vs auth-key `agent_id` (`set_payment_capability`, `get_agent_payment_tasks`, `get_agent_payment_stats`, `set_token_pricing`). Uniform `details={"path_agent_id": …, "authenticated_agent_id": …}`.
+    * **2× `AGENT_NOT_FOUND`** (404) — distinct code paths: `set_payment_capability` catches `AgentNotFoundException` from `agent_service.get_agent`, `set_token_pricing` checks `registry.get_agent` returning `None`. Both emit identical canonical 404 with `details={"agent_id": …}`.
+    * **1× `FROM_AGENT_MISMATCH`** (403) — `create_payment_task` body-field mismatch (auth-key vs `request.from_agent`). Distinct error code from `API_KEY_AGENT_MISMATCH` so SDK clients can branch on the source of the mismatch.
+    * **1× `PAYMENT_CAPABILITY_NOT_FOUND`** (404) — `get_payment_capability` lookup miss; `details={"agent_id": …}`.
+    * **1× `PAYMENT_TASK_NOT_FOUND`** (404) — `get_payment_task` internal lookup miss; `details={"task_id": …}`.
+    * **3× `TOKEN_PRICING_NOT_CONFIGURED`** (404) — `get_token_pricing` (path agent_id), `estimate_cost` (body field, public limited endpoint), `bill_usage` (body field, internal-token billing endpoint). All emit `details={"agent_id": …}` regardless of source.
+    * **1× `BILLING_TRANSACTION_NOT_FOUND`** (404) — `get_billing_transaction` internal lookup miss; `details={"transaction_id": …}`.
+
+    The 3 5xx sites (`set_payment_capability`, `create_payment_task`, `set_token_pricing` catch-alls) stay on `HTTPException` by design (sanitised-5xx handler chain). All three carry the `except ACNHTTPError: raise` + `except HTTPException: raise` defence layers so caller-actionable 4xx raised inside the try body propagates instead of being silently rewritten as 500.
+
+    `INSUFFICIENT_BALANCE` stays in the reserved group of the catalog: `payments.py` only surfaces *resource-existence* failures, not balance failures (those live in the wallet/billing subsystem and may surface at a different boundary).
 
 [^1]: **Migrated routes are converted at the route handler body level only.** 4xx errors raised by the *route handler function body* go through `ACNHTTPError` and emit the flat schema. 4xx errors raised by *shared dependencies* invoked before the handler body — `OwnerOrInternalDep`, `InternalTokenDep`, `AgentApiKeyDep`, the `A2AFromAgentValidationMiddleware` ASGI middleware — still raise `HTTPException` and emit the legacy `{"detail": "..."}` shape. They flip to flat schema when the `dependencies` module is migrated (sprint row #10 in `[docs/BACKLOG.md](../BACKLOG.md)`). SDK clients hitting a migrated endpoint must therefore keep both parsers in scope until row #10 lands; the parsing template below already does this via the `if "error_code" in body` branch.
 
@@ -383,7 +397,7 @@ Suggested ordering (cheapest / most impactful first):
 2. `**registry**` — frequently consumed by SDK; `agent_not_found` / `agent_already_exists` mappings are obvious
 3. `**subnets**` — `subnet_not_found` is already reserved in the catalog
 4. `**tasks**` — `task_not_found` reserved
-5. `**payments**` — `insufficient_balance` reserved
+5. ~~`**payments**` — `insufficient_balance` reserved~~ ✅ #5 landed. Actual sprint #5 surfaced **resource-existence** failures (capability / task / pricing / transaction not found), not balance failures — `INSUFFICIENT_BALANCE` stays reserved until the wallet/billing subsystem genuinely raises it. New codes: `PAYMENT_CAPABILITY_NOT_FOUND`, `PAYMENT_TASK_NOT_FOUND`, `TOKEN_PRICING_NOT_CONFIGURED`, `BILLING_TRANSACTION_NOT_FOUND` (4); reused: `AGENT_NOT_FOUND`, `API_KEY_AGENT_MISMATCH`, `FROM_AGENT_MISMATCH` (3).
 6. `**follows**` — small surface, similar shape to `allowlist`
 7. `**onchain**` — needs new codes for ERC-8004 specific failures
 8. `**manifest**` — small surface

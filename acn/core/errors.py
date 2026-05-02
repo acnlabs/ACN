@@ -107,6 +107,20 @@ class ErrorCode(StrEnum):
     # gate) pick up cross-module codes from the section below.
     TASK_NOT_FOUND = "task_not_found"
 
+    # ===== Payments routes (sprint row #5) =====
+    # ``AGENT_NOT_FOUND`` (×2), ``API_KEY_AGENT_MISMATCH`` (×4), and
+    # ``FROM_AGENT_MISMATCH`` (×1 — body.from_agent vs auth-key
+    # mismatch) are reused from the pilot / cross-module groups; the
+    # four codes below are payments-specific resource-existence
+    # failures. ``INSUFFICIENT_BALANCE`` (in the reserved group below)
+    # is intentionally NOT raised by ``payments.py`` today: balance
+    # failures live one layer deeper (wallet / billing subsystem) and
+    # don't surface at the route boundary in the current architecture.
+    PAYMENT_CAPABILITY_NOT_FOUND = "payment_capability_not_found"
+    PAYMENT_TASK_NOT_FOUND = "payment_task_not_found"
+    TOKEN_PRICING_NOT_CONFIGURED = "token_pricing_not_configured"
+    BILLING_TRANSACTION_NOT_FOUND = "billing_transaction_not_found"
+
     # ===== Cross-module auth/permission/validation (sprint row #2b) =====
     # Shared by ``registry``, ``subnets``, and ``tasks`` routes.
     # Single-source-of-truth set so that SDK clients see consistent
@@ -163,6 +177,16 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.SUBNET_NOT_FOUND: "The requested subnet could not be found.",
     ErrorCode.TASK_NOT_FOUND: "The requested task could not be found.",
+    ErrorCode.PAYMENT_CAPABILITY_NOT_FOUND: (
+        "No payment capability is registered for this agent."
+    ),
+    ErrorCode.PAYMENT_TASK_NOT_FOUND: "The requested payment task could not be found.",
+    ErrorCode.TOKEN_PRICING_NOT_CONFIGURED: (
+        "Token-based pricing is not configured for this agent."
+    ),
+    ErrorCode.BILLING_TRANSACTION_NOT_FOUND: (
+        "The requested billing transaction could not be found."
+    ),
     ErrorCode.ALLOWLIST_CAPACITY_EXCEEDED: (
         "The owner's allowlist is at capacity. Remove some entries first."
     ),
