@@ -312,7 +312,10 @@ class TaskCreateRequest(BaseModel):
 
     # ── Layer 2: Common options ───────────────────────────
     max_participants: int | None = Field(default=1, description="1=single, N=multi, None=unlimited")
-    completion_mode: str = Field(default="independent", description="independent | competitive | collaborative")
+    completion_mode: str = Field(
+        default="independent",
+        description="independent | competitive | collaborative",
+    )
     auto_approve: bool = Field(default=False)
     task_type: str = Field(default="general")
     required_tags: list[str] = Field(default_factory=list)

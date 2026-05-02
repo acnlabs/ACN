@@ -37,14 +37,16 @@ Errors:
 from __future__ import annotations
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
+from ..core.errors import ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException
 from ..services import (
     AllowlistCapacityExceededError,
     SelfAllowlistError,
 )
+from ..services.allowlist_service import MAX_ALLOWLIST_SIZE
 from .dependencies import (
     AgentApiKeyDep,
     AgentIdPath,
@@ -168,9 +170,13 @@ def _ensure_owner(caller: dict, agent_id: str) -> None:
     because the owner's allowlist is private (see module docstring).
     """
     if caller["agent_id"] != agent_id:
-        raise HTTPException(
-            status_code=403,
-            detail="API key does not match path agent_id",
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": caller["agent_id"],
+            },
         )
 
 
@@ -219,11 +225,26 @@ async def add_to_allowlist(
             reason=reason,
         )
     except SelfAllowlistError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise ACNHTTPError(
+            ErrorCode.SELF_ALLOWLIST_FORBIDDEN,
+            400,
+            details={"owner_id": agent_id},
+        ) from exc
     except AgentNotFoundException as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": target_id},
+        ) from exc
     except AllowlistCapacityExceededError as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
+        raise ACNHTTPError(
+            ErrorCode.ALLOWLIST_CAPACITY_EXCEEDED,
+            429,
+            details={
+                "owner_id": agent_id,
+                "max_size": MAX_ALLOWLIST_SIZE,
+            },
+        ) from exc
 
     return AllowlistActionResponse(
         owner_id=agent_id,

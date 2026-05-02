@@ -37,8 +37,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
+from acn.core.errors import ACNHTTPError
 from acn.routes.registry import _proxy_to_agent
 from acn.services.policy_service import PolicyCheckService
 
@@ -124,7 +124,7 @@ class TestClosedRecipientRejected:
     async def test_closed_returns_403_with_structured_detail(
         self, closed_agent_service, policy_service
     ):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ACNHTTPError) as exc_info:
             await _proxy_to_agent(
                 request=_make_request(),
                 agent_id="agent-target",
@@ -136,8 +136,8 @@ class TestClosedRecipientRejected:
             )
 
         assert exc_info.value.status_code == 403
-        assert exc_info.value.detail == {
-            "detail": "communication_rejected",
+        assert exc_info.value.code.value == "communication_rejected"
+        assert exc_info.value.details == {
             "reason": "policy_closed",
             "reject_reason": "On vacation until 2026-05",
         }
@@ -152,7 +152,7 @@ class TestClosedRecipientRejected:
         load and a leak of "this agent exists / has this hostname"
         signal to the recipient's DNS provider."""
         with patch("acn.routes.registry.safe_resolve_target") as mock_resolve:
-            with pytest.raises(HTTPException):
+            with pytest.raises(ACNHTTPError):
                 await _proxy_to_agent(
                     request=_make_request(),
                     agent_id="agent-target",
@@ -174,7 +174,7 @@ class TestClosedRecipientRejected:
         real TCP SYN if the test ever escaped the sandbox. Pinning that
         the rejection happens early enough to skip it entirely."""
         with patch("acn.routes.registry.httpx.AsyncClient") as mock_client:
-            with pytest.raises(HTTPException):
+            with pytest.raises(ACNHTTPError):
                 await _proxy_to_agent(
                     request=_make_request(),
                     agent_id="agent-target",
@@ -195,7 +195,7 @@ class TestClosedRecipientRejected:
         biggest surface area — anything the agent exposes via REST
         flows through here. Pinning that ``rest_path`` does not
         accidentally exempt traffic from the gate."""
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ACNHTTPError) as exc_info:
             await _proxy_to_agent(
                 request=_make_request(),
                 agent_id="agent-target",
@@ -363,7 +363,7 @@ class TestPolicyRejectedIncrementsMetric:
         metrics = MagicMock()
         metrics.inc_counter = AsyncMock()
 
-        with pytest.raises(HTTPException):
+        with pytest.raises(ACNHTTPError):
             await _proxy_to_agent(
                 request=_make_request(),
                 agent_id="agent-target",
@@ -398,7 +398,7 @@ class TestPolicyRejectedIncrementsMetric:
         metrics = MagicMock()
         metrics.inc_counter = AsyncMock(side_effect=RuntimeError("redis down"))
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ACNHTTPError) as exc_info:
             await _proxy_to_agent(
                 request=_make_request(),
                 agent_id="agent-target",
@@ -413,7 +413,7 @@ class TestPolicyRejectedIncrementsMetric:
         # 403 wins despite the metric inc failure — same wire
         # contract as the no-metrics case.
         assert exc_info.value.status_code == 403
-        assert exc_info.value.detail["reason"] == "policy_closed"
+        assert exc_info.value.details["reason"] == "policy_closed"
 
     @pytest.mark.asyncio
     async def test_open_recipient_does_not_inc_metric(
@@ -460,7 +460,7 @@ class TestPreconditionOrdering:
         svc = MagicMock()
         svc.get_agent = AsyncMock(side_effect=AgentNotFoundException("nope"))
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ACNHTTPError) as exc_info:
             await _proxy_to_agent(
                 request=_make_request(),
                 agent_id="agent-missing",
@@ -472,3 +472,5 @@ class TestPreconditionOrdering:
             )
 
         assert exc_info.value.status_code == 404
+        assert exc_info.value.code.value == "agent_not_found"
+        assert exc_info.value.details == {"agent_id": "agent-missing"}

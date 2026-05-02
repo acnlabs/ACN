@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import require_permission, verify_token
 from ..config import Settings, get_settings
+from ..core.errors import ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from ..monitoring import AuditEventType, AuditLevel, fire_and_forget_event, get_audit_singleton
@@ -66,6 +67,28 @@ from .dependencies import (  # type: ignore[import-untyped]
 router = APIRouter(prefix="/api/v1/agents", tags=["registry"])
 logger = structlog.get_logger()
 settings = get_settings()
+
+
+# Phase 2 review v2 P1 #10 — modes that carry an implicit SDK-version
+# contract. When a PATCH /policy resolves to one of these, the agent
+# becomes deaf to the legacy ``agent_message`` WS event and instead
+# only receives ``manifest_notification`` (manifest mode) or
+# inbox-suppressed traffic that the SDK must consult by polling
+# ``/communication/manifest/{id}`` (allowlist non-member targets).
+# An old SDK that doesn't implement those handlers silently misses
+# every inbound message, which is a near-impossible-to-diagnose
+# breakage from the agent author's perspective.
+#
+# We surface ``X-ACN-SDK-Min-Version`` on every PATCH that *resolves*
+# to one of these modes — including idempotent re-applications —
+# rather than only on a transition (open→manifest). Idempotent calls
+# are the most common form of "deploy script confirms desired state",
+# so always emitting the header makes the SDK contract observable
+# from any single PATCH the operator inspects, not only the first
+# one. See L601 of
+# ``docs/features/acn-communication-economic-model.md``.
+_MODES_REQUIRING_SDK_NOTIFY: frozenset[str] = frozenset({"manifest", "allowlist"})
+_SDK_MIN_VERSION_HEADER = "X-ACN-SDK-Min-Version"
 
 
 # ========== Request/Response Models ==========
@@ -263,9 +286,10 @@ async def dev_register_agent(
     # Validate subnets
     for subnet_id in subnet_ids:
         if subnet_id != "public" and not subnet_manager.subnet_exists(subnet_id):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Subnet not found: {subnet_id}",
+            raise ACNHTTPError(
+                ErrorCode.SUBNET_NOT_FOUND,
+                400,
+                details={"subnet_id": subnet_id},
             )
 
     try:
@@ -366,9 +390,10 @@ async def register_agent(
     # Validate subnets
     for subnet_id in subnet_ids:
         if subnet_id != "public" and not subnet_manager.subnet_exists(subnet_id):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Subnet not found: {subnet_id}",
+            raise ACNHTTPError(
+                ErrorCode.SUBNET_NOT_FOUND,
+                400,
+                details={"subnet_id": subnet_id},
             )
 
     try:
@@ -491,7 +516,11 @@ async def get_agent(request: Request, agent_id: AgentIdPath, agent_service: Agen
             logger.warning("follow_counts_lookup_failed", agent_id=agent_id, error=str(e))
         return info
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
 
 _PROXY_HOP_BY_HOP_HEADERS = frozenset(
@@ -541,7 +570,11 @@ async def _proxy_to_agent(
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
     # Gateway-level access control. Mirrors MessageRouter.route() — same
     # service, same exemption rules, same error shape — so a client that
@@ -613,10 +646,10 @@ async def _proxy_to_agent(
                         reason=e.reason,
                         metric_error=str(metric_exc),
                     )
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "detail": "communication_rejected",
+            raise ACNHTTPError(
+                ErrorCode.COMMUNICATION_REJECTED,
+                403,
+                details={
                     "reason": e.reason,
                     "reject_reason": e.reject_reason,
                 },
@@ -953,12 +986,23 @@ async def agent_heartbeat(
     Clean Architecture: Route → AgentService → Repository
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
+        )
     try:
         await agent_service.update_heartbeat(agent_id)
         return {"status": "ok", "agent_id": agent_id}
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
 
 def _acn_proxy_url_for(agent_id: str) -> str:
@@ -1048,7 +1092,11 @@ async def get_agent_card(
 
         return card.model_dump(exclude_none=True)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
 
 @router.get("/{agent_id}/.well-known/agent-registration.json")
@@ -1069,7 +1117,11 @@ async def get_agent_registration_file(
         agent = await agent_service.get_agent(agent_id)
         return build_erc8004_registration_file(agent, cfg)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
 
 @router.get("/{agent_id}/endpoint")
@@ -1119,7 +1171,11 @@ async def get_agent_endpoint(
         )
         return {"agent_id": agent_id, "endpoint": agent.endpoint}
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -1214,7 +1270,11 @@ async def get_agent_policy(
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
     # ``Agent.__post_init__`` backfills ``{"mode": "open"}`` on
     # entities that predate the field, so the response shape is
@@ -1239,6 +1299,7 @@ async def get_agent_policy(
 @limiter.limit("30/minute")
 async def update_agent_policy(
     request: Request,
+    response: Response,
     agent_id: AgentIdPath,
     body: CommunicationPolicyPatchRequest,
     caller: OwnerOrInternalDep,
@@ -1259,7 +1320,11 @@ async def update_agent_policy(
     try:
         existing = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
     old_mode = (existing.communication_policy or {}).get("mode", "open")
 
     try:
@@ -1271,7 +1336,11 @@ async def update_agent_policy(
         # Race: agent was deleted between get_agent and update. Same
         # surface (404) as the pre-check; just keep the audit emit
         # path inert.
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
     new_mode = (agent.communication_policy or {}).get("mode", "open")
 
@@ -1315,6 +1384,24 @@ async def update_agent_policy(
             caller_agent_id=caller.get("agent_id"),
             old_mode=old_mode,
             new_mode=new_mode,
+        )
+
+    # Phase 2 review v2 P1 #10: emit ``X-ACN-SDK-Min-Version`` whenever
+    # the post-update mode requires an SDK that understands
+    # ``manifest_notification`` (manifest mode) or polls the manifest
+    # queue for allowlist non-member fan-outs. Old clients without
+    # those handlers won't see any of the upcoming traffic — surfacing
+    # the requirement as a response header lets dashboards / SDK
+    # release tooling pick it up automatically (compared to documenting
+    # it only in release notes, which gets missed).
+    #
+    # Header is emitted on EVERY PATCH that resolves to one of the
+    # gated modes — including no-op ``manifest -> manifest``
+    # idempotency. See ``_MODES_REQUIRING_SDK_NOTIFY`` for the full
+    # rationale on always-emit vs transition-only emit.
+    if new_mode in _MODES_REQUIRING_SDK_NOTIFY:
+        response.headers[_SDK_MIN_VERSION_HEADER] = (
+            settings.policy_manifest_min_sdk_version
         )
 
     return {
@@ -1479,9 +1566,17 @@ async def unregister_agent(
             logger.info("agent_unregistered", agent_id=agent_id)
             return {"status": "unregistered", "agent_id": agent_id}
         else:
-            raise HTTPException(status_code=404, detail="Agent not found")
+            raise ACNHTTPError(
+                ErrorCode.AGENT_NOT_FOUND,
+                404,
+                details={"agent_id": agent_id},
+            )
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
@@ -1613,7 +1708,11 @@ async def claim_agent(
             message=f"Agent '{agent.name}' successfully claimed",
         )
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -1654,7 +1753,11 @@ async def transfer_agent(
             message=f"Agent '{agent.name}' transferred to {request.new_owner}",
         )
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
@@ -1688,7 +1791,11 @@ async def release_agent(
             message=f"Agent '{agent.name}' released. It can now be claimed by anyone.",
         )
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
@@ -1752,7 +1859,11 @@ async def get_agent_wallets(
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException:
-        raise HTTPException(status_code=404, detail="Agent not found") from None
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from None
 
     erc8004 = None
     if agent.erc8004_agent_id:

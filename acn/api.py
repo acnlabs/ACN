@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import get_settings
+from .core.errors import ACNHTTPError
 from .infrastructure.messaging import (
     BroadcastService,
     ManifestDispatcher,
@@ -804,7 +805,9 @@ async def _http_exception_handler(
         status_code=exc.status_code,
         content={
             "error": "internal_server_error",
+            "error_code": "internal_server_error",
             "message": "An internal error occurred. Please try again later.",
+            "details": {},
             "request_id": request_id,
         },
         headers=response_headers,
@@ -834,10 +837,57 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
         status_code=500,
         content={
             "error": "internal_server_error",
+            "error_code": "internal_server_error",
             "message": "An internal error occurred. Please try again later.",
+            "details": {},
             "request_id": request_id,
         },
         headers={"X-Request-ID": request_id},
+    )
+
+
+@app.exception_handler(ACNHTTPError)
+async def _acn_http_error_handler(
+    request: Request, exc: ACNHTTPError
+) -> JSONResponse:
+    """Translate an ``ACNHTTPError`` into a flat ACN error response.
+
+    Phase 2 review v2 P1 #11 — pilot: communication routes.
+
+    Emits the canonical ``{error_code, message, details, request_id}``
+    body. Behavioural notes:
+
+    * **No error-level logging.** ACN's convention is that 4xx
+      responses are part of the API contract and *expected* — logging
+      every one at error level would flood the log pipeline during
+      normal operation (e.g. a misconfigured client retrying with the
+      wrong API key). Routes that *do* want to record an interesting
+      4xx (policy rejections, audit-worthy events) emit
+      ``logger.info`` / ``logger.warning`` at the call site, where
+      the relevant context lives. The 5xx handlers above remain at
+      ``logger.error`` because 5xx is unexpected.
+    * **``X-Request-ID`` is overridden, not merged.** Any caller
+      value supplied via ``exc.headers`` is silently replaced by the
+      handler-issued UUID, so the header always identifies *this*
+      request rather than whatever the route author thought to put
+      there. Mirrors the 5xx handler's behaviour and keeps the
+      ``X-Request-ID`` ↔ ``body.request_id`` invariant intact.
+    * **Caller headers pass through.** Anything *other* than
+      ``X-Request-ID`` (e.g. ``Retry-After`` for 429 responses) is
+      forwarded verbatim.
+    """
+    request_id = _new_request_id(request)
+    response_headers: dict[str, str] = dict(exc.headers or {})
+    response_headers["X-Request-ID"] = request_id
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error_code": exc.code.value,
+            "message": exc.message,
+            "details": exc.details,
+            "request_id": request_id,
+        },
+        headers=response_headers,
     )
 
 # CORS

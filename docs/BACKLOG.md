@@ -64,6 +64,167 @@ Action items (none blocking, but worth doing before next release):
 - **SDK release notes**: mention the 500→200 shift; recommend clients inspect `responses[].status` rather than HTTP status to detect per-target failures.
 - **OpenAPI / docs**: `/broadcast` response schema now includes top-level `broadcast_id: str` (12-hex). `/broadcast-by-tag` same.
 
+### Phase 2 review v2 P1 #10 — `X-ACN-SDK-Min-Version` warning header (✅ shipped)
+
+`PATCH /api/v1/agents/{id}/policy` now emits the `X-ACN-SDK-Min-Version`
+response header whenever the resolved mode is `manifest` or
+`allowlist`. Default value `0.5.0` is configurable via
+`Settings.policy_manifest_min_sdk_version` (env: `POLICY_MANIFEST_MIN_SDK_VERSION`).
+
+Action items for surrounding tooling (none blocking; signal what to
+do BEFORE Phase 3 default-mode flip in
+[`acn-communication-economic-model.md`](features/acn-communication-economic-model.md)):
+- **SDK release notes**: clearly call out the contract — any client
+  pinned below `policy_manifest_min_sdk_version` that PATCHes its
+  policy to `manifest` / `allowlist` will silently miss every
+  inbound message until upgraded. Recommend clients READ the header
+  and surface a fail-fast error / log warning.
+  - **(P1 #11 follow-up)** Same SDK 0.5.0 release window also adds
+    the `X-ACN-SDK-Min-Version` header — see [`docs/features/acn-error-schema.md`](features/acn-error-schema.md)
+    section 4 (transitional coexistence matrix). Pilot routes
+    (`/communication/*`) emit a flat `{error_code, message, details,
+    request_id}` body; non-pilot routes still emit the legacy
+    `{"detail": "..."}` shape until the migration sprint flips them.
+    SDK 0.5.0 must accept BOTH shapes during the transition (the
+    `if "error_code" in body` parsing template in section 4.5 is
+    the recommended detection branch).
+- **Dashboards / ops scripts**: capture the header for any policy
+  PATCH; alert if a fleet of agents is on a client version below
+  the advertised minimum AFTER a `manifest` / `allowlist` flip.
+- **Versioning policy**: bump
+  `Settings.policy_manifest_min_sdk_version` each time the ACN
+  python client adds a contractually-required handler (currently
+  needs both `manifest_notification` and `policy_changed`). Keep
+  this ≤ the lowest published client version that implements both.
+
+### Phase 2 review v2 P1 #11 — Error schema migration sprint (✅ pilot shipped)
+
+Pilot scope: communication routes (`/api/v1/communication/*`) — 14
+4xx sites migrated from `HTTPException` to `ACNHTTPError`, 4xx + 5xx
+share the flat `{error_code, message, details, request_id}` schema.
+Spec: [`docs/features/acn-error-schema.md`](features/acn-error-schema.md).
+Catalog & helper: [`acn/core/errors.py`](../acn/core/errors.py).
+Central handler: [`acn/api.py`](../acn/api.py) `_acn_http_error_handler`.
+
+#### Sprint roadmap — non-pilot routes
+
+Each row flips ⏳ → ✅ in section 4 of `acn-error-schema.md` as the
+PR lands. Suggested ordering (cheapest / most impactful first):
+
+| # | Route module                          | New / reused codes                                              | Status |
+| - | ------------------------------------- | --------------------------------------------------------------- | ------ |
+| 1 | `allowlist`                           | reuse `ALLOWLIST_CAPACITY_EXCEEDED` / `SELF_ALLOWLIST_FORBIDDEN` (already in catalog) | ✅ |
+| 2a | `registry` (partial — safe migration) | reuse `AGENT_NOT_FOUND` (×17), `API_KEY_AGENT_MISMATCH`, `SUBNET_NOT_FOUND` (×2 — promoted from reserved), `COMMUNICATION_REJECTED` (also flattens proxy nested-detail) | ✅ |
+| 2b | `registry` (auth/ownership)           | new: `AGENT_NOT_OWNED` (or similar) for `PermissionError` (×3), `INVALID_AUTHORIZATION_HEADER` for the 2 `Authorization` rejects, `INTERNAL_TOKEN_REQUIRED` for `/join/internal` 401, `INVALID_CLAIM_REQUEST` for `ValueError` claim path | ⏳ |
+| 2c | `registry` (registration policy)      | new: `DEV_MODE_DISABLED`, `OWNER_TOKEN_MISMATCH`, `AGENT_ALREADY_EXISTS` (if domain raises one), `BULK_DELETE_FILTER_REQUIRED` | ⏳ |
+| 3 | `subnets`                             | reuse `SUBNET_NOT_FOUND`                                        | ⏳ |
+| 4 | `tasks`                               | reuse `TASK_NOT_FOUND`                                          | ⏳ |
+| 5 | `payments`                            | reuse `INSUFFICIENT_BALANCE`                                    | ⏳ |
+| 6 | `follows`                             | new: `FOLLOW_LIMIT_EXCEEDED` / `SELF_FOLLOW_FORBIDDEN`           | ⏳ |
+| 7 | `onchain`                             | new: ERC-8004 specific failures                                  | ⏳ |
+| 8 | `manifest`                            | small surface — existing 4xx mostly auth-shared                 | ⏳ |
+| 9 | `analytics`                           | small surface                                                    | ⏳ |
+| 10 | `dependencies` (auth-shared module)  | reuse `AUTHENTICATION_REQUIRED` / `INTERNAL_TOKEN_INVALID`      | ⏳ |
+| 11 | `websocket`                          | last (different protocol surface; may need separate treatment)  | ⏳ |
+
+#### 5xx field deprecation ticket
+
+| Field                                    | Value                                                  |
+| ---------------------------------------- | ------------------------------------------------------ |
+| Field name                               | `error` (in 5xx response body)                          |
+| Replacement                              | `error_code` (already double-emitted starting this PR)  |
+| Double-emit start                        | This PR's merge date                                    |
+| Removal target                           | merge + 30 days                                         |
+| Owner                                    | Same owner as the SDK 0.5.0 release notes (P1 #10)      |
+| Risk                                     | Low — the two fields hold equal values during the window; SDK 0.5.0 reads either |
+
+After 30 days: drop the `error` field from `_http_exception_handler`
+and `_unhandled_exception_handler` in `acn/api.py`; update
+`tests/test_error_sanitisation.py` to drop the legacy assertion;
+update section 1 of `acn-error-schema.md` to remove the deprecation
+note. Single-PR change.
+
+#### P3 — OpenAPI schema visibility for ACN flat error response
+
+`ACNErrorResponse` is defined in [`acn/core/errors.py`](../acn/core/errors.py) but is not advertised in `/openapi.json` for pilot routes today: FastAPI cannot statically infer which routes raise `ACNHTTPError`, so SDK type-gen consumers see `HTTPValidationError` / generic `dict` for 4xx responses instead of the canonical flat shape.
+
+Path forward — for each pilot or migrated route, add an explicit `responses=` block on the route decorator:
+
+```python
+from acn.core.errors import ACNErrorResponse
+
+@router.post(
+    "/send",
+    responses={
+        403: {"model": ACNErrorResponse, "description": "policy / auth rejection"},
+        404: {"model": ACNErrorResponse, "description": "agent not found"},
+    },
+)
+```
+
+Suggested batching: do this *atomically* with each row of the sprint roadmap above (route migration + OpenAPI advertisement in the same PR), so the doc and the matrix flip together. Pilot routes (already ✅ in the matrix) can be retro-fitted in a single follow-up PR — estimated 1-2 hours, no new tests required.
+
+Out of scope for this ticket: regenerating downstream SDK type-gen artefacts. That is the SDK release-notes owner's responsibility.
+
+#### P3 — Add `except ACNHTTPError: raise` defence on registry's catch-all 5xx blocks
+
+`acn/routes/registry.py` has 3 catch-all `except Exception as e: raise HTTPException(500, str(e))` blocks at L316 (`register` / dev), L425 (`register_protected`), L807 (`_join_agent_impl`). Sprint #2a's audit confirmed that **today** no `ACNHTTPError` is raised inside any of these `try` blocks — the migrated raises all live either *before* the `try` (subnet validation) or in *specific* `except` clauses (`AgentNotFoundException`, `PolicyRejected`).
+
+The fragility is forward-looking: sprints #2b and #2c will modify these same functions to add `ACNHTTPError(DEV_MODE_DISABLED, …)`, `ACNHTTPError(OWNER_TOKEN_MISMATCH, …)`, `ACNHTTPError(INVALID_CLAIM_REQUEST, …)`, etc. If any of those raises lands *inside* a try block (even temporarily during refactor), the `except Exception` will silently swallow it and convert a caller-actionable 4xx into a sanitised 500.
+
+Defence (low cost):
+
+```python
+try:
+    agent = await agent_service.register_agent(...)
+    return AgentRegisterResponse(...)
+except ACNHTTPError:
+    # caller-actionable 4xx — propagate verbatim, do not wrap as 500
+    raise
+except Exception as e:
+    logger.error("agent_registration_failed", error=str(e))
+    raise HTTPException(status_code=500, detail=str(e)) from e
+```
+
+Three locations × 3 lines each = ≈10-line change. Best landed atomically with sprint #2b (which will be the first sprint to put `ACNHTTPError` in proximity of these catch-alls, so the defence stops being theoretical at exactly the same moment).
+
+Why not now (sprint #2a):
+- The audit confirms zero current breakage paths.
+- Adding the defence preemptively without a triggering raise inside the try block is over-engineering — the `except ACNHTTPError: raise` line would have no observable behaviour today.
+- Co-locating the fix with sprint #2b keeps the migration commit message accurately describing why the defence is being added.
+
+#### P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py`
+
+Each error-schema migration sprint row produces a `tests/routes/test_<module>_error_schema.py` that re-defines roughly the same three fixtures:
+
+- `_reset_state` (autouse) — disables `slowapi.limiter`, clears `_api_key_cache`, clears `app.dependency_overrides`
+- `stub_agent_service` — wires owner + cross-tenant API keys
+- `stub_<resource>_service` — `AsyncMock` with sensible defaults
+
+By the time the sprint reaches row #3 we'll have ~3 × 50 LOC of duplication. Hoisting to `tests/routes/conftest.py` is a one-shot ~80 LOC dedup that future sprint rows pick up for free.
+
+Why not now (sprint row #1):
+- Touching `conftest.py` cross-cuts every existing route test file. Doing it inside a feature commit risks subtle collisions with existing route-test fixtures (`test_allowlist_routes.py`, `test_communication_*.py`, `test_registry_*.py` already each have their own `_reset_state`-shaped fixture).
+- The audit-preferred sequence is: land 2-3 schema test files first (so the *real* duplication shape is observable), then dedup in a focused PR with no behavioural changes.
+
+Suggested trigger: after sprint row #3 lands, open a single PR that introduces the shared fixtures and converts the three existing files. Estimated effort: 2-3 hours; one of those is reading the existing route tests to confirm the shared fixtures don't collide.
+
+#### P3 — `RequestValidationError` alignment
+
+FastAPI's automatic 422 (pydantic body / query / path validation)
+still emits `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`
+— a different shape from the ACN flat schema. Aligning it would
+require overriding `RequestValidationError` and may degrade pydantic's
+location-precise error reporting; out of scope for #11.
+
+If SDK feedback indicates it's worth doing, a single PR can:
+1. Override `RequestValidationError` in `acn/api.py` with a handler
+   that emits `{error_code: "validation_failed", message, details: {pydantic_errors: [...]}, request_id}`.
+2. Update `acn-error-schema.md` section 3 to mark this case ✅.
+3. Add `VALIDATION_FAILED` to the `ErrorCode` catalog.
+
+Estimated effort: ≈1 PR, 4-6 hours including test updates.
+
 ### Alembic chain hygiene
 
 Context: 修 `7ee2ed3a177c`（`expand_verification_code_to_64chars`）的 fresh-DB upgrade fail 时连带发现 — `alembic downgrade base` 全链回滚会在 initial schema 阶段炸。
