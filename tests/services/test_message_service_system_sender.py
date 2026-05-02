@@ -13,7 +13,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from a2a.types import Message, TextPart
+from a2a.compat.v0_3.types import Message, TextPart
 
 from acn.services.message_service import MessageService
 
