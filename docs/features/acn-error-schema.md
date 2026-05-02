@@ -58,16 +58,25 @@ The `ErrorCode` enum in [`acn/core/errors.py`](../../acn/core/errors.py) is a **
 
 | `error_code`               | HTTP status | Used by                                                | `details` schema                                         |
 | -------------------------- | ----------- | ------------------------------------------------------ | -------------------------------------------------------- |
-| `agent_not_found`          | 404         | `/send` `/broadcast` `/broadcast-by-tag` `/history` `/history/{agent_id}/ack` `/internal/send` | `{ agent_id: string }`                            |
-| `api_key_agent_mismatch`   | 403         | `/history` `/history/{agent_id}/ack`                   | `{ path_agent: string, key_agent: string }`              |
+| `agent_not_found`          | 404         | `/send` `/broadcast` `/broadcast-by-tag` `/history` `/history/{agent_id}/ack` `/internal/send` `/agents/{id}/allowlist/{target_id}` (POST) | `{ agent_id: string }`                            |
+| `api_key_agent_mismatch`   | 403         | `/history` `/history/{agent_id}/ack` `/agents/{id}/allowlist/...` (POST/DELETE/GET) | `{ path_agent: string, key_agent: string }`              |
 | `from_agent_mismatch`      | 403         | `/send` `/broadcast` `/broadcast-by-tag`               | `{ authenticated_as: string, from_agent: string }`       |
 | `communication_rejected`   | 403         | `/send` `/internal/send` (defensive)                   | `{ reason: string, reject_reason: string \| null }`      |
 | `unknown_strategy`         | 422         | `/broadcast`                                           | `{ strategy: string, expected: string[] }`               |
 | `internal_server_error`    | 5xx         | All routes (sanitised by 5xx handler)                  | `{}`                                                     |
 
+### Allowlist routes (sprint row #1)
+
+| `error_code`                   | HTTP status | Used by                                          | `details` schema                                  |
+| ------------------------------ | ----------- | ------------------------------------------------ | ------------------------------------------------- |
+| `self_allowlist_forbidden`     | 400         | `/agents/{id}/allowlist/{target_id}` (POST)      | `{ owner_id: string }`                            |
+| `allowlist_capacity_exceeded`  | 429         | `/agents/{id}/allowlist/{target_id}` (POST)      | `{ owner_id: string, max_size: int }`             |
+
+`agent_not_found` and `api_key_agent_mismatch` rows above are also raised here — see the *Used by* column.
+
 ### Reserved (declared, not yet raised)
 
-`subnet_not_found` / `task_not_found` / `allowlist_capacity_exceeded` / `self_allowlist_forbidden` / `wallet_rate_limit_exceeded` / `authentication_required` / `internal_token_invalid` / `insufficient_balance` / `resource_conflict`
+`subnet_not_found` / `task_not_found` / `wallet_rate_limit_exceeded` / `authentication_required` / `internal_token_invalid` / `insufficient_balance` / `resource_conflict`
 
 Reserved codes will be picked up by the migration sprint as each route is converted (see Section 7).
 
@@ -102,7 +111,7 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 | Route group                                                                                  | Exception class    | 4xx body shape                                                                          | Status |
 | -------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------- | ------ |
 | Pilot — `/communication/send`, `/broadcast`, `/broadcast-by-tag`, `/history`, `/history/{agent_id}/ack`, `/internal/send` [^1] | `ACNHTTPError`     | `{ error_code, message, details, request_id }` (flat)                                   | ✅ Migrated |
-| `/api/v1/allowlist/*`                                                                        | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
+| `/api/v1/agents/{id}/allowlist/...` (POST/DELETE/GET) [^1]                                   | `ACNHTTPError`     | `{ error_code, message, details, request_id }` (flat)                                   | ✅ Migrated |
 | `/api/v1/subnets/*`                                                                          | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/tasks/*`                                                                            | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/follows/*`                                                                          | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |

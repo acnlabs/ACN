@@ -113,7 +113,7 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 
 | # | Route module                          | New / reused codes                                              | Status |
 | - | ------------------------------------- | --------------------------------------------------------------- | ------ |
-| 1 | `allowlist`                           | reuse `ALLOWLIST_CAPACITY_EXCEEDED` / `SELF_ALLOWLIST_FORBIDDEN` (already in catalog) | ⏳ |
+| 1 | `allowlist`                           | reuse `ALLOWLIST_CAPACITY_EXCEEDED` / `SELF_ALLOWLIST_FORBIDDEN` (already in catalog) | ✅ |
 | 2 | `registry` (agents)                   | reuse `AGENT_NOT_FOUND`; add `AGENT_ALREADY_EXISTS` if needed   | ⏳ |
 | 3 | `subnets`                             | reuse `SUBNET_NOT_FOUND`                                        | ⏳ |
 | 4 | `tasks`                               | reuse `TASK_NOT_FOUND`                                          | ⏳ |

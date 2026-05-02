@@ -85,12 +85,19 @@ class ErrorCode(StrEnum):
     COMMUNICATION_REJECTED = "communication_rejected"
     UNKNOWN_STRATEGY = "unknown_strategy"
 
+    # ===== Allowlist routes (sprint row #1) =====
+    # ``AGENT_NOT_FOUND`` and ``API_KEY_AGENT_MISMATCH`` above are
+    # also reused here; only the allowlist-specific codes appear
+    # in this group.
+    ALLOWLIST_CAPACITY_EXCEEDED = "allowlist_capacity_exceeded"
+    SELF_ALLOWLIST_FORBIDDEN = "self_allowlist_forbidden"
+
     # ===== 5xx fallback (sanitised handler chain) =====
     INTERNAL_SERVER_ERROR = "internal_server_error"
 
     # ===== Reserved (declared, not yet raised by any route) =====
     # Auth/dependency layer codes — will be wired when the
-    # ``dependencies`` module is migrated (sprint #10 in BACKLOG).
+    # ``dependencies`` module is migrated (sprint row #10 in BACKLOG).
     AUTHENTICATION_REQUIRED = "authentication_required"
     INTERNAL_TOKEN_INVALID = "internal_token_invalid"
     # Rate-limit code — slowapi's ``_rate_limit_exceeded_handler``
@@ -101,8 +108,6 @@ class ErrorCode(StrEnum):
     # in section 4 of ``docs/features/acn-error-schema.md``.
     SUBNET_NOT_FOUND = "subnet_not_found"
     TASK_NOT_FOUND = "task_not_found"
-    ALLOWLIST_CAPACITY_EXCEEDED = "allowlist_capacity_exceeded"
-    SELF_ALLOWLIST_FORBIDDEN = "self_allowlist_forbidden"
     INSUFFICIENT_BALANCE = "insufficient_balance"
     RESOURCE_CONFLICT = "resource_conflict"
 
