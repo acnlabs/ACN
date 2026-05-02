@@ -190,12 +190,70 @@ except Exception as e:
     raise HTTPException(status_code=500, detail=str(e)) from e
 ```
 
-Combined ≈11 locations × 3 lines each = ≈35-line change. Best landed atomically with sprint #2b (which will be the first sprint to put `ACNHTTPError` in proximity of these catch-alls, so the defence stops being theoretical at exactly the same moment for registry; subnets gets the same treatment in the same PR for symmetry, plus the active `delete_subnet` bug fix).
+Combined ≈11 locations × 3 lines each = ≈35-line change.
 
-Why not now (sprint #2a / #3):
-- For registry: the audits confirm zero current breakage paths there.
-- For subnets `delete_subnet`: the bug pre-dates the migration; bundling the fix with sprint #3 would creep beyond "safe migration" scope. A separate PR keeps the bug fix loud in the commit history (instead of buried in a multi-purpose migration commit).
-- Co-locating both defences with sprint #2b keeps the migration commit message accurately describing why the defence is being added at exactly the right moment.
+**Status update (post sprint #2b/#3-followup/#4-followup, May 2026)**:
+The Step 2 sprint sweep (commits `8c9388a` / `8a9d7f2` / `a2955bc` /
+`3c632fa`) landed but did **not** include this defence holistically.
+Only one local defence was applied: `subnets.py::list_subnets` got
+`except ACNHTTPError: raise` because sprint #3-followup actually
+introduced new ACN raises into its `try` body, turning the latent
+fragility into an active bug for that endpoint specifically. The
+remaining 10 catch-all blocks are still undefended:
+- `acn/routes/registry.py` — 3 catch-all blocks (audited, **no
+  current** ACN raises live inside their try bodies → still latent).
+- `acn/routes/subnets.py` — 7 catch-all blocks (was 8 before the
+  `list_subnets` local fix); `delete_subnet` still carries its
+  pre-existing 404→500 silent rewrite (the `else: raise
+  HTTPException(404)` site, which we explicitly chose **not** to
+  migrate during sprint #3-followup so the latent fix doesn't leak
+  into a separate concern — cf. the inline NOTE in `subnets.py`).
+- `acn/routes/tasks.py` — sprint #4-followup audited the catch-alls;
+  none carry ACN raises in-try, so they are also latent-only.
+
+The defence still wants to land as a single focused PR (separate
+commit history is more valuable than amending the four Step 2
+commits retroactively, since pre-existing latent bugs and new active
+risks are conceptually distinct).
+
+Why not now (after Step 2):
+- For registry / tasks: post-sprint audits confirm zero current
+  breakage paths — pure latent defence.
+- For subnets `delete_subnet`: the 404→500 silent rewrite pre-dates
+  any migration; bundling its fix into the cross-module defence PR
+  keeps the bug fix loud and auditable.
+- A standalone defence PR can also add the matching `except
+  HTTPException: raise` line uniformly, repairing pre-existing
+  latent bugs in legacy `HTTPException` raises (same shape as the
+  `ACNHTTPError` defence, no behaviour change for already-correct
+  paths).
+
+#### Process note — sprint sweep test-coverage gap (post Step 2 audit)
+
+A self-audit on the four Step 2 commits (`8c9388a` / `8a9d7f2` /
+`a2955bc` / `3c632fa`) found **5 wire-shape regressions** across 3
+non-schema test files (`test_auth_failure_audit_h_audit.py`,
+`test_get_task_h8_auth.py`, `test_tasks_rate_limit_h7.py`). They all
+asserted on the legacy `r.json()["detail"]` body or on `pytest.raises(
+HTTPException)`. The Step 2 commits passed the focused
+`test_*_error_schema.py` subset but the regressions only surfaced when
+the full `tests/routes/` suite was run during audit. Fixed in commit
+`16b6ca8` (audit-followup). Retroactive lesson:
+
+> **Any commit that flips a route's emitted error wire-shape (from
+> `HTTPException` to `ACNHTTPError` or vice versa) MUST run the full
+> `tests/routes/` suite before merge — running only the dedicated
+> `test_*_error_schema.py` modules is insufficient because legacy
+> route tests written before the schema migration sprint may still
+> assert on `r.json()["detail"]` or `pytest.raises(HTTPException)`.**
+
+Concretely for the remaining schema migration sprints (#5 payments,
+#6 follows, #7 onchain, #8 manifest, #9 analytics, #10 dependencies,
+#11 websocket): each PR should include a `pytest tests/routes/ -q
+--no-cov` smoke run in the description (≈7 min on a warm cache) in
+addition to the schema-test subset that's already part of the sprint
+acceptance criteria. The cost is small relative to the cost of a
+post-merge revert when a non-schema test breaks on `main`.
 
 #### ~~P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py`~~ ✅ Landed
 
