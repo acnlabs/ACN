@@ -192,9 +192,11 @@ except Exception as e:
     raise HTTPException(status_code=500, detail=...) from e
 ```
 
-The single `create_subnet` block keeps an in-file rationale comment;
-the other 10 are intentionally compact (just two `raise` lines)
-because the rationale is identical.
+Three catch-all blocks (one per file: `create_subnet`,
+`dev_register_agent`, `create_task`) keep an in-file rationale
+comment so first-time readers don't have to chase the BACKLOG ticket
+for context. The other 9 are intentionally compact (just two
+`raise` lines) because the rationale is identical and grep-able.
 
 **Latent bug fix**: `delete_subnet`'s `else: raise HTTPException(
 404, "Subnet not found")` short-circuit (in the same `try` body as
