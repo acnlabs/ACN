@@ -110,8 +110,8 @@ async def set_payment_capability(
             ErrorCode.API_KEY_AGENT_MISMATCH,
             status_code=403,
             details={
-                "path_agent_id": agent_id,
-                "authenticated_agent_id": agent_info["agent_id"],
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
             },
         )
 
@@ -239,8 +239,8 @@ async def create_payment_task(
             ErrorCode.FROM_AGENT_MISMATCH,
             status_code=403,
             details={
+                "authenticated_as": agent_info["agent_id"],
                 "from_agent": request.from_agent,
-                "authenticated_agent_id": agent_info["agent_id"],
             },
         )
     try:
@@ -296,8 +296,8 @@ async def get_agent_payment_tasks(
             ErrorCode.API_KEY_AGENT_MISMATCH,
             status_code=403,
             details={
-                "path_agent_id": agent_id,
-                "authenticated_agent_id": agent_info["agent_id"],
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
             },
         )
     tasks = await payment_tasks.get_tasks_by_agent(
@@ -320,8 +320,8 @@ async def get_agent_payment_stats(
             ErrorCode.API_KEY_AGENT_MISMATCH,
             status_code=403,
             details={
-                "path_agent_id": agent_id,
-                "authenticated_agent_id": agent_info["agent_id"],
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
             },
         )
     stats = await payment_tasks.get_payment_stats(agent_id)
@@ -363,8 +363,8 @@ async def set_token_pricing(
             ErrorCode.API_KEY_AGENT_MISMATCH,
             status_code=403,
             details={
-                "path_agent_id": agent_id,
-                "authenticated_agent_id": agent_info["agent_id"],
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
             },
         )
     agent = await registry.get_agent(agent_id)

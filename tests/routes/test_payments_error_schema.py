@@ -138,8 +138,8 @@ class TestApiKeyAgentMismatchFlatShape:
     """
 
     EXPECTED_DETAILS = {
-        "path_agent_id": "agent-target",
-        "authenticated_agent_id": "agent-other",
+        "path_agent": "agent-target",
+        "key_agent": "agent-other",
     }
 
     def test_set_payment_capability_403_flat_shape(self):
@@ -274,8 +274,8 @@ class TestFromAgentMismatchFlatShape:
         _assert_flat_shape(body)
         assert body["error_code"] == "from_agent_mismatch"
         assert body["details"] == {
+            "authenticated_as": "agent-other",
             "from_agent": "agent-claimed",
-            "authenticated_agent_id": "agent-other",
         }
 
 
