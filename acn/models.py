@@ -187,7 +187,10 @@ class AgentRegisterRequest(BaseModel):
         v = v.strip()
         if not v:
             return None
-        if not (v.startswith("https://") or v.startswith("http://")):
+        # RFC 3986: URI schemes are case-insensitive. Match the entity
+        # layer (Agent.__post_init__) and SocialCardUrlPatchRequest.
+        scheme = v.lower()
+        if not (scheme.startswith("https://") or scheme.startswith("http://")):
             raise ValueError("social_card_url must start with https:// or http://")
         return v
 

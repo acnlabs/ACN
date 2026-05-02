@@ -343,6 +343,18 @@ class TestSocialCardUrl:
         )
         assert agent.social_card_url == "http://localhost:3000/social.md"
 
+    def test_uppercase_scheme_accepted(self):
+        """RFC 3986: URI schemes are case-insensitive. A client that
+        sends ``HTTPS://`` (some legacy serializers do) shouldn't get
+        a 422 when a perfectly valid lowercased version would pass."""
+        agent = Agent(
+            agent_id="agent-1",
+            name="Loud card",
+            endpoint="https://example.com",
+            social_card_url="HTTPS://acme.example.com/social.md",
+        )
+        assert agent.social_card_url == "HTTPS://acme.example.com/social.md"
+
     def test_empty_string_normalized_to_none(self):
         """Empty input collapses to ``None`` so downstream code
         can rely on a single sentinel for "no card published"."""
