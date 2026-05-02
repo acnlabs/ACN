@@ -166,6 +166,33 @@ Suggested batching: do this *atomically* with each row of the sprint roadmap abo
 
 Out of scope for this ticket: regenerating downstream SDK type-gen artefacts. That is the SDK release-notes owner's responsibility.
 
+#### P3 — Add `except ACNHTTPError: raise` defence on registry's catch-all 5xx blocks
+
+`acn/routes/registry.py` has 3 catch-all `except Exception as e: raise HTTPException(500, str(e))` blocks at L316 (`register` / dev), L425 (`register_protected`), L807 (`_join_agent_impl`). Sprint #2a's audit confirmed that **today** no `ACNHTTPError` is raised inside any of these `try` blocks — the migrated raises all live either *before* the `try` (subnet validation) or in *specific* `except` clauses (`AgentNotFoundException`, `PolicyRejected`).
+
+The fragility is forward-looking: sprints #2b and #2c will modify these same functions to add `ACNHTTPError(DEV_MODE_DISABLED, …)`, `ACNHTTPError(OWNER_TOKEN_MISMATCH, …)`, `ACNHTTPError(INVALID_CLAIM_REQUEST, …)`, etc. If any of those raises lands *inside* a try block (even temporarily during refactor), the `except Exception` will silently swallow it and convert a caller-actionable 4xx into a sanitised 500.
+
+Defence (low cost):
+
+```python
+try:
+    agent = await agent_service.register_agent(...)
+    return AgentRegisterResponse(...)
+except ACNHTTPError:
+    # caller-actionable 4xx — propagate verbatim, do not wrap as 500
+    raise
+except Exception as e:
+    logger.error("agent_registration_failed", error=str(e))
+    raise HTTPException(status_code=500, detail=str(e)) from e
+```
+
+Three locations × 3 lines each = ≈10-line change. Best landed atomically with sprint #2b (which will be the first sprint to put `ACNHTTPError` in proximity of these catch-alls, so the defence stops being theoretical at exactly the same moment).
+
+Why not now (sprint #2a):
+- The audit confirms zero current breakage paths.
+- Adding the defence preemptively without a triggering raise inside the try block is over-engineering — the `except ACNHTTPError: raise` line would have no observable behaviour today.
+- Co-locating the fix with sprint #2b keeps the migration commit message accurately describing why the defence is being added.
+
 #### P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py`
 
 Each error-schema migration sprint row produces a `tests/routes/test_<module>_error_schema.py` that re-defines roughly the same three fixtures:

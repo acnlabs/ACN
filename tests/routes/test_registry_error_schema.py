@@ -246,50 +246,52 @@ class TestRegistryFlatErrorSchemaUnregisterPath:
     ``except AgentNotFoundException`` branch and lose the explicit
     "service returned False" signal in operator logs.
 
-    DELETE /api/v1/agents/{id} requires Auth0 — so we patch
-    ``verify_token`` to bypass it. The auth surface is sprint
-    #2c work; here we just need the route to reach the
-    ``success=False`` branch.
+    Auth bypass note
+        DELETE /api/v1/agents/{id} is gated by
+        ``Depends(require_permission("acn:write"))``. We rely on
+        ``settings.dev_mode=True`` (which is the test-environment
+        default — see ``acn/auth/middleware.py::verify_token``)
+        to short-circuit Auth0 verification: any non-empty Bearer
+        token is accepted and the synthetic payload grants
+        ``acn:read`` / ``acn:write`` / ``acn:admin`` permissions.
+
+        Why not ``app.dependency_overrides``: ``Depends`` captures
+        the ``permission_checker`` closure at decoration time,
+        keyed by *that closure object*. Overriding the factory
+        ``require_permission`` after import would create a
+        different closure that FastAPI never resolves against.
+        Overriding the *resolved* dependency would require us to
+        reach into ``permission_checker`` directly — fragile across
+        FastAPI versions. The dev-mode pathway is more robust and
+        is already the canonical way the rest of the suite tests
+        Auth0-gated routes (``test_phase1_management_rate_limits``,
+        ``test_agent_endpoint_disclosure``, etc.).
+
+        When sprint row #10 (`dependencies` migration) lands and
+        introduces ``ACNHTTPError`` for auth rejects, this test
+        will need a re-think — at that point the auth gate's flat
+        shape becomes part of the contract this file pins.
     """
 
-    def test_unregister_returns_404_with_flat_shape(
-        self, stub_agent_service, monkeypatch
-    ):
-        from acn.routes import registry as registry_module
-
-        async def _fake_verify_token(authorization=None):
-            return {"sub": "test-owner"}
-
-        monkeypatch.setattr(
-            registry_module, "verify_token", _fake_verify_token
-        )
-
-        from acn.auth import middleware as auth_mw
-
-        async def _fake_require_permission_factory(*args, **kwargs):
-            return {"sub": "test-owner"}
-
-        monkeypatch.setattr(
-            auth_mw,
-            "require_permission",
-            lambda perm: _fake_require_permission_factory,
-        )
-
+    def test_unregister_returns_404_with_flat_shape(self, stub_agent_service):
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
             r = client.delete(
                 "/api/v1/agents/agent-target",
-                headers={"Authorization": "Bearer fake-token"},
+                headers={"Authorization": "Bearer dev-mode-any-token"},
             )
 
-        if r.status_code == 401:
-            pytest.skip(
-                "auth bypass for DELETE/{id} not wired in this fixture set; "
-                "the success=False branch is exercised via direct registry "
-                "function tests in test_proxy_policy.py-style tests once #2c "
-                "lands the auth-layer migration"
-            )
+        # Defence-in-depth: if a future refactor disables dev_mode in
+        # the test environment, fail loudly rather than silently
+        # turning into a no-op. ``pytest.skip`` would hide the
+        # coverage loss; an outright ``fail`` keeps it loud.
+        assert r.status_code != 401, (
+            "DELETE /agents/{id} returned 401 — dev_mode auth bypass "
+            "is no longer in effect. Restore the dev-mode default in "
+            "the test environment, or rewrite this test against the "
+            "new auth surface (sprint row #10)."
+        )
 
         assert r.status_code == 404
         body = r.json()
