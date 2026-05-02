@@ -134,9 +134,16 @@ class TestPublicSendPolicyRejected:
         self, stub_metrics, stub_message_service, stub_audit
     ):
         """Pinning the wire shape: clients branch on
-        ``reason == "policy_closed"`` without parsing free-form
-        strings. ``reject_reason`` is the recipient's own message
-        passed through verbatim."""
+        ``error_code == "communication_rejected"`` without parsing
+        free-form strings; per-rejection structured context lives
+        under ``details`` (``reason`` / ``reject_reason``).
+
+        Phase 2 review v2 P1 #11 migrated this route from the legacy
+        nested ``{"detail": {...}}`` shape to the flat ACN error
+        schema (``{error_code, message, details, request_id}``) —
+        SDKs that pinned the old nested shape need to upgrade per
+        ``docs/features/acn-error-schema.md``.
+        """
         _wire_send_dep_overrides(stub_metrics, stub_message_service, stub_audit)
 
         with patch("acn.routes.communication.Message", return_value=MagicMock()):
@@ -147,15 +154,17 @@ class TestPublicSendPolicyRejected:
                     headers={"X-API-Key": "x"},
                 )
 
-        # FastAPI wraps ``HTTPException(detail=dict)`` in a top-level
-        # ``"detail"`` key — the inner dict is exactly what the route
-        # constructs.
         body = r.json()
-        assert body["detail"] == {
-            "detail": "communication_rejected",
+        # Flat ACN error schema (P1 #11).
+        assert {"error_code", "message", "details", "request_id"} <= body.keys()
+        assert body["error_code"] == "communication_rejected"
+        assert body["details"] == {
             "reason": "policy_closed",
             "reject_reason": "On vacation until 2026-05",
         }
+        # Defensive: the legacy ``detail`` field is gone — no nested
+        # wrapper carrying the same payload.
+        assert "detail" not in body
 
     def test_metrics_record_rejected_status(
         self, stub_metrics, stub_message_service, stub_audit
@@ -277,11 +286,16 @@ class TestInternalSendPolicyRejectedDefensive:
 
         assert r.status_code == 403, r.text
         body = r.json()
-        assert body["detail"] == {
-            "detail": "communication_rejected",
+        # Flat ACN error schema (P1 #11) — same shape as the public
+        # ``/send`` route to keep the SDK contract uniform across
+        # the two send surfaces.
+        assert {"error_code", "message", "details", "request_id"} <= body.keys()
+        assert body["error_code"] == "communication_rejected"
+        assert body["details"] == {
             "reason": "policy_closed",
             "reject_reason": "On vacation until 2026-05",
         }
+        assert "detail" not in body
 
     def test_audit_marks_internal_path_unexpected(
         self, stub_metrics, stub_message_service, stub_audit

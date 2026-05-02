@@ -10,6 +10,7 @@ from a2a.types import Message, TextPart  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from ..core.errors import ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..infrastructure.messaging.broadcast_service import (
     BroadcastResult,
@@ -197,9 +198,13 @@ async def send_message(
     Clean Architecture: Route → MessageService → Repository + MessageRouter
     """
     if agent_info["agent_id"] != body.from_agent:
-        raise HTTPException(
-            status_code=403,
-            detail="Authenticated agent does not match from_agent field",
+        raise ACNHTTPError(
+            ErrorCode.FROM_AGENT_MISMATCH,
+            403,
+            details={
+                "authenticated_as": agent_info["agent_id"],
+                "from_agent": body.from_agent,
+            },
         )
     try:
         message = _payload_to_a2a_message(body.message)
@@ -231,13 +236,21 @@ async def send_message(
         return result
 
     except AgentNotFoundException as e:
-        logger.error("message_send_failed", error=str(e))
+        logger.info(
+            "message_send_target_not_found",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+        )
         await metrics.inc_message_count(
             from_agent=body.from_agent,
             to_agent=body.target_agent,
             status="not_found",
         )
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": body.target_agent},
+        ) from e
 
     except PolicyRejected as e:
         # Recipient's communication_policy denied this sender. Phase 1
@@ -282,10 +295,10 @@ async def send_message(
                 "path": "single",
             },
         )
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "detail": "communication_rejected",
+        raise ACNHTTPError(
+            ErrorCode.COMMUNICATION_REJECTED,
+            403,
+            details={
                 "reason": e.reason,
                 "reject_reason": e.reject_reason,
             },
@@ -327,9 +340,13 @@ async def broadcast_message(
     ``docs/features/acn-communication-economic-model.md`` L608–L614.
     """
     if agent_info["agent_id"] != body.from_agent:
-        raise HTTPException(
-            status_code=403,
-            detail="Authenticated agent does not match from_agent field",
+        raise ACNHTTPError(
+            ErrorCode.FROM_AGENT_MISMATCH,
+            403,
+            details={
+                "authenticated_as": agent_info["agent_id"],
+                "from_agent": body.from_agent,
+            },
         )
     try:
         message = _payload_to_a2a_message(body.message)
@@ -350,12 +367,13 @@ async def broadcast_message(
         try:
             strategy = BroadcastStrategy(body.strategy.lower())
         except ValueError as ve:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Unknown strategy {body.strategy!r}; "
-                    f"expected one of: parallel, sequential, best_effort"
-                ),
+            raise ACNHTTPError(
+                ErrorCode.UNKNOWN_STRATEGY,
+                422,
+                details={
+                    "strategy": body.strategy,
+                    "expected": ["parallel", "sequential", "best_effort"],
+                },
             ) from ve
 
         result = await broadcast_service.broadcast(
@@ -399,13 +417,21 @@ async def broadcast_message(
         }
 
     except AgentNotFoundException as e:
-        logger.error("broadcast_failed", error=str(e))
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        logger.info("broadcast_sender_not_found", from_agent=body.from_agent)
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": body.from_agent},
+        ) from e
 
-    except HTTPException:
-        # 422 strategy-validation surfaced from inside the try block
-        # — let FastAPI translate it directly without the generic
-        # 500 wrapper below.
+    except ACNHTTPError:
+        # Strategy-validation 422 (and any other 4xx raised inside the
+        # try block) is part of the API contract — let the central
+        # ACNHTTPError handler translate it directly without the
+        # generic 500 wrapper below. Mirrors the previous
+        # ``except HTTPException: raise`` guard but scoped to ACN's
+        # 4xx exception tree so non-ACN HTTPExceptions still fall
+        # through to the catch-all.
         raise
 
     except Exception as e:
@@ -439,9 +465,13 @@ async def broadcast_by_tag(
     returns ``broadcast_id``.
     """
     if agent_info["agent_id"] != body.from_agent:
-        raise HTTPException(
-            status_code=403,
-            detail="Authenticated agent does not match from_agent field",
+        raise ACNHTTPError(
+            ErrorCode.FROM_AGENT_MISMATCH,
+            403,
+            details={
+                "authenticated_as": agent_info["agent_id"],
+                "from_agent": body.from_agent,
+            },
         )
     try:
         message = _payload_to_a2a_message(body.message)
@@ -493,8 +523,12 @@ async def broadcast_by_tag(
         }
 
     except AgentNotFoundException as e:
-        logger.error("tag_broadcast_failed", error=str(e))
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        logger.info("tag_broadcast_sender_not_found", from_agent=body.from_agent)
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": body.from_agent},
+        ) from e
 
     except Exception as e:
         logger.error("tag_broadcast_failed", error=str(e))
@@ -522,9 +556,13 @@ async def get_message_history(
       un-returned messages
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(
-            status_code=403,
-            detail="API key does not match agent_id",
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
         )
     try:
         history = await message_service.get_message_history(
@@ -544,8 +582,12 @@ async def get_message_history(
         }
 
     except AgentNotFoundException as e:
-        logger.error("inbox_retrieve_failed", error=str(e))
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        logger.info("inbox_retrieve_agent_not_found", agent_id=agent_id)
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
     except Exception as e:
         logger.error("inbox_retrieve_failed", error=str(e))
@@ -579,9 +621,13 @@ async def ack_message_history(
     Body: ``{"route_ids": ["abc123", "def456", ...]}``
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(
-            status_code=403,
-            detail="API key does not match agent_id",
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
         )
     try:
         acked = await message_service.ack_message_history(
@@ -592,7 +638,11 @@ async def ack_message_history(
         return {"agent_id": agent_id, "acked": acked}
 
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
     except Exception as e:
         logger.error("inbox_ack_failed", error=str(e))
@@ -708,13 +758,21 @@ async def internal_send_message(
         return result
 
     except AgentNotFoundException as e:
-        logger.error("internal_message_send_failed", error=str(e))
+        logger.info(
+            "internal_message_target_not_found",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+        )
         await metrics.inc_message_count(
             from_agent=body.from_agent,
             to_agent=body.target_agent,
             status="not_found",
         )
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": body.target_agent},
+        ) from e
 
     except PolicyRejected as e:
         # Defensive: ``assert_system_caller`` already guarantees
@@ -758,10 +816,10 @@ async def internal_send_message(
                 "unexpected": True,
             },
         )
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "detail": "communication_rejected",
+        raise ACNHTTPError(
+            ErrorCode.COMMUNICATION_REJECTED,
+            403,
+            details={
                 "reason": e.reason,
                 "reject_reason": e.reject_reason,
             },

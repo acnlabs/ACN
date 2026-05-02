@@ -698,7 +698,7 @@ Phase 2 共 11 条决策（Group A 4 + Group B 5 + Group C 2）密集落地，�
 
 - 两个原型可并行开发（不同 namespace、不同 PG 表、不同 API 路径，无代码耦合）
 - 原型期间不做 metrics / audit 完整 wire-up（Phase 1 风格的最少埋点即可）；这些在原型通过后的正式 sprint 补全
-- 原型 review pass 标准：6 / 7 个验收点全部 ✅；review 时一并消化 Phase 2 review v2 剩余 P1（✅ #7 BroadcastService 反向收敛已收敛入 Group C #9、✅ #10 mode 切换 SDK 版本灰度已落地（`X-ACN-SDK-Min-Version` 响应 header）、⏳ #11 错误码 schema 规范）
+- 原型 review pass 标准：6 / 7 个验收点全部 ✅；review 时一并消化 Phase 2 review v2 剩余 P1（✅ #7 BroadcastService 反向收敛已收敛入 Group C #9、✅ #10 mode 切换 SDK 版本灰度已落地（`X-ACN-SDK-Min-Version` 响应 header）、✅ #11 错误码 schema 规范已落地（pilot：communication routes 14 处 4xx 迁移到 `ACNHTTPError`，4xx + 5xx 共享 flat schema `{error_code, message, details, request_id}`；catalog & 异常类见 `acn/core/errors.py`；规范文档 `docs/features/acn-error-schema.md`；剩余 11 routes 进 BACKLOG sprint）
 
 ### Phase 3：经济闭环与默认迁移
 

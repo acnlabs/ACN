@@ -79,6 +79,15 @@ do BEFORE Phase 3 default-mode flip in
   policy to `manifest` / `allowlist` will silently miss every
   inbound message until upgraded. Recommend clients READ the header
   and surface a fail-fast error / log warning.
+  - **(P1 #11 follow-up)** Same SDK 0.5.0 release window also adds
+    the `X-ACN-SDK-Min-Version` header — see [`docs/features/acn-error-schema.md`](features/acn-error-schema.md)
+    section 4 (transitional coexistence matrix). Pilot routes
+    (`/communication/*`) emit a flat `{error_code, message, details,
+    request_id}` body; non-pilot routes still emit the legacy
+    `{"detail": "..."}` shape until the migration sprint flips them.
+    SDK 0.5.0 must accept BOTH shapes during the transition (the
+    `if "error_code" in body` parsing template in section 4.5 is
+    the recommended detection branch).
 - **Dashboards / ops scripts**: capture the header for any policy
   PATCH; alert if a fleet of agents is on a client version below
   the advertised minimum AFTER a `manifest` / `allowlist` flip.
@@ -87,6 +96,67 @@ do BEFORE Phase 3 default-mode flip in
   python client adds a contractually-required handler (currently
   needs both `manifest_notification` and `policy_changed`). Keep
   this ≤ the lowest published client version that implements both.
+
+### Phase 2 review v2 P1 #11 — Error schema migration sprint (✅ pilot shipped)
+
+Pilot scope: communication routes (`/api/v1/communication/*`) — 14
+4xx sites migrated from `HTTPException` to `ACNHTTPError`, 4xx + 5xx
+share the flat `{error_code, message, details, request_id}` schema.
+Spec: [`docs/features/acn-error-schema.md`](features/acn-error-schema.md).
+Catalog & helper: [`acn/core/errors.py`](../acn/core/errors.py).
+Central handler: [`acn/api.py`](../acn/api.py) `_acn_http_error_handler`.
+
+#### Sprint roadmap — non-pilot routes
+
+Each row flips ⏳ → ✅ in section 4 of `acn-error-schema.md` as the
+PR lands. Suggested ordering (cheapest / most impactful first):
+
+| # | Route module                          | New / reused codes                                              | Status |
+| - | ------------------------------------- | --------------------------------------------------------------- | ------ |
+| 1 | `allowlist`                           | reuse `ALLOWLIST_CAPACITY_EXCEEDED` / `SELF_ALLOWLIST_FORBIDDEN` (already in catalog) | ⏳ |
+| 2 | `registry` (agents)                   | reuse `AGENT_NOT_FOUND`; add `AGENT_ALREADY_EXISTS` if needed   | ⏳ |
+| 3 | `subnets`                             | reuse `SUBNET_NOT_FOUND`                                        | ⏳ |
+| 4 | `tasks`                               | reuse `TASK_NOT_FOUND`                                          | ⏳ |
+| 5 | `payments`                            | reuse `INSUFFICIENT_BALANCE`                                    | ⏳ |
+| 6 | `follows`                             | new: `FOLLOW_LIMIT_EXCEEDED` / `SELF_FOLLOW_FORBIDDEN`           | ⏳ |
+| 7 | `onchain`                             | new: ERC-8004 specific failures                                  | ⏳ |
+| 8 | `manifest`                            | small surface — existing 4xx mostly auth-shared                 | ⏳ |
+| 9 | `analytics`                           | small surface                                                    | ⏳ |
+| 10 | `dependencies` (auth-shared module)  | reuse `AUTHENTICATION_REQUIRED` / `INTERNAL_TOKEN_INVALID`      | ⏳ |
+| 11 | `websocket`                          | last (different protocol surface; may need separate treatment)  | ⏳ |
+
+#### 5xx field deprecation ticket
+
+| Field                                    | Value                                                  |
+| ---------------------------------------- | ------------------------------------------------------ |
+| Field name                               | `error` (in 5xx response body)                          |
+| Replacement                              | `error_code` (already double-emitted starting this PR)  |
+| Double-emit start                        | This PR's merge date                                    |
+| Removal target                           | merge + 30 days                                         |
+| Owner                                    | Same owner as the SDK 0.5.0 release notes (P1 #10)      |
+| Risk                                     | Low — the two fields hold equal values during the window; SDK 0.5.0 reads either |
+
+After 30 days: drop the `error` field from `_http_exception_handler`
+and `_unhandled_exception_handler` in `acn/api.py`; update
+`tests/test_error_sanitisation.py` to drop the legacy assertion;
+update section 1 of `acn-error-schema.md` to remove the deprecation
+note. Single-PR change.
+
+#### P3 — `RequestValidationError` alignment
+
+FastAPI's automatic 422 (pydantic body / query / path validation)
+still emits `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`
+— a different shape from the ACN flat schema. Aligning it would
+require overriding `RequestValidationError` and may degrade pydantic's
+location-precise error reporting; out of scope for #11.
+
+If SDK feedback indicates it's worth doing, a single PR can:
+1. Override `RequestValidationError` in `acn/api.py` with a handler
+   that emits `{error_code: "validation_failed", message, details: {pydantic_errors: [...]}, request_id}`.
+2. Update `acn-error-schema.md` section 3 to mark this case ✅.
+3. Add `VALIDATION_FAILED` to the `ErrorCode` catalog.
+
+Estimated effort: ≈1 PR, 4-6 hours including test updates.
 
 ### Alembic chain hygiene
 
