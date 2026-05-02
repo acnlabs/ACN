@@ -98,21 +98,36 @@ class ErrorCode(StrEnum):
     # only the registry-specific code appears in this group.
     SUBNET_NOT_FOUND = "subnet_not_found"
 
+    # ===== Tasks routes (sprint row #4 — partial) =====
+    # ``TASK_NOT_FOUND`` is the only currently-raised tasks code; the
+    # remaining 26 4xx sites pick up cross-module auth/permission/
+    # validation codes in the section below.
+    TASK_NOT_FOUND = "task_not_found"
+
+    # ===== Cross-module auth/permission/validation (sprint row #2b) =====
+    # Shared by ``registry``, ``subnets``, and ``tasks`` routes.
+    # Single-source-of-truth set so that SDK clients see consistent
+    # error semantics for the same kind of caller error regardless of
+    # which module emitted it. See ``docs/features/acn-error-schema.md``
+    # section "Cross-module catalog (sprint row #2b)" for the
+    # per-module raise-site matrix.
+    AUTHENTICATION_REQUIRED = "authentication_required"
+    INTERNAL_TOKEN_INVALID = "internal_token_invalid"
+    MISSING_PERMISSION = "missing_permission"
+    OWNERSHIP_MISMATCH = "ownership_mismatch"
+    NOT_SUBNET_MEMBER = "not_subnet_member"
+    INVALID_REQUEST = "invalid_request"
+
     # ===== 5xx fallback (sanitised handler chain) =====
     INTERNAL_SERVER_ERROR = "internal_server_error"
 
     # ===== Reserved (declared, not yet raised by any route) =====
-    # Auth/dependency layer codes — will be wired when the
-    # ``dependencies`` module is migrated (sprint row #10 in BACKLOG).
-    AUTHENTICATION_REQUIRED = "authentication_required"
-    INTERNAL_TOKEN_INVALID = "internal_token_invalid"
     # Rate-limit code — slowapi's ``_rate_limit_exceeded_handler``
     # currently owns 429 responses; this code is reserved for when
     # rate limit emission converges with the flat schema.
     WALLET_RATE_LIMIT_EXCEEDED = "wallet_rate_limit_exceeded"
     # Per-resource codes — picked up as each module flips ⏳ → ✅
     # in section 4 of ``docs/features/acn-error-schema.md``.
-    TASK_NOT_FOUND = "task_not_found"
     INSUFFICIENT_BALANCE = "insufficient_balance"
     RESOURCE_CONFLICT = "resource_conflict"
 
@@ -150,6 +165,18 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.SELF_ALLOWLIST_FORBIDDEN: (
         "An owner cannot add itself to its own allowlist."
+    ),
+    ErrorCode.MISSING_PERMISSION: (
+        "The authenticated caller lacks the required permission for this operation."
+    ),
+    ErrorCode.OWNERSHIP_MISMATCH: (
+        "The authenticated caller does not own the requested resource."
+    ),
+    ErrorCode.NOT_SUBNET_MEMBER: (
+        "The authenticated caller is not a member of the required subnet."
+    ),
+    ErrorCode.INVALID_REQUEST: (
+        "The request contains invalid data."
     ),
     ErrorCode.INSUFFICIENT_BALANCE: (
         "The requested operation cannot be completed due to insufficient balance."
