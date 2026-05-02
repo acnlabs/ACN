@@ -1139,7 +1139,7 @@ async def proxy_patch(
     )
 
 
-_VISIBILITY_VALUES = frozenset({"real", "test", "demo", "spam", "archived", "all"})
+_VISIBILITY_VALUES = frozenset({"real", "hidden", "spam", "archived", "all"})
 
 
 @router.get("", response_model=AgentSearchResponse)
@@ -1158,7 +1158,7 @@ async def search_agents(
             "Data-hygiene filter on metadata.visibility. "
             "'real' (default) shows only production agents. "
             "'all' returns every registered agent regardless of visibility. "
-            "Other values: test, demo, spam, archived. "
+            "Other values: hidden (internal bots), spam, archived. "
             "Agents without an explicit visibility tag are treated as 'real'."
         ),
     ),

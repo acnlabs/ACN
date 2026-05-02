@@ -24,4 +24,4 @@ SELECT json_build_object(
   )
 )
 FROM agents
-WHERE metadata->>'visibility' = 'real';
+WHERE metadata->'extra_metadata'->>'visibility' = 'real';
