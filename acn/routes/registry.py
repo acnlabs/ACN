@@ -275,6 +275,14 @@ def _extract_jsonrpc_endpoint_from_agent_card(agent_card: dict) -> str | None:
     return url if isinstance(url, str) and url else None
 
 
+def _validate_resolved_a2a_endpoint(endpoint: str) -> None:
+    """Apply registration-time endpoint validation to URLs parsed from cards."""
+    try:
+        validate_endpoint_url(endpoint, allow_loopback=settings.dev_mode)
+    except SSRFViolation as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 async def _resolve_registration_endpoint(
     *,
     direct_endpoint: str | None,
@@ -283,11 +291,13 @@ async def _resolve_registration_endpoint(
 ) -> tuple[str, dict | None]:
     """Resolve the direct A2A endpoint while preserving the discovery card."""
     if direct_endpoint:
+        _validate_resolved_a2a_endpoint(direct_endpoint)
         return direct_endpoint, agent_card
 
     if agent_card:
         direct_endpoint = _extract_jsonrpc_endpoint_from_agent_card(agent_card)
         if direct_endpoint:
+            _validate_resolved_a2a_endpoint(direct_endpoint)
             return direct_endpoint, agent_card
 
     if not agent_card_url:
@@ -314,10 +324,7 @@ async def _resolve_registration_endpoint(
             status_code=400,
             detail="A2A Agent Card does not include a JSON-RPC delivery URL",
         )
-    try:
-        validate_endpoint_url(direct_endpoint, allow_loopback=settings.dev_mode)
-    except SSRFViolation as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    _validate_resolved_a2a_endpoint(direct_endpoint)
 
     return direct_endpoint, fetched_card
 
@@ -470,8 +477,12 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
     if strip_sensitive:
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
         exposed_endpoint = f"{base_url}/api/v1/agents/{agent.agent_id}"
+        exposed_agent_card_url = f"{exposed_endpoint}/.well-known/agent-card.json"
+        exposed_agent_card = None
     else:
         exposed_endpoint = agent.endpoint or ""
+        exposed_agent_card_url = getattr(agent, "agent_card_url", None)
+        exposed_agent_card = agent.agent_card
 
     return AgentInfo(
         agent_id=agent.agent_id,
@@ -480,11 +491,11 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
         description=agent.description,
         endpoint=exposed_endpoint,
         a2a_endpoint=exposed_endpoint,
-        agent_card_url=agent.agent_card_url,
+        agent_card_url=exposed_agent_card_url,
         tags=agent.tags,
         status=agent.status.value,
         subnet_ids=agent.subnet_ids,
-        agent_card=agent.agent_card,
+        agent_card=exposed_agent_card,
         metadata=metadata,
         registered_at=agent.registered_at,
         last_heartbeat=agent.last_heartbeat,

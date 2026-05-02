@@ -1,10 +1,15 @@
 """Regression tests for A2A discovery vs direct delivery URL semantics."""
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from acn.models import AgentRegisterRequest
-from acn.routes.registry import AgentJoinRequest, _extract_jsonrpc_endpoint_from_agent_card
+from acn.routes.registry import (
+    AgentJoinRequest,
+    _extract_jsonrpc_endpoint_from_agent_card,
+    _resolve_registration_endpoint,
+)
 
 
 def test_register_request_accepts_explicit_a2a_endpoint_without_legacy_endpoint():
@@ -58,3 +63,15 @@ def test_extract_jsonrpc_endpoint_falls_back_to_legacy_card_url():
         _extract_jsonrpc_endpoint_from_agent_card({"url": "https://agent.example.com/a2a"})
         == "https://agent.example.com/a2a"
     )
+
+
+@pytest.mark.asyncio
+async def test_resolved_agent_card_endpoint_is_registration_validated():
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_registration_endpoint(
+            direct_endpoint=None,
+            agent_card_url=None,
+            agent_card={"url": "ftp://agent.example.com/a2a"},
+        )
+
+    assert exc_info.value.status_code == 400
