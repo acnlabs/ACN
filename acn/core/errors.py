@@ -92,6 +92,12 @@ class ErrorCode(StrEnum):
     ALLOWLIST_CAPACITY_EXCEEDED = "allowlist_capacity_exceeded"
     SELF_ALLOWLIST_FORBIDDEN = "self_allowlist_forbidden"
 
+    # ===== Registry routes (sprint row #2a — partial) =====
+    # The pilot codes ``AGENT_NOT_FOUND``, ``API_KEY_AGENT_MISMATCH``,
+    # and ``COMMUNICATION_REJECTED`` are also raised by registry —
+    # only the registry-specific code appears in this group.
+    SUBNET_NOT_FOUND = "subnet_not_found"
+
     # ===== 5xx fallback (sanitised handler chain) =====
     INTERNAL_SERVER_ERROR = "internal_server_error"
 
@@ -106,7 +112,6 @@ class ErrorCode(StrEnum):
     WALLET_RATE_LIMIT_EXCEEDED = "wallet_rate_limit_exceeded"
     # Per-resource codes — picked up as each module flips ⏳ → ✅
     # in section 4 of ``docs/features/acn-error-schema.md``.
-    SUBNET_NOT_FOUND = "subnet_not_found"
     TASK_NOT_FOUND = "task_not_found"
     INSUFFICIENT_BALANCE = "insufficient_balance"
     RESOURCE_CONFLICT = "resource_conflict"

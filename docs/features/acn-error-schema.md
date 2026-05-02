@@ -58,10 +58,10 @@ The `ErrorCode` enum in [`acn/core/errors.py`](../../acn/core/errors.py) is a **
 
 | `error_code`               | HTTP status | Used by                                                | `details` schema                                         |
 | -------------------------- | ----------- | ------------------------------------------------------ | -------------------------------------------------------- |
-| `agent_not_found`          | 404         | `/send` `/broadcast` `/broadcast-by-tag` `/history` `/history/{agent_id}/ack` `/internal/send` `/agents/{id}/allowlist/{target_id}` (POST) | `{ agent_id: string }`                            |
-| `api_key_agent_mismatch`   | 403         | `/history` `/history/{agent_id}/ack` `/agents/{id}/allowlist/...` (POST/DELETE/GET) | `{ path_agent: string, key_agent: string }`              |
+| `agent_not_found`          | 404         | communication routes (`/send` `/broadcast` `/broadcast-by-tag` `/history` `/history/{agent_id}/ack` `/internal/send`); allowlist routes (POST); registry routes (`GET /agents/{id}` `POST /heartbeat` `GET /me` `GET /agent-card.json` `GET /agent-registration.json` `GET /endpoint` `GET /policy` `PATCH /policy` `DELETE /agents/{id}` `POST /claim` `POST /transfer` `POST /release` `GET /wallets`, plus the catch-all proxy) | `{ agent_id: string }`                            |
+| `api_key_agent_mismatch`   | 403         | communication routes (`/history` `/history/{agent_id}/ack`); allowlist routes (POST/DELETE/GET); registry routes (`POST /heartbeat`) | `{ path_agent: string, key_agent: string }`              |
 | `from_agent_mismatch`      | 403         | `/send` `/broadcast` `/broadcast-by-tag`               | `{ authenticated_as: string, from_agent: string }`       |
-| `communication_rejected`   | 403         | `/send` `/internal/send` (defensive)                   | `{ reason: string, reject_reason: string \| null }`      |
+| `communication_rejected`   | 403         | `/send` `/internal/send` (defensive); registry catch-all proxy (`POST/PUT/PATCH /{agent_id}{/rest_path}`) | `{ reason: string, reject_reason: string \| null }`      |
 | `unknown_strategy`         | 422         | `/broadcast`                                           | `{ strategy: string, expected: string[] }`               |
 | `internal_server_error`    | 5xx         | All routes (sanitised by 5xx handler)                  | `{}`                                                     |
 
@@ -73,6 +73,16 @@ The `ErrorCode` enum in [`acn/core/errors.py`](../../acn/core/errors.py) is a **
 | `allowlist_capacity_exceeded`  | 429         | `/agents/{id}/allowlist/{target_id}` (POST)      | `{ owner_id: string, max_size: int }`             |
 
 `agent_not_found` and `api_key_agent_mismatch` rows above are also raised here — see the *Used by* column.
+
+### Registry routes (sprint row #2a — partial)
+
+| `error_code`            | HTTP status | Used by                                                    | `details` schema           |
+| ----------------------- | ----------- | ---------------------------------------------------------- | -------------------------- |
+| `subnet_not_found`      | 400         | `POST /register` (DEV) and `POST /register-protected`       | `{ subnet_id: string }`    |
+
+Pilot codes `agent_not_found` / `api_key_agent_mismatch` / `communication_rejected` are also raised by registry — see the *Used by* column on the pilot table.
+
+The remaining 11 4xx sites in `acn/routes/registry.py` (dev-mode rejection, owner-token mismatch, ownership / permission errors, bulk-delete safety guard, `ValueError` claim path, and `Authorization` header rejects) need new catalog codes and are tracked as sprint rows #2b and #2c in [`docs/BACKLOG.md`](../BACKLOG.md). Until those land, registry endpoints can emit *either* the flat schema (for migrated raise sites) *or* the legacy `{"detail": "..."}` shape (for unmigrated sites). The §4 SDK parsing template handles both correctly.
 
 ### Reserved (declared, not yet raised)
 
@@ -140,7 +150,7 @@ Realigning slowapi to the flat schema is reserved as `WALLET_RATE_LIMIT_EXCEEDED
 
 ### Non-pilot routes
 
-The remaining 11 route modules (`allowlist`, `subnets`, `tasks`, `follows`, `payments`, `onchain`, `dependencies`, `manifest`, `analytics`, `registry`, `websocket`) still raise vanilla `HTTPException` and are caught by the existing `_http_exception_handler` 4xx pass-through, which emits the legacy `{"detail": "..."}` / `{"detail": {...}}` shape. See the coexistence matrix below — these routes are NOT broken, they just speak the old contract until the migration sprint reaches them.
+The route modules `subnets`, `tasks`, `follows`, `payments`, `onchain`, `dependencies`, `manifest`, `analytics`, and `websocket` still raise vanilla `HTTPException` and are caught by the existing `_http_exception_handler` 4xx pass-through, which emits the legacy `{"detail": "..."}` / `{"detail": {...}}` shape. The `registry` module is partially migrated as of sprint row #2a — see the coexistence matrix below. These routes are NOT broken, they just speak the old contract until the migration sprint reaches them.
 
 ---
 
@@ -152,12 +162,12 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 | -------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------- | ------ |
 | Pilot — `/communication/send`, `/broadcast`, `/broadcast-by-tag`, `/history`, `/history/{agent_id}/ack`, `/internal/send` [^1] | `ACNHTTPError`     | `{ error_code, message, details, request_id }` (flat)                                   | ✅ Migrated |
 | `/api/v1/agents/{id}/allowlist/...` (POST/DELETE/GET) [^1]                                   | `ACNHTTPError`     | `{ error_code, message, details, request_id }` (flat)                                   | ✅ Migrated |
+| `/api/v1/agents/*` (registry) [^1] [^2]                                                      | mixed (`ACNHTTPError` + `HTTPException`) | mixed (flat for migrated 4xx, nested `{"detail": "..."}` for unmigrated 4xx) | 🟡 Partial (#2a) |
 | `/api/v1/subnets/*`                                                                          | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/tasks/*`                                                                            | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/follows/*`                                                                          | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/payments/*`                                                                         | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/onchain/*`                                                                          | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
-| `/api/v1/agents/*` (registry)                                                                | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/communication/manifest/*`                                                           | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/api/v1/analytics/*`                                                                        | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
 | `/ws/*` (websocket)                                                                          | `HTTPException`    | `{ "detail": "..." }`                                                                   | ⏳ Pending |
@@ -165,6 +175,8 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 | All routes — 5xx                                                                             | `HTTPException` (sanitised) | `{ error, error_code, message, details, request_id }` (flat, with deprecation `error`) | ✅ Aligned |
 
 Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can depend on this matrix as the source of truth for which response shape a given endpoint emits.
+
+[^2]: **Registry partial migration (sprint #2a).** 19 of the 30 4xx raise sites in `acn/routes/registry.py` are migrated — the ones that map directly to existing catalog codes (`AGENT_NOT_FOUND`, `API_KEY_AGENT_MISMATCH`, `SUBNET_NOT_FOUND`, `COMMUNICATION_REJECTED`). The remaining 11 sites (dev-mode rejection, owner-token mismatch, `Authorization` header rejects, ownership / permission errors, the bulk-delete safety guard, the `ValueError` claim path, and the internal-token requirement) need new catalog codes and ship as sprint rows #2b and #2c. SDK clients must therefore handle BOTH the flat schema and the legacy `{"detail": "..."}` shape on registry endpoints — the §4 SDK parsing template (`if "error_code" in body`) does this correctly. Sprint row #2 flips fully ✅ when #2c lands.
 
 [^1]: **Migrated routes are converted at the route handler body level only.** 4xx errors raised by the *route handler function body* go through `ACNHTTPError` and emit the flat schema. 4xx errors raised by *shared dependencies* invoked before the handler body — `OwnerOrInternalDep`, `InternalTokenDep`, `AgentApiKeyDep`, the `A2AFromAgentValidationMiddleware` ASGI middleware — still raise `HTTPException` and emit the legacy `{"detail": "..."}` shape. They flip to flat schema when the `dependencies` module is migrated (sprint row #10 in [`docs/BACKLOG.md`](../BACKLOG.md)). SDK clients hitting a migrated endpoint must therefore keep both parsers in scope until row #10 lands; the parsing template below already does this via the `if "error_code" in body` branch.
 

@@ -114,7 +114,9 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 | # | Route module                          | New / reused codes                                              | Status |
 | - | ------------------------------------- | --------------------------------------------------------------- | ------ |
 | 1 | `allowlist`                           | reuse `ALLOWLIST_CAPACITY_EXCEEDED` / `SELF_ALLOWLIST_FORBIDDEN` (already in catalog) | ✅ |
-| 2 | `registry` (agents)                   | reuse `AGENT_NOT_FOUND`; add `AGENT_ALREADY_EXISTS` if needed   | ⏳ |
+| 2a | `registry` (partial — safe migration) | reuse `AGENT_NOT_FOUND` (×17), `API_KEY_AGENT_MISMATCH`, `SUBNET_NOT_FOUND` (×2 — promoted from reserved), `COMMUNICATION_REJECTED` (also flattens proxy nested-detail) | ✅ |
+| 2b | `registry` (auth/ownership)           | new: `AGENT_NOT_OWNED` (or similar) for `PermissionError` (×3), `INVALID_AUTHORIZATION_HEADER` for the 2 `Authorization` rejects, `INTERNAL_TOKEN_REQUIRED` for `/join/internal` 401, `INVALID_CLAIM_REQUEST` for `ValueError` claim path | ⏳ |
+| 2c | `registry` (registration policy)      | new: `DEV_MODE_DISABLED`, `OWNER_TOKEN_MISMATCH`, `AGENT_ALREADY_EXISTS` (if domain raises one), `BULK_DELETE_FILTER_REQUIRED` | ⏳ |
 | 3 | `subnets`                             | reuse `SUBNET_NOT_FOUND`                                        | ⏳ |
 | 4 | `tasks`                               | reuse `TASK_NOT_FOUND`                                          | ⏳ |
 | 5 | `payments`                            | reuse `INSUFFICIENT_BALANCE`                                    | ⏳ |
