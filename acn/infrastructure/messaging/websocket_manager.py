@@ -155,7 +155,8 @@ class WebSocketManager:
                 pass
 
         if self._pubsub:
-            await self._pubsub.close()
+            # redis-py 5.0.1+ deprecated PubSub.close() in favor of aclose().
+            await self._pubsub.aclose()
 
         # Close all connections
         for conn in list(self._connections.values()):

@@ -704,7 +704,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("audit_stop_failed", error=str(e))
     await router_instance.close()
-    await registry_instance.redis.close()
+    # redis-py 5.0.1+ deprecated Redis.close() in favor of aclose() for the
+    # async client (https://github.com/redis/redis-py/pull/2745).
+    await registry_instance.redis.aclose()
     if _pg_engine is not None:
         await _pg_engine.dispose()
     logger.info("acn_stopped")
