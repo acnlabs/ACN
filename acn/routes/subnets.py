@@ -90,6 +90,16 @@ async def create_subnet(
             400,
             details={"reason": str(e)},
         ) from e
+    except ACNHTTPError:
+        # P3 cross-module catch-all defence: ``ACNHTTPError`` is
+        # ``Exception``-typed (not ``HTTPException``-typed); without
+        # this re-raise, any caller-actionable 4xx raised inside the
+        # try body would be silently rewritten as a sanitised 500.
+        raise
+    except HTTPException:
+        # Mirror defence for legacy ``HTTPException`` raises — same
+        # swallow risk via the catch-all below.
+        raise
     except Exception as e:
         logger.error("subnet_creation_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create subnet") from e
@@ -138,15 +148,6 @@ async def list_subnets(
 
         return {"subnets": subnet_infos, "count": len(subnet_infos)}
     except ACNHTTPError:
-        # Defence layer (sprint #3-followup): the owner-filter auth /
-        # ownership gates above raise ACNHTTPError, which is NOT a
-        # HTTPException subclass — without this re-raise the trailing
-        # ``except Exception`` would silently rewrite both 401 and 403
-        # as 500. The same defence applies to the other 7 catch-all
-        # blocks in subnets.py + 3 in registry.py once the
-        # cross-module catch-all defence P3 ticket lands; we apply
-        # it locally here only because the migration would be
-        # immediately broken without it.
         raise
     except HTTPException:
         raise
@@ -229,6 +230,8 @@ async def get_subnet_agents(
         agent_infos = [_agent_entity_to_info(a, strip_sensitive=True) for a in agents]
 
         return {"subnet_id": subnet_id, "agents": agent_infos, "count": len(agent_infos)}
+    except ACNHTTPError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -285,6 +288,10 @@ async def join_subnet(
             404,
             details={"agent_id": agent_id},
         ) from e
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("join_subnet_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to join subnet") from e
@@ -332,6 +339,10 @@ async def leave_subnet(
             404,
             details={"subnet_id": subnet_id},
         ) from e
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("leave_subnet_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to leave subnet") from e
@@ -387,18 +398,13 @@ async def delete_subnet(
             logger.info("subnet_deleted", subnet_id=subnet_id, owner=owner)
             return {"status": "deleted", "subnet_id": subnet_id}
         else:
-            # NOTE (sprint #3-followup): this in-try raise is intentionally
-            # NOT migrated to ``ACNHTTPError`` — it would fall through to
-            # the catch-all ``except Exception`` below and be silently
-            # rewritten as 500. The same fragility exists today for the
-            # legacy ``HTTPException`` form (also ``Exception``-typed).
-            # Tracked as a P3 ticket in ``docs/BACKLOG.md``
-            # ("Cross-module catch-all defence") — the holistic fix adds
-            # ``except ACNHTTPError: raise`` to ALL remaining catch-all
-            # 5xx blocks across the codebase. The same local defence has
-            # already been applied to ``list_subnets`` above (where new
-            # ACN raises *were* introduced and a fall-through was an
-            # active bug rather than a latent one).
+            # This in-try raise is now correctly propagated thanks to the
+            # ``except HTTPException: raise`` defence below (added by the
+            # P3 cross-module catch-all defence sweep). Pre-defence, the
+            # 404 was silently rewritten to 500 by the catch-all — that
+            # latent bug is now fixed. Future migration of this site to
+            # ``ACNHTTPError`` is also safe (the matching
+            # ``except ACNHTTPError: raise`` line is in place).
             raise HTTPException(status_code=404, detail="Subnet not found")
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
@@ -413,6 +419,15 @@ async def delete_subnet(
             403,
             details={"subnet_id": subnet_id, "reason": str(e)},
         ) from e
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        # P3 cross-module catch-all defence ALSO repairs the pre-existing
+        # latent bug at the ``else: raise HTTPException(404, "Subnet not
+        # found")`` branch above (line ≈398): without this re-raise the
+        # 404 was silently rewritten to 500 by the catch-all below. The
+        # 404 raise path is now correctly propagated.
+        raise
     except Exception as e:
         logger.error("delete_subnet_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to delete subnet") from e
@@ -446,6 +461,10 @@ async def admin_add_subnet_member(
             404,
             details={"subnet_id": subnet_id},
         ) from e
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("admin_add_subnet_member_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to add subnet member") from e
@@ -474,6 +493,10 @@ async def admin_remove_subnet_member(
             404,
             details={"subnet_id": subnet_id},
         ) from e
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("admin_remove_subnet_member_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to remove subnet member") from e

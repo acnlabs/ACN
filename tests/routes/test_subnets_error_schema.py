@@ -520,3 +520,105 @@ class TestSubnetsFlatErrorSchemaCrossModule:
             "subnet_id": "subnet-1",
             "reason": "Only the subnet owner can delete it.",
         }
+
+
+class TestSubnetsCatchAllDefence:
+    """P3 cross-module catch-all defence — sweep that adds
+    ``except ACNHTTPError: raise`` + ``except HTTPException: raise``
+    to every catch-all ``except Exception`` block in subnets/registry/
+    tasks routes.
+
+    These tests pin two contracts:
+
+    1. **Latent-bug fix proof**: ``delete_subnet``'s ``else: raise
+       HTTPException(404, "Subnet not found")`` short-circuit (in-try)
+       was previously rewritten to 500 by the catch-all. The new
+       ``except HTTPException: raise`` defence layer makes the 404
+       propagate correctly. Pre-defence this test would have asserted
+       500; post-defence it asserts 404.
+
+    2. **Forward-looking ACNHTTPError propagation**: any future
+       refactor that moves an ``ACNHTTPError`` raise *into* a try
+       body (intentionally or not) MUST still see the 4xx propagate.
+       We simulate this by mocking the service layer to raise an
+       ``ACNHTTPError`` from inside the ``try``, asserting the catch-
+       all does NOT swallow it.
+
+    These tests are forward-looking by design — none of the current
+    ``ACNHTTPError`` raises live inside any try body in subnets.py
+    (they live in either ``except`` clauses or pre-try gates). Pinning
+    the defence here means future schema migrations cannot
+    accidentally regress the contract.
+    """
+
+    def test_delete_subnet_returns_none_propagates_404(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """When ``subnet_service.delete_subnet`` returns falsy (no
+        exception raised), the route's ``else: raise HTTPException(
+        404, "Subnet not found")`` short-circuit must produce a 404
+        — NOT a 500. Before the catch-all defence sweep, this
+        in-try ``HTTPException`` was silently swallowed and rewritten
+        to 500 by ``except Exception``."""
+        stub_subnet_service.delete_subnet = AsyncMock(return_value=False)
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.delete(
+                "/api/v1/subnets/subnet-1",
+                headers={"Authorization": "Bearer dev-mode-any-token"},
+            )
+
+        assert r.status_code == 404, (
+            f"delete_subnet None-return path should propagate 404, got "
+            f"{r.status_code}: {r.text}. If this is 500, the "
+            f"``except HTTPException: raise`` defence in delete_subnet "
+            f"is missing or out of order."
+        )
+        assert r.json() == {"detail": "Subnet not found"}, (
+            "Latent-bug fix preserves the legacy ``HTTPException`` shape "
+            "for this site (it was deliberately NOT migrated to "
+            "``ACNHTTPError`` in sprint #3-followup — the defence sweep "
+            "fixes the silent rewrite without changing the wire shape "
+            "for this site)."
+        )
+
+    def test_create_subnet_inner_acnhttperror_propagates(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """Forward-looking contract test: if an ``ACNHTTPError`` ever
+        gets raised inside a ``try`` body in subnets.py, the catch-all
+        ``except Exception`` MUST NOT swallow it. We simulate this by
+        making ``subnet_service.create_subnet`` raise an
+        ``ACNHTTPError`` directly (bypassing the route's normal
+        ``ValueError → INVALID_REQUEST`` mapping). Without
+        ``except ACNHTTPError: raise``, this would land as a sanitised
+        500."""
+        from acn.core.errors import ACNHTTPError, ErrorCode
+
+        stub_subnet_service.create_subnet = AsyncMock(
+            side_effect=ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                400,
+                message="Synthetic in-try raise for defence test.",
+                details={"reason": "defence_contract_pin"},
+            )
+        )
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/v1/subnets/",
+                json={"subnet_id": "sn-x", "name": "x", "owner": "o"},
+                headers={"Authorization": "Bearer dev-mode-any-token"},
+            )
+
+        assert r.status_code == 400, (
+            f"In-try ACNHTTPError must propagate as its declared status "
+            f"({400}), got {r.status_code}: {r.text}. If this is 500, "
+            f"``except ACNHTTPError: raise`` is missing in create_subnet."
+        )
+        body = r.json()
+        _assert_flat_shape(body)
+        assert body["error_code"] == "invalid_request"
+        assert body["details"] == {"reason": "defence_contract_pin"}

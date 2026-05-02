@@ -453,6 +453,16 @@ async def dev_register_agent(
             message=f"DEV MODE: Agent registered successfully (owner: {request.owner})",
         )
 
+    except ACNHTTPError:
+        # P3 cross-module catch-all defence: ``ACNHTTPError`` is
+        # ``Exception``-typed (not ``HTTPException``-typed); without
+        # this re-raise, any caller-actionable 4xx raised inside the
+        # try body would be silently rewritten as a sanitised 500.
+        raise
+    except HTTPException:
+        # Mirror defence for legacy ``HTTPException`` raises — same
+        # swallow risk via the catch-all below.
+        raise
     except Exception as e:
         logger.error("Dev registration failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -585,6 +595,10 @@ async def register_agent(
             name=agent.name,
             agent_card_url=agent_card_url,
         )
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("agent_registration_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -986,6 +1000,10 @@ async def _join_agent_impl(
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
             agent_card_url=f"{base_url}/api/v1/agents/{agent.agent_id}/.well-known/agent-card.json",
         )
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("agent_join_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e

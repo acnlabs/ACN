@@ -711,6 +711,16 @@ async def create_task(
         )
         return _task_to_response(task)
 
+    except ACNHTTPError:
+        # P3 cross-module catch-all defence: ``ACNHTTPError`` is
+        # ``Exception``-typed (not ``HTTPException``-typed); without
+        # this re-raise, any caller-actionable 4xx raised inside the
+        # try body would be silently rewritten as a sanitised 500.
+        raise
+    except HTTPException:
+        # Mirror defence for legacy ``HTTPException`` raises — same
+        # swallow risk via the catch-all below.
+        raise
     except Exception as e:
         logger.error("task_creation_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e)) from e

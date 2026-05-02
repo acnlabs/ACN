@@ -135,16 +135,23 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 | ---------------------------------------- | ------------------------------------------------------ |
 | Field name                               | `error` (in 5xx response body)                          |
 | Replacement                              | `error_code` (already double-emitted starting this PR)  |
-| Double-emit start                        | This PR's merge date                                    |
-| Removal target                           | merge + 30 days                                         |
+| Double-emit start                        | 2026-05-02 (commit `099bfb7`, P1 #11 pilot merge)       |
+| Removal target                           | **2026-06-01** (merge + 30 days)                        |
 | Owner                                    | Same owner as the SDK 0.5.0 release notes (P1 #10)      |
 | Risk                                     | Low — the two fields hold equal values during the window; SDK 0.5.0 reads either |
 
-After 30 days: drop the `error` field from `_http_exception_handler`
-and `_unhandled_exception_handler` in `acn/api.py`; update
-`tests/test_error_sanitisation.py` to drop the legacy assertion;
-update section 1 of `acn-error-schema.md` to remove the deprecation
-note. Single-PR change.
+On or after **2026-06-01**: drop the `error` field from
+`_http_exception_handler` and `_unhandled_exception_handler` in
+`acn/api.py`; update `tests/test_error_sanitisation.py` to drop the
+legacy assertion; update section 1 of `acn-error-schema.md` to
+remove the deprecation note. Single-PR change.
+
+> **Do not remove early.** The 30-day window is a public contract
+> for SDK 0.5.0 clients. Compressing it (even when the codebase is
+> ready) breaks the deprecation guarantee. If the schedule needs to
+> change (e.g. an emergency revert), that is a separate decision and
+> should be communicated through the same channel as the original
+> announcement, not silently shipped.
 
 #### P3 — OpenAPI schema visibility for ACN flat error response
 
@@ -168,7 +175,46 @@ Suggested batching: do this *atomically* with each row of the sprint roadmap abo
 
 Out of scope for this ticket: regenerating downstream SDK type-gen artefacts. That is the SDK release-notes owner's responsibility.
 
-#### P3 — Add `except ACNHTTPError: raise` defence on catch-all 5xx blocks
+#### ~~P3 — Add `except ACNHTTPError: raise` defence on catch-all 5xx blocks~~ ✅ Landed
+
+**Resolution** (commit landing this entry): all 11 catch-all
+``except Exception`` blocks across `registry.py` (3) + `subnets.py`
+(7 — `list_subnets` already had local defence from sprint
+#3-followup) + `tasks.py` (1) now carry the matching pair:
+
+```python
+except ACNHTTPError:
+    raise
+except HTTPException:
+    raise
+except Exception as e:
+    logger.error(...)
+    raise HTTPException(status_code=500, detail=...) from e
+```
+
+The single `create_subnet` block keeps an in-file rationale comment;
+the other 10 are intentionally compact (just two `raise` lines)
+because the rationale is identical.
+
+**Latent bug fix**: `delete_subnet`'s `else: raise HTTPException(
+404, "Subnet not found")` short-circuit (in the same `try` body as
+the catch-all) now correctly propagates as 404 instead of being
+silently rewritten to 500 — the new `except HTTPException: raise`
+line catches it. Regression test pinned in
+`tests/routes/test_subnets_error_schema.py::TestSubnetsCatchAllDefence::
+test_delete_subnet_returns_none_propagates_404`. Pre-defence this
+test would have asserted 500.
+
+**Forward-looking contract test**: 
+`test_create_subnet_inner_acnhttperror_propagates` mocks
+`subnet_service.create_subnet` to raise `ACNHTTPError` directly
+inside the `try` body and asserts the catch-all does NOT swallow it.
+Pins the contract for any future refactor that moves an
+`ACNHTTPError` raise into a try body (intentional or accidental).
+
+**Original ticket text retained below for archeology / context.**
+
+---
 
 **Affected files**:
 - `acn/routes/registry.py` — 3 catch-all `except Exception as e: raise HTTPException(500, str(e))` blocks at L316 (`register` / dev), L425 (`register_protected`), L807 (`_join_agent_impl`).
@@ -241,19 +287,31 @@ the full `tests/routes/` suite was run during audit. Fixed in commit
 `16b6ca8` (audit-followup). Retroactive lesson:
 
 > **Any commit that flips a route's emitted error wire-shape (from
-> `HTTPException` to `ACNHTTPError` or vice versa) MUST run the full
-> `tests/routes/` suite before merge — running only the dedicated
-> `test_*_error_schema.py` modules is insufficient because legacy
-> route tests written before the schema migration sprint may still
-> assert on `r.json()["detail"]` or `pytest.raises(HTTPException)`.**
+> `HTTPException` to `ACNHTTPError` or vice versa, or removes the
+> double-emit `error` 5xx field) MUST run the full `tests/` suite
+> before merge — running only the dedicated `test_*_error_schema.py`
+> modules or even the full `tests/routes/` subtree is insufficient,
+> because module-level sanitisation tests (e.g.
+> `tests/test_error_sanitisation.py`) and integration tests live
+> outside `tests/routes/` and may still assert on legacy shapes.**
 
 Concretely for the remaining schema migration sprints (#5 payments,
 #6 follows, #7 onchain, #8 manifest, #9 analytics, #10 dependencies,
-#11 websocket): each PR should include a `pytest tests/routes/ -q
---no-cov` smoke run in the description (≈7 min on a warm cache) in
-addition to the schema-test subset that's already part of the sprint
-acceptance criteria. The cost is small relative to the cost of a
-post-merge revert when a non-schema test breaks on `main`.
+#11 websocket): each PR should include a `pytest tests/ -q --no-cov
+--ignore=tests/integration` smoke run in the description (≈9 min on
+a warm cache) in addition to the schema-test subset that's already
+part of the sprint acceptance criteria. The cost is small relative
+to the cost of a post-merge revert when a non-schema test breaks on
+`main`.
+
+The "tests/routes/ is enough" rule was the *first* iteration of this
+note, written after the Step 2 audit found 5 wire-shape regressions
+in 3 route-test files. A subsequent finding in the cross-module
+catch-all defence sweep (May 2026) showed that `tests/test_error_
+sanitisation.py` (module-scope, not under `tests/routes/`) can also
+carry stale assertions when an in-progress deprecation lands in the
+working tree before its companion `acn/api.py` change. Widening the
+rule to `tests/` ensures both kinds of drift are caught pre-merge.
 
 #### ~~P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py`~~ ✅ Landed
 
