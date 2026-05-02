@@ -56,7 +56,7 @@ async def create_subnet(
     try:
         # Use SubnetService
         security_cfg = request.security_config or (
-            {k: v for k, v in (request.security_schemes or {}).items()} if request.security_schemes else {}
+            dict(request.security_schemes) if request.security_schemes else {}
         )
         subnet = await subnet_service.create_subnet(
             subnet_id=request.subnet_id
@@ -348,7 +348,7 @@ async def admin_add_subnet_member(
         logger.info("admin_subnet_member_added", subnet_id=subnet_id, agent_id=agent_id)
         return {"status": "added", "subnet_id": subnet_id, "agent_id": agent_id}
     except SubnetNotFoundException:
-        raise HTTPException(status_code=404, detail="Subnet not found")
+        raise HTTPException(status_code=404, detail="Subnet not found") from None
     except Exception as e:
         logger.error("admin_add_subnet_member_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to add subnet member") from e
@@ -372,7 +372,7 @@ async def admin_remove_subnet_member(
         logger.info("admin_subnet_member_removed", subnet_id=subnet_id, agent_id=agent_id)
         return {"status": "removed", "subnet_id": subnet_id, "agent_id": agent_id}
     except SubnetNotFoundException:
-        raise HTTPException(status_code=404, detail="Subnet not found")
+        raise HTTPException(status_code=404, detail="Subnet not found") from None
     except Exception as e:
         logger.error("admin_remove_subnet_member_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to remove subnet member") from e
