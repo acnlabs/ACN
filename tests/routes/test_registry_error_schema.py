@@ -54,21 +54,8 @@ from fastapi.testclient import TestClient
 
 from acn.api import app
 from acn.core.exceptions import AgentNotFoundException
-from acn.routes.dependencies import (
-    _api_key_cache,
-    get_agent_service,
-    limiter,
-)
-
-
-@pytest.fixture(autouse=True)
-def _reset_state():
-    limiter.enabled = False
-    _api_key_cache.clear()
-    yield
-    limiter.enabled = True
-    _api_key_cache.clear()
-    app.dependency_overrides.clear()
+from acn.routes.dependencies import get_agent_service
+from tests.routes.conftest import _assert_flat_shape
 
 
 @pytest.fixture
@@ -122,25 +109,6 @@ def stub_agent_service():
 
 def _wire(svc) -> None:
     app.dependency_overrides[get_agent_service] = lambda: svc
-
-
-_FLAT_SCHEMA_FIELDS = {"error_code", "message", "details", "request_id"}
-
-
-def _assert_flat_shape(body: dict) -> None:
-    """Same shape invariant used by sprint row #1's allowlist tests
-    — see ``tests/routes/test_allowlist_error_schema.py`` for the
-    rationale; once row #3 lands the helper will be hoisted to
-    ``tests/routes/conftest.py`` per the BACKLOG ticket.
-    """
-    assert _FLAT_SCHEMA_FIELDS <= body.keys(), (
-        f"missing canonical fields; got {sorted(body.keys())}"
-    )
-    assert "detail" not in body, (
-        "legacy `detail` field present — migration regression: a "
-        "raise HTTPException(...) likely sneaked back in"
-    )
-    assert isinstance(body["details"], dict)
 
 
 class TestRegistryFlatErrorSchema:

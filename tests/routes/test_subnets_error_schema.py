@@ -68,21 +68,10 @@ from fastapi.testclient import TestClient
 from acn.api import app
 from acn.core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from acn.routes.dependencies import (
-    _api_key_cache,
     get_agent_service,
     get_subnet_service,
-    limiter,
 )
-
-
-@pytest.fixture(autouse=True)
-def _reset_state():
-    limiter.enabled = False
-    _api_key_cache.clear()
-    yield
-    limiter.enabled = True
-    _api_key_cache.clear()
-    app.dependency_overrides.clear()
+from tests.routes.conftest import _assert_flat_shape
 
 
 @pytest.fixture
@@ -165,26 +154,6 @@ def stub_subnet_service():
 def _wire(agent_svc, subnet_svc) -> None:
     app.dependency_overrides[get_agent_service] = lambda: agent_svc
     app.dependency_overrides[get_subnet_service] = lambda: subnet_svc
-
-
-_FLAT_SCHEMA_FIELDS = {"error_code", "message", "details", "request_id"}
-
-
-def _assert_flat_shape(body: dict) -> None:
-    """Same shape invariant used by sprint rows #1, #2a — duplicated
-    here pending the BACKLOG fixture-DRY hoist (which becomes active
-    once row #3 lands, i.e. with this commit). The hoist will move
-    this helper plus the ``_FLAT_SCHEMA_FIELDS`` constant to
-    ``tests/routes/conftest.py``.
-    """
-    assert _FLAT_SCHEMA_FIELDS <= body.keys(), (
-        f"missing canonical fields; got {sorted(body.keys())}"
-    )
-    assert "detail" not in body, (
-        "legacy `detail` field present — migration regression: a "
-        "raise HTTPException(...) likely sneaked back in"
-    )
-    assert isinstance(body["details"], dict)
 
 
 class TestSubnetsFlatErrorSchema:

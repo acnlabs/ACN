@@ -196,31 +196,19 @@ Why not now (sprint #2a / #3):
 - For subnets `delete_subnet`: the bug pre-dates the migration; bundling the fix with sprint #3 would creep beyond "safe migration" scope. A separate PR keeps the bug fix loud in the commit history (instead of buried in a multi-purpose migration commit).
 - Co-locating both defences with sprint #2b keeps the migration commit message accurately describing why the defence is being added at exactly the right moment.
 
-#### P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py` *(ready to pick up — trigger met)*
+#### ~~P3 — Hoist shared route-test fixtures to `tests/routes/conftest.py`~~ ✅ Landed
 
-Each error-schema migration sprint row produces a `tests/routes/test_<module>_error_schema.py` that re-defines roughly the same three fixtures:
+Hoisted in a focused follow-up commit after sprint row #3 — `tests/routes/conftest.py` now owns:
 
 - `_reset_state` (autouse) — disables `slowapi.limiter`, clears `_api_key_cache`, clears `app.dependency_overrides`
-- `stub_agent_service` — wires owner + cross-tenant API keys
-- `stub_<resource>_service` — `AsyncMock` with sensible defaults
+- `_FLAT_SCHEMA_FIELDS` constant — the canonical four-field set for ACN flat error responses
+- `_assert_flat_shape(body)` helper — the shared schema-shape invariant
 
-**Trigger condition reached as of sprint row #3 (this commit)** — three concrete duplicates now exist:
-- `tests/routes/test_allowlist_error_schema.py` (sprint row #1)
-- `tests/routes/test_registry_error_schema.py` (sprint row #2a)
-- `tests/routes/test_subnets_error_schema.py` (sprint row #3, this commit)
+The three schema test files (`test_allowlist_error_schema.py`, `test_registry_error_schema.py`, `test_subnets_error_schema.py`) drop their per-file copies and inherit / import from the conftest.
 
-Each file ships its own copy of `_reset_state`, the `_FLAT_SCHEMA_FIELDS` constant, and the `_assert_flat_shape` helper — totalling ~120 LOC of duplication. The duplication shape is now stable enough that hoisting will not require speculative API design.
+Six pre-existing route test files (`test_allowlist_routes.py`, `test_agent_endpoint_disclosure.py`, `test_agent_policy_patch.py`, `test_manifest_routes.py`, `test_agent_social_card_url_patch.py`, `test_agent_card_url_sanitize.py`) keep their own `_reset_state` autouse fixtures. Pytest's fixture override rules (closest scope wins) mean the conftest copy is silently overridden in those scopes — five of the six file-local copies are byte-identical to the conftest version (idempotent), and `test_agent_card_url_sanitize.py` deliberately omits the API-key-cache clear because it doesn't authenticate. The `tests/routes/conftest.py` module docstring explains this override pattern so future contributors don't read it as a hazard.
 
-Why not bundled with row #3 (this commit):
-- Touching `tests/routes/conftest.py` cross-cuts every existing route test file beyond the schema tests (`test_allowlist_routes.py`, `test_communication_*.py`, `test_registry_*.py` each have their own `_reset_state`-shaped fixture). The audit-preferred sequence is to land the migration tests first (so the *real* duplication shape is observable across three modules), then dedup in a focused PR with no behavioural changes.
-- Bundling would conflate "behaviour: subnets routes now emit flat schema" with "test infra: dedup fixtures" — two reviewable concerns deserving two commits.
-
-Suggested follow-up PR scope:
-1. Move `_FLAT_SCHEMA_FIELDS`, `_assert_flat_shape`, and the `_reset_state` autouse fixture to `tests/routes/conftest.py`.
-2. Replace the per-file copies in the three schema test files with imports / fixture inheritance.
-3. Audit the non-schema route test files for collisions with the now-shared fixture name; rename if needed (preferable to silently overriding).
-
-Estimated effort: 2-3 hours; one of those is reading the existing route tests to confirm the shared fixtures don't collide.
+Net effect: ~70 LOC removed from the three schema files; ~30 LOC of conftest infrastructure added; future schema migration sprints (rows #4–#11) inherit the reset fixture for free. Verified by 102/102 passing tests across all nine route test files (three hoisted, six preserving their overrides).
 
 #### P3 — `RequestValidationError` alignment
 

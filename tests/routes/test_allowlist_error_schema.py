@@ -44,23 +44,12 @@ from fastapi.testclient import TestClient
 from acn.api import app
 from acn.core.exceptions import AgentNotFoundException
 from acn.routes.dependencies import (
-    _api_key_cache,
     get_agent_service,
     get_allowlist_service,
-    limiter,
 )
 from acn.services import AllowlistCapacityExceededError, SelfAllowlistError
 from acn.services.allowlist_service import MAX_ALLOWLIST_SIZE
-
-
-@pytest.fixture(autouse=True)
-def _reset_state():
-    limiter.enabled = False
-    _api_key_cache.clear()
-    yield
-    limiter.enabled = True
-    _api_key_cache.clear()
-    app.dependency_overrides.clear()
+from tests.routes.conftest import _assert_flat_shape
 
 
 @pytest.fixture
@@ -100,30 +89,6 @@ def stub_allowlist_service():
 def _wire(allowlist_svc, agent_svc) -> None:
     app.dependency_overrides[get_allowlist_service] = lambda: allowlist_svc
     app.dependency_overrides[get_agent_service] = lambda: agent_svc
-
-
-_FLAT_SCHEMA_FIELDS = {"error_code", "message", "details", "request_id"}
-
-
-def _assert_flat_shape(body: dict) -> None:
-    """Schema invariant: every migrated 4xx body has all four canonical
-    fields and **must not** carry the legacy ``detail`` field.
-
-    Centralising the assertion here keeps the per-case tests focused
-    on the code-specific ``details`` keys and makes a contract
-    regression (e.g. a future refactor accidentally re-introducing
-    ``detail``) fail with a single, obvious message.
-    """
-    assert _FLAT_SCHEMA_FIELDS <= body.keys(), (
-        f"missing canonical fields; got {sorted(body.keys())}"
-    )
-    assert "detail" not in body, (
-        "legacy `detail` field present — migration regression: a "
-        "raise HTTPException(...) likely sneaked back in"
-    )
-    assert isinstance(body["details"], dict), (
-        "`details` must be a JSON object even when empty"
-    )
 
 
 class TestAllowlistFlatErrorSchema:
