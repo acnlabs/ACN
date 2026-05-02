@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, model_validator
 from ..auth.middleware import require_permission, verify_token
 from ..config import get_settings
 from ..core.entities import TaskStatus
+from ..core.errors import ACNHTTPError, ErrorCode
 from ..services import TaskNotFoundException, TaskService
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
@@ -581,7 +582,11 @@ async def get_task(
     try:
         task = await task_service.get_task(task_id)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
 
     if task.subnet_id:
         requesting_agent_id = await _resolve_caller_identity(request, credentials)
@@ -696,7 +701,11 @@ async def accept_task(
         )
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -728,7 +737,11 @@ async def invite_solver(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -758,7 +771,11 @@ async def submit_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -803,7 +820,11 @@ async def review_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -829,7 +850,11 @@ async def cancel_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -864,7 +889,11 @@ async def list_participations(
             total=len(participations),
         )
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
 
 
 @router.get("/{task_id}/participations/me", response_model=ParticipationResponse | None)
@@ -904,7 +933,11 @@ async def cancel_participation(
         )
         return _task_to_response(task)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -931,7 +964,11 @@ async def approve_applicant(
         )
         return _task_to_response(task)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -958,7 +995,11 @@ async def reject_applicant(
         )
         return _task_to_response(task)
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -987,7 +1028,11 @@ async def get_task_internal(
         task = await task_service.get_task(task_id)
         return task.to_dict()
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
 
 
 # ========== Agent API Key Endpoints ==========
@@ -1052,7 +1097,11 @@ async def agent_accept_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -1080,7 +1129,11 @@ async def agent_submit_task(
         return _task_to_response(task)
 
     except TaskNotFoundException:
-        raise HTTPException(status_code=404, detail="Task not found") from None
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:

@@ -119,7 +119,8 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 | 2c | `registry` (registration policy)      | new: `DEV_MODE_DISABLED`, `OWNER_TOKEN_MISMATCH`, `AGENT_ALREADY_EXISTS` (if domain raises one), `BULK_DELETE_FILTER_REQUIRED` | ⏳ |
 | 3 | `subnets` (partial — safe migration)  | reuse `SUBNET_NOT_FOUND` (×7), `AGENT_NOT_FOUND` (×3), `API_KEY_AGENT_MISMATCH` (×3) | ✅ |
 | 3-followup | `subnets` (auth/permission/validation) | depends on #2b auth code naming — 2× 401 *authentication required* (listing / private-subnet view), 3× 403 *permission denied* (same paths + `delete_subnet`'s `except PermissionError`), 1× 400 *invalid request* (`ValueError` on `POST /subnets`) | ⏳ |
-| 4 | `tasks`                               | reuse `TASK_NOT_FOUND`                                          | ⏳ |
+| 4 | `tasks` (partial — safe migration)    | reuse `TASK_NOT_FOUND` (×13 — every `except TaskNotFoundException` site, 3 different auth surfaces) | ✅ |
+| 4-followup | `tasks` (auth/permission/validation) | depends on #2b auth code naming — 9× 403 `PermissionError` re-raises (ownership), 9× 400 `ValueError` re-raises (body / status validation), 8× endpoint-specific 4xx (auth gates, body validation, subnet-membership on private tasks) | ⏳ |
 | 5 | `payments`                            | reuse `INSUFFICIENT_BALANCE`                                    | ⏳ |
 | 6 | `follows`                             | new: `FOLLOW_LIMIT_EXCEEDED` / `SELF_FOLLOW_FORBIDDEN`           | ⏳ |
 | 7 | `onchain`                             | new: ERC-8004 specific failures                                  | ⏳ |
