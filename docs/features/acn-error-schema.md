@@ -428,23 +428,36 @@ Update Section 4's coexistence matrix from ⏳ to ✅ for the migrated route gro
 
 ## 7. Migration sprint roadmap
 
-The pilot migration covered communication routes (~14 4xx sites). The sprint to cover the remaining 11 modules is tracked in `[docs/BACKLOG.md](../BACKLOG.md)` under "Phase 2 review v2 P1 #11 — Error schema migration sprint".
+Per-sprint progress, code-level breakdown, and the suggested
+ordering live in **[`docs/BACKLOG.md`](../BACKLOG.md) → "Phase 2
+review v2 P1 #11 — Error schema migration sprint"**, which is the
+single source of truth (this section is intentionally short — a
+duplicate roadmap has caused stale-doc drift in the past, e.g. a
+sprint #5 update that hit BACKLOG but missed this file).
 
-Suggested ordering (cheapest / most impactful first):
+This document focuses on the **public contract** SDK clients
+depend on (sections 1-6, 8); BACKLOG focuses on the **internal
+migration process**. The two are linked but separate concerns.
 
-1. `**allowlist`** — already has domain exceptions (`AllowlistCapacityExceededError`, `SelfAllowlistError`); 1:1 mapping to reserved catalog codes
-2. `**registry**` — frequently consumed by SDK; `agent_not_found` / `agent_already_exists` mappings are obvious
-3. `**subnets**` — `subnet_not_found` is already reserved in the catalog
-4. `**tasks**` — `task_not_found` reserved
-5. ~~`**payments**` — `insufficient_balance` reserved~~ ✅ #5 landed. Actual sprint #5 surfaced **resource-existence** failures (capability / task / pricing / transaction not found), not balance failures — `INSUFFICIENT_BALANCE` stays reserved until the wallet/billing subsystem genuinely raises it. New codes: `PAYMENT_CAPABILITY_NOT_FOUND`, `PAYMENT_TASK_NOT_FOUND`, `TOKEN_PRICING_NOT_CONFIGURED`, `BILLING_TRANSACTION_NOT_FOUND` (4); reused: `AGENT_NOT_FOUND`, `API_KEY_AGENT_MISMATCH`, `FROM_AGENT_MISMATCH` (3).
-6. ~~`**follows**` — small surface, similar shape to `allowlist`~~ ✅ #6 landed. New codes: `FOLLOW_LIMIT_EXCEEDED`, `SELF_FOLLOW_FORBIDDEN` (2); reused: `AGENT_NOT_FOUND`, `API_KEY_AGENT_MISMATCH` (2). 5 4xx sites total, **0 5xx catch-all sites** (the only `try/except` blocks in `follow_agent` / `unfollow_agent` catch domain-specific exceptions, no trailing `except Exception`). Field-name divergence vs sprint #1 (`follower_id` / `max_follows` instead of `owner_id` / `max_size`) was deliberate — see footnote `[^6]`.
-7. `**onchain**` — needs new codes for ERC-8004 specific failures
-8. `**manifest**` — small surface
-9. `**analytics**` — small surface, mostly 4xx pass-through today
-10. `**dependencies**` — auth-shared module; high care due to security relevance
-11. `**websocket**` — last (different protocol surface; may need separate schema treatment)
+### Migration exit criteria
 
-After all rows in Section 4 flip to ✅, the SDK fallback `else` branch in Section 4's parsing template can be removed and the 30-day 5xx `error` field deprecation can land — at which point the schema is fully unified and ACN can declare the migration complete.
+The migration is complete and ACN can declare full schema
+unification when **all** of the following hold (all observable
+from this document, BACKLOG, and `/openapi.json`):
+
+- Every row in Section 4's coexistence matrix is ✅.
+- Every footnote `[^N]` (N = sprint index) is published with
+  per-site enumeration and contract notes.
+- The 30-day 5xx `error` field deprecation window has expired
+  (target: **2026-06-01** — see BACKLOG "5xx field deprecation
+  ticket"); the field is removed from `_http_exception_handler`
+  and `_unhandled_exception_handler`.
+- The SDK parsing template's `if "error_code" in body` fallback
+  branch is removed (currently load-bearing during transition;
+  drops out once Section 4 is uniformly ✅).
+
+Until then, SDK 0.5.0 must accept both shapes — see the parsing
+template in Section 4.
 
 ---
 
