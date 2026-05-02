@@ -80,7 +80,7 @@ The `ErrorCode` enum in `[acn/core/errors.py](../../acn/core/errors.py)` is a **
 
 `agent_not_found` and `api_key_agent_mismatch` rows above are also raised here — see the *Used by* column.
 
-### Registry routes (sprint row #2a — partial)
+### Registry routes (sprint rows #2a + #2b)
 
 
 | `error_code`       | HTTP status | Used by                                               | `details` schema        |
@@ -88,9 +88,9 @@ The `ErrorCode` enum in `[acn/core/errors.py](../../acn/core/errors.py)` is a **
 | `subnet_not_found` | 400         | `POST /register` (DEV) and `POST /register-protected` | `{ subnet_id: string }` |
 
 
-Pilot codes `agent_not_found` / `api_key_agent_mismatch` / `communication_rejected` are also raised by registry — see the *Used by* column on the pilot table.
+Pilot codes `agent_not_found` / `api_key_agent_mismatch` / `communication_rejected` are also raised by registry — see the *Used by* column on the pilot table. Sprint #2a's coverage of `agent_not_found` was extended in #2b to include `PATCH /agents/{id}/social-card-url` (a missed migration site — see footnote `[^2]`).
 
-The remaining 10 4xx sites in `acn/routes/registry.py` (dev-mode rejection, owner-token mismatch, ownership / permission errors, bulk-delete safety guard, `ValueError` claim path, and `Authorization` header rejects) need new catalog codes and are tracked as sprint rows #2b and #2c in `[docs/BACKLOG.md](../BACKLOG.md)`. Until those land, registry endpoints can emit *either* the flat schema (for migrated raise sites) *or* the legacy `{"detail": "..."}` shape (for unmigrated sites). The §4 SDK parsing template handles both correctly.
+The remaining 11 4xx sites in `acn/routes/registry.py` migrated to the cross-module catalog in sprint #2b — see "Cross-module catalog (sprint row #2b)" below for the per-`ErrorCode` site enumeration.
 
 ### Tasks routes (sprint row #4 — partial)
 
@@ -109,9 +109,26 @@ The remaining 7 4xx sites in `acn/routes/subnets.py` are deferred:
 - **6 sites need new catalog codes** — 2 401 *authentication required* on the listing / private-subnet view paths, 3 403 *permission denied* on the same paths plus the owner-only `DELETE /subnets/{id}` path's `except PermissionError`, and 1 400 *invalid request* on `POST /subnets` (`ValueError` from the create flow). The auth/permission codes will be picked up alongside sprint row #2b once registry's auth gates settle on names; the 400 *invalid request* code lands with row #2c's `ValueError` claim path.
 - **1 site is a pre-existing latent bug** — the `else: raise HTTPException(404)` short-circuit inside `delete_subnet`'s `try` body is silently rewritten to 500 by the surrounding catch-all `except Exception`. The migration intentionally does **not** convert this site because `ACNHTTPError` would have the same fate (it inherits from `Exception`, not `HTTPException`, by design). The fix requires the `except ACNHTTPError: raise` defence ticket in `[docs/BACKLOG.md](../BACKLOG.md)` and is tracked there alongside the registry catch-all defence work.
 
+### Cross-module catalog (sprint row #2b)
+
+Six `ErrorCode` members designed to be **shared by `registry`, `subnets`, and `tasks`** so an SDK consumer can write one set of fallback handlers regardless of which module emitted the error. The cross-module set is the deliverable that unblocks rows #3-followup and #4-followup; see [`docs/BACKLOG.md`](../BACKLOG.md) for the per-row status.
+
+| `error_code`              | HTTP status | Raised by (sprint #2b — registry only)                                                                                                                | `details` schema                                                       |
+| ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `authentication_required` | 401         | `GET /me` (×2 — invalid Authorization header format / unrecognised API key)                                                                           | `{ reason: "invalid_authorization_header_format" \| "invalid_api_key" }` |
+| `internal_token_invalid`  | 401         | `POST /agents/join/internal` (X-Internal-Token missing or mismatched)                                                                                 | `{}`                                                                   |
+| `missing_permission`      | 403         | `POST /agents/dev/register` (dev-mode disabled in this environment)                                                                                   | `{ reason: "dev_mode_disabled" }`                                      |
+| `ownership_mismatch`      | 403         | `POST /register-protected` (owner-token mismatch); `DELETE /agents/{id}` `POST /claim` `POST /transfer` `POST /release` (`PermissionError` re-raises) | `{ agent_id: string, reason?: string } \| { requested_owner: string, token_owner: string }` |
+| `not_subnet_member`       | 403         | *(reserved for sprint rows #3-followup / #4-followup — not raised by registry)*                                                                       | `{ subnet_id: string, agent_id: string }`                              |
+| `invalid_request`         | 400         | `DELETE /api/v1/agents` (bulk-delete filter required); `POST /agents/{id}/claim` (`ValueError` from claim flow)                                       | `{ reason: string, agent_id?: string }`                                |
+
+`details.reason` is a stable per-code enum — it gives the SDK a way to branch on the cause without parsing the prose `message`. Each per-`ErrorCode` row above lists the fixed reason values that `acn/routes/registry.py` emits today; the same set will pick up additional values as `subnets` / `tasks` migrate, and we track new reason values in this section as they appear.
+
+Default `_DEFAULT_MESSAGES` for these codes are short, generic, and SDK-friendly (e.g. `"The authenticated caller does not own the requested resource."` for `OWNERSHIP_MISMATCH`). Routes pass per-call diagnostic prose via the explicit `message=` kwarg when the default isn't precise enough — the bulk-delete safety guard is the canonical example.
+
 ### Reserved (declared, not yet raised)
 
-`wallet_rate_limit_exceeded` / `authentication_required` / `internal_token_invalid` / `insufficient_balance` / `resource_conflict`
+`wallet_rate_limit_exceeded` / `insufficient_balance` / `resource_conflict`
 
 Reserved codes will be picked up by the migration sprint as each route is converted (see Section 7).
 
@@ -179,7 +196,7 @@ Realigning slowapi to the flat schema is reserved as `WALLET_RATE_LIMIT_EXCEEDED
 
 ### Non-pilot routes
 
-The route modules `follows`, `payments`, `onchain`, `dependencies`, `manifest`, `analytics`, and `websocket` still raise vanilla `HTTPException` and are caught by the existing `_http_exception_handler` 4xx pass-through, which emits the legacy `{"detail": "..."}` / `{"detail": {...}}` shape. The `registry`, `subnets`, and `tasks` modules are partially migrated as of sprint rows #2a, #3, and #4 respectively — see the coexistence matrix below. These routes are NOT broken, they just speak the old contract until the migration sprint reaches them.
+The route modules `follows`, `payments`, `onchain`, `dependencies`, `manifest`, `analytics`, and `websocket` still raise vanilla `HTTPException` and are caught by the existing `_http_exception_handler` 4xx pass-through, which emits the legacy `{"detail": "..."}` / `{"detail": {...}}` shape. The `registry` module is fully migrated as of sprint #2b; `subnets` and `tasks` are partially migrated as of sprint rows #3 and #4 (their followup migrations land alongside this sprint). See the coexistence matrix below. These routes are NOT broken, they just speak the old contract until the migration sprint reaches them.
 
 ---
 
@@ -192,7 +209,7 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- | -------------------------------------------------------------------------------------- | ---------------- |
 | Pilot — `/communication/send`, `/broadcast`, `/broadcast-by-tag`, `/history`, `/history/{agent_id}/ack`, `/internal/send` [^1] | `ACNHTTPError`                           | `{ error_code, message, details, request_id }` (flat)                                  | ✅ Migrated       |
 | `/api/v1/agents/{id}/allowlist/...` (POST/DELETE/GET) [^1]                                                                     | `ACNHTTPError`                           | `{ error_code, message, details, request_id }` (flat)                                  | ✅ Migrated       |
-| `/api/v1/agents/`* (registry) [^1] [^2]                                                                                        | mixed (`ACNHTTPError` + `HTTPException`) | mixed (flat for migrated 4xx, nested `{"detail": "..."}` for unmigrated 4xx)           | 🟡 Partial (#2a) |
+| `/api/v1/agents/`* (registry) [^1] [^2]                                                                                        | `ACNHTTPError` (4xx) + `HTTPException` (5xx) | flat                                                                              | ✅ Aligned (#2a + #2b) |
 | `/api/v1/subnets/*` [^1] [^3]                                                                                                  | mixed (`ACNHTTPError` + `HTTPException`) | mixed (flat for migrated 4xx, nested `{"detail": "..."}` for unmigrated 4xx)           | 🟡 Partial (#3)  |
 | `/api/v1/tasks/*` [^1] [^4]                                                                                                    | mixed (`ACNHTTPError` + `HTTPException`) | mixed (flat for migrated 4xx, nested `{"detail": "..."}` for unmigrated 4xx)           | 🟡 Partial (#4)  |
 | `/api/v1/follows/*`                                                                                                            | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
@@ -207,7 +224,15 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 
 Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can depend on this matrix as the source of truth for which response shape a given endpoint emits.
 
-[^2]: **Registry partial migration (sprint #2a).** 19 of the 29 4xx raise sites in `acn/routes/registry.py` are migrated — the ones that map directly to existing catalog codes: 15× `AGENT_NOT_FOUND` + 1× `API_KEY_AGENT_MISMATCH` + 2× `SUBNET_NOT_FOUND` + 1× `COMMUNICATION_REJECTED` (which also flattens the legacy nested `{"detail": {"detail": "..."}}` proxy shape). The remaining 10 4xx sites (dev-mode rejection, owner-token mismatch, the 2 `Authorization` header rejects, the internal-token requirement, ownership / permission errors ×3, the bulk-delete safety guard, and the `ValueError` claim path) need new catalog codes and ship as sprint rows #2b and #2c. The 7 5xx sites in registry (502 / 503 / catch-all 500) stay on `HTTPException` by design — `ACNHTTPError` rejects 5xx at construction time so the existing sanitised-5xx handler chain stays in charge. SDK clients must therefore handle BOTH the flat schema and the legacy `{"detail": "..."}` shape on registry endpoints — the §4 SDK parsing template (`if "error_code" in body`) does this correctly. Sprint row #2 flips fully ✅ when #2c lands.
+[^2]: **Registry full migration (sprint #2a + #2b).** All 30 4xx raise sites in `acn/routes/registry.py` are migrated:
+
+    *Sprint #2a (19 sites)* — direct mapping to existing catalog codes: 15× `AGENT_NOT_FOUND` + 1× `API_KEY_AGENT_MISMATCH` + 2× `SUBNET_NOT_FOUND` + 1× `COMMUNICATION_REJECTED` (which also flattened the legacy nested `{"detail": {"detail": "..."}}` proxy shape).
+
+    *Sprint #2b (11 sites)* — picked up by the new cross-module catalog: 1× `MISSING_PERMISSION` (dev-mode disabled), 1× `OWNERSHIP_MISMATCH` for the `register-protected` owner-token mismatch + 3× more for the `unregister_agent` / `transfer_agent` / `release_agent` `PermissionError` re-raises, 2× `AUTHENTICATION_REQUIRED` for `GET /me`'s malformed-header / unrecognised-API-key paths, 1× `INTERNAL_TOKEN_INVALID` for the internal join endpoint, 2× `INVALID_REQUEST` (bulk-delete safety guard + `claim_agent`'s `ValueError`), and 1× `AGENT_NOT_FOUND` to fix a missed migration site at `update_agent_social_card_url` (a `PATCH` endpoint added to registry *after* sprint #2a's 19-site enumeration was frozen — the sprint-#2a footnote's "29 4xx total" count was a snapshot, not a stable invariant).
+
+    Sprint #2c was originally scoped to cover the `ValueError` claim path with a dedicated `INVALID_AGENT_CLAIM` code; the cross-module RFC consolidated that into `INVALID_REQUEST` with `details.reason="invalid_agent_claim"` so #2c is no longer needed as a separate sprint row.
+
+    The 7 5xx sites in registry (502 / 503 / catch-all 500) stay on `HTTPException` by design — `ACNHTTPError` rejects 5xx at construction time so the existing sanitised-5xx handler chain stays in charge. SDK clients hitting registry endpoints now see the flat schema for *all* 4xx; the §4 SDK parsing template's `if "error_code" in body` branch is no longer load-bearing for registry but stays correct (shared across modules at different migration stages).
 
 [^3]: **Subnets partial migration (sprint #3).** 13 of the 20 4xx raise sites in `acn/routes/subnets.py` are migrated — the ones that map directly to existing catalog codes: 7× `SUBNET_NOT_FOUND` + 3× `AGENT_NOT_FOUND` + 3× `API_KEY_AGENT_MISMATCH`. The remaining 7 4xx sites split into two groups: (1) **six sites need new catalog codes** — 2× 401 *authentication required* (listing / private-subnet view), 3× 403 *permission denied* (same paths plus `delete_subnet`'s `except PermissionError`), and 1× 400 *invalid request* on `POST /subnets` (`ValueError` from the create flow). These pick up alongside sprint rows #2b/#2c once auth/permission codes settle on names. (2) **One site is a pre-existing latent bug** — the `else: raise HTTPException(404)` short-circuit inside `delete_subnet`'s `try` body is silently rewritten to 500 by the surrounding catch-all `except Exception` (today and after migration, since `ACNHTTPError` is also `Exception`-typed by design). Fixing it requires the `except ACNHTTPError: raise` defence ticket in `[docs/BACKLOG.md](../BACKLOG.md)` and is tracked there alongside the registry catch-all defence work. The 8 5xx sites in subnets stay on `HTTPException` by design (sanitised-5xx handler chain). Sprint row #3 flips fully ✅ when both the new auth/permission codes and the catch-all defence ticket land.
 

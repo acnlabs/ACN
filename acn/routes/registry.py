@@ -293,9 +293,11 @@ async def dev_register_agent(
     ⚠️ WARNING: This endpoint should be disabled in production!
     """
     if not settings.dev_mode:
-        raise HTTPException(
-            status_code=403,
-            detail="Dev mode registration is disabled. Use /register with Auth0 token.",
+        raise ACNHTTPError(
+            ErrorCode.MISSING_PERMISSION,
+            403,
+            message="Dev mode registration is disabled in this environment. Use /register with an Auth0 token instead.",
+            details={"reason": "dev_mode_disabled"},
         )
 
     logger.warning(
@@ -403,9 +405,17 @@ async def register_agent(
     if request.owner != token_owner:
         permissions = payload.get("permissions", []) or payload.get("scope", "").split()
         if "acn:admin" not in permissions:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Cannot register agent for owner '{request.owner}'. Token owner is '{token_owner}'.",
+            raise ACNHTTPError(
+                ErrorCode.OWNERSHIP_MISMATCH,
+                403,
+                message=(
+                    f"Cannot register agent for owner '{request.owner}'. "
+                    f"Token owner is '{token_owner}'."
+                ),
+                details={
+                    "requested_owner": request.owner,
+                    "token_owner": token_owner,
+                },
             )
 
     # Get subnet IDs
@@ -469,14 +479,24 @@ async def get_my_agent(
     """
     # Parse API key from Authorization header
     if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization header format")
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Authorization header must use the 'Bearer <api_key>' format.",
+            details={"reason": "invalid_authorization_header_format"},
+        )
 
     api_key = authorization[7:]  # Remove "Bearer " prefix
 
     # Find agent by API key
     agent = await agent_service.get_agent_by_api_key(api_key)
     if not agent:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="The supplied API key is invalid or has been revoked.",
+            details={"reason": "invalid_api_key"},
+        )
 
     base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
 
@@ -849,7 +869,11 @@ async def join_agent_internal(
         or not settings.internal_api_token
         or not secrets.compare_digest(token, settings.internal_api_token)
     ):
-        raise HTTPException(status_code=401, detail="Internal token required")
+        raise ACNHTTPError(
+            ErrorCode.INTERNAL_TOKEN_INVALID,
+            401,
+            message="The X-Internal-Token header is missing or does not match.",
+        )
     # Get agent service manually to avoid FastAPI Depends() injection edge cases
     from .dependencies import get_agent_service as _get_svc
     try:
@@ -1525,7 +1549,11 @@ async def update_agent_social_card_url(
             social_card_url=body.social_card_url,
         )
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
 
     # Log every URL mutation. SOCIAL.md content can change semantics
     # (mode flip from open → closed, fee changes, retention policy
@@ -1584,13 +1612,15 @@ async def admin_bulk_delete_agents(
       choosing a filter.
     """
     if not dry_run and not name_prefix and not owner:
-        raise HTTPException(
-            status_code=400,
-            detail=(
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            message=(
                 "Refusing to bulk-delete without a filter. "
                 "Pass name_prefix or owner explicitly. "
                 "Use dry_run=true to preview filterless results."
             ),
+            details={"reason": "bulk_delete_filter_required"},
         )
 
     agents = await agent_service.search_agents(tags=None, status="all")
@@ -1716,7 +1746,11 @@ async def unregister_agent(
             details={"agent_id": agent_id},
         ) from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"agent_id": agent_id, "reason": str(e)},
+        ) from e
 
 
 # ============================================================================
@@ -1852,7 +1886,11 @@ async def claim_agent(
             details={"agent_id": agent_id},
         ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"agent_id": agent_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/{agent_id}/transfer", response_model=AgentTransferResponse)
@@ -1897,7 +1935,11 @@ async def transfer_agent(
             details={"agent_id": agent_id},
         ) from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"agent_id": agent_id, "reason": str(e)},
+        ) from e
 
 
 @router.post("/{agent_id}/release", response_model=AgentReleaseResponse)
@@ -1935,7 +1977,11 @@ async def release_agent(
             details={"agent_id": agent_id},
         ) from e
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"agent_id": agent_id, "reason": str(e)},
+        ) from e
 
 
 # ============================================================================
