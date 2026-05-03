@@ -127,7 +127,8 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 | 8 | `manifest`                            | new: `MANIFEST_ENTRY_NOT_FOUND` (×1 — `delete_manifest_entry` miss/cross-tenant probe; `details = {agent_id, mid}` keyed by path), `MANIFEST_CONTENT_NOT_FOUND` (×1 — `fetch_manifest_content` miss/cross-tenant probe; `details = {owner_id, mid}` keyed by API-key-derived owner, NOT `agent_id` because this route has no path `agent_id`). 2 4xx sites total; **0 catch-all 5xx sites** in this router (the two raise sites are simple "service returned None/False" guards, no `except Exception:` blocks). Two distinct ErrorCodes (vs a single `MANIFEST_NOT_FOUND` with `details.kind`) chosen so SDK clients branch on `error_code` without inspecting `details`, and so the cross-sprint consistency test gives strict (not union-schema) protection on each code's `details` shape. Cross-tenant probes intentionally surface the *exact* same `error_code`/`details` shape as legitimate misses — see §4 footnote `[^8]` and `test_manifest_error_schema.py::test_cross_tenant_miss_emits_same_shape_as_legit_miss` for the existence-leak invariant. 3 contract tests pin both raise sites (1 entry test + 2 content tests covering legit-miss / cross-tenant). | ✅ |
 | 9 | `analytics`                           | reuse cross-module catalog only — no new ErrorCodes. `AUTHENTICATION_REQUIRED` (×2 — `list_activities` `auth_required_for_agent_filter` when an `agent_id`/`agent_ids` filter is requested without a Bearer token + `invalid_api_key` when the Bearer key fails to resolve), `API_KEY_AGENT_MISMATCH` (×1 — `list_activities` cross-tenant filter probe; `details = {path_agent, key_agent}` strict shape, surfaces only the *first sorted* mismatched id when the caller passes a multi-id `agent_ids` filter so the body stays in the strict schema bucket — see `test_analytics_error_schema.py::test_multi_agent_ids_mismatch_surfaces_first_sorted` for the regression pin). 3 4xx sites total, all confined to `list_activities`; **0 catch-all 5xx sites** in this router (the other six analytics endpoints have no file-local 4xx sites — `InternalTokenDep` from sprint #10 covers their auth). The `auth_required_for_agent_filter` reason value is *new in sprint #9* and joins the cross-module `AUTHENTICATION_REQUIRED` reason vocabulary alongside the existing `invalid_api_key` / `invalid_authorization_header_format` / `owner_or_internal_credential_required` set. 5 contract tests pin every raise site (2 for `auth_required_for_agent_filter` covering missing-header / non-Bearer-prefix branches, 1 for `invalid_api_key`, 2 for `api_key_agent_mismatch` covering single-id / multi-id filter forms). Test wiring needs `monkeypatch.setattr` on `acn.routes.analytics.get_agent_service` in addition to `app.dependency_overrides` because the route fetches the agent service via a *module-level* call rather than as a FastAPI parameter dependency — without the monkeypatch the agent-service stub is silently ignored and tests fall through to the `invalid_api_key` branch. | ✅ |
 | 10 | `dependencies` (auth-shared module)  | reuse cross-module catalog: `AUTHENTICATION_REQUIRED` (×4 — `_resolve_agent_by_bearer` invalid_api_key, `verify_agent_api_key` invalid_authorization_header_format, `verify_proxy_caller` invalid_authorization_header_format, `verify_owner_or_internal` owner_or_internal_credential_required), `INTERNAL_TOKEN_INVALID` (×2 — `verify_internal_token` and `verify_owner_or_internal` priority branch; both with empty `details` to avoid leaking the wrong token via response logs), `API_KEY_AGENT_MISMATCH` (×1 — `verify_owner_or_internal` owner-key-for-different-agent path), `INVALID_REQUEST` (×1 — `assert_system_caller` 422 with `{field, reason="system_namespace_required", value}`). 8 4xx sites total; **1 5xx site preserved** (`get_allowlist_service` 503 with `Retry-After: 300` — declined to migrate because `ACNHTTPError` rejects 5xx at construction time and the 503-with-retry-hint contract is load-bearing for the configured-disabled vs crashed distinction). 8 contract tests pin every 4xx raise site (1:1 coverage), each driven through a representative route so the central handler runs end-to-end. **Sprint #10 unblocks footnote `[^1]`** (the long-standing "auth-dep 4xx still on legacy shape" caveat in `acn-error-schema.md`) — that footnote has been deleted in this sprint and the SDK parsing template's "auth dep rejects" disclaimer goes away. The 422 site stays 422 (vs being downgraded to 400) so SDK clients on the migrated path don't see a status-code regression vs the legacy emission. | ✅ |
-| 11 | `websocket`                          | last (different protocol surface; may need separate treatment)  | ⏳ |
+| 11a | `websocket-http`                    | reuse cross-module catalog only — no new ErrorCodes. `API_KEY_AGENT_MISMATCH` (×1 — `get_agent_websocket_status` path-key mismatch on `GET /api/v1/websocket/agent/{agent_id}/status`; strict `{path_agent, key_agent}` shape, identical emitter pattern as registry/payments/follows/onchain/analytics). 1 4xx site total; **0 catch-all 5xx sites**. Sprint #7 had inadvertently declared `websocket` as having no HTTP router (incorrect — the router exposes both `GET /api/v1/websocket/connections` gated by `InternalTokenDep` and the path-checked `…/agent/{agent_id}/status`); #11a corrects that documentation drift, adds `responses=ACN_DEFAULT_RESPONSES` to the router, and adds the `status` endpoint to `REPRESENTATIVE_ENDPOINTS` so OpenAPI advertises the flat schema for both HTTP routes via the uniform router-level merge. 1 contract test pins the single raise site (1:1 coverage). Test wiring overrides the `verify_agent_api_key` dependency directly (rather than monkey-patching `get_agent_service`) because the route consumes auth via `AgentApiKeyDep` which is a FastAPI dependency — same pattern as #5 / #6 / #7 onchain. The sibling WebSocket protocol endpoint (`WEBSOCKET /ws/{agent_id}`) is NOT touched here; its error contract is governed by RFC 6455 close codes and is split out as #11b. | ✅ |
+| 11b | `websocket-protocol`                 | RFC required — close-code ↔ ErrorCode mapping, error-frame payload format vs close-reason JSON, SDK dual-event-source coordination (browser `ws.close` event + application error frame). Out of scope for #11a. | ⏳ |
 
 #### 5xx field deprecation ticket
 
@@ -223,11 +224,20 @@ to every router that opted in.
   `#/components/schemas/ACNErrorResponse`. (Per-endpoint sampling
   is sufficient because the router-level mechanism is uniform — if
   the representative endpoint has the spec, all do.)
-- **Negative coverage** is empty as of sprint #7. All HTTP-mounting
-  routers are migrated; the remaining sprint (#11 ``websocket``)
-  does not register an HTTP router (its error contract is RFC 6455
-  close codes, not HTTP responses), so the
-  `NON_MIGRATED_ENDPOINTS` list has no rows to assert today. The
+- **Negative coverage** is empty as of sprint #11a. All HTTP-mounting
+  routers are migrated. Sprint #7 had prematurely declared the list
+  empty under the (incorrect) belief that the `websocket` router
+  owned only a WebSocket endpoint; in fact it also exposes two HTTP
+  endpoints (`GET /api/v1/websocket/connections` and
+  `GET /api/v1/websocket/agent/{agent_id}/status`). Sprint #11a
+  migrated the `status` endpoint's single 4xx site and added it to
+  `REPRESENTATIVE_ENDPOINTS`, restoring the invariant. The remaining
+  sprint (#11b ``websocket-protocol``) addresses the
+  `WEBSOCKET /ws/{agent_id}` endpoint specifically — its error
+  contract uses RFC 6455 close codes, not HTTP responses, so it
+  never appears in the `NON_MIGRATED_ENDPOINTS` list (the OpenAPI
+  spec doesn't advertise WS-protocol errors as HTTP responses in
+  the first place). The
   `TestNonMigratedRoutersDoNotAdvertiseDefault` class stays in the
   test file as a structural anchor — a single
   `test_class_remains_a_structural_anchor` placeholder asserts the
@@ -408,7 +418,7 @@ the full `tests/routes/` suite was run during audit. Fixed in commit
 > `tests/test_error_sanitisation.py`) and integration tests live
 > outside `tests/routes/` and may still assert on legacy shapes.**
 
-Concretely for the remaining schema migration sprint (#11 websocket):
+Concretely for the remaining schema migration sprint (#11b websocket-protocol):
 the PR should include a
 `pytest tests/ -q --no-cov
 --ignore=tests/integration` smoke run in the description (≈9 min on

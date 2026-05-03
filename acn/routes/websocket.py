@@ -3,9 +3,10 @@
 import json
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from ..config import get_settings
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     InternalTokenDep,
@@ -14,7 +15,12 @@ from .dependencies import (  # type: ignore[import-untyped]
     get_ws_manager,
 )
 
-router = APIRouter(tags=["websocket"])
+# ``responses=`` only affects HTTP routes registered on this APIRouter
+# (see ``get_active_connections`` and ``get_agent_websocket_status``
+# below). The ``@router.websocket(...)`` endpoint at L65 is not an HTTP
+# route — its error contract is governed by RFC 6455 close codes and is
+# tracked separately under sprint #11b.
+router = APIRouter(tags=["websocket"], responses=ACN_DEFAULT_RESPONSES)
 logger = structlog.get_logger()
 
 
@@ -218,6 +224,13 @@ async def get_agent_websocket_status(
     An agent may only query its own connection status.
     """
     if agent_info["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not match agent_id")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            status_code=403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
+        )
     is_connected = ws_manager.is_user_connected(agent_id)
     return {"agent_id": agent_id, "connected": is_connected}

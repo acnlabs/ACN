@@ -180,6 +180,21 @@ class TestRouterLevelResponsesCoverage:
             "post",
             "onchain (#7) — POST bind",
         ),
+        # websocket-http (#11a) registers two HTTP endpoints on
+        # the same ``APIRouter`` that hosts the WebSocket
+        # endpoint. The WS endpoint itself is *not* HTTP and is
+        # tracked under sprint #11b — its error contract uses
+        # RFC 6455 close codes, not ``ACNErrorResponse``. We
+        # sample the ``status`` endpoint because it carries the
+        # only file-local 4xx site (path/key mismatch); the
+        # sibling ``connections`` endpoint inherits the same
+        # router-level ``responses=`` block so a regression on
+        # the router config is caught by either sample.
+        (
+            "/api/v1/websocket/agent/{agent_id}/status",
+            "get",
+            "websocket-http (#11a) — GET status",
+        ),
     ]
 
     @pytest.mark.parametrize(
@@ -250,13 +265,24 @@ class TestNonMigratedRoutersDoNotAdvertiseDefault:
     contract bug because it only surfaces in production at the
     SDK / client deserialisation layer.
 
-    Empty as of sprint #7
-    ---------------------
-    All HTTP-mounting routers are migrated. The remaining sprint
-    (#11 ``websocket``) does NOT register an HTTP router — it owns
-    a WebSocket endpoint whose error contract is bounded by RFC
-    6455 close codes, not HTTP responses. The negative-coverage
-    contract therefore has no rows to assert today.
+    Empty as of sprint #11a
+    -----------------------
+    All HTTP-mounting routers are migrated. Sprint #7 prematurely
+    declared this list empty under the (incorrect) belief that the
+    ``websocket`` router owned only a WebSocket endpoint; in fact
+    it also exposes two HTTP endpoints (``GET
+    /api/v1/websocket/connections`` and ``GET
+    /api/v1/websocket/agent/{agent_id}/status``). Sprint #11a
+    migrated the single 4xx site on the ``status`` endpoint and
+    added it to ``REPRESENTATIVE_ENDPOINTS`` above, restoring the
+    invariant the docstring claimed.
+
+    The remaining sprint (#11b ``websocket-protocol``) addresses
+    the ``WEBSOCKET /ws/{agent_id}`` endpoint specifically — its
+    error contract is bounded by RFC 6455 close codes, not HTTP
+    responses, so it never appears in this list (the OpenAPI
+    spec doesn't advertise WS-protocol errors as HTTP responses
+    in the first place).
 
     The class itself stays in the file as a structural anchor: if
     a future contributor adds a new non-migrated HTTP router (e.g.
@@ -270,7 +296,7 @@ class TestNonMigratedRoutersDoNotAdvertiseDefault:
     """
 
     NON_MIGRATED_ENDPOINTS: list[tuple[str, str, str]] = [
-        # Empty as of sprint #7 — see class docstring. Future
+        # Empty as of sprint #11a — see class docstring. Future
         # non-migrated HTTP routers go here in the (path, method,
         # module name for failure messages) shape.
     ]
@@ -286,7 +312,7 @@ class TestNonMigratedRoutersDoNotAdvertiseDefault:
         pytest emits a warning; pinning a single anchor test
         avoids that noise.
         """
-        # Intentional: at sprint #7 the list MUST be empty. If a
+        # Intentional: at sprint #11a the list MUST be empty. If a
         # future sprint adds rows back, this assertion fails by
         # design — the contributor reads the class docstring,
         # adds their entry to ``NON_MIGRATED_ENDPOINTS``, and
