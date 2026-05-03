@@ -124,7 +124,7 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 | 5 | `payments`                            | new: `PAYMENT_CAPABILITY_NOT_FOUND` / `PAYMENT_TASK_NOT_FOUND` / `TOKEN_PRICING_NOT_CONFIGURED` (×3 sites) / `BILLING_TRANSACTION_NOT_FOUND`. reuse `AGENT_NOT_FOUND` (×2 — `AgentNotFoundException` catch + `registry.get_agent`-returns-None path), `API_KEY_AGENT_MISMATCH` (×4 — `set_payment_capability`, `get_agent_payment_tasks`, `get_agent_payment_stats`, `set_token_pricing` path-mismatch sites), `FROM_AGENT_MISMATCH` (×1 — `create_payment_task` body-field mismatch). 13 4xx sites total; 3 catch-all 5xx sites stay `HTTPException(500)` with `except ACNHTTPError: raise` + `except HTTPException: raise` defence (sanitised by central handler). 13 contract tests pin every raise site (1:1 coverage). **Note**: pre-sprint roadmap row read "reuse `INSUFFICIENT_BALANCE`" — that was wrong. `INSUFFICIENT_BALANCE` stays reserved (declared, not raised) until the wallet / billing subsystem genuinely surfaces "insufficient balance" at the route layer; the current `payments.py` only surfaces resource-existence failures (capability / task / pricing / transaction not found), not balance failures. | ✅ |
 | 6 | `follows`                             | new: `FOLLOW_LIMIT_EXCEEDED` / `SELF_FOLLOW_FORBIDDEN`. reuse `AGENT_NOT_FOUND` (×1 — followee lookup miss in `follow_agent`), `API_KEY_AGENT_MISMATCH` (×2 — `follow_agent` POST + `unfollow_agent` DELETE path-mismatch gates). 5 4xx sites total; **0 catch-all 5xx sites** in this router (no `except Exception:` in `follow_agent` / `unfollow_agent` — the three caught exceptions are domain-specific: `SelfFollowError` / `AgentNotFoundException` / `FollowLimitExceededError`). 5 contract tests pin every raise site (1:1 coverage). `details.follower_id` / `details.max_follows` chosen over allowlist's `owner_id` / `max_size` because follow has no ownership semantics — service-layer exception names and `acn-follow-proposal.md` response bodies all use `follower`; semantically parallel to sprint #1, field-name divergent on purpose. | ✅ |
 | 7 | `onchain`                             | new: ERC-8004 specific failures                                  | ⏳ |
-| 8 | `manifest`                            | small surface — existing 4xx mostly auth-shared                 | ⏳ |
+| 8 | `manifest`                            | new: `MANIFEST_ENTRY_NOT_FOUND` (×1 — `delete_manifest_entry` miss/cross-tenant probe; `details = {agent_id, mid}` keyed by path), `MANIFEST_CONTENT_NOT_FOUND` (×1 — `fetch_manifest_content` miss/cross-tenant probe; `details = {owner_id, mid}` keyed by API-key-derived owner, NOT `agent_id` because this route has no path `agent_id`). 2 4xx sites total; **0 catch-all 5xx sites** in this router (the two raise sites are simple "service returned None/False" guards, no `except Exception:` blocks). Two distinct ErrorCodes (vs a single `MANIFEST_NOT_FOUND` with `details.kind`) chosen so SDK clients branch on `error_code` without inspecting `details`, and so the cross-sprint consistency test gives strict (not union-schema) protection on each code's `details` shape. Cross-tenant probes intentionally surface the *exact* same `error_code`/`details` shape as legitimate misses — see §4 footnote `[^8]` and `test_manifest_error_schema.py::test_cross_tenant_miss_emits_same_shape_as_legit_miss` for the existence-leak invariant. 3 contract tests pin both raise sites (1 entry test + 2 content tests covering legit-miss / cross-tenant). | ✅ |
 | 9 | `analytics`                           | small surface                                                    | ⏳ |
 | 10 | `dependencies` (auth-shared module)  | reuse `AUTHENTICATION_REQUIRED` / `INTERNAL_TOKEN_INVALID`      | ⏳ |
 | 11 | `websocket`                          | last (different protocol surface; may need separate treatment)  | ⏳ |
@@ -223,10 +223,12 @@ to every router that opted in.
   `#/components/schemas/ACNErrorResponse`. (Per-endpoint sampling
   is sufficient because the router-level mechanism is uniform — if
   the representative endpoint has the spec, all do.)
-- **Negative coverage** for the not-yet-migrated `manifest` router
-  (sprint #8) pinning the contract that it does *not* advertise
-  the default 4xx block. Drift detection: if a future commit adds
-  `responses=ACN_DEFAULT_RESPONSES` to a router whose endpoints
+- **Negative coverage** for the not-yet-migrated `analytics` router
+  (sprint #9, sampled as the representative pending router after
+  #8 manifest landed) pinning the contract that it does *not*
+  advertise the default 4xx block. Drift detection: if a future
+  commit adds `responses=ACN_DEFAULT_RESPONSES` to a router whose
+  endpoints
   still raise raw `HTTPException`, the OpenAPI spec would
   over-promise (`ACNErrorResponse` shape) while runtime emits the
   legacy `{"detail": ...}` shape — the negative test forces the
@@ -243,17 +245,18 @@ two routers:
 - `acn/routes/communication.py` (✅ migrated, this commit) — owns
   `POST /send`, `POST /broadcast`, `POST /broadcast-by-tag`, `GET
   /history/{agent_id}`, `POST /ack`, `POST /internal/send`
-- `acn/routes/manifest.py` (⏳ sprint #8) — owns `GET
+- `acn/routes/manifest.py` (✅ sprint #8) — owns `GET
   /manifest/{agent_id}`, `DELETE /manifest/{agent_id}/{mid}`, `GET
   /content/{mid}`
 
 So SDK consumers parsing `/openapi.json` today will see *mixed* 4xx
-type-gen across the `/api/v1/communication/*` namespace:
-`ACNErrorResponse` for `/send` and `/broadcast`, generic `dict` for
-`/manifest/*` and `/content/*`. This is intentional and converges
-once sprint #8 (manifest module) lands; SDK release-notes authors
-should describe the migration as "communication send + broadcast"
-rather than "all `/communication/*` endpoints" until then.
+type-gen across the `/api/v1/communication/*` namespace was a known
+heterogeneity throughout sprints #1–#7: `ACNErrorResponse` for
+`/send` and `/broadcast`, generic `dict` for `/manifest/*` and
+`/content/*`. Sprint #8 (manifest) closes this gap — the entire
+`/api/v1/communication/*` namespace now type-generates against
+`ACNErrorResponse`, and SDK release-notes can describe the
+migration as "all `/communication/*` endpoints" without caveats.
 
 Out of scope: regenerating downstream SDK type-gen artefacts. That
 is the SDK release-notes owner's responsibility.
@@ -404,9 +407,9 @@ the full `tests/routes/` suite was run during audit. Fixed in commit
 > `tests/test_error_sanitisation.py`) and integration tests live
 > outside `tests/routes/` and may still assert on legacy shapes.**
 
-Concretely for the remaining schema migration sprints (#5 payments,
-#6 follows, #7 onchain, #8 manifest, #9 analytics, #10 dependencies,
-#11 websocket): each PR should include a `pytest tests/ -q --no-cov
+Concretely for the remaining schema migration sprints (#7 onchain,
+#9 analytics, #10 dependencies, #11 websocket): each PR should
+include a `pytest tests/ -q --no-cov
 --ignore=tests/integration` smoke run in the description (≈9 min on
 a warm cache) in addition to the schema-test subset that's already
 part of the sprint acceptance criteria. The cost is small relative

@@ -138,6 +138,25 @@ Pilot codes `agent_not_found`, `api_key_agent_mismatch`, and `from_agent_mismatc
 
 `INSUFFICIENT_BALANCE` stays in the reserved group of the `ErrorCode` catalog: `payments.py` only surfaces *resource-existence* failures (the four codes above), not balance failures. Balance failures live one layer deeper (wallet / billing subsystem) and may surface at a different boundary in a future sprint.
 
+### Manifest routes (sprint row #8)
+
+
+| `error_code`                  | HTTP status | Used by                                                              | `details` schema                       |
+| ----------------------------- | ----------- | -------------------------------------------------------------------- | -------------------------------------- |
+| `manifest_entry_not_found`    | 404         | `DELETE /communication/manifest/{agent_id}/{mid}`                    | `{ agent_id: string, mid: string }`    |
+| `manifest_content_not_found`  | 404         | `GET /communication/content/{mid}`                                   | `{ owner_id: string, mid: string }`    |
+
+
+Manifest has **no** pilot-code reuse — its raise sites are pure resource-existence misses, not auth/ownership/path-mismatch surfaces. `manifest.py` has **0** 5xx catch-all sites: each raise is a simple "service returned `None`/`False`" guard, no `except Exception:` blocks to defend.
+
+**Field-name choice — `agent_id` vs `owner_id`.** The two codes deliberately use different `details` field names because the routes have different parameter shapes. `DELETE /manifest/{agent_id}/{mid}` exposes `agent_id` directly in the URL path and the route layer has no role beyond echoing it back, so `details.agent_id` matches the surface the caller saw. `GET /content/{mid}` has *no* path `agent_id` — the owner is derived from the Bearer API key — so calling that field `agent_id` would mislead SDK clients into thinking they passed it explicitly, and would obscure the security-critical fact that `owner_id` came from server-side key resolution. The `owner_id` choice also pairs naturally with the cross-tenant probe contract below (which always returns the *probing* caller as `owner_id`, never the real owner of the mid).
+
+**Two distinct codes vs a single `manifest_not_found` with `details.kind`.** SDK clients can branch on `error_code` directly without inspecting `details`, mirroring the discriminator pattern used by every other migrated route. The split also lets the cross-sprint `details` consistency test (`tests/test_error_code_details_consistency.py`) give *strict* (not union-schema) protection on each code's `details` shape — a single `manifest_not_found` would have to be added to `UNION_SCHEMA_CODES` and lose the per-code field-name guarantee.
+
+**Existence-leak invariant.** Both codes are also raised on cross-tenant probes (a caller authenticating as agent A asking for agent B's manifest entry / content). The route layer never returns 403 for these cases — that would leak the existence of the entry/content to an attacker probing for other agents' queues. Crucially, the *body shape* must be identical to a legitimate own-resource miss for the same reason: a divergent shape (e.g. omitting `details.owner_id` only on cross-tenant probes) would reintroduce the existence leak the 404-not-403 design exists to prevent. For `manifest_content_not_found` specifically, `details.owner_id` always reflects the *probing* caller's agent ID (as resolved from their API key), never the real owner of the mid — `tests/routes/test_manifest_error_schema.py::test_cross_tenant_miss_emits_same_shape_as_legit_miss` pins this.
+
+3 contract tests in `tests/routes/test_manifest_error_schema.py` pin both raise sites: 1 entry test (DELETE on missing/cross-tenant mid) + 2 content tests (legit own-resource miss + cross-tenant probe with the leak-guard assertion).
+
 ### Cross-module catalog (sprint row #2b)
 
 Six `ErrorCode` members designed to be **shared by `registry`, `subnets`, and `tasks`** so an SDK consumer can write one set of fallback handlers regardless of which module emitted the error. The cross-module set is the deliverable that unblocked rows #3-followup and #4-followup; see [`docs/BACKLOG.md`](../BACKLOG.md) for the per-row status.
@@ -231,7 +250,7 @@ Realigning slowapi to the flat schema is reserved as `WALLET_RATE_LIMIT_EXCEEDED
 
 ### Non-pilot routes
 
-The route modules `onchain`, `dependencies`, `manifest`, `analytics`, and `websocket` still raise vanilla `HTTPException` and are caught by the existing `_http_exception_handler` 4xx pass-through, which emits the legacy `{"detail": "..."}` / `{"detail": {...}}` shape. The `registry`, `subnets`, `tasks`, `payments`, and `follows` modules are fully migrated as of sprints #2b, #3-followup, #4-followup, #5, and #6 respectively. See the coexistence matrix below. These routes are NOT broken, they just speak the old contract until the migration sprint reaches them.
+The route modules `onchain`, `dependencies`, `analytics`, and `websocket` still raise vanilla `HTTPException` and are caught by the existing `_http_exception_handler` 4xx pass-through, which emits the legacy `{"detail": "..."}` / `{"detail": {...}}` shape. The `registry`, `subnets`, `tasks`, `payments`, `follows`, and `manifest` modules are fully migrated as of sprints #2b, #3-followup, #4-followup, #5, #6, and #8 respectively. See the coexistence matrix below. These routes are NOT broken, they just speak the old contract until the migration sprint reaches them.
 
 ---
 
@@ -249,8 +268,8 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 | `/api/v1/tasks/*` [^1] [^4]                                                                                                    | `ACNHTTPError` (4xx) + `HTTPException` (5xx)             | flat                                                                                   | ✅ Aligned (#4 + #4-followup) |
 | `/api/v1/agents/{id}/follows/*` [^1] [^6]                                                                                      | `ACNHTTPError`                           | flat                                                                                   | ✅ Aligned (#6)   |
 | `/api/v1/payments/*` [^1] [^5]                                                                                                 | `ACNHTTPError` (4xx) + `HTTPException` (5xx) | flat                                                                                   | ✅ Aligned (#5)   |
+| `/api/v1/communication/manifest/*` and `/api/v1/communication/content/*` [^1] [^8]                                             | `ACNHTTPError`                           | flat                                                                                   | ✅ Aligned (#8)   |
 | `/api/v1/onchain/*`                                                                                                            | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
-| `/api/v1/communication/manifest/*`                                                                                             | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
 | `/api/v1/analytics/*`                                                                                                          | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
 | `/ws/*` (websocket)                                                                                                            | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
 | Auth dependency rejects (any route)                                                                                            | `HTTPException`                          | `{ "detail": "..." }`                                                                  | ⏳ Pending        |
@@ -322,6 +341,19 @@ Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can 
     `follows.py` has **0 5xx catch-all sites** — `follow_agent` and `unfollow_agent` only catch the three domain-specific exceptions (`SelfFollowError` / `AgentNotFoundException` / `FollowLimitExceededError`); there is no trailing `except Exception:` to defend, so the cross-module catch-all defence (P3) does not apply to this module.
 
     5 contract tests in `tests/routes/test_follows_error_schema.py` pin every raise site (1:1 coverage), asserting flat shape + exact `error_code` + exact `details` dict + `X-Request-ID` echo for each.
+
+[^8]: **Manifest full migration (sprint #8).** All 2 4xx raise sites in `acn/routes/manifest.py` are migrated to two new ErrorCode members:
+
+    * **1× `MANIFEST_ENTRY_NOT_FOUND`** (404) — `delete_manifest_entry` when `manifest_service.delete` returns `False` (entry missing or owned by a different agent — same surface, see existence-leak invariant in §2). `details={"agent_id": <path>, "mid": <path>}`.
+    * **1× `MANIFEST_CONTENT_NOT_FOUND`** (404) — `fetch_manifest_content` when `manifest_service.fetch_content` returns `None` (content expired, missing, or belonging to a different owner). `details={"owner_id": <key-derived>, "mid": <path>}` — `owner_id` is the API-key-resolved caller (NOT a path parameter), so it always reflects who is *asking*, never the real owner of the mid. The `owner_id` field name (vs `agent_id` used by the entry-route) is a deliberate divergence — see §2 manifest subsection for rationale.
+
+    `manifest.py` has **0** 5xx catch-all sites — both raise sites are simple service-return guards with no surrounding `except Exception:` blocks. The cross-module catch-all defence (P3) does not apply.
+
+    **Cross-tenant probe shape contract.** The body shape (especially `error_code` and `details`) must be **identical** between a legitimate own-resource miss and a cross-tenant probe. A divergent shape would reintroduce the existence leak the 404-not-403 design exists to prevent. For `MANIFEST_CONTENT_NOT_FOUND`, `details.owner_id` therefore *always* reflects the *probing* caller's agent ID, never the real owner of the mid (which the caller has no right to know). `tests/routes/test_manifest_error_schema.py::test_cross_tenant_miss_emits_same_shape_as_legit_miss` pins this — if it ever flips to `details.owner_id == "<real owner>"`, the route has started leaking ownership info and that's the regression it exists to catch.
+
+    3 contract tests in `tests/routes/test_manifest_error_schema.py` pin both raise sites: 1 entry test (DELETE on missing/cross-tenant mid) + 2 content tests (legit own-resource miss + cross-tenant probe).
+
+    Sprint #8 closes the long-standing heterogeneity in the `/api/v1/communication/*` namespace (see BACKLOG note): SDK type-gen against `/openapi.json` now emits `ACNErrorResponse` for *every* endpoint under that prefix, not just `/send` and `/broadcast`.
 
 [^1]: **Migrated routes are converted at the route handler body level only.** 4xx errors raised by the *route handler function body* go through `ACNHTTPError` and emit the flat schema. 4xx errors raised by *shared dependencies* invoked before the handler body — `OwnerOrInternalDep`, `InternalTokenDep`, `AgentApiKeyDep`, the `A2AFromAgentValidationMiddleware` ASGI middleware — still raise `HTTPException` and emit the legacy `{"detail": "..."}` shape. They flip to flat schema when the `dependencies` module is migrated (sprint row #10 in `[docs/BACKLOG.md](../BACKLOG.md)`). SDK clients hitting a migrated endpoint must therefore keep both parsers in scope until row #10 lands; the parsing template below already does this via the `if "error_code" in body` branch.
 

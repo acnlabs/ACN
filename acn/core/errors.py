@@ -121,6 +121,25 @@ class ErrorCode(StrEnum):
     FOLLOW_LIMIT_EXCEEDED = "follow_limit_exceeded"
     SELF_FOLLOW_FORBIDDEN = "self_follow_forbidden"
 
+    # ===== Manifest routes (sprint row #8) =====
+    # ``manifest.py`` exposes two distinct 404 surfaces — the
+    # listing/delete endpoints (``DELETE /communication/manifest/
+    # {agent_id}/{mid}``) operate on the ZSET entry, while the
+    # content-fetch endpoint (``GET /communication/content/{mid}``)
+    # operates on the JSON blob keyed by ``mid``. Splitting them as
+    # distinct codes (vs a single ``MANIFEST_NOT_FOUND`` with
+    # ``details.kind ∈ {entry, content}``) lets SDK clients branch
+    # without inspecting ``details``, and gives the cross-sprint
+    # consistency test strict (not union-schema) protection on each
+    # code's ``details`` shape.
+    #
+    # Cross-tenant access also surfaces the same code (404 — the
+    # existence of an entry/content for another owner is itself
+    # sensitive and the route layer never leaks it via a different
+    # status code). See ``manifest.py`` per-route docstrings.
+    MANIFEST_ENTRY_NOT_FOUND = "manifest_entry_not_found"
+    MANIFEST_CONTENT_NOT_FOUND = "manifest_content_not_found"
+
     # ===== Payments routes (sprint row #5) =====
     # ``AGENT_NOT_FOUND`` (×2), ``API_KEY_AGENT_MISMATCH`` (×4), and
     # ``FROM_AGENT_MISMATCH`` (×1 — body.from_agent vs auth-key
@@ -196,6 +215,12 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
         "Unfollow some agents first."
     ),
     ErrorCode.SELF_FOLLOW_FORBIDDEN: "An agent cannot follow itself.",
+    ErrorCode.MANIFEST_ENTRY_NOT_FOUND: (
+        "The requested manifest entry could not be found."
+    ),
+    ErrorCode.MANIFEST_CONTENT_NOT_FOUND: (
+        "The requested manifest content could not be found or has expired."
+    ),
     ErrorCode.PAYMENT_CAPABILITY_NOT_FOUND: (
         "No payment capability is registered for this agent."
     ),

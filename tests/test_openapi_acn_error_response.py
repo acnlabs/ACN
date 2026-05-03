@@ -135,6 +135,19 @@ class TestRouterLevelResponsesCoverage:
             "post",
             "follows (#6) — POST follow",
         ),
+        # manifest (#8) shares the ``/api/v1/communication`` prefix
+        # with the ✅-migrated ``communication`` router but registers
+        # its own ``APIRouter``. Sample the content-fetch endpoint
+        # because its emitted code (``MANIFEST_CONTENT_NOT_FOUND``)
+        # has the more security-sensitive details shape — naming the
+        # field ``owner_id`` rather than ``agent_id`` is the contract
+        # SDK type-gen reads, and a router-config regression here
+        # would silently drop that distinction.
+        (
+            "/api/v1/communication/content/{mid}",
+            "get",
+            "manifest (#8) — GET content",
+        ),
     ]
 
     @pytest.mark.parametrize(
@@ -206,28 +219,27 @@ class TestNonMigratedRoutersDoNotAdvertiseDefault:
     SDK / client deserialisation layer.
 
     Sampled non-migrated routers (matrix as of this commit):
-    - ``manifest`` (sprint #8, pending) — owns the
-      ``/api/v1/communication/manifest/*`` and ``/content/*``
-      endpoints. Notably this one shares the
-      ``/api/v1/communication`` URL prefix with the ✅-migrated
-      ``communication`` router (see "5 routers ≠ 5 URL prefixes"
-      caveat in BACKLOG); the negative test pins the
-      heterogeneity — a single shared URL prefix can host
-      heterogeneously-migrated routers, and OpenAPI tracks the
-      router (where ``responses=`` is declared), not the prefix.
+    - ``analytics`` (sprint #9, pending) — owns the
+      ``/api/v1/analytics/*`` endpoints. Sampling here rather than
+      ``onchain`` (sprint #7) keeps the negative-coverage list
+      thin; both routers raise plain ``HTTPException`` and would
+      catch the same class of contract bug.
 
-    When sprint #8 / #9 / #10 / #11 land, move the corresponding
-    entry from here up into ``REPRESENTATIVE_ENDPOINTS`` above and
-    the drift-detection contract converts to a positive coverage
-    contract atomically.
+    When sprint #7 / #9 / #11 land, move the corresponding entry
+    from here up into ``REPRESENTATIVE_ENDPOINTS`` above and the
+    drift-detection contract converts to a positive coverage
+    contract atomically. (Sprint #10 ``dependencies`` is *not*
+    listed here because that module exposes no router of its own
+    — its raise sites surface through routers that already
+    advertise the default block.)
     """
 
     NON_MIGRATED_ENDPOINTS = [
         # (path, method, module name for failure messages)
         (
-            "/api/v1/communication/content/{mid}",
+            "/api/v1/analytics/agents",
             "get",
-            "manifest (sprint #8 — NOT YET migrated)",
+            "analytics (sprint #9 — NOT YET migrated)",
         ),
     ]
 

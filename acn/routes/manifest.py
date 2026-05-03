@@ -38,8 +38,9 @@ suite.
 from __future__ import annotations
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from .dependencies import (
     AgentApiKeyDep,
     AgentIdPath,
@@ -48,7 +49,11 @@ from .dependencies import (
     limiter,
 )
 
-router = APIRouter(prefix="/api/v1/communication", tags=["manifest"])
+router = APIRouter(
+    prefix="/api/v1/communication",
+    tags=["manifest"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 
 
@@ -146,7 +151,11 @@ async def delete_manifest_entry(
         # the existence of a manifest entry is itself sensitive,
         # so leaking it via a different status code (e.g. 403)
         # would let an attacker probe other agents' queues.
-        raise HTTPException(status_code=404, detail="Manifest entry not found")
+        raise ACNHTTPError(
+            ErrorCode.MANIFEST_ENTRY_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id, "mid": mid},
+        )
     return {"agent_id": agent_id, "mid": mid, "deleted": True}
 
 
@@ -176,7 +185,11 @@ async def fetch_manifest_content(
     owner_id = agent_info["agent_id"]
     payload = await manifest_service.fetch_content(owner_id=owner_id, mid=mid)
     if payload is None:
-        raise HTTPException(status_code=404, detail="Manifest content not found")
+        raise ACNHTTPError(
+            ErrorCode.MANIFEST_CONTENT_NOT_FOUND,
+            status_code=404,
+            details={"owner_id": owner_id, "mid": mid},
+        )
     return {
         "mid": mid,
         "owner_id": owner_id,
