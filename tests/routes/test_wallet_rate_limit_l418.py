@@ -34,10 +34,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 from acn.api import app
+from acn.core.errors import ACNHTTPError, ErrorCode
 from acn.routes.dependencies import (
     WALLET_RATE_LIMIT,
     _wallet_rate_limit_key,
@@ -208,13 +208,21 @@ class TestAuthPropagatesWalletAddress:
         request = _make_request_for_auth()
         agent_service = AsyncMock()
         agent_service.get_agent_by_api_key.return_value = None
-        with pytest.raises(HTTPException) as exc:
+        # Sprint #10 (dependencies migration): ``verify_agent_api_key``
+        # now raises ``ACNHTTPError(AUTHENTICATION_REQUIRED, 401)``
+        # instead of the legacy ``HTTPException(401)``. ACNHTTPError is
+        # ``Exception``-typed (not ``HTTPException``-typed) by design —
+        # see ``acn.core.errors`` docstring for why. The status_code
+        # attribute is preserved so the contract this layer pins
+        # (no wallet seeding on auth failure) is unchanged.
+        with pytest.raises(ACNHTTPError) as exc:
             await verify_agent_api_key(
                 request=request,
                 authorization="Bearer bogus",
                 agent_service=agent_service,
             )
         assert exc.value.status_code == 401
+        assert exc.value.code is ErrorCode.AUTHENTICATION_REQUIRED
         # No state should leak from a failed auth — otherwise a
         # downstream limiter could mistakenly bucket against a wallet
         # that the request never proved ownership of.

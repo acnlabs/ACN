@@ -183,10 +183,9 @@ class TestOwnerApiKeyAccess:
             )
 
         assert r.status_code == 403, r.text
-        # Specifically pin "API key does not match agent_id" — same
-        # body shape as the heartbeat path, so callers can write a
-        # single error handler.
-        assert "match" in r.json()["detail"].lower()
+        # Specifically pin api_key_agent_mismatch — same error_code as
+        # the heartbeat path, so callers can write a single error handler.
+        assert r.json()["error_code"] == "api_key_agent_mismatch"
         # The 403 fires before the entity lookup — confirm by checking
         # we never reached ``get_agent``.
         stub_agent_service.get_agent.assert_not_awaited()

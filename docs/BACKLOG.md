@@ -126,7 +126,7 @@ PR lands. Suggested ordering (cheapest / most impactful first):
 | 7 | `onchain`                             | new: ERC-8004 specific failures                                  | ⏳ |
 | 8 | `manifest`                            | new: `MANIFEST_ENTRY_NOT_FOUND` (×1 — `delete_manifest_entry` miss/cross-tenant probe; `details = {agent_id, mid}` keyed by path), `MANIFEST_CONTENT_NOT_FOUND` (×1 — `fetch_manifest_content` miss/cross-tenant probe; `details = {owner_id, mid}` keyed by API-key-derived owner, NOT `agent_id` because this route has no path `agent_id`). 2 4xx sites total; **0 catch-all 5xx sites** in this router (the two raise sites are simple "service returned None/False" guards, no `except Exception:` blocks). Two distinct ErrorCodes (vs a single `MANIFEST_NOT_FOUND` with `details.kind`) chosen so SDK clients branch on `error_code` without inspecting `details`, and so the cross-sprint consistency test gives strict (not union-schema) protection on each code's `details` shape. Cross-tenant probes intentionally surface the *exact* same `error_code`/`details` shape as legitimate misses — see §4 footnote `[^8]` and `test_manifest_error_schema.py::test_cross_tenant_miss_emits_same_shape_as_legit_miss` for the existence-leak invariant. 3 contract tests pin both raise sites (1 entry test + 2 content tests covering legit-miss / cross-tenant). | ✅ |
 | 9 | `analytics`                           | small surface                                                    | ⏳ |
-| 10 | `dependencies` (auth-shared module)  | reuse `AUTHENTICATION_REQUIRED` / `INTERNAL_TOKEN_INVALID`      | ⏳ |
+| 10 | `dependencies` (auth-shared module)  | reuse cross-module catalog: `AUTHENTICATION_REQUIRED` (×4 — `_resolve_agent_by_bearer` invalid_api_key, `verify_agent_api_key` invalid_authorization_header_format, `verify_proxy_caller` invalid_authorization_header_format, `verify_owner_or_internal` owner_or_internal_credential_required), `INTERNAL_TOKEN_INVALID` (×2 — `verify_internal_token` and `verify_owner_or_internal` priority branch; both with empty `details` to avoid leaking the wrong token via response logs), `API_KEY_AGENT_MISMATCH` (×1 — `verify_owner_or_internal` owner-key-for-different-agent path), `INVALID_REQUEST` (×1 — `assert_system_caller` 422 with `{field, reason="system_namespace_required", value}`). 8 4xx sites total; **1 5xx site preserved** (`get_allowlist_service` 503 with `Retry-After: 300` — declined to migrate because `ACNHTTPError` rejects 5xx at construction time and the 503-with-retry-hint contract is load-bearing for the configured-disabled vs crashed distinction). 8 contract tests pin every 4xx raise site (1:1 coverage), each driven through a representative route so the central handler runs end-to-end. **Sprint #10 unblocks footnote `[^1]`** (the long-standing "auth-dep 4xx still on legacy shape" caveat in `acn-error-schema.md`) — that footnote has been deleted in this sprint and the SDK parsing template's "auth dep rejects" disclaimer goes away. The 422 site stays 422 (vs being downgraded to 400) so SDK clients on the migrated path don't see a status-code regression vs the legacy emission. | ✅ |
 | 11 | `websocket`                          | last (different protocol surface; may need separate treatment)  | ⏳ |
 
 #### 5xx field deprecation ticket
@@ -408,8 +408,8 @@ the full `tests/routes/` suite was run during audit. Fixed in commit
 > outside `tests/routes/` and may still assert on legacy shapes.**
 
 Concretely for the remaining schema migration sprints (#7 onchain,
-#9 analytics, #10 dependencies, #11 websocket): each PR should
-include a `pytest tests/ -q --no-cov
+#9 analytics, #11 websocket): each PR should include a
+`pytest tests/ -q --no-cov
 --ignore=tests/integration` smoke run in the description (≈9 min on
 a warm cache) in addition to the schema-test subset that's already
 part of the sprint acceptance criteria. The cost is small relative

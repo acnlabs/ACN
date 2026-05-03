@@ -14,6 +14,7 @@ from slowapi.util import get_remote_address  # type: ignore[import-untyped]
 
 from ..auth.middleware import get_subject
 from ..config import get_settings
+from ..core.errors import ACNHTTPError, ErrorCode
 from ..infrastructure.messaging import (
     BroadcastService,
     MessageRouter,
@@ -622,7 +623,11 @@ async def _resolve_agent_by_bearer(
     agent = await agent_service.get_agent_by_api_key(api_key)
     if not agent:
         _record_auth_failure(reason="api_key_invalid", request=request)
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            status_code=401,
+            details={"reason": "invalid_api_key"},
+        )
     # Pull wallet_address from the entity. ``Agent.__post_init__`` keeps
     # the legacy single ``wallet_address`` field in sync with the
     # primary entry of ``wallet_addresses``, so reading the legacy
@@ -658,9 +663,10 @@ async def verify_agent_api_key(
     """
     if not authorization.startswith("Bearer "):
         _record_auth_failure(reason="bearer_format_invalid", request=request)
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
             status_code=401,
-            detail="Invalid authorization header format, expected: Bearer <API_KEY>",
+            details={"reason": "invalid_authorization_header_format"},
         )
     api_key = authorization[7:]
     agent_info = await _resolve_agent_by_bearer(api_key, agent_service, request=request)
@@ -706,9 +712,10 @@ async def verify_proxy_caller(
             reason="x_acn_authorization_format_invalid",
             request=request,
         )
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
             status_code=401,
-            detail="Invalid X-ACN-Authorization format, expected: Bearer <API_KEY>",
+            details={"reason": "invalid_authorization_header_format"},
         )
     api_key = x_acn_authorization[7:]
     agent_info = await _resolve_agent_by_bearer(api_key, agent_service, request=request)
@@ -747,7 +754,10 @@ def verify_internal_token(
             reason="internal_token_invalid",
             request=request,
         )
-        raise HTTPException(status_code=403, detail="Invalid internal token")
+        raise ACNHTTPError(
+            ErrorCode.INTERNAL_TOKEN_INVALID,
+            status_code=403,
+        )
 
 
 InternalTokenDep = Annotated[None, Depends(verify_internal_token)]
@@ -814,17 +824,18 @@ async def verify_owner_or_internal(
         # ops tool than an attacker who *also* has a valid owner
         # API key, and conflating the two would mask the misconfig.
         _record_auth_failure(reason="internal_token_invalid", request=request)
-        raise HTTPException(status_code=403, detail="Invalid internal token")
+        raise ACNHTTPError(
+            ErrorCode.INTERNAL_TOKEN_INVALID,
+            status_code=403,
+        )
 
     # Fall back to owner-via-API-key.
     if not authorization or not authorization.startswith("Bearer "):
         _record_auth_failure(reason="owner_or_internal_missing_credential", request=request)
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
             status_code=401,
-            detail=(
-                "Owner API key (Authorization: Bearer <API_KEY>) "
-                "or X-Internal-Token required"
-            ),
+            details={"reason": "owner_or_internal_credential_required"},
         )
     api_key = authorization[7:]
     agent_info = await _resolve_agent_by_bearer(api_key, agent_service, request=request)
@@ -835,9 +846,13 @@ async def verify_owner_or_internal(
             reason="owner_api_key_wrong_agent",
             request=request,
         )
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
             status_code=403,
-            detail="API key does not match agent_id",
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
         )
     request.state.agent_id = agent_info["agent_id"]
     request.state.rate_limit_key = f"agent:{agent_info['agent_id']}"
@@ -883,11 +898,12 @@ def assert_system_caller(from_agent: str) -> None:
     reserved ``system:`` namespace.
     """
     if not _SYSTEM_CALLER_RE.match(from_agent):
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
             status_code=422,
-            detail=(
-                "from_agent must match 'system:<slug>' "
-                "where <slug> is 1-64 chars of [A-Za-z0-9_-] "
-                "(internal channel reserves the 'system:' namespace)"
-            ),
+            details={
+                "field": "from_agent",
+                "reason": "system_namespace_required",
+                "value": from_agent,
+            },
         )
