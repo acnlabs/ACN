@@ -126,7 +126,21 @@ class TestReputationCorruptTokenId:
         ],
     )
     def test_corrupt_token_id_returns_422_not_500(self, corrupt_value):
-        """Non-numeric persisted token ids must surface as 422, never 5xx."""
+        """Non-numeric persisted token ids must surface as 422, never 5xx.
+
+        Post-sprint #7: the body is the flat ACN error schema
+        (``error_code = erc8004_token_id_corrupt``) instead of the
+        legacy ``detail`` prose. We assert on the typed code rather
+        than string-matching ``"valid integer"`` — the diagnostic
+        is now in ``_DEFAULT_MESSAGES`` and treated as unstable
+        prose by SDK consumers.
+
+        Crucially, ``stored_value`` is *not* echoed in the response
+        body — it is logged operator-side only because it is
+        potentially attacker-controlled DB content. The "no 500
+        from int() coercion" intent of this test is preserved
+        unchanged.
+        """
         agent = _stub_agent(token_id=corrupt_value)
         svc = _stub_service(agent)
         erc = _stub_erc()
@@ -141,7 +155,10 @@ class TestReputationCorruptTokenId:
                 assert r.status_code in (404, 422), r.text
             else:
                 assert r.status_code == 422, r.text
-                assert "valid integer" in r.json()["detail"].lower()
+                body = r.json()
+                assert body["error_code"] == "erc8004_token_id_corrupt"
+                assert body["details"] == {"agent_id": "agent-1"}
+                assert "stored_value" not in body["details"]
             erc.get_reputation_summary.assert_not_awaited()
         finally:
             _clear()

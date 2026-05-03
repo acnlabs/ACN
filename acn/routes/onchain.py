@@ -17,12 +17,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException
 from ..services.agent_service import AgentService
 from ..services.erc8004_client import ERC8004Client
 from .dependencies import AgentApiKeyDep, AgentServiceDep, limiter
 
-router = APIRouter(prefix="/api/v1/onchain", tags=["onchain"])
+router = APIRouter(
+    prefix="/api/v1/onchain",
+    tags=["onchain"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
@@ -69,8 +74,11 @@ def _parse_token_id_or_422(value: str | None, agent_id: str) -> int:
     so an operator can clean it up.
     """
     if value is None:
-        # Callers should have already 404'd on this; treat as 422 for safety.
-        raise HTTPException(status_code=422, detail="Agent has no ERC-8004 token ID")
+        raise ACNHTTPError(
+            ErrorCode.ERC8004_TOKEN_ID_MISSING,
+            status_code=422,
+            details={"agent_id": agent_id},
+        )
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -79,9 +87,10 @@ def _parse_token_id_or_422(value: str | None, agent_id: str) -> int:
             agent_id=agent_id,
             stored_value=value,
         )
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.ERC8004_TOKEN_ID_CORRUPT,
             status_code=422,
-            detail="Agent's stored ERC-8004 token ID is not a valid integer",
+            details={"agent_id": agent_id},
         ) from None
 
 
@@ -173,7 +182,14 @@ async def bind_onchain_identity(
     agent-registration.json URL before storing the binding.
     """
     if caller["agent_id"] != agent_id:
-        raise HTTPException(status_code=403, detail="API key does not belong to this agent")
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            status_code=403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": caller["agent_id"],
+            },
+        )
 
     # ── H-erc8004 ──────────────────────────────────────────────────────────
     # 1. Server-derive the canonical chain string from settings. Any
@@ -181,13 +197,13 @@ async def bind_onchain_identity(
     #    never as data we trust to persist.
     server_chain = f"eip155:{settings.erc8004_chain_id}"
     if body.chain is not None and body.chain != server_chain:
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.ERC8004_CHAIN_MISMATCH,
             status_code=422,
-            detail=(
-                f"Chain mismatch: ACN is configured for {server_chain} but "
-                f"request specified {body.chain!r}. Omit the field or pass "
-                f"the matching value."
-            ),
+            details={
+                "server_chain": server_chain,
+                "client_chain": body.chain,
+            },
         )
 
     # 2. Confirm the RPC endpoint is actually on the configured chain.
@@ -202,7 +218,11 @@ async def bind_onchain_identity(
             actual=actual,
         )
         # 503 not 422 — this is a server-side misconfiguration / outage,
-        # not a client error. The client cannot fix it by retrying.
+        # not a client error. ``HTTPException`` (not ``ACNHTTPError``)
+        # because ``ACNHTTPError`` rejects 5xx at construction time so
+        # the central 5xx sanitisation handler stays in charge. The
+        # client cannot fix this by retrying — it surfaces as the flat
+        # sanitised 5xx body via the existing handler chain.
         raise HTTPException(
             status_code=503,
             detail=(
@@ -214,14 +234,34 @@ async def bind_onchain_identity(
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id},
+        ) from e
 
     # Check for duplicate binding (another agent already bound this token)
     existing_binding = await _check_duplicate_token(agent_service, body.token_id, agent_id)
     if existing_binding:
-        raise HTTPException(
+        # ``bound_agent_id`` IS leaked here on purpose. It already
+        # leaked pre-migration via the legacy ``detail`` string, and
+        # the on-chain reverse-index that powers
+        # ``_check_duplicate_token`` is *publicly* readable on the
+        # ERC-8004 contract — anyone can call ``ownerOf(token_id)``
+        # against the chain and resolve the same mapping client-side.
+        # Hiding it from the response body would not actually keep
+        # the binding private; it would only force SDK clients to
+        # round-trip through the public chain to get a piece of
+        # data the route already knows. Echoing it back keeps the
+        # SDK contract honest and avoids a false sense of privacy.
+        raise ACNHTTPError(
+            ErrorCode.ERC8004_TOKEN_ALREADY_BOUND,
             status_code=409,
-            detail=f"Token ID {body.token_id} is already bound to agent {existing_binding}",
+            details={
+                "token_id": body.token_id,
+                "bound_agent_id": existing_binding,
+                "requesting_agent_id": agent_id,
+            },
         )
 
     # Verify on-chain: tokenURI must point to this agent's registration file
@@ -231,12 +271,20 @@ async def bind_onchain_identity(
     )
     verified = await erc8004.verify_registration(body.token_id, expected_url)
     if not verified:
-        raise HTTPException(
+        # ``expected_url`` is preserved in full because the caller
+        # needs it verbatim to know what URL to set as the on-chain
+        # ``tokenURI``. Truncating or omitting it would force the
+        # caller to reconstruct it from gateway_base_url and agent_id,
+        # which is fragile (gateway URL changes, future path edits)
+        # and provides zero diagnostic value over echoing the canonical
+        # string ACN actually expects.
+        raise ACNHTTPError(
+            ErrorCode.ERC8004_REGISTRATION_MISMATCH,
             status_code=422,
-            detail=(
-                f"On-chain tokenURI does not match expected URL: {expected_url}. "
-                "Please register on-chain with the correct agentURI first."
-            ),
+            details={
+                "token_id": body.token_id,
+                "expected_url": expected_url,
+            },
         )
 
     # Read wallet address from chain (more trustworthy than agent self-report)
@@ -280,7 +328,11 @@ async def get_onchain_identity(agent_id: str, agent_service: AgentServiceDep = N
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id},
+        ) from e
 
     return OnchainIdentityResponse(
         agent_id=agent_id,
@@ -307,12 +359,17 @@ async def get_agent_reputation(
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id},
+        ) from e
 
     if not agent.erc8004_agent_id:
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.ERC8004_NOT_BOUND,
             status_code=404,
-            detail="Agent has not bound an ERC-8004 token ID yet",
+            details={"agent_id": agent_id},
         )
 
     token_id = _parse_token_id_or_422(agent.erc8004_agent_id, agent_id)
@@ -335,6 +392,10 @@ async def get_agent_validation(
     (the registry is still experimental — addresses not yet publicly published).
     """
     if not erc8004.validation_available:
+        # 5xx — Validation Registry contract address not configured
+        # is operator-side misconfig, not caller-actionable. ``ACNHTTPError``
+        # rejects 5xx at construction time so the central 5xx
+        # sanitisation handler stays in charge here.
         raise HTTPException(
             status_code=503,
             detail=(
@@ -346,12 +407,17 @@ async def get_agent_validation(
     try:
         agent = await agent_service.get_agent(agent_id)
     except AgentNotFoundException as e:
-        raise HTTPException(status_code=404, detail="Agent not found") from e
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id},
+        ) from e
 
     if not agent.erc8004_agent_id:
-        raise HTTPException(
+        raise ACNHTTPError(
+            ErrorCode.ERC8004_NOT_BOUND,
             status_code=404,
-            detail="Agent has not bound an ERC-8004 token ID yet",
+            details={"agent_id": agent_id},
         )
 
     token_id = _parse_token_id_or_422(agent.erc8004_agent_id, agent_id)

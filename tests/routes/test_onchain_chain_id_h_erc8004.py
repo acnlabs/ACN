@@ -156,6 +156,16 @@ class TestClientChainValidation:
         """The actual H-erc8004 attack: client claims a different chain
         than the one ACN is configured for. Must be 422 with a precise
         diagnostic, and *no* state must be written.
+
+        Post-sprint #7: the response is the flat ACN error schema
+        (``error_code`` + ``details``), not the legacy ``detail``
+        prose. We assert on ``details.{server_chain, client_chain}``
+        directly — the diagnostic content is now typed instead of
+        embedded in a free-form string. (This is the same regression
+        ``tests/routes/test_onchain_error_schema.py`` covers as a
+        contract test; this test stays here as the H-erc8004
+        *audit-intent* pin — it asserts side-effects + body shape
+        together, where the contract test asserts only the body.)
         """
         _override_deps(stub_agent_service, stub_erc)
         try:
@@ -165,8 +175,12 @@ class TestClientChainValidation:
                     json={"token_id": 42, "chain": "eip155:1"},
                 )
             assert r.status_code == 422
-            detail = r.json()["detail"]
-            assert "eip155:8453" in detail and "eip155:1" in detail, detail
+            body = r.json()
+            assert body["error_code"] == "erc8004_chain_mismatch"
+            assert body["details"] == {
+                "server_chain": "eip155:8453",
+                "client_chain": "eip155:1",
+            }
             # Side-effect proof: the rejection must short-circuit before
             # any chain RPC, registration check, or save() can run.
             stub_erc.verify_chain_id.assert_not_awaited()

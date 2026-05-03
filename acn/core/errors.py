@@ -140,6 +140,70 @@ class ErrorCode(StrEnum):
     MANIFEST_ENTRY_NOT_FOUND = "manifest_entry_not_found"
     MANIFEST_CONTENT_NOT_FOUND = "manifest_content_not_found"
 
+    # ===== Onchain / ERC-8004 routes (sprint row #7) =====
+    # All six codes are NEW in sprint #7 and are *route-local* — they
+    # only surface from ``acn/routes/onchain.py``. The cross-module
+    # ``AGENT_NOT_FOUND`` (×4 sites) and ``API_KEY_AGENT_MISMATCH``
+    # (×1 site) are reused from the pilot / cross-module groups; they
+    # do not get a new declaration here.
+    #
+    # ----- Why six distinct codes (vs a single ``ERC8004_FAILURE``
+    # with ``details.kind``)? -----
+    #
+    # Each of the six is a *materially different* failure mode that
+    # an SDK consumer wants to branch on without inspecting
+    # ``details``:
+    # * ``ERC8004_TOKEN_ID_MISSING`` — the agent has never bound a
+    #   token. Caller's next step: prompt the user to call
+    #   ``POST /agents/{id}/bind`` first. (Reachable from the
+    #   reputation / validation read paths via the
+    #   ``_parse_token_id_or_422`` helper.)
+    # * ``ERC8004_TOKEN_ID_CORRUPT`` — the agent's stored
+    #   ``erc8004_agent_id`` is non-numeric. Caller's next step: open
+    #   a support ticket (this is operator-side data corruption, not
+    #   user-actionable). Distinct from "missing" because the bind
+    #   record exists but is malformed.
+    # * ``ERC8004_CHAIN_MISMATCH`` — the bind request named a
+    #   ``chain`` value that disagrees with ACN's configured chain.
+    #   Caller's next step: omit the field or pass the matching
+    #   server-derived value.
+    # * ``ERC8004_TOKEN_ALREADY_BOUND`` — the requested
+    #   ``token_id`` is already bound to a *different* agent. (Note:
+    #   re-binding the same token to the same agent is idempotent
+    #   and does not raise — this code only surfaces on cross-agent
+    #   collisions.) Caller's next step: surface the 409 to the
+    #   user and let them either pick a different token or contact
+    #   the bound agent's owner.
+    # * ``ERC8004_REGISTRATION_MISMATCH`` — the on-chain ``tokenURI``
+    #   does not match ACN's expected agent-registration URL.
+    #   Caller's next step: re-register on-chain with the correct
+    #   ``agentURI`` and retry.
+    # * ``ERC8004_NOT_BOUND`` — the agent exists but has no ERC-8004
+    #   token binding (so reputation / validation queries can't
+    #   proceed). Distinct from ``ERC8004_TOKEN_ID_MISSING`` because
+    #   *this* code is raised at the *route entry point* (before the
+    #   parse-or-422 helper is reached), and SDK clients want to
+    #   render a friendlier "this agent has not bound an on-chain
+    #   identity yet" message rather than the operator-tier
+    #   ``token_id_missing`` diagnostic. Both 404, both essentially
+    #   "no token to query against", but differentiated by *which
+    #   layer* surfaced the absence.
+    #
+    # ----- Why six in *this* group, not lifted to ``cross-module``? -----
+    #
+    # None of these failure modes are expected to surface from any
+    # other route module. ERC-8004 binding is unique to the
+    # ``/api/v1/onchain/*`` namespace; if a future route ever needs
+    # to surface "this token is corrupt", the right move is to lift
+    # the code into the cross-module group at that point — not to
+    # over-anticipate now.
+    ERC8004_TOKEN_ID_MISSING = "erc8004_token_id_missing"
+    ERC8004_TOKEN_ID_CORRUPT = "erc8004_token_id_corrupt"
+    ERC8004_CHAIN_MISMATCH = "erc8004_chain_mismatch"
+    ERC8004_TOKEN_ALREADY_BOUND = "erc8004_token_already_bound"
+    ERC8004_REGISTRATION_MISMATCH = "erc8004_registration_mismatch"
+    ERC8004_NOT_BOUND = "erc8004_not_bound"
+
     # ===== Payments routes (sprint row #5) =====
     # ``AGENT_NOT_FOUND`` (×2), ``API_KEY_AGENT_MISMATCH`` (×4), and
     # ``FROM_AGENT_MISMATCH`` (×1 — body.from_agent vs auth-key
@@ -220,6 +284,25 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.MANIFEST_CONTENT_NOT_FOUND: (
         "The requested manifest content could not be found or has expired."
+    ),
+    ErrorCode.ERC8004_TOKEN_ID_MISSING: (
+        "Agent has no ERC-8004 token ID."
+    ),
+    ErrorCode.ERC8004_TOKEN_ID_CORRUPT: (
+        "Agent's stored ERC-8004 token ID is not a valid integer."
+    ),
+    ErrorCode.ERC8004_CHAIN_MISMATCH: (
+        "The supplied chain identifier does not match the chain ACN is "
+        "configured for."
+    ),
+    ErrorCode.ERC8004_TOKEN_ALREADY_BOUND: (
+        "The requested ERC-8004 token ID is already bound to a different agent."
+    ),
+    ErrorCode.ERC8004_REGISTRATION_MISMATCH: (
+        "The on-chain tokenURI does not match the expected agent-registration URL."
+    ),
+    ErrorCode.ERC8004_NOT_BOUND: (
+        "Agent has not bound an ERC-8004 token ID yet."
     ),
     ErrorCode.PAYMENT_CAPABILITY_NOT_FOUND: (
         "No payment capability is registered for this agent."

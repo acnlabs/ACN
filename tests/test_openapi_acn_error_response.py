@@ -163,6 +163,23 @@ class TestRouterLevelResponsesCoverage:
             "get",
             "analytics (#9) — GET activities",
         ),
+        # onchain (#7) carries the most diverse error vocabulary
+        # of any non-pilot router (6 new ErrorCodes +
+        # 2 reused). We sample ``POST /agents/{id}/bind``
+        # because it is the only endpoint that can raise *all*
+        # six new ERC-8004 codes (chain mismatch, token already
+        # bound, registration mismatch) and one of the four
+        # AGENT_NOT_FOUND sites — a router-config regression on
+        # the bind endpoint catches the most surface area in a
+        # single sample. The other onchain endpoints (GET
+        # identity / reputation / validation) inherit the same
+        # router-level ``responses=`` block so positive coverage
+        # transfers to them by FastAPI's uniform merge.
+        (
+            "/api/v1/onchain/agents/{agent_id}/bind",
+            "post",
+            "onchain (#7) — POST bind",
+        ),
     ]
 
     @pytest.mark.parametrize(
@@ -233,56 +250,50 @@ class TestNonMigratedRoutersDoNotAdvertiseDefault:
     contract bug because it only surfaces in production at the
     SDK / client deserialisation layer.
 
-    Sampled non-migrated routers (matrix as of this commit):
-    - ``onchain`` (sprint #7, pending) — owns the
-      ``/api/v1/onchain/*`` endpoints, ~14 raw ``HTTPException``
-      raise sites (ERC-8004 NFT identity binding). Sampling here
-      keeps the negative-coverage contract live until sprint #7
-      lands; sprint #11 (``websocket``) does not register an HTTP
-      router, so it is not represented in this matrix.
+    Empty as of sprint #7
+    ---------------------
+    All HTTP-mounting routers are migrated. The remaining sprint
+    (#11 ``websocket``) does NOT register an HTTP router — it owns
+    a WebSocket endpoint whose error contract is bounded by RFC
+    6455 close codes, not HTTP responses. The negative-coverage
+    contract therefore has no rows to assert today.
 
-    When sprint #7 / #11 land, move the corresponding entry from
-    here up into ``REPRESENTATIVE_ENDPOINTS`` above and the
-    drift-detection contract converts to a positive coverage
-    contract atomically. (Sprint #10 ``dependencies`` is *not*
-    listed here because that module exposes no router of its own
-    — its raise sites surface through routers that already
-    advertise the default block.)
+    The class itself stays in the file as a structural anchor: if
+    a future contributor adds a new non-migrated HTTP router (e.g.
+    a brand new ``/api/v1/foo/*`` namespace that raises raw
+    ``HTTPException``), they should add an entry here at the same
+    time as the router lands so drift detection re-engages — the
+    same lifecycle every previous sprint exercised. The
+    ``test_class_remains_a_structural_anchor`` test below is a
+    no-op intended only to keep the class non-empty so it shows
+    up in pytest collection output as a documented contract.
     """
 
-    NON_MIGRATED_ENDPOINTS = [
-        # (path, method, module name for failure messages)
-        (
-            "/api/v1/onchain/agents/{agent_id}/bind",
-            "post",
-            "onchain (sprint #7 — NOT YET migrated)",
-        ),
+    NON_MIGRATED_ENDPOINTS: list[tuple[str, str, str]] = [
+        # Empty as of sprint #7 — see class docstring. Future
+        # non-migrated HTTP routers go here in the (path, method,
+        # module name for failure messages) shape.
     ]
 
-    @pytest.mark.parametrize(
-        "path,method,module",
-        NON_MIGRATED_ENDPOINTS,
-        ids=[m for _, _, m in NON_MIGRATED_ENDPOINTS],
-    )
-    def test_non_migrated_router_has_no_default_4xx_block(
-        self, openapi_spec, path: str, method: str, module: str
-    ):
-        op = openapi_spec["paths"][path][method]
-        responses = op.get("responses", {})
-        unexpected_4xx = (
-            TestRouterLevelResponsesCoverage.EXPECTED_STATUSES
-            & set(responses.keys())
-        )
-        assert not unexpected_4xx, (
-            f"{module}: {method.upper()} {path} unexpectedly advertises "
-            f"default 4xx codes {sorted(unexpected_4xx)}. Either:\n"
-            f"  (a) this module just got migrated to ACNHTTPError + "
-            f"``responses=ACN_DEFAULT_RESPONSES`` — congrats, move this "
-            f"entry from NON_MIGRATED_ENDPOINTS up into "
-            f"REPRESENTATIVE_ENDPOINTS in the class above; or\n"
-            f"  (b) someone added ``responses=ACN_DEFAULT_RESPONSES`` to "
-            f"the router without flipping the raise sites — that's a "
-            f"contract bug (spec promises ACNErrorResponse, runtime "
-            f"emits legacy ``{{detail}}``); revert the responses= until "
-            f"the raise sites are migrated."
+    def test_class_remains_a_structural_anchor(self):
+        """Documentation-only assertion.
+
+        Keeps this class visible in pytest output (and in code
+        review diffs that touch the migration matrix) even when
+        ``NON_MIGRATED_ENDPOINTS`` is empty, so the contract
+        described in the class docstring is discoverable. If a
+        future ``parametrize`` over the empty list is collected,
+        pytest emits a warning; pinning a single anchor test
+        avoids that noise.
+        """
+        # Intentional: at sprint #7 the list MUST be empty. If a
+        # future sprint adds rows back, this assertion fails by
+        # design — the contributor reads the class docstring,
+        # adds their entry to ``NON_MIGRATED_ENDPOINTS``, and
+        # parametrizes the test below over the new list.
+        assert self.NON_MIGRATED_ENDPOINTS == [], (
+            "NON_MIGRATED_ENDPOINTS is no longer empty — port the "
+            "test_non_migrated_router_has_no_default_4xx_block test "
+            "back from git history (commits prior to sprint #7) and "
+            "re-parametrize over the new list."
         )
