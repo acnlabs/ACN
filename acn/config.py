@@ -137,6 +137,30 @@ class Settings(BaseSettings):
     # WebSocket limits
     max_websocket_connections: int = 10_000
 
+    # WebSocket close-frame reason format.
+    # Phase 2 review v2 P1 #11 sprint #11b: the close-frame ``reason`` field
+    # carries an opaque string today (e.g. ``"Unauthorized: invalid API key"``).
+    # Sprint #11b migrates it to a compact JSON payload
+    # (``{"c":"<error_code>","r":"<request_id>","d":{...}}``) so SDK clients
+    # can branch on a typed ``error_code`` instead of regexing prose.
+    #
+    # Bake-window contract:
+    #   * ``"legacy"``  — emit the human-readable string (default during the
+    #                     30-day bake window after SDK 0.6.0 ships, so SDK
+    #                     0.5.x clients that string-match the prose continue
+    #                     to work without flag knowledge).
+    #   * ``"compact"`` — emit the typed JSON payload. SDK 0.6.0+ parses this
+    #                     unconditionally; 0.5.x clients see opaque garbage in
+    #                     the reason field and should ignore reason text per
+    #                     the §5 SDK guideline (only ``error_code`` and HTTP
+    #                     status are stable contract).
+    #
+    # Operators flip this to ``"compact"`` AFTER the 30-day SDK 0.6.0 bake
+    # window closes. The legacy branch is removed in a follow-up PR a further
+    # 30 days later (the deprecation-warning helper logs each emission so
+    # dashboards show whether any SDK 0.5.x is still in the wild).
+    websocket_close_reason_format: str = "legacy"
+
     # WebSocket auth: allow API key in the URL query string?
     # Security audit M14: an API key in ``?token=...`` ends up in:
     #   - server access logs (Nginx, Cloudflare, ALB),

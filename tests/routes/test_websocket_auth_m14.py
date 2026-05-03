@@ -52,6 +52,7 @@ def _make_app(
     valid_token: str = "good-token",
     matching_agent_id: str = "agent-1",
     allow_query_token: bool = False,
+    close_reason_format: str = "legacy",
 ) -> tuple[FastAPI, MagicMock]:
     """Build a FastAPI app mounting the WS router with stubbed deps.
 
@@ -61,8 +62,16 @@ def _make_app(
     app = FastAPI()
     app.include_router(ws_route.router)
 
-    # Settings stub: only attribute consulted is allow flag.
-    settings_stub = SimpleNamespace(websocket_allow_query_token=allow_query_token)
+    # Settings stub: attributes consulted by the WS auth path. M14 tests
+    # default to ``"legacy"`` close-reason mode (the bake window default)
+    # so the security invariants encoded here continue to pin pre-#11b
+    # wire shape; the dedicated #11b contract tests
+    # (``test_websocket_error_schema_protocol.py``) flip the flag to
+    # ``"compact"`` and assert on the new shape.
+    settings_stub = SimpleNamespace(
+        websocket_allow_query_token=allow_query_token,
+        websocket_close_reason_format=close_reason_format,
+    )
 
     # Agent service stub: returns an Agent-shaped object with the
     # matching ID iff the API key matches; None otherwise.
@@ -304,7 +313,15 @@ class TestFirstMessageAuth:
         finally:
             _exit(ps)
 
-    def test_no_auth_message_at_all_closes_4401(self):
+    def test_no_auth_message_at_all_closes_4400(self):
+        # Sprint #11b: first-message JSON has the wrong shape (``type``
+        # is not "auth"). Per RFC §3-D2b the failure is now mapped to
+        # close code 4400 (bad-request class), not 4401 (auth class) —
+        # the caller IS being rejected, but the failure is "your auth
+        # message was malformed" rather than "your credentials were bad".
+        # The pre-#11b code collapsed both to 4401; the security
+        # invariant (the manager's connect() is never reached) is
+        # unchanged.
         app, ws_mgr, svc, settings = _make_app()
         ps = _patches(ws_mgr, svc, settings)
         _enter(ps)
@@ -316,12 +333,20 @@ class TestFirstMessageAuth:
                         # Send something that's not an auth message.
                         ws.send_json({"type": "ping"})
                         ws.receive_text()
-                assert exc_info.value.code == 4401
+                assert exc_info.value.code == 4400
+            ws_mgr.connect.assert_not_called()
         finally:
             _exit(ps)
 
     def test_agent_id_mismatch_rejected(self):
-        # Even with a valid key, you can only connect on your own agent_id.
+        # Even with a valid key, you can only connect on your own
+        # agent_id. Sprint #11b RFC Q3 split: the wrong-agent half goes
+        # to close code 4403 (forbidden class), distinct from 4401
+        # (auth class) used when the key didn't resolve at all. This
+        # mirrors the HTTP route #11a precedent (which uses HTTP 403 +
+        # ``api_key_agent_mismatch`` for the same logical failure) and
+        # prevents an attacker from using transport switching as a side
+        # channel to differentiate "key bad" from "key for wrong agent".
         app, ws_mgr, svc, settings = _make_app(matching_agent_id="agent-A")
         ps = _patches(ws_mgr, svc, settings)
         _enter(ps)
@@ -332,6 +357,7 @@ class TestFirstMessageAuth:
                     with client.websocket_connect("/ws/agent-OTHER") as ws:
                         ws.send_json({"type": "auth", "token": "good-token"})
                         ws.receive_text()
-                assert exc_info.value.code == 4401
+                assert exc_info.value.code == 4403
+            ws_mgr.connect.assert_not_called()
         finally:
             _exit(ps)

@@ -62,7 +62,7 @@ The `ErrorCode` enum in `[acn/core/errors.py](../../acn/core/errors.py)` is a **
 | `error_code`             | HTTP status | Used by                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `details` schema                                   |
 | ------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
 | `agent_not_found`        | 404         | communication routes (`/send` `/broadcast` `/broadcast-by-tag` `/history` `/history/{agent_id}/ack` `/internal/send`); allowlist routes (POST); registry routes (`GET /agents/{id}` `POST /heartbeat` `GET /me` `GET /agent-card.json` `GET /agent-registration.json` `GET /endpoint` `GET /policy` `PATCH /policy` `DELETE /agents/{id}` `POST /claim` `POST /transfer` `POST /release` `GET /wallets`, plus the catch-all proxy); subnets routes (`POST /subnets/{agent_id}/subnets/{subnet_id}` `DELETE /subnets/{agent_id}/subnets/{subnet_id}` `GET /subnets/{agent_id}/subnets`); payments routes (`POST /{agent_id}/payment-capability` `POST /{agent_id}/token-pricing`); follows routes (`POST /agents/{agent_id}/follows/{target_id}` — followee lookup miss); onchain routes (`POST /onchain/agents/{agent_id}/bind` `GET /onchain/agents/{agent_id}` `GET /onchain/agents/{agent_id}/reputation` `GET /onchain/agents/{agent_id}/validation` — every route's `except AgentNotFoundException` branch) | `{ agent_id: string }`                             |
-| `api_key_agent_mismatch` | 403         | communication routes (`/history` `/history/{agent_id}/ack`); allowlist routes (POST/DELETE/GET); registry routes (`POST /heartbeat`); subnets routes (`POST /subnets/{agent_id}/subnets/{subnet_id}` `DELETE /subnets/{agent_id}/subnets/{subnet_id}` `GET /subnets/{agent_id}/subnets`); payments routes (`POST /{agent_id}/payment-capability` `GET /tasks/agent/{agent_id}` `GET /stats/{agent_id}` `POST /{agent_id}/token-pricing`); follows routes (`POST /agents/{agent_id}/follows/{target_id}` `DELETE /agents/{agent_id}/follows/{target_id}` — path-mismatch gates); analytics routes (`GET /analytics/activities` — cross-tenant filter probe); onchain routes (`POST /onchain/agents/{agent_id}/bind` — path-key mismatch gate); websocket routes (`GET /api/v1/websocket/agent/{agent_id}/status` — path-key mismatch gate)                                                                                                                                                                                                                                                                                               | `{ path_agent: string, key_agent: string }`        |
+| `api_key_agent_mismatch` | 403 (HTTP) / WS close `4403` (#11b) | communication routes (`/history` `/history/{agent_id}/ack`); allowlist routes (POST/DELETE/GET); registry routes (`POST /heartbeat`); subnets routes (`POST /subnets/{agent_id}/subnets/{subnet_id}` `DELETE /subnets/{agent_id}/subnets/{subnet_id}` `GET /subnets/{agent_id}/subnets`); payments routes (`POST /{agent_id}/payment-capability` `GET /tasks/agent/{agent_id}` `GET /stats/{agent_id}` `POST /{agent_id}/token-pricing`); follows routes (`POST /agents/{agent_id}/follows/{target_id}` `DELETE /agents/{agent_id}/follows/{target_id}` — path-mismatch gates); analytics routes (`GET /analytics/activities` — cross-tenant filter probe); onchain routes (`POST /onchain/agents/{agent_id}/bind` — path-key mismatch gate); websocket routes (`GET /api/v1/websocket/agent/{agent_id}/status` — path-key mismatch gate; **`WEBSOCKET /ws/{agent_id}`** — sprint #11b path-key-mismatch close 4403)                                                                                                                                                                                                                                                                                               | `{ path_agent: string, key_agent: string }`        |
 | `from_agent_mismatch`    | 403         | `/send` `/broadcast` `/broadcast-by-tag`; payments routes (`POST /tasks`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `{ authenticated_as: string, from_agent: string }` |
 | `communication_rejected` | 403         | `/send` `/internal/send` (defensive); registry catch-all proxy (`POST/PUT/PATCH /{agent_id}{/rest_path}`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `{ reason: string, reject_reason: string | null }` |
 | `unknown_strategy`       | 422         | `/broadcast`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `{ strategy: string, expected: string[] }`         |
@@ -241,7 +241,7 @@ Six `ErrorCode` members designed to be **shared by `registry`, `subnets`, and `t
 
 | `error_code`              | HTTP status | Raised by                                                                                                                                                                                                                                                                                                                                                                                                                            | `details` schema                                                       |
 | ------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| `authentication_required` | 401         | **registry** — `GET /me` (×2: invalid Authorization header format / unrecognised API key); **subnets** — `GET /subnets?owner=…` (owner-filter requires auth), `GET /subnets/{id}/agents` (private subnet requires auth); **tasks** — `require_task_write_auth` agent path (invalid `acn_xxx` API key); **dependencies** (×4 — every router that mounts an auth dep): `_resolve_agent_by_bearer` invalid_api_key, `verify_agent_api_key` invalid_authorization_header_format, `verify_proxy_caller` invalid_authorization_header_format, `verify_owner_or_internal` owner_or_internal_credential_required; **analytics** (×2) — `list_activities` requires Bearer when filtering by `agent_id` / `agent_ids` (`reason="auth_required_for_agent_filter"`) and rejects unresolved Bearer keys (`reason="invalid_api_key"`)                                                                                                                                 | `{ reason: enum, subnet_id?: string }`                                 |
+| `authentication_required` | 401 (HTTP) / WS close `4400` or `4401` (#11b) | **registry** — `GET /me` (×2: invalid Authorization header format / unrecognised API key); **subnets** — `GET /subnets?owner=…` (owner-filter requires auth), `GET /subnets/{id}/agents` (private subnet requires auth); **tasks** — `require_task_write_auth` agent path (invalid `acn_xxx` API key); **dependencies** (×4 — every router that mounts an auth dep): `_resolve_agent_by_bearer` invalid_api_key, `verify_agent_api_key` invalid_authorization_header_format, `verify_proxy_caller` invalid_authorization_header_format, `verify_owner_or_internal` owner_or_internal_credential_required; **analytics** (×2) — `list_activities` requires Bearer when filtering by `agent_id` / `agent_ids` (`reason="auth_required_for_agent_filter"`) and rejects unresolved Bearer keys (`reason="invalid_api_key"`); **websocket protocol** (×4, sprint #11b — close codes vary per site) — `WEBSOCKET /ws/{agent_id}` query-token rejection (`reason="ws_query_token_disabled"`, close 4401), first-message wrong shape (`reason="ws_invalid_auth_message"`, close 4400), first-message JSON parse failure (`reason="ws_invalid_auth_message_format"`, close 4400), and resolved-key-not-found (`reason="invalid_api_key"`, close 4401 — same reason value as the dependencies / analytics emitters since the SDK-actionable failure is identical) | `{ reason: enum, subnet_id?: string }`                                 |
 | `internal_token_invalid`  | 401 / 403   | **registry** — `POST /agents/join/internal` (X-Internal-Token missing or mismatched, 401); **dependencies** (×2 — every router that mounts `InternalTokenDep` or `OwnerOrInternalDep`): `verify_internal_token` (403), `verify_owner_or_internal` priority branch (403). Status-code split is intentional: registry's join endpoint pre-dates the dep migration and returns 401 to mirror "you didn't authenticate"; the dep-layer sites return 403 to mirror "we know you're trying — your token is wrong". SDK clients should branch on `error_code`, not status, to handle both.                                                                                                                                                                                                                                                                                                                                                                                                                                  | `{}`                                                                   |
 | `missing_permission`      | 403         | **registry** — `POST /agents/dev/register` (dev-mode disabled in this environment); **tasks** — `require_task_write_auth` JWT path (caller lacks `acn:write` scope)                                                                                                                                                                                                                                                                  | `{ reason: enum, required_permission?: string }`                       |
 | `ownership_mismatch`      | 403         | **registry** — `POST /register-protected` (owner-token mismatch); `DELETE /agents/{id}` `POST /claim` `POST /transfer` `POST /release` (`PermissionError` re-raises); **subnets** — `GET /subnets?owner=…` (cross-tenant non-admin), `DELETE /subnets/{id}` (`PermissionError` re-raise); **tasks** — every write endpoint that goes through `task_service` raising `PermissionError` (×10, `replace_all=true` cohort)                | `{ agent_id?: string, subnet_id?: string, task_id?: string, reason?: string } \| { requested_owner: string, token_owner: string }` |
@@ -250,7 +250,7 @@ Six `ErrorCode` members designed to be **shared by `registry`, `subnets`, and `t
 
 `details.reason` is a stable per-code enum where the value is a fixed identifier, OR a free-form `str(...)` of the underlying domain exception when the code wraps `ValueError` / `PermissionError`. Reason values currently emitted, by `error_code`:
 
-* `authentication_required` — `"invalid_authorization_header_format"` (registry `GET /me`; **dependencies** `verify_agent_api_key` + `verify_proxy_caller` — same reason value used across both header names because the SDK-actionable failure is identical), `"invalid_api_key"` (registry; **dependencies** `_resolve_agent_by_bearer`; **analytics** `list_activities` Bearer-key-fails-to-resolve branch — same reason value as the dependencies site because the SDK-actionable failure is identical), `"owner_filter_requires_auth"` (subnets), `"private_subnet"` (subnets), `"invalid_agent_api_key"` (tasks), `"owner_or_internal_credential_required"` (**dependencies** `verify_owner_or_internal` no-credential branch), `"auth_required_for_agent_filter"` (**analytics** `list_activities` no-Bearer branch — distinct from `invalid_api_key` so SDK clients can tell "you must authenticate to filter" apart from "your auth failed")
+* `authentication_required` — `"invalid_authorization_header_format"` (registry `GET /me`; **dependencies** `verify_agent_api_key` + `verify_proxy_caller` — same reason value used across both header names because the SDK-actionable failure is identical), `"invalid_api_key"` (registry; **dependencies** `_resolve_agent_by_bearer`; **analytics** `list_activities` Bearer-key-fails-to-resolve branch; **websocket protocol** `WEBSOCKET /ws/{agent_id}` resolved-key-not-found branch — same reason value across all four emitters because the SDK-actionable failure is identical), `"owner_filter_requires_auth"` (subnets), `"private_subnet"` (subnets), `"invalid_agent_api_key"` (tasks), `"owner_or_internal_credential_required"` (**dependencies** `verify_owner_or_internal` no-credential branch), `"auth_required_for_agent_filter"` (**analytics** `list_activities` no-Bearer branch — distinct from `invalid_api_key` so SDK clients can tell "you must authenticate to filter" apart from "your auth failed"), `"ws_query_token_disabled"` / `"ws_invalid_auth_message"` / `"ws_invalid_auth_message_format"` (**websocket protocol** sprint #11b — three handshake-phase failure modes; `ws_*` prefix marks them as WS-only so an HTTP-side parser ignoring WS reasons does not need a dedicated allow-list)
 * `missing_permission` — `"dev_mode_disabled"` (registry); tasks emits `details.required_permission` (`"acn:write"`) instead of a reason
 * `not_subnet_member` — `"anonymous_caller"` (tasks `get_task` no-auth branch), `"not_member"` (tasks `get_task` non-member branch); subnets uses no reason (the field set already disambiguates)
 * `invalid_request` — `"bulk_delete_filter_required"` (registry), `"tag_list_empty"` (tasks `match_tasks_for_agent`), `field="status"` enum-value rejection (tasks `list_tasks`), `"system_namespace_required"` (**dependencies** `assert_system_caller` — emitted as 422 to preserve the pre-migration "request was understood, semantic rule violated" status semantics); free-form `str(ValueError)` (registry claim path, subnets create path, tasks 10× `replace_all=true` cohort)
@@ -353,7 +353,7 @@ During the migration sprint, ACN-emitted 4xx responses carry **two distinct shap
 | `/api/v1/analytics/*` [^9]                                                                                                | `ACNHTTPError`                           | flat                                                                                   | ✅ Aligned (#9)   |
 | `/api/v1/onchain/*` [^7]                                                                                                  | `ACNHTTPError` (4xx) + `HTTPException` (2× 503 preserved) | flat                                                                  | ✅ Aligned (#7)   |
 | `/api/v1/websocket/*` (HTTP routes) [^11a]                                                                                     | `ACNHTTPError`                           | flat                                                                                   | ✅ Aligned (#11a) |
-| `/ws/*` (websocket protocol)                                                                                                   | RFC 6455 close codes (no HTTP body)      | close code 4401 + free-text `reason` (no typed `error_code`)                           | ⏳ Pending (#11b) |
+| `/ws/*` (websocket protocol) [^11b]                                                                                            | `_send_error_and_close` (compact mode) — application error-frame + RFC 6455 close | application frame `{type:"error", error_code, message, details, request_id}` (mirrors `ACNErrorResponse` 1:1) + close code from `{4400, 4401, 4403, 4429, 1011}` with compact close-reason fallback `{c, r}` | ✅ Aligned (#11b, behind `WEBSOCKET_CLOSE_REASON_FORMAT=compact` flag during 30-day SDK 0.6.0 bake window) |
 | All routes — 5xx                                                                                                               | `HTTPException` (sanitised)              | `{ error, error_code, message, details, request_id }` (flat, with deprecation `error`) | ✅ Aligned        |
 
 
@@ -498,6 +498,45 @@ Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can 
 
     **1 contract test** in `tests/routes/test_websocket_error_schema.py` pins the single raise site (1:1 coverage). The test additionally asserts the WS manager's `is_user_connected` is NOT called on the mismatch path — a regression that swapped check order would let strangers probe whether arbitrary agents are online via response-time differential.
 
+[^11b]: **WebSocket protocol full migration (sprint #11b).** All 4 (now 5 — see Q3 below) handshake-phase failure sites in `acn/routes/websocket.py`'s `WEBSOCKET /ws/{agent_id}` endpoint are migrated to the typed dual-channel contract documented in §5 above. The full RFC and design rationale lives at [`acn-error-schema-websocket.md`](acn-error-schema-websocket.md); this footnote summarises the implementation outcomes that diverged from the RFC during landing.
+
+    **0 new ErrorCodes** (RFC D3a — reuse cross-module catalog). All 4 sites reuse `AUTHENTICATION_REQUIRED` and the path-mismatch site reuses `API_KEY_AGENT_MISMATCH`, byte-identical to the HTTP emitters in registry / payments / follows / onchain / analytics / dependencies.
+
+    *Three new `details.reason` values* added to the existing `AUTHENTICATION_REQUIRED` union schema: `ws_query_token_disabled`, `ws_invalid_auth_message`, `ws_invalid_auth_message_format`. The `ws_*` prefix marks them as WS-only; HTTP-side parsers ignoring WS reasons do not need a dedicated allow-list.
+
+    *Site #4 split* (RFC Q3 — distinct close codes for distinct semantics). The pre-migration code path collapsed both halves of the API-key validation into one `_safe_close(4401, "Unauthorized: invalid API key")`. The migration splits this into two sites:
+
+    * **Site #4a** — `agent_service.get_agent_by_api_key` returned `None` → close 4401 + `AUTHENTICATION_REQUIRED` + `details.reason="invalid_api_key"`. Same reason value as the dependencies / analytics emitters.
+    * **Site #4b** — key resolved but to a different agent → close 4403 + `API_KEY_AGENT_MISMATCH` + strict `{path_agent, key_agent}`. Distinct close code from #4a so the WS protocol mirrors the HTTP route #11a precedent (which uses 403 for the same logical failure) and prevents an attacker from using transport switching as a side channel to differentiate "key bad" from "key for wrong agent".
+
+    *Close-code dictionary* (RFC D2b — RFC-mapped buckets):
+
+    | Site | Failure                                       | Close code   |
+    | ---- | --------------------------------------------- | ------------ |
+    | #1   | Query-string token rejected (flag off)        | 4401         |
+    | #2   | First-message JSON parsed but shape wrong     | 4400         |
+    | #3   | First-message JSON parse failure / disconnect | 4400         |
+    | #4a  | API key did not resolve                       | 4401         |
+    | #4b  | API key resolved, agent_id mismatch           | 4403         |
+    | (—)  | Unhandled exception in main message loop      | 1011 (Starlette default) |
+
+    **RFC §4 revised post-implementation.** The original RFC §4.1 proposed including `details` (`d` key) inline in the close-reason JSON. Implementation discovered that `api_key_agent_mismatch`'s `{path_agent, key_agent}` payload (two UUIDs) overflows the 123-byte RFC 6455 close-reason budget by ~60 bytes. Rather than amputate the shape per-code (which would re-introduce the cross-channel drift that union-schema codes already cause), the implementation moves `details` exclusively onto the application error-frame channel (`_send_error_and_close` sends both, the close-reason carries only `{c, r}` as a fallback for close-only SDK clients that miss the frame). The application error-frame channel has no size cap so it carries the full `ACNErrorResponse`-shaped payload regardless of `details` shape. The `acn-error-schema-websocket.md` RFC document was updated post-landing to reflect the corrected design.
+
+    *Cross-channel `details` consistency*. The AST consistency walker at `tests/test_error_code_details_consistency.py` was extended in this sprint to walk `await _send_error_and_close(error_code=..., details=...)` calls in addition to `raise ACNHTTPError(...)` — both emitter forms feed the same per-`ErrorCode` consistency bucket. Without this extension, the WS-protocol emitter could silently drift from the HTTP emitters (e.g. emit `{p, k}` instead of `{path_agent, key_agent}` to save bytes), re-opening the same drift surface that sprint #5 caught and sprint #6 hardened.
+
+    *Bake-window flag* (RFC Q4 — SDK 0.6.0 + 30-day bake). `WEBSOCKET_CLOSE_REASON_FORMAT` is added to `acn/config.py` with values `"legacy"` (default during bake — pre-#11b wire shape, no application error-frame, free-text close-reason) and `"compact"` (post-bake — typed dual-channel contract). The two modes are wire-incompatible; the flag exists so operators can flip atomically AFTER the SDK 0.6.0 30-day bake window closes (target 2026-06-15). A `websocket_legacy_close_reason_emitted` debug log fires on every legacy close so operators can confirm the SDK 0.5.x tail has decommissioned before flipping. The flag itself is removed in a follow-up PR a further 30 days after the default flip.
+
+    *Request id propagation* (RFC Q5). Every WebSocket connection now generates a UUID v4 `request_id` at handshake-accept time (mirroring the HTTP middleware's per-request id). The id is echoed in the application error-frame's `request_id` field, in the close-reason's `r` key, in every audit log line emitted on the connection (including the `websocket_error` catch-all at the main message loop's `except Exception:` branch — which is the WebSocket equivalent of an HTTP 5xx). Operators correlating a 1011 close with a server-side stack trace use the `r` value from the close-reason to grep the logs.
+
+    *5xx equivalence* (RFC D5). The main message loop's `except Exception:` branch propagates the raise to FastAPI / Starlette, which closes the connection with **1011** (RFC 6455 standard "internal server error"). No body is sent — the WebSocket framing layer cannot reach the central HTTP `_unhandled_exception_handler` after a successful handshake. Operator visibility comes through the `websocket_error` audit log (now carrying `request_id`); SDK clients see the 1011 close code and should retry with backoff per the WS spec.
+
+    **6 contract tests** in `tests/routes/test_websocket_error_schema_protocol.py` pin every site (1:1 coverage):
+
+    * 1 each for sites #1 / #2 / #3 / #4a / #4b — asserting the application error-frame shape (`{type, error_code, message, details, request_id}`), the close code (4401 / 4400 / 4400 / 4401 / 4403), the compact close-reason `{c, r}`, the request_id correlation between channels, and the WS manager's `connect()` is NOT called.
+    * **Cross-cutting byte-budget guard** — the static-analysis backstop walks every `ErrorCode` in the catalog and asserts `_build_compact_close_reason(error_code, request_id_uuid)` produces ≤ 123 UTF-8 bytes. Catches a future contributor renaming an `ErrorCode` to something so long that a `request_id` plus envelope overflows the close-reason budget.
+
+    **The 16 existing M14 security tests** (`tests/routes/test_websocket_auth_m14.py`) continue to pass under the bake-window default `"legacy"` mode without modification — the close codes for sites #2 / #3 changed from 4401 to 4400, and site #4b changed from 4401 to 4403, but the security invariant each test pins (`ws_manager.connect.assert_not_called()` for failed-auth paths) is preserved at the new close codes. Two M14 test names were updated to reflect the new RFC-mapped codes (`test_no_auth_message_at_all_closes_4401` → `_closes_4400`, plus the `test_agent_id_mismatch_rejected` body now asserts 4403). The dedicated `compact`-mode contract tests in `test_websocket_error_schema_protocol.py` exercise the new wire shape independently.
+
 ### SDK parsing template
 
 A defensively-written SDK should detect the new shape by presence of `error_code`:
@@ -545,6 +584,92 @@ Branch only on these:
 
 - Log `request_id` alongside any client-side error to enable cross-channel correlation when filing a support ticket.
 - Do **not** log `details` payloads verbatim if they may contain user input (`reject_reason` is recipient-supplied prose; treat it like any other user content).
+
+### WebSocket protocol close-frame contract (sprint #11b)
+
+The HTTP wire shape from §1 carries on a single channel — the response body. The WebSocket-protocol endpoint `WEBSOCKET /ws/{agent_id}` (sprint #11b — see [`acn-error-schema-websocket.md`](acn-error-schema-websocket.md) for the full RFC) cannot use the same channel because RFC 6455 does not give a closing connection an HTTP body. The post-bake-window contract uses **two channels** that together encode the same `error_code` / `message` / `details` / `request_id` payload as the HTTP shape, so an SDK can converge on one typed model:
+
+* **Application error-frame** (primary). Sent on the WebSocket data channel before the close, while the connection is still open. Mirrors `ACNErrorResponse` 1:1 with one extra discriminator field (`type:"error"`) so the SDK can tell this frame apart from regular application messages on the same channel:
+
+  ```json
+  { "type": "error",
+    "error_code": "api_key_agent_mismatch",
+    "message": "The path agent_id does not match the API key's owner agent.",
+    "details": { "path_agent": "agent-OTHER", "key_agent": "agent-A" },
+    "request_id": "3f29a1b2-…" }
+  ```
+
+  The error-frame has **no size cap** — it goes through the same WebSocket message framing as application traffic, so `details` can carry the same shapes the HTTP body carries (including the two-UUID `{path_agent, key_agent}` shape that overflows the close-reason channel).
+
+* **Close-frame fallback** (secondary). After the application frame, the server closes the connection with an RFC-mapped close code from this dictionary (see `acn-error-schema-websocket.md` §3-D2b for derivation):
+
+  | Close code | Class                | HTTP analogue                                                                                                  |
+  | ---------- | -------------------- | -------------------------------------------------------------------------------------------------------------- |
+  | `4400`     | Bad request          | `400` / `422` — caller's auth message was malformed                                                            |
+  | `4401`     | Auth required        | `401` — caller didn't authenticate or credentials were rejected                                                |
+  | `4403`     | Forbidden            | `403` — caller authenticated but is forbidden (e.g. `api_key_agent_mismatch`)                                  |
+  | `4429`     | Rate limited         | `429` — reserved for future per-connection rate limiter                                                        |
+  | `1011`     | Internal server error | `500` / `503` — RFC 6455 standard server error code                                                           |
+
+  The close-reason carries a **compact JSON** payload with two single-letter keys to fit inside RFC 6455's 123-byte close-reason budget regardless of `error_code` length:
+
+  ```json
+  { "c": "api_key_agent_mismatch", "r": "3f29a1b2-…" }
+  ```
+
+  `c` is the `error_code`; `r` is the `request_id`. **There is no `d` (details) in the close-reason** — `{path_agent, key_agent}` (two UUIDs) plus the JSON envelope already overflows the 123-byte budget by ~60 bytes, so the design moved `details` exclusively onto the application error-frame channel rather than amputate or vary the shape per-code (which would re-introduce the cross-channel drift that union-schema codes already cause).
+
+#### SDK parsing template (post-bake)
+
+```python
+async def parse_acn_ws_error(websocket) -> AcnError:
+    """Read a typed error from a WebSocket that ACN closed.
+
+    Call this when ``websocket.recv()`` raises a ``ConnectionClosed`` /
+    ``WebSocketDisconnect``-shaped exception in the auth-handshake phase.
+    """
+    # 1. Try the application error-frame first — richest payload.
+    try:
+        msg = await websocket.recv()  # may raise immediately if drained
+        frame = json.loads(msg)
+        if frame.get("type") == "error":
+            return AcnError(
+                code=frame["error_code"],
+                message=frame["message"],
+                details=frame.get("details", {}),
+                request_id=frame.get("request_id"),
+            )
+    except Exception:
+        pass  # fall through to close-reason fallback
+
+    # 2. Close-reason fallback — typed but minimal (no details).
+    if exc.reason and exc.reason.startswith("{"):
+        # Compact mode: {"c":"<code>","r":"<request_id>"}
+        try:
+            payload = json.loads(exc.reason)
+            return AcnError(
+                code=payload["c"],
+                message="",  # not carried on the close channel
+                details={},  # see app frame for full details
+                request_id=payload.get("r"),
+            )
+        except Exception:
+            pass
+
+    # 3. Pre-bake / SDK 0.5.x: legacy free-text reason.
+    return AcnError(
+        code="legacy_unknown",
+        message=exc.reason or "",
+        details={},
+        request_id=None,
+    )
+```
+
+#### Bake window
+
+The new wire shape (compact close-reason + application error-frame) is gated by `WEBSOCKET_CLOSE_REASON_FORMAT=compact`. The default during the **30-day SDK 0.6.0 bake window** is `legacy`, which keeps the pre-#11b free-text close-reason and emits no application error-frame — SDK 0.5.x clients that string-match the prose continue to work without flag knowledge.
+
+After the bake window closes (target **2026-06-15**, +30 days from SDK 0.6.0 GA), operators flip the default to `compact` and SDK 0.5.x clients see the legacy text channel disappear. They will see opaque close-reason JSON but their `onclose` handlers continue to function — they just lose the prose. A deprecation log line (`websocket_legacy_close_reason_emitted`) is emitted on every legacy close so operators can confirm the SDK 0.5.x tail has decommissioned before flipping the default.
 
 ---
 

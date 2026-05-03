@@ -1,10 +1,24 @@
 # ACN Error Schema — WebSocket Protocol Migration (Sprint #11b RFC)
 
-**Status**: ✅ Approved — pending implementation
+**Status**: ✅ Implemented (2026-05-03; behind `WEBSOCKET_CLOSE_REASON_FORMAT=compact` flag during 30-day SDK 0.6.0 bake window)
 **Sprint**: Phase 2 review v2 P1 #11 row #11b
-**Companion to**: [`acn-error-schema.md`](./acn-error-schema.md) (HTTP error contract, sprint rows #1–#11a)
+**Companion to**: [`acn-error-schema.md`](./acn-error-schema.md) (HTTP error contract, sprint rows #1–#11a; §5 → "WebSocket protocol close-frame contract" for the SDK consumer view)
 **Approved on**: 2026-05-03
-**Resolved decisions**: D1 = D1c (hybrid) · D2 = D2b (RFC-mapped buckets) · D3 = D3a (catalog reuse) · D4 = as-drafted · D5 = as-drafted · Q1 = yes · Q2 = defer to separate ticket · Q3 = distinct close codes (4401 / 4403) · Q4 = ship with SDK 0.6.0 (major break) · Q5 = yes
+**Implemented on**: 2026-05-03
+**Resolved decisions**: D1 = ~~D1c (hybrid)~~ → revised to **D1b (uniform application error-frame + close)** during implementation — see "Post-implementation revision" below · D2 = D2b (RFC-mapped buckets) · D3 = D3a (catalog reuse) · D4 = as-drafted · D5 = as-drafted · Q1 = yes · Q2 = defer to separate ticket · Q3 = distinct close codes (4401 / 4403) · Q4 = ship with SDK 0.6.0 (major break) · Q5 = yes
+
+## Post-implementation revision (2026-05-03)
+
+The original RFC §4.1 proposed including `details` (the `d` key) inline in the close-frame compact JSON. Implementation discovered that `api_key_agent_mismatch`'s `{path_agent, key_agent}` payload (two UUIDs + the JSON envelope) overflows the 123-byte RFC 6455 close-reason budget by ~60 bytes — the original RFC's 90-byte estimate undercounted by ~50%.
+
+Rather than amputate or compress the shape per-code (which would re-introduce the cross-channel drift that union-schema codes already cause), the implementation moves `details` exclusively onto the application error-frame channel. Every site emits BOTH:
+
+1. An application error-frame (`{type:"error", error_code, message, details, request_id}`) on the WebSocket data channel — no size cap, full payload.
+2. A close with the RFC-mapped code from D2b + a compact `{c, r}` close-reason fallback for close-only SDK clients that miss the frame.
+
+The application error-frame channel was already the post-handshake recommendation in §4.2; the revision applies it uniformly to all 4 (now 5 — see Q3 split) sites. The close-reason becomes a typed-but-minimal fallback rather than the primary payload channel. See `acn-error-schema.md` §5 → "WebSocket protocol close-frame contract" for the SDK parsing template.
+
+§4.1 below preserves the original D1c proposal for historical traceability; the actual implementation follows the post-revision design.
 
 ---
 

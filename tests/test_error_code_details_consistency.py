@@ -4,6 +4,15 @@ P1 #11 sprint #6 audit-of-process item: pin the contract that a
 single ``ErrorCode`` member emits the *same* ``details`` dict shape
 regardless of which route module raises it.
 
+Sprint #11b extension: ``ErrorCode``s now travel two error-emission
+channels — ``raise ACNHTTPError(...)`` for HTTP routes, and
+``await _send_error_and_close(...)`` for WebSocket protocol failures
+(see ``acn/routes/websocket.py``). The same cross-channel ``details``
+shape invariant applies: if HTTP and WS both emit
+``AUTHENTICATION_REQUIRED``, both must agree on the keys-set (or the
+code must be union-schema). This walker treats both emitter forms as
+contributing to the same per-code consistency bucket.
+
 Why this test exists
 --------------------
 Sprint #5 (`payments`) shipped with `details={"path_agent_id":
@@ -14,15 +23,17 @@ existing test (the per-sprint contract tests only assert what
 *that* sprint emits, not what other sprints emit) and required
 an audit-followup commit (``4330346``) to fix in code +
 documentation. Without an automated guard, every future sprint
-(#7 `onchain`, #8 `manifest`, #10 `dependencies`, etc.) is
-exposed to the same drift.
+(#7 `onchain`, #8 `manifest`, #10 `dependencies`, #11b `websocket`,
+etc.) is exposed to the same drift.
 
 Strategy
 --------
-1. Statically scan every ``raise ACNHTTPError(...)`` site in
-   ``acn/routes/*.py`` via the AST module — no runtime
-   instrumentation needed, the test runs in milliseconds.
-2. Group raise sites by ``ErrorCode`` member name.
+1. Statically scan every ``raise ACNHTTPError(...)`` site AND every
+   ``await _send_error_and_close(...)`` site in ``acn/routes/*.py``
+   via the AST module — no runtime instrumentation needed, the test
+   runs in milliseconds.
+2. Group emitter sites by ``ErrorCode`` member name (across both
+   emitter forms — they share the consistency bucket).
 3. For each group, collect the set of ``details`` keys at each
    site. If all sites in a group agree on a single keys set,
    the code is "strict" — pass.
@@ -121,16 +132,26 @@ UNION_SCHEMA_CODES: dict[str, str] = {
 
 
 class RaiseSite:
-    """A single ``raise ACNHTTPError(...)`` call.
+    """A single error-emission site.
+
+    Sprint #11b: ``RaiseSite`` now also covers
+    ``await _send_error_and_close(...)`` calls in ``websocket.py``,
+    not just ``raise ACNHTTPError(...)`` calls. The class name is a
+    historical artefact (the AST walker started life as a raise-only
+    walker) — we kept it because every consumer of this class only
+    cares about ``(file, lineno, code, details_keys)`` regardless of
+    which emitter form fed it. ``emitter`` is a presentation-only
+    field surfaced in failure messages so reviewers can tell which
+    emission channel the offending site uses.
 
     Stored as a flat record (instead of a NamedTuple) so the failure
     messages can be concatenated with a single f-string and still
     print every meaningful field. ``details_keys`` is ``None`` only
-    when the raise site does not pass ``details=`` at all (which
-    pydantic / the helper class default to ``{}``).
+    when the site does not pass ``details=`` at all (which pydantic /
+    the helper class default to ``{}``).
     """
 
-    __slots__ = ("file", "lineno", "code", "details_keys")
+    __slots__ = ("file", "lineno", "code", "details_keys", "emitter")
 
     def __init__(
         self,
@@ -138,11 +159,13 @@ class RaiseSite:
         lineno: int,
         code: str,
         details_keys: frozenset[str] | None,
+        emitter: str = "ACNHTTPError",
     ) -> None:
         self.file = file
         self.lineno = lineno
         self.code = code
         self.details_keys = details_keys
+        self.emitter = emitter
 
     def __repr__(self) -> str:
         keys = (
@@ -150,7 +173,10 @@ class RaiseSite:
             if self.details_keys is None
             else "{" + ", ".join(sorted(self.details_keys)) + "}"
         )
-        return f"{self.file}:{self.lineno} ErrorCode.{self.code} details={keys}"
+        return (
+            f"{self.file}:{self.lineno} [{self.emitter}] "
+            f"ErrorCode.{self.code} details={keys}"
+        )
 
 
 def _extract_details_keys(call: ast.Call) -> frozenset[str] | None:
@@ -182,39 +208,107 @@ def _extract_details_keys(call: ast.Call) -> frozenset[str] | None:
     return None
 
 
+def _is_error_code_attr(node: ast.AST) -> bool:
+    """Match ``ErrorCode.X`` attribute reference."""
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "ErrorCode"
+    )
+
+
 def _walk_module(path: Path) -> Iterator[RaiseSite]:
+    """Walk ``raise ACNHTTPError(...)`` and ``_send_error_and_close(...)`` sites.
+
+    Both emitter forms feed the same ``RaiseSite`` shape so downstream
+    consistency checks treat them as one consistency bucket per
+    ``ErrorCode``. Sprint #11b added the ``_send_error_and_close``
+    branch — see module docstring for the rationale.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     rel = str(path.relative_to(_ROUTES_DIR.parents[2]))
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Raise) or node.exc is None:
+        # ── ``raise ACNHTTPError(ErrorCode.X, ...)`` ──
+        if isinstance(node, ast.Raise) and node.exc is not None:
+            call = node.exc
+            if not isinstance(call, ast.Call):
+                continue
+            # Aliased imports (``raise errors.ACNHTTPError(...)``) are not
+            # used in this codebase; if they ever are, extend here.
+            if not (
+                isinstance(call.func, ast.Name) and call.func.id == "ACNHTTPError"
+            ):
+                continue
+            if not call.args:
+                # ACNHTTPError requires a positional ErrorCode — a missing
+                # one is a Python-level bug we don't try to handle here.
+                continue
+            first = call.args[0]
+            if not _is_error_code_attr(first):
+                # E.g. ``raise ACNHTTPError(some_var, ...)`` — non-literal
+                # ErrorCode reference. Skip; per-sprint contract tests
+                # cover the dynamic paths.
+                continue
+            yield RaiseSite(
+                file=rel,
+                lineno=node.lineno,
+                code=first.attr,
+                details_keys=_extract_details_keys(call),
+                emitter="ACNHTTPError",
+            )
             continue
-        call = node.exc
-        if not isinstance(call, ast.Call):
+
+        # ── ``await _send_error_and_close(error_code=ErrorCode.X, ...)`` ──
+        # The ``await`` is wrapped in an ``Expr`` statement at the
+        # module level; the AST shape is
+        # ``Expr(value=Await(value=Call(func=Name(id='_send_error_and_close'))))``.
+        # We accept both ``Await`` and bare ``Call`` for resilience —
+        # in practice all sites are awaited but a future contributor
+        # might (incorrectly) call it sync; we'd rather flag the
+        # consistency error than silently miss it.
+        call: ast.Call | None = None
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+        elif isinstance(node, ast.Call):
+            # Don't re-process nested calls — only the top-level
+            # ``Call`` reached during a single walk step. ``ast.walk``
+            # yields every ``Call`` independently, so this branch sees
+            # both the awaited form (twice — once via ``Await`` + once
+            # via ``Call``) and the sync form (once via ``Call``). We
+            # skip the second visit by only matching here when the
+            # parent is NOT an ``Await`` — but ``ast.walk`` doesn't
+            # surface parents. The cheap workaround: do nothing here,
+            # rely on the ``Await`` branch above. ``_send_error_and_close``
+            # is always awaited.
             continue
-        # Match ``raise ACNHTTPError(...)`` — bare Name reference.
-        # Aliased imports (``raise errors.ACNHTTPError(...)``) are not
-        # used in this codebase; if they ever are, extend here.
-        if not (isinstance(call.func, ast.Name) and call.func.id == "ACNHTTPError"):
+        if call is None:
             continue
-        if not call.args:
-            # ACNHTTPError requires a positional ErrorCode — a missing
-            # one is a Python-level bug we don't try to handle here.
-            continue
-        first = call.args[0]
         if not (
-            isinstance(first, ast.Attribute)
-            and isinstance(first.value, ast.Name)
-            and first.value.id == "ErrorCode"
+            isinstance(call.func, ast.Name)
+            and call.func.id == "_send_error_and_close"
         ):
-            # E.g. ``raise ACNHTTPError(some_var, ...)`` — non-literal
-            # ErrorCode reference. Skip; per-sprint contract tests
-            # cover the dynamic paths.
+            continue
+        # ``_send_error_and_close`` takes ``error_code=`` as a
+        # keyword (the helper signature has only ``websocket`` as
+        # positional). Walk the keywords and pull the
+        # ``ErrorCode.X`` reference out.
+        code_name: str | None = None
+        for kw in call.keywords:
+            if kw.arg == "error_code" and _is_error_code_attr(kw.value):
+                code_name = kw.value.attr
+                break
+        if code_name is None:
+            # Site uses a non-literal ``error_code`` (or omits it
+            # entirely). Per-sprint contract tests must cover the
+            # dynamic path; we skip here for the same reason the
+            # raise-site walker skips dynamic ``ACNHTTPError(some_var)``.
             continue
         yield RaiseSite(
             file=rel,
             lineno=node.lineno,
-            code=first.attr,
+            code=code_name,
             details_keys=_extract_details_keys(call),
+            emitter="_send_error_and_close",
         )
 
 
