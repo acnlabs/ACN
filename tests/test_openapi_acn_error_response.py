@@ -148,6 +148,21 @@ class TestRouterLevelResponsesCoverage:
             "get",
             "manifest (#8) — GET content",
         ),
+        # analytics (#9) only has 4xx raise sites on a *single*
+        # endpoint — ``GET /api/v1/analytics/activities`` with the
+        # ``agent_id`` / ``agent_ids`` filter. The other six
+        # analytics endpoints have no file-local 4xx sites
+        # (``InternalTokenDep`` covers their auth). We sample the
+        # filter-bearing endpoint because that's where the router
+        # config materially impacts SDK type-gen — a regression on
+        # the router's ``responses=`` argument would drop the
+        # ``ACNErrorResponse`` ref from precisely the endpoint
+        # SDK clients hit when filtering activity feeds.
+        (
+            "/api/v1/analytics/activities",
+            "get",
+            "analytics (#9) — GET activities",
+        ),
     ]
 
     @pytest.mark.parametrize(
@@ -219,14 +234,15 @@ class TestNonMigratedRoutersDoNotAdvertiseDefault:
     SDK / client deserialisation layer.
 
     Sampled non-migrated routers (matrix as of this commit):
-    - ``analytics`` (sprint #9, pending) — owns the
-      ``/api/v1/analytics/*`` endpoints. Sampling here rather than
-      ``onchain`` (sprint #7) keeps the negative-coverage list
-      thin; both routers raise plain ``HTTPException`` and would
-      catch the same class of contract bug.
+    - ``onchain`` (sprint #7, pending) — owns the
+      ``/api/v1/onchain/*`` endpoints, ~14 raw ``HTTPException``
+      raise sites (ERC-8004 NFT identity binding). Sampling here
+      keeps the negative-coverage contract live until sprint #7
+      lands; sprint #11 (``websocket``) does not register an HTTP
+      router, so it is not represented in this matrix.
 
-    When sprint #7 / #9 / #11 land, move the corresponding entry
-    from here up into ``REPRESENTATIVE_ENDPOINTS`` above and the
+    When sprint #7 / #11 land, move the corresponding entry from
+    here up into ``REPRESENTATIVE_ENDPOINTS`` above and the
     drift-detection contract converts to a positive coverage
     contract atomically. (Sprint #10 ``dependencies`` is *not*
     listed here because that module exposes no router of its own
@@ -237,9 +253,9 @@ class TestNonMigratedRoutersDoNotAdvertiseDefault:
     NON_MIGRATED_ENDPOINTS = [
         # (path, method, module name for failure messages)
         (
-            "/api/v1/analytics/agents",
-            "get",
-            "analytics (sprint #9 — NOT YET migrated)",
+            "/api/v1/onchain/agents/{agent_id}/bind",
+            "post",
+            "onchain (sprint #7 — NOT YET migrated)",
         ),
     ]
 

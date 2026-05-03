@@ -10,9 +10,10 @@ acn.monitoring.analytics.Analytics.
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel
 
+from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from .dependencies import (  # type: ignore[import-untyped]
     ActivityServiceDep,
     AnalyticsDep,
@@ -21,7 +22,11 @@ from .dependencies import (  # type: ignore[import-untyped]
     limiter,
 )
 
-router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
+router = APIRouter(
+    prefix="/api/v1/analytics",
+    tags=["analytics"],
+    responses=ACN_DEFAULT_RESPONSES,
+)
 
 
 # ========== Activities Response Models ==========
@@ -132,26 +137,46 @@ async def list_activities(
     # Enforce auth when filtering by specific agent identity to prevent enumeration
     if agent_id or agent_ids:
         if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
                 status_code=401,
-                detail="Authorization header required when filtering by agent_id or agent_ids",
+                details={"reason": "auth_required_for_agent_filter"},
             )
         api_key = authorization[7:]
         agent_service = get_agent_service()
         authed_agent = await agent_service.get_agent_by_api_key(api_key)
         if not authed_agent:
-            raise HTTPException(status_code=401, detail="Invalid API key")
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
+                status_code=401,
+                details={"reason": "invalid_api_key"},
+            )
 
-        # Agent may only query its own activity
+        # Agent may only query its own activity. ``requested_ids`` is a
+        # set (agent_id + comma-split agent_ids) but we surface only the
+        # *first* mismatched id in ``details.path_agent`` so the error
+        # body keeps the cross-sprint ``API_KEY_AGENT_MISMATCH`` strict
+        # schema (``{path_agent, key_agent}``). Multi-id filter
+        # information is something the caller already has client-side;
+        # echoing the entire set back would force this code into the
+        # union-schema bucket and weaken the cross-sprint contract for
+        # zero diagnostic gain.
         requested_ids = set()
         if agent_id:
             requested_ids.add(agent_id)
         if agent_ids:
             requested_ids.update(aid.strip() for aid in agent_ids.split(",") if aid.strip())
-        if any(aid != authed_agent.agent_id for aid in requested_ids):
-            raise HTTPException(
+        mismatched = sorted(
+            aid for aid in requested_ids if aid != authed_agent.agent_id
+        )
+        if mismatched:
+            raise ACNHTTPError(
+                ErrorCode.API_KEY_AGENT_MISMATCH,
                 status_code=403,
-                detail="API key does not match the requested agent_id(s)",
+                details={
+                    "path_agent": mismatched[0],
+                    "key_agent": authed_agent.agent_id,
+                },
             )
     # Parse agent_ids if provided
     agent_id_list = None
