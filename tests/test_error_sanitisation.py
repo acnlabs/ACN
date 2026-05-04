@@ -81,7 +81,8 @@ class TestFiveHundredsAreSanitised:
         r = client.get("/leak-500")
         assert r.status_code == 500
         body = r.json()
-        assert body["error"] == "internal_server_error"
+        assert body["error_code"] == "internal_server_error"
+        assert "error" not in body, "legacy 'error' field must be absent"
         assert "request_id" in body
         assert "password" not in r.text
         assert "hunter2" not in r.text
@@ -92,8 +93,9 @@ class TestFiveHundredsAreSanitised:
         r = client.get("/leak-503")
         assert r.status_code == 503
         body = r.json()
-        assert set(body.keys()) >= {"error", "message", "request_id"}
-        assert body["error"] == "internal_server_error"
+        assert set(body.keys()) >= {"error_code", "message", "request_id"}
+        assert body["error_code"] == "internal_server_error"
+        assert "error" not in body, "legacy 'error' field must be absent"
         assert "internal-redis.svc" not in r.text
 
     def test_request_id_is_uuid_and_in_header(self, client: TestClient) -> None:
@@ -132,7 +134,8 @@ class TestUncaughtExceptions:
         r = client.get("/uncaught")
         assert r.status_code == 500
         body = r.json()
-        assert body["error"] == "internal_server_error"
+        assert body["error_code"] == "internal_server_error"
+        assert "error" not in body, "legacy 'error' field must be absent"
         assert "internal_secret_lookup" not in r.text, (
             "Raw exception args must never appear in the response body"
         )

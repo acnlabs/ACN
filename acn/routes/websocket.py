@@ -114,7 +114,6 @@ async def _safe_close(
     code: int,
     error_code: ErrorCode,
     request_id: str,
-    legacy_reason: str,
 ) -> None:
     """``websocket.close()`` that never raises out of an auth-failure path.
 
@@ -130,57 +129,25 @@ async def _safe_close(
     FastAPI just turns a clean reject into a noisy 500 in logs without
     changing the wire outcome.
 
-    Sprint #11b dual-format:
-
-    * ``settings.websocket_close_reason_format == "legacy"`` (default
-      during the 30-day SDK 0.6.0 bake window): the human-readable
-      ``legacy_reason`` string is sent verbatim. SDK 0.5.x clients that
-      string-match prose continue to work without flag knowledge.
-    * ``settings.websocket_close_reason_format == "compact"``: the typed
-      JSON payload from ``_build_compact_close_reason`` (``{c, r}`` only)
-      is sent. SDK 0.6.0+ parses ``error_code`` from the close reason
-      and reads ``details`` from the preceding application error-frame
-      (see ``_send_error_and_close``).
-
-    The ``legacy_reason`` argument is REQUIRED in both modes — it is used
-    in ``"legacy"`` mode to drive the wire and in ``"compact"`` mode it
-    feeds the ``websocket_legacy_close_reason_emitted`` debug log so
-    dashboards can confirm the bake window decommission is real before
-    flipping the operator default to ``"compact"``.
-
-    Most callers should NOT use this primitive directly — call
-    ``_send_error_and_close`` instead, which combines the application
-    error-frame send with the close so SDK consumers see a
-    ``details``-bearing payload in both modes.
+    The close-frame reason is always the compact JSON payload
+    ``{"c":"<error_code>","r":"<request_id>"}`` (sprint #11b RFC §4.1).
+    Callers should use ``_send_error_and_close`` which additionally sends
+    an application error-frame with the full ``ACNErrorResponse`` payload
+    (including ``details``) before closing.
     """
-    settings = get_settings()
-    if settings.websocket_close_reason_format == "compact":
-        try:
-            reason = _build_compact_close_reason(
-                error_code=error_code,
-                request_id=request_id,
-            )
-        except RuntimeError as exc:
-            # Pin the bug in logs but still send a clean close. Production
-            # behaviour: opaque close (no reason) rather than a noisy
-            # crash. CI / dev sees the RuntimeError because tests should
-            # be exercising the compact path with realistic ErrorCode
-            # values.
-            logger.error(
-                "websocket_close_reason_payload_oversize",
-                error_code=error_code.value,
-                request_id=request_id,
-                error=str(exc),
-            )
-            reason = ""
-    else:
-        reason = legacy_reason
-        logger.debug(
-            "websocket_legacy_close_reason_emitted",
+    try:
+        reason = _build_compact_close_reason(
+            error_code=error_code,
+            request_id=request_id,
+        )
+    except RuntimeError as exc:
+        logger.error(
+            "websocket_close_reason_payload_oversize",
             error_code=error_code.value,
             request_id=request_id,
-            close_code=code,
+            error=str(exc),
         )
+        reason = ""
     try:
         await websocket.close(code=code, reason=reason)
     except Exception as exc:  # noqa: BLE001 — defensive: we are tearing down anyway
@@ -201,37 +168,26 @@ async def _send_error_and_close(
     request_id: str,
     details: dict[str, Any] | None = None,
     message: str | None = None,
-    legacy_reason: str,
 ) -> None:
     """Emit a typed error and close the WebSocket.
 
-    Sprint #11b RFC §4.2 + the post-implementation revision: every
-    handshake-phase failure goes through this combo helper, which:
+    Sprint #11b RFC §4.2: every handshake-phase failure goes through this
+    combo helper, which:
 
-    * Compact mode (``settings.websocket_close_reason_format ==
-      "compact"``):
+    1. Sends an application error-frame with the ``ACNErrorResponse``-shaped
+       payload (``type`` discriminator + four canonical fields). No size
+       budget — the close-reason is capped, but application frames are not.
 
-      1. Sends an application error-frame on the WebSocket with the
-         ``ACNErrorResponse``-shaped payload (``type`` discriminator +
-         four canonical fields). No size budget — the close-reason is
-         capped, but application frames are not.
+       ::
 
-         ::
+           {"type":"error","error_code":"<>","message":"<>",
+            "details":{...},"request_id":"<>"}
 
-             {"type":"error","error_code":"<>","message":"<>",
-              "details":{...},"request_id":"<>"}
-
-      2. Closes the socket with the ``code`` from the RFC 6455-mapped
-         dictionary (4400/4401/4403/4429/1011) and a compact close-
-         reason ``{c, r}`` so close-only SDK clients (browsers that
-         don't read pending frames before ``onclose``) still receive a
-         typed ``error_code`` and correlation id, even if they miss the
-         frame.
-
-    * Legacy mode (``"legacy"``, default during bake window): skips
-      the frame and emits the close + ``legacy_reason`` text, exactly
-      matching pre-#11b wire shape. SDK 0.5.x clients that string-match
-      prose continue to work without flag knowledge.
+    2. Closes the socket with the ``code`` from the RFC 6455-mapped
+       dictionary (4400/4401/4403/4429/1011) and a compact close-reason
+       ``{c, r}`` so close-only SDK clients (browsers that don't read
+       pending frames before ``onclose``) still receive a typed
+       ``error_code`` and correlation id, even if they miss the frame.
 
     The application-frame send is wrapped in ``try`` so a peer that
     hard-closed mid-handshake doesn't surface a noisy 500 in logs —
@@ -240,45 +196,40 @@ async def _send_error_and_close(
     The cross-channel ``details`` invariant (each ``ErrorCode`` emits a
     consistent ``details`` keys-set across HTTP and WS) is enforced by
     the AST walker in ``tests/test_error_code_details_consistency.py``,
-    which now walks ``_send_error_and_close`` calls alongside ``raise
-    ACNHTTPError``. The walker treats both as belonging to the same
-    cross-emitter consistency bucket per ``ErrorCode``.
+    which walks ``_send_error_and_close`` calls alongside ``raise
+    ACNHTTPError``.
 
     The ``message`` argument is OPTIONAL — when omitted the helper
     falls back to ``_DEFAULT_MESSAGES[error_code]``, the same default
-    ``ACNHTTPError`` uses. Pass an explicit override only when the WS
-    site needs a different human-readable wording from the HTTP analogue.
+    ``ACNHTTPError`` uses.
     """
-    settings = get_settings()
-    if settings.websocket_close_reason_format == "compact":
-        frame_message = message if message is not None else _DEFAULT_MESSAGES[error_code]
-        frame_payload = json.dumps(
-            {
-                "type": "error",
-                "error_code": error_code.value,
-                "message": frame_message,
-                "details": details or {},
-                "request_id": request_id,
-            },
-            separators=(",", ":"),
-            ensure_ascii=False,
+    frame_message = message if message is not None else _DEFAULT_MESSAGES[error_code]
+    frame_payload = json.dumps(
+        {
+            "type": "error",
+            "error_code": error_code.value,
+            "message": frame_message,
+            "details": details or {},
+            "request_id": request_id,
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    try:
+        await websocket.send_text(frame_payload)
+    except Exception as exc:  # noqa: BLE001 — peer may have hard-closed mid-handshake
+        logger.debug(
+            "websocket_error_frame_send_failed",
+            error_code=error_code.value,
+            request_id=request_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
         )
-        try:
-            await websocket.send_text(frame_payload)
-        except Exception as exc:  # noqa: BLE001 — peer may have hard-closed mid-handshake
-            logger.debug(
-                "websocket_error_frame_send_failed",
-                error_code=error_code.value,
-                request_id=request_id,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
     await _safe_close(
         websocket,
         code=code,
         error_code=error_code,
         request_id=request_id,
-        legacy_reason=legacy_reason,
     )
 
 
@@ -351,7 +302,6 @@ async def websocket_endpoint(
                 error_code=ErrorCode.AUTHENTICATION_REQUIRED,
                 request_id=request_id,
                 details={"reason": "ws_query_token_disabled"},
-                legacy_reason="Unauthorized: query-string token disabled",
             )
             return
         resolved_token = token
@@ -385,7 +335,6 @@ async def websocket_endpoint(
                     error_code=ErrorCode.AUTHENTICATION_REQUIRED,
                     request_id=request_id,
                     details={"reason": "ws_invalid_auth_message"},
-                    legacy_reason="Unauthorized: expected auth message",
                 )
                 return
         except Exception:  # noqa: BLE001 — JSON parse / disconnect / timeout
@@ -402,7 +351,6 @@ async def websocket_endpoint(
                 error_code=ErrorCode.AUTHENTICATION_REQUIRED,
                 request_id=request_id,
                 details={"reason": "ws_invalid_auth_message_format"},
-                legacy_reason="Unauthorized: invalid auth message",
             )
             return
 
@@ -442,7 +390,6 @@ async def websocket_endpoint(
             error_code=ErrorCode.AUTHENTICATION_REQUIRED,
             request_id=request_id,
             details={"reason": "invalid_api_key"},
-            legacy_reason="Unauthorized: invalid API key",
         )
         return
     if agent.agent_id != agent_id:
@@ -455,7 +402,6 @@ async def websocket_endpoint(
                 "path_agent": agent_id,
                 "key_agent": agent.agent_id,
             },
-            legacy_reason="Unauthorized: invalid API key",
         )
         return
 

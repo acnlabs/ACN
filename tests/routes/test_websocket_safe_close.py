@@ -24,29 +24,20 @@ These tests pin the contract: any exception class can come out of
 it, (b) log a structured debug breadcrumb, (c) still issue exactly one
 close attempt.
 
-Sprint #11b updated ``_safe_close``'s signature to accept typed fields
-(``error_code``, ``request_id``, ``legacy_reason``) instead of a bare
-``reason`` string — the helper now dispatches to the correct reason
-format based on the ``WEBSOCKET_CLOSE_REASON_FORMAT`` config flag.
-The swallow-on-exception contract is unchanged; the tests here are
-updated to use the new signature with representative values.
+The close-frame reason is always the compact JSON payload
+``{"c":"<error_code>","r":"<request_id>"}`` (sprint #11b RFC §4.1,
+bake window removed).
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
-import acn.routes.websocket as ws_route
 from acn.core.errors import ErrorCode
 from acn.routes.websocket import _safe_close
-
-
-def _legacy_settings():
-    """Return a settings stub with the bake-window default (legacy mode)."""
-    return SimpleNamespace(websocket_close_reason_format="legacy")
 
 
 @pytest.fixture
@@ -59,18 +50,16 @@ def fake_ws() -> SimpleNamespace:
 
 class TestSafeCloseHappyPath:
     @pytest.mark.asyncio
-    async def test_normal_close_passes_through(self, fake_ws):
-        """In legacy mode, ``_safe_close`` passes the ``legacy_reason`` text
-        through to ``websocket.close()`` verbatim — same wire as pre-#11b."""
-        with patch.object(ws_route, "get_settings", return_value=_legacy_settings()):
-            await _safe_close(
-                fake_ws,
-                code=4401,
-                error_code=ErrorCode.AUTHENTICATION_REQUIRED,
-                request_id="req-id-001",
-                legacy_reason="bye",
-            )
-        fake_ws.close.assert_awaited_once_with(code=4401, reason="bye")
+    async def test_normal_close_passes_compact_reason(self, fake_ws):
+        """``_safe_close`` always emits the compact JSON reason ``{c, r}``."""
+        await _safe_close(
+            fake_ws,
+            code=4401,
+            error_code=ErrorCode.AUTHENTICATION_REQUIRED,
+            request_id="req-id-001",
+        )
+        expected_reason = '{"c":"authentication_required","r":"req-id-001"}'
+        fake_ws.close.assert_awaited_once_with(code=4401, reason=expected_reason)
 
 
 class TestSafeCloseSwallowsExceptions:
@@ -93,14 +82,12 @@ class TestSafeCloseSwallowsExceptions:
     async def test_swallows_all_realistic_close_errors(self, fake_ws, exc):
         fake_ws.close.side_effect = exc
         # Must not propagate.
-        with patch.object(ws_route, "get_settings", return_value=_legacy_settings()):
-            await _safe_close(
-                fake_ws,
-                code=4401,
-                error_code=ErrorCode.AUTHENTICATION_REQUIRED,
-                request_id="req-id-002",
-                legacy_reason="x",
-            )
+        await _safe_close(
+            fake_ws,
+            code=4401,
+            error_code=ErrorCode.AUTHENTICATION_REQUIRED,
+            request_id="req-id-002",
+        )
         # And we did try exactly once — no retry storm.
         fake_ws.close.assert_awaited_once()
 
@@ -109,30 +96,26 @@ class TestSafeCloseSwallowsExceptions:
         """A retry would be wrong: if close() failed because the socket is
         gone, hammering it can mask real bugs and amplify GC pressure."""
         fake_ws.close.side_effect = RuntimeError("gone")
-        with patch.object(ws_route, "get_settings", return_value=_legacy_settings()):
-            await _safe_close(
-                fake_ws,
-                code=4401,
-                error_code=ErrorCode.AUTHENTICATION_REQUIRED,
-                request_id="req-id-003",
-                legacy_reason="x",
-            )
+        await _safe_close(
+            fake_ws,
+            code=4401,
+            error_code=ErrorCode.AUTHENTICATION_REQUIRED,
+            request_id="req-id-003",
+        )
         assert fake_ws.close.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_passes_code_and_reason_through(self, fake_ws):
+    async def test_passes_code_and_compact_reason_through(self, fake_ws):
         """Even when the underlying close raises, the *intent* (code,
-        reason) is recorded by the call site for log/debug correlation.
-        In legacy mode the reason wire value is the ``legacy_reason`` text."""
+        compact reason) is recorded by the call site for log/debug correlation."""
         fake_ws.close.side_effect = RuntimeError("gone")
-        with patch.object(ws_route, "get_settings", return_value=_legacy_settings()):
-            await _safe_close(
-                fake_ws,
-                code=4401,
-                error_code=ErrorCode.AUTHENTICATION_REQUIRED,
-                request_id="req-id-004",
-                legacy_reason="Unauthorized: foo",
-            )
+        await _safe_close(
+            fake_ws,
+            code=4401,
+            error_code=ErrorCode.AUTHENTICATION_REQUIRED,
+            request_id="req-id-004",
+        )
+        expected_reason = '{"c":"authentication_required","r":"req-id-004"}'
         fake_ws.close.assert_awaited_once_with(
-            code=4401, reason="Unauthorized: foo"
+            code=4401, reason=expected_reason
         )

@@ -317,37 +317,29 @@ class TestCentralHandlerShape:
 # ─────────────────────────────────────────────
 
 
-class TestFiveHundredsDoubleEmitForDeprecation:
-    """During the 30-day deprecation window the sanitised 5xx body
-    carries BOTH ``error`` (legacy field, removed at end of window)
-    and ``error_code`` (new alignment with 4xx flat schema). Both
-    fields hold the same ``"internal_server_error"`` value so SDK
-    clients can read either during the transition.
+class TestFiveHundredsSchema:
+    """5xx responses emit the flat ``ACNErrorResponse`` schema — same shape
+    as 4xx. The legacy ``error`` field has been removed; ``error_code`` is
+    the sole canonical field."""
 
-    See ``docs/BACKLOG.md`` for the deprecation owner / due date.
-    """
-
-    def test_500_emits_both_error_and_error_code(self, client: TestClient) -> None:
+    def test_500_emits_error_code_not_legacy_error(self, client: TestClient) -> None:
         r = client.get("/raise-http-500")
         assert r.status_code == 500
         body = r.json()
-        assert body["error"] == "internal_server_error"
         assert body["error_code"] == "internal_server_error"
-        assert body["error"] == body["error_code"]
+        assert "error" not in body, "legacy 'error' field must be absent"
 
     def test_500_emits_empty_details(self, client: TestClient) -> None:
-        """``details: {}`` is in scope to keep the 5xx + 4xx schema
-        aligned — SDK clients can read ``body.details`` uniformly
-        rather than guarding ``body.get("details", {})`` only on
-        5xx."""
+        """``details: {}`` keeps the 5xx + 4xx schema aligned — SDK
+        clients can read ``body.details`` uniformly."""
         r = client.get("/raise-http-500")
         body = r.json()
         assert body["details"] == {}
 
-    def test_503_also_double_emits(self, client: TestClient) -> None:
+    def test_503_uses_flat_schema(self, client: TestClient) -> None:
         r = client.get("/raise-http-503")
         assert r.status_code == 503
         body = r.json()
-        assert body["error"] == "internal_server_error"
         assert body["error_code"] == "internal_server_error"
+        assert "error" not in body, "legacy 'error' field must be absent"
         assert body["details"] == {}

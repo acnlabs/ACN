@@ -3,12 +3,10 @@
 Phase 2 review v2 P1 #11 sprint #11b RFC §6:
 ``acn/docs/features/acn-error-schema-websocket.md``.
 
-These tests pin the **post-bake** wire shape: every handshake-phase error
-emits an application error-frame (mirroring ``ACNErrorResponse`` 1:1)
-followed by a close with the RFC-mapped code and a compact close-reason
-``{c, r}`` fallback. Tests run with ``websocket_close_reason_format =
-"compact"`` to exercise the new path; the bake-window default is
-``"legacy"`` and is exercised by ``test_websocket_auth_m14.py``.
+These tests pin the wire shape: every handshake-phase error emits an
+application error-frame (mirroring ``ACNErrorResponse`` 1:1) followed
+by a close with the RFC-mapped code and a compact close-reason
+``{c, r}`` fallback.
 
 Coverage map (one test per *raise site* — the same precedent established
 by sprints #9 and #7):
@@ -68,18 +66,12 @@ def _make_app(
     matching_agent_id: str = "agent-1",
     allow_query_token: bool = False,
 ):
-    """Build a FastAPI app mounting the WS router with stubbed deps.
-
-    Mirrors ``test_websocket_auth_m14._make_app`` but pins
-    ``websocket_close_reason_format = "compact"`` so the new wire
-    contract is exercised.
-    """
+    """Build a FastAPI app mounting the WS router with stubbed deps."""
     app = FastAPI()
     app.include_router(ws_route.router)
 
     settings_stub = SimpleNamespace(
         websocket_allow_query_token=allow_query_token,
-        websocket_close_reason_format="compact",
     )
 
     async def _get_agent_by_api_key(token: str):

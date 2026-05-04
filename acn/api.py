@@ -804,7 +804,6 @@ async def _http_exception_handler(
     return JSONResponse(
         status_code=exc.status_code,
         content={
-            "error": "internal_server_error",
             "error_code": "internal_server_error",
             "message": "An internal error occurred. Please try again later.",
             "details": {},
@@ -836,7 +835,6 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
     return JSONResponse(
         status_code=500,
         content={
-            "error": "internal_server_error",
             "error_code": "internal_server_error",
             "message": "An internal error occurred. Please try again later.",
             "details": {},

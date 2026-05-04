@@ -52,7 +52,6 @@ def _make_app(
     valid_token: str = "good-token",
     matching_agent_id: str = "agent-1",
     allow_query_token: bool = False,
-    close_reason_format: str = "legacy",
 ) -> tuple[FastAPI, MagicMock]:
     """Build a FastAPI app mounting the WS router with stubbed deps.
 
@@ -62,15 +61,8 @@ def _make_app(
     app = FastAPI()
     app.include_router(ws_route.router)
 
-    # Settings stub: attributes consulted by the WS auth path. M14 tests
-    # default to ``"legacy"`` close-reason mode (the bake window default)
-    # so the security invariants encoded here continue to pin pre-#11b
-    # wire shape; the dedicated #11b contract tests
-    # (``test_websocket_error_schema_protocol.py``) flip the flag to
-    # ``"compact"`` and assert on the new shape.
     settings_stub = SimpleNamespace(
         websocket_allow_query_token=allow_query_token,
-        websocket_close_reason_format=close_reason_format,
     )
 
     # Agent service stub: returns an Agent-shaped object with the
@@ -181,15 +173,14 @@ class TestHeaderAuth:
         _enter(ps)
         try:
             with TestClient(app) as client:
-                # Bad token: handshake accepts, then closes 4401 — the
-                # TestClient surfaces this as ``WebSocketDisconnect``.
                 from starlette.websockets import WebSocketDisconnect
                 with pytest.raises(WebSocketDisconnect) as exc_info:
                     with client.websocket_connect(
                         "/ws/agent-1",
                         headers={"Authorization": "Bearer wrong-token"},
                     ) as ws:
-                        ws.receive_text()
+                        ws.receive_json()   # consume application error-frame
+                        ws.receive_text()   # raises WebSocketDisconnect
                 assert exc_info.value.code == 4401
             ws_mgr.connect.assert_not_called()
         finally:
@@ -232,10 +223,8 @@ class TestQueryTokenGating:
                 from starlette.websockets import WebSocketDisconnect
                 with pytest.raises(WebSocketDisconnect) as exc_info:
                     with client.websocket_connect("/ws/agent-1?token=good-token") as ws:
-                        ws.receive_text()
-                # 4401 = unauthorized; the close reason is informative
-                # but we deliberately don't pin its exact wording so it
-                # can evolve.
+                        ws.receive_json()   # consume application error-frame
+                        ws.receive_text()   # raises WebSocketDisconnect
                 assert exc_info.value.code == 4401
             ws_mgr.connect.assert_not_called()
         finally:
@@ -269,7 +258,8 @@ class TestQueryTokenGating:
                     with client.websocket_connect(
                         "/ws/agent-1?token=wrong-token",
                     ) as ws:
-                        ws.receive_text()
+                        ws.receive_json()   # consume application error-frame
+                        ws.receive_text()   # raises WebSocketDisconnect
                 assert exc_info.value.code == 4401
         finally:
             _exit(ps)
@@ -308,7 +298,8 @@ class TestFirstMessageAuth:
                 with pytest.raises(WebSocketDisconnect) as exc_info:
                     with client.websocket_connect("/ws/agent-1") as ws:
                         ws.send_json({"type": "auth", "token": "wrong"})
-                        ws.receive_text()
+                        ws.receive_json()   # consume application error-frame
+                        ws.receive_text()   # raises WebSocketDisconnect
                 assert exc_info.value.code == 4401
         finally:
             _exit(ps)
@@ -330,9 +321,9 @@ class TestFirstMessageAuth:
                 from starlette.websockets import WebSocketDisconnect
                 with pytest.raises(WebSocketDisconnect) as exc_info:
                     with client.websocket_connect("/ws/agent-1") as ws:
-                        # Send something that's not an auth message.
                         ws.send_json({"type": "ping"})
-                        ws.receive_text()
+                        ws.receive_json()   # consume application error-frame
+                        ws.receive_text()   # raises WebSocketDisconnect
                 assert exc_info.value.code == 4400
             ws_mgr.connect.assert_not_called()
         finally:
@@ -356,7 +347,8 @@ class TestFirstMessageAuth:
                 with pytest.raises(WebSocketDisconnect) as exc_info:
                     with client.websocket_connect("/ws/agent-OTHER") as ws:
                         ws.send_json({"type": "auth", "token": "good-token"})
-                        ws.receive_text()
+                        ws.receive_json()   # consume application error-frame
+                        ws.receive_text()   # raises WebSocketDisconnect
                 assert exc_info.value.code == 4403
             ws_mgr.connect.assert_not_called()
         finally:
