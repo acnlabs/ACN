@@ -1,8 +1,8 @@
 # ACN Error Schema
 
-**Status**: ✅ Pilot landed — Phase 2 review v2 P1 #11 (May 2026)
+**Status**: ✅ All sprints landed — Phase 2 review v2 P1 #11 (sprints #1–#11b, May 2026). HTTP routes and the WebSocket protocol endpoint both speak the typed schema; WebSocket protocol's compact wire is behind `WEBSOCKET_CLOSE_REASON_FORMAT` flag during a 30-day SDK 0.6.0 bake window (target flip 2026-06-15).
 **Pilot scope**: communication routes (`/api/v1/communication/`*)
-**Min SDK consumer**: ACN python client `0.5.0+` (synchronised with P1 #10 `X-ACN-SDK-Min-Version`)
+**Min SDK consumer**: ACN python client `0.5.0+` for HTTP routes (synchronised with P1 #10 `X-ACN-SDK-Min-Version`); `0.6.0+` for the WebSocket protocol typed wire shape.
 
 This document is the canonical specification of the ACN error response schema. SDK authors and dashboard maintainers should treat it as the contract; route authors and reviewers should treat it as the migration guide.
 
@@ -222,7 +222,7 @@ The HTTP routes:
 * `GET /api/v1/websocket/connections` — internal-only summary of live connections, gated by `InternalTokenDep`. **0 file-local 4xx raise sites** — auth-fail propagates from `dependencies.py` (already migrated under sprint #10).
 * `GET /api/v1/websocket/agent/{agent_id}/status` — gated by `AgentApiKeyDep`, additionally enforces "agent may only query *its own* status". **1 file-local 4xx raise site**: path-vs-key mismatch → `API_KEY_AGENT_MISMATCH` (403) with the cross-module strict shape `{path_agent, key_agent}`. No new ErrorCode.
 
-**Cross-module reuse only.** Sprint #11a reuses `API_KEY_AGENT_MISMATCH` exactly as registry / payments / follows / onchain / analytics emit it, so the AST consistency test at `tests/test_error_code_details_consistency.py` continues to enforce the strict `{path_agent, key_agent}` invariant across all 16 emitters.
+**Cross-module reuse only.** Sprint #11a reuses `API_KEY_AGENT_MISMATCH` exactly as registry / payments / follows / onchain / analytics emit it, so the AST consistency test at `tests/test_error_code_details_consistency.py` continues to enforce the strict `{path_agent, key_agent}` invariant across all 17 emitters at #11a-time (sprint #11b adds the 18th — the WS protocol site #4b — via the same AST walker, see [^11b]).
 
 **Documentation drift correction.** Sprint #7 had inadvertently declared the websocket router as having no HTTP routes (the `TestNonMigratedRoutersDoNotAdvertiseDefault` docstring and the sprint-row header in this document both made that incorrect claim). #11a corrects the drift by:
 
@@ -330,7 +330,7 @@ Realigning slowapi to the flat schema is reserved as `WALLET_RATE_LIMIT_EXCEEDED
 
 All HTTP-mounting route modules are now migrated: `registry`, `subnets`, `tasks`, `payments`, `follows`, `manifest`, `dependencies`, `analytics`, `onchain`, and the HTTP routes of `websocket` are fully aligned as of sprints #2b, #3-followup, #4-followup, #5, #6, #8, #10, #9, #7, and #11a respectively. See the coexistence matrix below.
 
-The remaining migration target is the **WebSocket protocol endpoint** itself (`WEBSOCKET /ws/{agent_id}`), tracked as sprint #11b. Its error contract is bounded by RFC 6455 close codes, not HTTP responses — close code 4401 + free-text reason today, with no `error_code` / `details` typing — so the migration requires separate RFC / design work distinct from the HTTP schema convergence done in sprints #1-#11a. The WS surface is NOT broken; it speaks a different (older, less typed) contract until #11b lands.
+The **WebSocket protocol endpoint** (`WEBSOCKET /ws/{agent_id}`) is also aligned, via sprint #11b. Because RFC 6455 close frames cannot carry an HTTP body, #11b uses a typed dual-channel contract — application error-frame on the WS data channel + RFC-mapped close code with a compact `{c, r}` close-reason fallback. The new wire shape is gated by the `WEBSOCKET_CLOSE_REASON_FORMAT` config flag, which defaults to `legacy` during a 30-day SDK 0.6.0 bake window (target flip to `compact` on **2026-06-15**). See [§5 → "WebSocket protocol close-frame contract"](#websocket-protocol-close-frame-contract-sprint-11b) for the SDK parsing template, and [`acn-error-schema-websocket.md`](acn-error-schema-websocket.md) for the full migration RFC.
 
 ---
 
@@ -490,7 +490,7 @@ Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can 
 
     **1× `API_KEY_AGENT_MISMATCH`** (403) — `get_agent_websocket_status` enforces "agent may only query *its own* connection status" on `GET /api/v1/websocket/agent/{agent_id}/status`. Reuses the canonical `{path_agent, key_agent}` strict shape established in sprint #1, identical to emitters in registry / payments / follows / onchain / analytics. No new ErrorCode.
 
-    **0 new ErrorCodes.** The migration is a pure cross-module-catalog reuse. The cross-sprint AST consistency test (`tests/test_error_code_details_consistency.py`) continues to enforce the strict `{path_agent, key_agent}` invariant across all 16 emitters.
+    **0 new ErrorCodes.** The migration is a pure cross-module-catalog reuse. The cross-sprint AST consistency test (`tests/test_error_code_details_consistency.py`) continues to enforce the strict `{path_agent, key_agent}` invariant across all 17 emitters at #11a-time (sprint #11b later adds an 18th via the WS protocol site #4b — see [^11b]).
 
     **0 5xx sites preserved** — neither HTTP endpoint wraps its body in `try`/`except Exception`. The catch-all defence (P3) does not apply.
 
@@ -507,7 +507,7 @@ Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can 
     *Site #4 split* (RFC Q3 — distinct close codes for distinct semantics). The pre-migration code path collapsed both halves of the API-key validation into one `_safe_close(4401, "Unauthorized: invalid API key")`. The migration splits this into two sites:
 
     * **Site #4a** — `agent_service.get_agent_by_api_key` returned `None` → close 4401 + `AUTHENTICATION_REQUIRED` + `details.reason="invalid_api_key"`. Same reason value as the dependencies / analytics emitters.
-    * **Site #4b** — key resolved but to a different agent → close 4403 + `API_KEY_AGENT_MISMATCH` + strict `{path_agent, key_agent}`. Distinct close code from #4a so the WS protocol mirrors the HTTP route #11a precedent (which uses 403 for the same logical failure) and prevents an attacker from using transport switching as a side channel to differentiate "key bad" from "key for wrong agent".
+    * **Site #4b** — key resolved but to a different agent → close 4403 + `API_KEY_AGENT_MISMATCH` + strict `{path_agent, key_agent}`. Distinct close code from #4a so the WS protocol mirrors the HTTP route #11a precedent (which uses 403 for the same logical failure). The driver is **SDK ergonomics, not security**: a SDK 0.6.0+ client builds one `error_code → domain exception` mapping; without the split, the WS branch would collapse two distinct exceptions into one ambiguous `AuthError`. The HTTP 401/403 distinction already lets a pure-HTTP attacker enumerate "key bad" vs "key for wrong agent" via response status alone, so the WS split is **parity-with-HTTP**, not parity-with-no-disclosure. The actual confidentiality lever is the policy decision (echoed across HTTP and WS) to surface `key_agent`; if a future reviewer wants to close that disclosure they must change both transports together.
 
     *Close-code dictionary* (RFC D2b — RFC-mapped buckets):
 
@@ -522,7 +522,7 @@ Each migration PR in the sprint flips a row from ⏳ → ✅. SDK consumers can 
 
     **RFC §4 revised post-implementation.** The original RFC §4.1 proposed including `details` (`d` key) inline in the close-reason JSON. Implementation discovered that `api_key_agent_mismatch`'s `{path_agent, key_agent}` payload (two UUIDs) overflows the 123-byte RFC 6455 close-reason budget by ~60 bytes. Rather than amputate the shape per-code (which would re-introduce the cross-channel drift that union-schema codes already cause), the implementation moves `details` exclusively onto the application error-frame channel (`_send_error_and_close` sends both, the close-reason carries only `{c, r}` as a fallback for close-only SDK clients that miss the frame). The application error-frame channel has no size cap so it carries the full `ACNErrorResponse`-shaped payload regardless of `details` shape. The `acn-error-schema-websocket.md` RFC document was updated post-landing to reflect the corrected design.
 
-    *Cross-channel `details` consistency*. The AST consistency walker at `tests/test_error_code_details_consistency.py` was extended in this sprint to walk `await _send_error_and_close(error_code=..., details=...)` calls in addition to `raise ACNHTTPError(...)` — both emitter forms feed the same per-`ErrorCode` consistency bucket. Without this extension, the WS-protocol emitter could silently drift from the HTTP emitters (e.g. emit `{p, k}` instead of `{path_agent, key_agent}` to save bytes), re-opening the same drift surface that sprint #5 caught and sprint #6 hardened.
+    *Cross-channel `details` consistency*. The AST consistency walker at `tests/test_error_code_details_consistency.py` was extended in this sprint to walk `await _send_error_and_close(error_code=..., details=...)` calls in addition to `raise ACNHTTPError(...)` — both emitter forms feed the same per-`ErrorCode` consistency bucket. Without this extension, the WS-protocol emitter could silently drift from the HTTP emitters (e.g. emit `{p, k}` instead of `{path_agent, key_agent}` to save bytes), re-opening the same drift surface that sprint #5 caught and sprint #6 hardened. **Total emitter count after #11b**: 18 `api_key_agent_mismatch` (17 HTTP via `ACNHTTPError` + 1 WS via `_send_error_and_close`), 15 `authentication_required` (11 HTTP + 4 WS) — the union exemption for the latter is preserved since reason values still vary per emitter as designed.
 
     *Bake-window flag* (RFC Q4 — SDK 0.6.0 + 30-day bake). `WEBSOCKET_CLOSE_REASON_FORMAT` is added to `acn/config.py` with values `"legacy"` (default during bake — pre-#11b wire shape, no application error-frame, free-text close-reason) and `"compact"` (post-bake — typed dual-channel contract). The two modes are wire-incompatible; the flag exists so operators can flip atomically AFTER the SDK 0.6.0 30-day bake window closes (target 2026-06-15). A `websocket_legacy_close_reason_emitted` debug log fires on every legacy close so operators can confirm the SDK 0.5.x tail has decommissioned before flipping. The flag itself is removed in a follow-up PR a further 30 days after the default flip.
 

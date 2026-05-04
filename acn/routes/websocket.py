@@ -414,12 +414,26 @@ async def websocket_endpoint(
     #     dependencies sprints #9 and #10).
     #   * key resolved but to a different agent → 4403 + API_KEY_AGENT_MISMATCH
     #     with the cross-module strict ``{path_agent, key_agent}`` shape
-    #     (matches HTTP route #11a precedent + 16 other emitters).
-    # Privacy note: the wrong-agent half emits ``key_agent`` so the caller
-    # can debug their mistake. The HTTP route #11a does the same. The
-    # alternative (collapse to 4401) would create a transport-switch
-    # side-channel oracle: an attacker could differentiate "key bad" from
-    # "key for wrong agent" by trying both HTTP and WS — see RFC §7-Q3.
+    #     (matches HTTP route #11a precedent + 17 other emitters).
+    #
+    # Why split (rather than keep both halves at 4401)? Pre-migration the
+    # WS path collapsed both halves into one 4401 with the same prose
+    # reason. The HTTP analogue (`get_agent_websocket_status` and every
+    # other path-key gated route under sprints #1-#11a) already
+    # distinguishes 401 from 403 for these two failure modes — a SDK
+    # client that builds one ``error_code -> domain class`` mapping
+    # (the post-#11b SDK 0.6.0 contract) needs the WS channel to
+    # discriminate too, otherwise the WS branch collapses two distinct
+    # SDK exceptions into one ambiguous "AuthError". This is purely
+    # SDK ergonomics; it does NOT close a security oracle. The HTTP
+    # 401/403 distinction already lets a pure-HTTP attacker enumerate
+    # "key bad" vs "key for wrong agent" via response status alone, so
+    # the WS split is parity-with-HTTP, not parity-with-no-disclosure.
+    # The true confidentiality lever is the policy decision (echoed
+    # explicitly across HTTP and WS) to surface ``key_agent`` so the
+    # caller can debug their mistake; if a future reviewer wants to
+    # close that disclosure they should change BOTH transports
+    # together.
     agent = await agent_service.get_agent_by_api_key(resolved_token)
     if agent is None:
         await _send_error_and_close(
