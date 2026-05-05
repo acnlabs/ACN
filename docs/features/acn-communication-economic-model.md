@@ -1,26 +1,25 @@
 # ACN 通信经济模型提案
 
-**状态**: 实施中（Phase 1 + Phase 2 全部上线；Phase 3 Module B `attention_fee` lock + ack-release 已落地，TTL refund worker 与 `content_url` 自托管路径仍待开发）
+**状态**: 实施中（Phase 1 + Phase 2 全部上线；Phase 3 Module B `attention_fee` 全部三条退出路径已落地，含 TTL refund worker；`content_url` 自托管路径仍待开发）
 **作者**: AgentPlanet Team  
-**日期**: 2026-04-29（Phase 3 Module B 首版：2026-05-05）
-**版本**: 0.12.0
+**日期**: 2026-04-29（Phase 3 Module B 首版：2026-05-05；TTL worker：2026-05-05）
+**版本**: 0.13.0
 
-> **当前实施快照（2026-05-05）**：
+> **当前实施快照（2026-05-05 v2）**：
 >
 > - Phase 1 — `communication_policy` 基础（`open` / `closed` / `allowlist` / `manifest`），网关执行点、policy 检查、合规通知豁免：✅ 全量上线。
 > - Phase 2 — manifest 通知队列（`/communication/manifest/...`、`/communication/content/{mid}`）、内容存储约束、错误码 schema（`acn-error-schema.md`）、broadcast 指标合并：✅ 全量上线。
-> - **Phase 3 Module B（本次新增）** — 发送方在 `POST /communication/send` 上携带 `attention_fee`，网关在写 manifest 之前调用 Backend Escrow `lock_v2` 锁定 Credits。锁定后 fee 必须以下列三种方式之一终结，避免资金陷死：
->   - 接收方调用 `POST /communication/manifest/{agent_id}/{mid}/ack` 显式确认 → `release_partial` 把 fee 释放到接收方钱包；
->   - 接收方调用 `DELETE /communication/manifest/{agent_id}/{mid}` 主动拒收 → ACN 先调 `refund_v2` 把 fee 退给发送方，再删除 manifest 记录（refund-first ordering，避免孤儿 escrow）；
->   - 接收方既不 ack 也不 delete，等待 manifest TTL 过期后由 ACN-side worker 触发 refund（worker 仍待开发，见下面"仍未实现"）。
+> - **Phase 3 Module B — attention_fee 全部三条退出路径**：发送方在 `POST /communication/send` 上携带 `attention_fee`，网关在写 manifest 之前调用 Backend Escrow `lock_v2` 锁定 Credits。锁定后 fee 以下列三种方式之一终结：
+>   - 接收方调用 `POST /communication/manifest/{agent_id}/{mid}/ack` 显式确认 → `release_partial` 把 fee 释放到接收方钱包；✅ 已落地
+>   - 接收方调用 `DELETE /communication/manifest/{agent_id}/{mid}` 主动拒收 → ACN 先调 `refund_v2` 把 fee 退给发送方，再删除 manifest 记录（refund-first ordering，避免孤儿 escrow）；✅ 已落地
+>   - 接收方既不 ack 也不 delete，manifest TTL 过期后由后台 worker 自动退款：✅ 已落地（`ManifestTTLRefundWorker`，每 5 分钟扫描 Redis，超时未 ack + 过 5 分钟 grace period → 调 `refund_v2` + 写 `refunded_at` 防双退）。
 >
->   均已落地：✅ ack 路由 + ✅ DELETE refund 路由 + ✅ 服务层（`mark_acked` HSETNX 幂等、`unmark_acked` 回滚、`refund_v2` provider 接口）+ ✅ 测试（59 个新增/扩展用例）。
+>   全部落地：✅ ack 路由 + ✅ DELETE refund 路由 + ✅ TTL refund worker + ✅ 服务层（`mark_acked` HSETNX 幂等、`unmark_acked` 回滚、`refund_v2` provider 接口、`expires_at_ms` 字段）+ ✅ 测试（83 个新增/扩展用例）。
 > - **仍未实现**：
->   - Phase 3 TTL 自动 refund worker（manifest 过期未 ack 时把 fee 退回发送方）；
 >   - Phase 3 `content_url` 自托管路径（manifest 仅存元数据 + URL + hash）；
 >   - 新注册 agent 默认 mode 从 `open` 切换为 `manifest`；
 >   - 链上合约托管（替代当前 Backend 中心化托管）。
-> - **已知 v1 限制**：ack 路径的"先 stamp `acked_at`、后调 `release_partial`"顺序在极小概率下（ACN 进程在两步之间崩溃）会导致重试时 4xx ALREADY_ACKED + escrow 仍 LOCKED。当前依赖 ops 介入或上线后的 TTL refund worker 兜底（已记入 BACKLOG）。
+> - **已知 v1 限制**：ack 路径的"先 stamp `acked_at`、后调 `release_partial`"顺序在极小概率下（ACN 进程在两步之间崩溃）会导致重试时 4xx ALREADY_ACKED + escrow 仍 LOCKED。TTL refund worker 是当前兜底机制（5 分钟内扫描到后自动退款）；v2 需要 release-first ordering + backend 幂等键，见 BACKLOG。
 
 ---
 

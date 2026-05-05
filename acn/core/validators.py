@@ -40,7 +40,7 @@ from typing import Any
 
 # Canonical caps (bytes, post-JSON-serialisation).  Adjust here only.
 _64K = 64 * 1024   # 65 536 bytes  — default for most metadata / card fields
-_256K = 256 * 1024  # 262 144 bytes — extended cap for agent_card / message payloads
+_256K = 256 * 1024  # 262 144 bytes — extended cap for message payloads (communication)
 
 
 def make_dict_size_validator(max_bytes: int):

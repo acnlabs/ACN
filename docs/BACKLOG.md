@@ -41,61 +41,31 @@ Context: commits `39c0ed0`（PR #2 v1+v2+v3）+ `d928a06`（ruff sweep）+ `<P2-
 - ~~**`_http_exception_handler` 的 `Retry-After` lookup 大小写敏感**（v3 P2-A7）~~ ✅
   `next((v for k, v in exc_headers.items() if k.lower() == "retry-after"), None)`。HTTP header 名 case-insensitive（RFC 9110 §5.1）的语义对齐。
 
-### Phase 3 Module B `attention_fee` — TTL refund worker (pending)
+### ~~Phase 3 Module B `attention_fee` — TTL refund worker~~ ✅ Done (2026-05-05)
 
 Context: 2026-05-05 commit landed the attention_fee `lock + ack-release`
-flow (see [`acn-communication-economic-model.md`](features/acn-communication-economic-model.md#phase-3-module-b-首版实施2026-05-05-上线)).
-Sender attaches `attention_fee` on `POST /communication/send`; the
-ManifestDispatcher locks Credits via Backend Escrow `lock_v2` before
-writing the manifest entry; receiver calls
-`POST /communication/manifest/{agent_id}/{mid}/ack` to release the
-fee via `release_partial`.
+flow (see [`acn-communication-economic-model.md`](features/acn-communication-economic-model.md)).
+The worker (`acn/services/manifest_ttl_refund_worker.py`) was shipped in
+the same phase and is wired into `api.py` lifespan as a background asyncio
+task running every 5 minutes.
 
-What's missing: **no worker yet refunds locked fees when the manifest
-TTL expires without an ack.** Backend Escrow's `auto_release_at`
-mechanism only releases to an *assignee*, but attention_fee escrows
-are created without an assignee on purpose (the recipient is not yet
-committed). Without a refund worker:
+Implementation summary:
+- `ManifestService.write` now persists `expires_at_ms` into the HASH detail
+  key; `_decode_entry` reads it back into `ManifestEntry.expires_at_ms`.
+- `run_once(redis_client, escrow_provider)` scans `acn:manifest:{*}:*` HASHes
+  via cursor SCAN, filters for entries where:
+  - `extra.attention_fee.escrow_id` is set (has fee)
+  - `acked_at` is absent (not yet acknowledged)
+  - `expires_at_ms` is past `now − REFUND_GRACE_SECONDS` (5 min grace)
+  - `extra.attention_fee.refunded_at` is absent (not already refunded)
+- Calls `escrow_provider.refund_v2(escrow_id, reason="attention_fee_ttl_expired")`.
+- On success, stamps `extra.attention_fee.refunded_at` in Redis (ACN-side
+  idempotency guard — backend also rejects double-refund on its own state).
+- 18 unit tests covering happy path, all skip conditions, error handling, dry-run.
+- `api.py` lifespan starts the worker only when `escrow_client_instance` is
+  available; first run delayed 5 min to avoid colliding with deploy restarts.
 
-- TTL-expired manifest entries leak (fee stays `locked` in escrow,
-  sender's wallet never gets the Credits back)
-- `acn:attn:*` escrow records pile up in Backend's `Escrow` table
-- A misconfigured / abusive sender could reserve large amounts of
-  Credits indefinitely (mitigated short-term by the ≤1000 Credits
-  per-message ceiling, but not a long-term solution)
-
-Plan:
-
-1. Add a periodic ACN-side worker (mirror of the audit-stream
-   reaper or `analytics_aggregator` cadence — every 60 s).
-2. Worker queries manifest entries with `extra.attention_fee.escrow_id`
-   set + `acked_at_ms IS NULL` + `expires_at < now`.
-   - First implementation can SCAN the manifest detail HASHes
-     (`acn:manifest:{<owner>}:<mid>`) and filter; later, lift to a
-     PG mirror once Phase 3 PG mirror lands.
-3. For each match, call Backend `POST /api/labs/escrow/v2/{escrow_id}/refund`
-   with `reason="attention_fee_ttl_expired"`. Record the refund in
-   ACN audit log + emit `attention_fee_refunds_total{reason}` metric.
-4. Mark the manifest entry's `extra.attention_fee.refunded_at` field
-   so a follow-up refund cannot double-refund (idempotency on the ACN
-   side). Backend itself rejects double-refund anyway (`refund` checks
-   `escrow.status` is not already `REFUNDED`), but the ACN-side flag
-   keeps the audit log honest.
-5. Tests: TTL-expired entry happy path, double-refund safety, partial
-   release-then-refund (once `release_partial` lands) interaction,
-   backend 4xx / 5xx response handling.
-
-Until the worker is wired, the recipient-driven exit paths cover most
-non-stuck scenarios:
-- `POST /communication/manifest/{agent_id}/{mid}/ack` releases on consent;
-- `DELETE /communication/manifest/{agent_id}/{mid}` refunds on rejection
-  (refund-first ordering: `refund_v2` before `delete`, so the escrow is
-  never orphaned).
-
-The remaining stuck-lock case is "recipient never visits the queue at all",
-which the TTL worker is meant to bound. Until then ops can replay the
-DELETE path manually, or call the Backend `POST /api/labs/escrow/v2/{escrow_id}/refund`
-directly when the manifest row has already been evicted.
+Legacy rows (pre-Phase 3, `expires_at` absent) are silently skipped.
 
 ### Phase 3 Module B `attention_fee` — ack crash-recovery race (P2 v1 limitation)
 
@@ -539,17 +509,14 @@ If SDK feedback indicates it's worth doing, a single PR can:
 
 Estimated effort: ≈1 PR, 4-6 hours including test updates.
 
-### Alembic chain hygiene
+### ~~Alembic chain hygiene~~ ✅ Done (2026-05-05)
 
 Context: 修 `7ee2ed3a177c`（`expand_verification_code_to_64chars`）的 fresh-DB upgrade fail 时连带发现 — `alembic downgrade base` 全链回滚会在 initial schema 阶段炸。
 
-- **`8d958bd38c11_initial_schema.py` participations FK 未命名导致 downgrade 不可用**（P2）
-  initial schema `participations` 表通过 `sa.ForeignKeyConstraint(["task_id"], ["tasks.task_id"], ondelete="CASCADE")` 建 FK，**没有显式 `name=...`**；PG 自动生成 `participations_task_id_fkey`，但 SQLAlchemy 元数据里这个约束 `.name is None`。
-  `alembic downgrade base` 在 initial schema 的 downgrade（`op.drop_table("participations")` 之前若有 drop_constraint）或 metadata 反向 emit 时报：
-  `sqlalchemy.exc.CompileError: Can't emit DROP CONSTRAINT for constraint ForeignKeyConstraint(...); it has no name`
-  影响：production 几乎不会用 downgrade 全链回滚，但 CI 跑 `alembic check` / 测试矩阵会卡住。
-  修法：给 initial schema 的 FK 加显式 `name="participations_task_id_fkey"`，或 downgrade 链改用 `op.execute("ALTER TABLE participations DROP CONSTRAINT IF EXISTS participations_task_id_fkey")`。
-  影响文件：[alembic/versions/8d958bd38c11_initial_schema.py](../alembic/versions/8d958bd38c11_initial_schema.py)。
+- ~~**`8d958bd38c11_initial_schema.py` participations FK 未命名导致 downgrade 不可用**（P2）~~ ✅ Done
+  Added `name="participations_task_id_fkey"` to the `sa.ForeignKeyConstraint` in
+  `alembic/versions/8d958bd38c11_initial_schema.py`. SQLAlchemy metadata now carries
+  the name so `alembic downgrade base` can emit `DROP CONSTRAINT` correctly.
 
 ---
 
@@ -719,28 +686,24 @@ H6 把所有 body Pydantic 模型的字符串字段都加了 `max_length`，并�
 
 影响文件：`acn/routes/subnets.py`、`acn/routes/registry.py`（部分）、`acn/routes/tasks.py`（部分）。
 
-### dict 字段单字段无独立 size cap（H6 延伸）
+### ~~dict 字段单字段无独立 size cap（H6 延伸）~~ ✅ Done (2026-05-05)
 
-H6 装了 1 MiB 总 body cap，所有 string 字段也都加了 `max_length`。但 dict 字段（`metadata` / `message` / `agent_card` / `ui_spec` / `wallet_addresses` / `token_pricing` / `proof`）当前**只受总 body cap 约束**——单个 dict 字段就能占满 ~1 MiB body。
+选项 A 已落地：`acn/core/validators.py` 提供 `make_dict_size_validator` /
+`check_dict_size_64k` / `check_dict_size_256k` 工厂，挂到以下字段（JSON 序列化后字节数）：
 
-后果：
-- 任意 task 创建可以塞 ~1 MiB 的 `metadata` 进 PG JSONB 字段，单条记录就吃 1 MiB 存储
-- `SendMessageRequest.message` 同理可塞满 inbox（每条消息 1 MiB × inbox cap 100 = 单 agent 100 MiB Redis 占用）
-- 攻击成本是 1 MiB body × N 次合法写请求
+| 文件 | 字段 | 上限 |
+| --- | --- | --- |
+| `communication.py` | `SendMessageRequest.message` | 256 KB |
+| `communication.py` | `BroadcastRequest.message` | 256 KB |
+| `communication.py` | `BroadcastByTagRequest.message` | 256 KB |
+| `tasks.py` | `TaskCreateRequest.metadata` | 64 KB |
+| `tasks.py` | `TaskCreateRequest.ui_spec` | 64 KB |
+| `registry.py` | `AgentRegisterRequest.agent_card` | 64 KB |
+| `payments.py` | `PaymentCapabilityRequest.token_pricing` | 64 KB |
+| `payments.py` | `CreatePaymentTaskRequest.metadata` | 64 KB |
 
-为什么暂不在 H6 修：
-- 总 body cap + per-string max_length 已经挡住"single giant string field" DoS（实际更常见的攻击形态）
-- per-field dict size cap 需要序列化后字节数检查，每字段一个 `field_validator`，复杂度上升
-- DB 层兜底（PG JSONB 没硬上限，但可以加 CHECK constraint 或应用层 audit metric 监控异常 size）
-
-修法选项：
-- 选项 A：写一个 `validate_dict_size(max_bytes)` 复用 validator，每个关键 dict 字段挂上去（典型 64 KB / 256 KB）
-- 选项 B：在 BodySizeLimit 之外加一个"per-known-field 解析后大小检查"的 ASGI middleware，反复解析 JSON 太贵
-- 选项 C：把 dict 字段都改成有结构的 Pydantic submodel，用 nested `max_length` 约束每个字符串子字段
-
-倾向：选项 A，针对 metadata/message/agent_card/ui_spec 各加 64 KB 上限，逐个评估。
-
-影响文件：`acn/routes/tasks.py` `TaskCreateRequest.metadata` `ui_spec`、`acn/routes/communication.py` `SendMessageRequest.message` 等、`acn/routes/registry.py` `AgentJoinRequest.agent_card`。
+`wallet_addresses` / `proof` 字段结构已受 `dict[str, str]` 类型约束（单值 `max_length` 限定），
+暂不额外加 dict size cap（攻击面极小）。
 
 ### HTTP 请求走私防御依赖 ASGI server（H6 延伸）
 
