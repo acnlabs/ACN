@@ -943,14 +943,25 @@ async def _request_validation_error_handler(
     replaces it while preserving the full Pydantic error list under
     ``details.pydantic_errors`` so SDK clients that need location-precise
     messages can still access them.
+
+    Pydantic v2 ``ValidationError.errors()`` can include non-JSON-serialisable
+    objects (e.g. ``ValueError`` instances) inside ``ctx`` dicts.  We
+    round-trip through ``json.dumps`` with a ``str`` fallback to sanitise them
+    before handing the list to ``JSONResponse``.
     """
+    import json as _json
+
+    def _safe(obj: object) -> str:
+        return str(obj)
+
     request_id = _new_request_id(request)
+    raw_errors = _json.loads(_json.dumps(exc.errors(), default=_safe))
     return JSONResponse(
         status_code=422,
         content={
             "error_code": ErrorCode.VALIDATION_FAILED.value,
             "message": "Request validation failed.",
-            "details": {"pydantic_errors": exc.errors()},
+            "details": {"pydantic_errors": raw_errors},
             "request_id": request_id,
         },
         headers={"X-Request-ID": request_id},
