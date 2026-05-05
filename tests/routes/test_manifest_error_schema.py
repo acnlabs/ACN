@@ -71,6 +71,11 @@ def _reset_state():
 @pytest.fixture
 def stub_manifest_service():
     svc = AsyncMock()
+    # Phase 3: DELETE pre-fetches the entry to detect attention_fee
+    # escrows that need refunding. ``None`` short-circuits straight
+    # to the 404 path the tests below pin — same external surface
+    # as a missing entry, no escrow round-trip.
+    svc.get_entry = AsyncMock(return_value=None)
     svc.delete = AsyncMock(return_value=False)
     svc.fetch_content = AsyncMock(return_value=None)
     return svc

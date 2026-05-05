@@ -15,6 +15,7 @@ from slowapi.util import get_remote_address  # type: ignore[import-untyped]
 from ..auth.middleware import get_subject
 from ..config import get_settings
 from ..core.errors import ACNHTTPError, ErrorCode
+from ..core.interfaces.escrow_provider import IEscrowProvider
 from ..infrastructure.messaging import (
     BroadcastService,
     MessageRouter,
@@ -293,6 +294,13 @@ _manifest_service: ManifestService | None = None
 # default keeps tests / CLI tools that don't depend on allowlist mode
 # operational without spinning up the storage layer.
 _allowlist_service: AllowlistService | None = None
+# Phase 3 attention_fee — escrow provider used by the manifest ack
+# endpoint to release locked funds and (eventually) by a TTL-refund
+# worker to return unread fees to senders. ``None`` is supported so
+# the legacy / tests-only bring-ups that disable ESCROW_ENABLED keep
+# working — the ack endpoint surfaces 503 in that mode rather than
+# crashing.
+_escrow_provider: IEscrowProvider | None = None
 
 
 def init_services(
@@ -316,6 +324,7 @@ def init_services(
     policy_service: PolicyCheckService | None = None,
     manifest_service: ManifestService | None = None,
     allowlist_service: AllowlistService | None = None,
+    escrow_provider: IEscrowProvider | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -330,7 +339,7 @@ def init_services(
     global _metrics, _audit, _analytics
     global _payment_discovery, _payment_tasks, _webhook_service, _billing_service
     global _activity_service, _follow_service, _policy_service, _manifest_service
-    global _allowlist_service
+    global _allowlist_service, _escrow_provider
 
     _registry = registry
     _agent_service = agent_service
@@ -353,6 +362,7 @@ def init_services(
     _policy_service = policy_service
     _manifest_service = manifest_service
     _allowlist_service = allowlist_service
+    _escrow_provider = escrow_provider
 
 
 # Dependency functions
@@ -519,6 +529,51 @@ def get_allowlist_service() -> AllowlistService:
     return _allowlist_service
 
 
+def get_escrow_provider() -> IEscrowProvider:
+    """Get the wired escrow provider, or 503 when escrow is disabled.
+
+    Phase 3 attention_fee endpoints rely on the backend escrow API for
+    the lock + release flow. When ``ESCROW_ENABLED=false`` the lifespan
+    deliberately skips wiring this dependency — the deployment runs
+    without payment settlement (smoke harnesses, dev environments
+    without a Backend reachable). Surfaces a 503 with ``Retry-After``
+    so the SDK distinguishes "feature disabled" from "transient 5xx".
+    """
+    if _escrow_provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "attention_fee feature is unavailable — server is "
+                "running with ESCROW_ENABLED=false. Contact the "
+                "operator to enable escrow before retrying."
+            ),
+            headers={"Retry-After": "300"},
+        )
+    return _escrow_provider
+
+
+def get_escrow_provider_optional() -> IEscrowProvider | None:
+    """Optional sibling of ``get_escrow_provider``.
+
+    Returns ``None`` instead of raising when the escrow provider is
+    not wired. Used by routes that operate happily without an escrow
+    backend on the no-fee path but still need to call the provider
+    when a fee *is* attached:
+
+    * ``DELETE /communication/manifest/{agent_id}/{mid}`` —
+      free-message deletes must keep working under
+      ``ESCROW_ENABLED=false``; only the paid-message branch refuses
+      to proceed without a provider, in which case the route maps
+      ``None`` to a 503 explicitly so callers see the same error
+      surface as ``/ack``.
+
+    Exists as a separate dep so ``app.dependency_overrides`` can
+    target it independently from the strict ``EscrowProviderDep`` —
+    integration tests stub one without disturbing the other.
+    """
+    return _escrow_provider
+
+
 def get_policy_service() -> PolicyCheckService | None:
     """Get the PolicyCheckService instance, or ``None`` if policy is not wired.
 
@@ -552,6 +607,10 @@ FollowServiceDep = Annotated[FollowService, Depends(get_follow_service)]
 PolicyServiceDep = Annotated["PolicyCheckService | None", Depends(get_policy_service)]
 ManifestServiceDep = Annotated[ManifestService, Depends(get_manifest_service)]
 AllowlistServiceDep = Annotated[AllowlistService, Depends(get_allowlist_service)]
+EscrowProviderDep = Annotated[IEscrowProvider, Depends(get_escrow_provider)]
+OptionalEscrowProviderDep = Annotated[
+    "IEscrowProvider | None", Depends(get_escrow_provider_optional)
+]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]

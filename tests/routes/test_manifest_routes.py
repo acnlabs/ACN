@@ -67,6 +67,19 @@ def stub_manifest_service():
     )
     svc.delete = AsyncMock(return_value=True)
     svc.fetch_content = AsyncMock(return_value={"text": "hi"})
+    # Phase 3: DELETE pre-fetches the entry to detect attention_fee escrows
+    # that need a refund. Default to a fee-less entry so existing tests
+    # exercise the no-fee path; tests that need a paid entry override
+    # this directly.
+    svc.get_entry = AsyncMock(
+        return_value=ManifestEntry(
+            mid="mid-1" + "a" * 26,
+            sender_id="sender-x",
+            summary="hello",
+            ts_ms=1_700_000_000_000,
+            content_size=42,
+        )
+    )
     return svc
 
 
@@ -224,6 +237,11 @@ class TestDeleteManifestEntry:
         404. We never reveal "entry exists for another owner" via
         a different code — that would let an attacker probe other
         agents' queues."""
+        # Phase 3: ``get_entry`` returns None for missing/cross-tenant
+        # mids — that's the primary 404 path now (the earlier
+        # ``delete → False`` 404 still covers TTL evictions racing
+        # the delete call).
+        stub_manifest_service.get_entry = AsyncMock(return_value=None)
         stub_manifest_service.delete = AsyncMock(return_value=False)
         _wire(stub_manifest_service, stub_agent_service)
 
@@ -234,6 +252,9 @@ class TestDeleteManifestEntry:
             )
 
         assert r.status_code == 404, r.text
+        # The pre-fetch returns None — the delete call must never
+        # be issued (and definitely no escrow refund).
+        stub_manifest_service.delete.assert_not_awaited()
 
     def test_other_agent_cannot_delete(
         self, stub_manifest_service, stub_agent_service

@@ -37,15 +37,43 @@ Why a separate module rather than inline helpers on the router:
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from a2a.compat.v0_3.types import Message  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from ...core.interfaces.escrow_provider import IEscrowProvider
     from ...services.manifest_service import ManifestEntry, ManifestService
     from .websocket_manager import WebSocketManager
 
+# Mirrors ``ManifestService.DEFAULT_TTL_SECONDS`` to avoid a circular
+# import (``services`` package re-exports ``MessageService``, which in
+# turn imports this very module). Drift risk is tiny: the constant is
+# a global manifest-wide TTL and only the ``auto_release_days``
+# floor in ``dispatch`` reads it. The unit-test contract covers a
+# regression by asserting ``auto_release_days >= ceil(7d) + 1`` on
+# the default-TTL happy path.
+_DEFAULT_TTL_SECONDS = 7 * 24 * 3600
+
 logger = logging.getLogger(__name__)
+
+
+class AttentionFeeLockError(Exception):
+    """Raised by ``ManifestDispatcher.dispatch`` when the escrow lock fails.
+
+    Surfaces backend failure context (rejection reason, missing wallet,
+    insufficient balance) so the route layer can map it to a 4xx
+    ``ATTENTION_FEE_LOCK_FAILED``. We never roll back the manifest
+    write here because the dispatcher attempts the lock *before*
+    persisting the entry — a failed lock means no manifest row was
+    written, no WS push was sent, and the recipient sees nothing.
+    """
+
+    def __init__(self, *, reason: str) -> None:
+        super().__init__(f"attention_fee lock failed: {reason}")
+        self.reason = reason
 
 # Cap on how much of the inbound A2A message body we scan when
 # constructing the manifest summary. Mirrors ``MAX_SUMMARY_LEN`` on
@@ -133,10 +161,17 @@ class ManifestDispatcher:
         *,
         ws_manager: WebSocketManager | None = None,
         metrics: Any = None,
+        escrow_provider: IEscrowProvider | None = None,
     ) -> None:
         self.manifest_service = manifest_service
         self.ws_manager = ws_manager
         self.metrics = metrics
+        # Phase 3: optional handle to lock attention_fee in escrow.
+        # ``None`` is supported for unit-test fixtures and legacy
+        # bring-ups that don't need fee semantics; a ``dispatch``
+        # call carrying ``attention_fee`` against a dispatcher
+        # without an escrow provider raises loudly (config error).
+        self.escrow_provider = escrow_provider
 
     async def dispatch(
         self,
@@ -146,6 +181,7 @@ class ManifestDispatcher:
         message: Message,
         path: str,
         route_id: str | None = None,
+        attention_fee: dict[str, Any] | None = None,
     ) -> ManifestEntry:
         """Persist the message to the manifest queue + push WS + count.
 
@@ -178,11 +214,69 @@ class ManifestDispatcher:
         )
         summary = extract_summary(message)
 
+        # Phase 3 attention_fee: lock the fee in escrow BEFORE
+        # persisting the manifest entry. Order matters — if the
+        # lock fails (insufficient balance, backend down) we don't
+        # want a half-baked manifest row sitting in Redis with no
+        # corresponding escrow record. The ManifestService.write
+        # path is the commit point: succeed there → both the
+        # manifest entry and the escrow lock are durable; fail
+        # before that → caller sees AttentionFeeLockError and the
+        # message is treated as not-sent.
+        extra: dict[str, Any] = {}
+        if attention_fee is not None:
+            if self.escrow_provider is None:
+                raise AttentionFeeLockError(
+                    reason="escrow provider not wired into dispatcher",
+                )
+            # Mint a fresh escrow task_id distinct from the manifest mid.
+            # The mid is generated inside ``ManifestService.write`` after
+            # the lock has succeeded; we cannot use it here. ``acn:attn:``
+            # prefix tags the escrow record so backend-side audit tooling
+            # can split attention_fee escrows from task escrows.
+            escrow_task_id = f"acn:attn:{uuid4().hex}"
+            # auto_release_days bounds backend's stale-escrow detector to
+            # one day past the manifest TTL, so any orphaned escrow
+            # (manifest expired without ack) gets a chance to refund via
+            # the ACN-side worker rather than getting stuck.
+            ttl_seconds = int(attention_fee.get("ttl_seconds") or _DEFAULT_TTL_SECONDS)
+            auto_release_days = max(1, math.ceil(ttl_seconds / 86400) + 1)
+            lock_result = await self.escrow_provider.lock_v2(
+                task_id=escrow_task_id,
+                creator_id=sender_id,
+                creator_type="agent",
+                amount=int(attention_fee["amount"]),
+                currency=str(attention_fee.get("currency", "credits")),
+                auto_release_days=auto_release_days,
+                description=(
+                    f"acn attention_fee mid_pending recipient={owner_id}"
+                ),
+            )
+            if not lock_result.success or not lock_result.escrow_id:
+                raise AttentionFeeLockError(
+                    reason=lock_result.error or "unknown error",
+                )
+            # Persist enough state on the manifest entry to drive the
+            # ack/refund path without an extra backend round-trip:
+            #   * escrow_id  — release_partial / refund target
+            #   * task_id    — fallback for get_by_task lookups
+            #   * amount     — what to release on ack
+            #   * currency   — surfaced to the SDK so the recipient
+            #                  knows what they're collecting
+            extra["attention_fee"] = {
+                "escrow_id": lock_result.escrow_id,
+                "task_id": escrow_task_id,
+                "amount": int(attention_fee["amount"]),
+                "currency": str(attention_fee.get("currency", "credits")),
+                "auto_release_days": auto_release_days,
+            }
+
         entry = await self.manifest_service.write(
             owner_id=owner_id,
             sender_id=sender_id,
             summary=summary,
             content=content_dict,
+            extra=extra or None,
         )
 
         # Best-effort WS push. The recipient still gets the manifest

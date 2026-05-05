@@ -269,6 +269,58 @@ class AgentPlanetEscrowProvider(IEscrowProvider):
             logger.error("escrow_release_partial_error", escrow_id=escrow_id, error=str(e))
             return ReleaseResult(success=False, error=str(e))
 
+    async def refund_v2(
+        self,
+        escrow_id: str,
+        reason: str | None = None,
+    ) -> EscrowDetailResult:
+        """Refund a v2 escrow → backend ``POST /v2/{escrow_id}/refund``.
+
+        Used by ACN's recipient-cancel path (manifest DELETE on a
+        paid message): the receiver declined to read, so the locked
+        funds bounce back to the sender. Backend transitions the
+        escrow to REFUNDED and credits the creator wallet
+        atomically.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
+                response = await client.post(
+                    f"{self.backend_url}/api/labs/escrow/v2/{escrow_id}/refund",
+                    headers=self._get_headers(),
+                    json={"reason": reason},
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(
+                        "escrow_refunded_v2",
+                        escrow_id=escrow_id,
+                        reason=reason,
+                    )
+                    return EscrowDetailResult(
+                        success=True,
+                        escrow_id=data.get("escrow_id"),
+                        task_id=data.get("task_id"),
+                        creator_id=data.get("creator_id"),
+                        creator_type=data.get("creator_type"),
+                        amount=data.get("amount", 0.0),
+                        currency=data.get("currency"),
+                        status=data.get("status"),
+                    )
+                else:
+                    error = self._extract_error(response)
+                    logger.warning(
+                        "escrow_refund_v2_failed",
+                        escrow_id=escrow_id,
+                        status_code=response.status_code,
+                        error=error,
+                    )
+                    return EscrowDetailResult(success=False, error=str(error))
+
+        except httpx.RequestError as e:
+            logger.error("escrow_refund_v2_error", escrow_id=escrow_id, error=str(e))
+            return EscrowDetailResult(success=False, error=str(e))
+
     # -------------------------------------------------------------------------
     # v1 Compatibility
     # -------------------------------------------------------------------------

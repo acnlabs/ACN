@@ -81,6 +81,23 @@ MAX_TTL_SECONDS: Final = 30 * 24 * 3600  # 30 days — capped to bound cluster m
 QUEUE_CAPACITY: Final = 200  # max manifest entries retained per agent (oldest evicted)
 
 
+class AlreadyAckedError(Exception):
+    """Raised by ``ManifestService.mark_acked`` on a replay/double-ack.
+
+    Phase 3 ``attention_fee`` flow uses HSETNX to make the ack
+    operation idempotent. The 0-return branch means a prior ack
+    already stamped the entry and released funds. We surface this
+    as a distinct exception (rather than a sentinel) so the route
+    layer can map it cleanly to ``ATTENTION_FEE_ALREADY_ACKED``
+    without inspecting return tuples.
+    """
+
+    def __init__(self, *, owner_id: str, mid: str) -> None:
+        super().__init__(f"manifest entry {mid!r} already acked by {owner_id!r}")
+        self.owner_id = owner_id
+        self.mid = mid
+
+
 @dataclass(frozen=True)
 class ManifestEntry:
     """A single manifest queue row (excluding the full content body).
@@ -97,6 +114,13 @@ class ManifestEntry:
     ts_ms: int
     content_size: int
     extra: dict[str, Any] = field(default_factory=dict)
+    # Phase 3 attention_fee — ms timestamp of the ack call that
+    # released the fee from escrow. ``None`` when the entry was
+    # never acked or when no fee was attached. Stored in the detail
+    # HASH as a separate top-level field (rather than inside
+    # ``extra``) so HSETNX can guarantee single-write semantics on
+    # the ack hot path.
+    acked_at_ms: int | None = None
 
 
 def _zset_key(owner_id: str) -> str:
@@ -363,6 +387,14 @@ class ManifestService:
             ``True`` if the entry existed (at least one of the
             three keys was deleted), ``False`` if it had already
             been evicted.
+
+        Phase 3 note:
+            For entries with an attached ``attention_fee``, callers
+            that need to refund the locked escrow MUST pre-fetch
+            ``get_entry`` first to capture ``extra.attention_fee``
+            (this method only returns a bool). The route layer
+            handles that orchestration — see ``manifest.py`` DELETE
+            handler.
         """
         zset = _zset_key(owner_id)
         detail_key = _detail_key(owner_id, mid)
@@ -377,6 +409,123 @@ class ManifestService:
         # ZREM returns int (count removed), DELETE returns int. Any
         # nonzero entry means we actually touched something.
         return any(int(r) > 0 for r in results)
+
+    async def get_entry(
+        self,
+        owner_id: str,
+        mid: str,
+    ) -> ManifestEntry | None:
+        """Read a single manifest entry's metadata (without the body).
+
+        Returns ``None`` when the detail HASH has been trimmed/expired
+        or when the ``mid`` belongs to a different owner. Callers
+        translate ``None`` to 404 — same surface as
+        ``fetch_content`` so an attacker cannot distinguish "wrong
+        owner" from "expired" by status code.
+
+        Phase 3 ``attention_fee`` flow needs this read separately
+        from ``fetch_content``: the ack path inspects the
+        ``extra.attention_fee`` block before performing the release,
+        and the body itself is not required to make that decision.
+        """
+        detail_key = _detail_key(owner_id, mid)
+        raw = await self.redis.hgetall(detail_key)
+        if not raw:
+            return None
+        return _decode_entry(mid, raw)
+
+    async def mark_acked(
+        self,
+        owner_id: str,
+        mid: str,
+        *,
+        ts_ms: int | None = None,
+    ) -> int | None:
+        """Atomically flip the manifest entry's ``acked_at`` field.
+
+        Returns:
+            * The newly stamped ``acked_at`` timestamp (ms) on a
+              first-time ack — caller proceeds to release the
+              attention_fee from escrow.
+            * ``None`` when the detail HASH does not exist (entry
+              expired / wrong owner / never written) — caller
+              surfaces 404.
+
+        Raises:
+            ``AlreadyAckedError`` when ``acked_at`` was already set
+            on the HASH. Letting the caller see this as a distinct
+            exception (vs ``None``) keeps the ack endpoint's
+            surfaces tight: 404 for "no such entry" and a 4xx
+            ``ATTENTION_FEE_ALREADY_ACKED`` for "already released".
+
+        Atomicity notes:
+            ``HSETNX`` is the lynchpin — it only stamps the field
+            when absent, returning 1 on first ack and 0 on replay.
+            Two concurrent ack calls cannot both observe a
+            "first-time ack" state, so the downstream escrow
+            release runs at most once per manifest entry per ACN
+            instance. (The backend escrow itself is also idempotent
+            on release, so even a cross-instance race is safe — but
+            this guard keeps the metric / receipt count honest.)
+
+            We DON'T pre-check the HASH's existence in a separate
+            round-trip: HSETNX on a non-existent key would still
+            return 1 and leave a degenerate hash with only the
+            ``acked_at`` field. Instead we issue HEXISTS on a
+            stable field (``mid``) AFTER the HSETNX and rollback
+            (HDEL ``acked_at``) if the entry doesn't actually exist.
+            This trades one extra round-trip for correctness on
+            the cold path.
+        """
+        detail_key = _detail_key(owner_id, mid)
+        stamped_at = ts_ms if ts_ms is not None else _now_ms()
+
+        # HSETNX returns 1 when the field was newly written, 0 when
+        # it already existed. The 0 path means a prior ack already
+        # claimed this entry — surface as a distinct exception so
+        # the caller can return 4xx ATTENTION_FEE_ALREADY_ACKED.
+        wrote = await self.redis.hsetnx(detail_key, "acked_at", str(stamped_at))
+        if int(wrote) == 0:
+            # Could be "already acked" *or* "key never existed" (HSETNX
+            # on a missing key still creates a one-field HASH and
+            # returns 1, so 0 is unambiguously "field already set").
+            raise AlreadyAckedError(owner_id=owner_id, mid=mid)
+
+        # Cold-path correctness: if the entry was missing, HSETNX
+        # silently created a degenerate one-field hash. Detect via
+        # HEXISTS on a stable field that the writer always sets and
+        # rollback so we don't leak orphan rows.
+        has_mid = await self.redis.hexists(detail_key, "mid")
+        if not has_mid:
+            await self.redis.hdel(detail_key, "acked_at")
+            return None
+
+        return stamped_at
+
+    async def unmark_acked(self, owner_id: str, mid: str) -> bool:
+        """Roll back the ``acked_at`` field on a manifest entry.
+
+        Phase 3 attention_fee uses this on the failure path of the
+        ack endpoint: when the backend escrow ``release_partial``
+        rejects the release after ``mark_acked`` already stamped
+        the entry, we drop the stamp so the SDK can retry the ack
+        without immediately tripping ``ATTENTION_FEE_ALREADY_ACKED``.
+
+        Returns ``True`` when the field was actually removed,
+        ``False`` when it had already been cleared (or the entry
+        is gone). The route layer ignores the return value — the
+        rollback is best-effort by design (we don't want a Redis
+        hiccup during error handling to mask the *original* error).
+
+        We expose this as a service method (rather than letting the
+        route reach into ``service.redis`` directly) to keep the
+        Redis key naming encapsulated. Without it the route would
+        have to recompute ``acn:manifest:{<owner>}:<mid>`` itself,
+        guaranteeing drift the moment the storage layout shifts.
+        """
+        detail_key = _detail_key(owner_id, mid)
+        result = await self.redis.hdel(detail_key, "acked_at")
+        return int(result) > 0
 
     async def fetch_content(
         self,
@@ -454,6 +603,20 @@ def _decode_entry(mid: str, raw: dict[Any, Any]) -> ManifestEntry:
     except ValueError:
         content_size = 0
 
+    # ``acked_at`` is only present on entries whose attention_fee has
+    # been released. Defensive int parse — if a future writer stores
+    # something other than a numeric ms timestamp we just treat the
+    # entry as un-acked rather than blowing up the read path.
+    acked_at_raw = decoded.get("acked_at")
+    acked_at_ms: int | None
+    if acked_at_raw is None or acked_at_raw == "":
+        acked_at_ms = None
+    else:
+        try:
+            acked_at_ms = int(acked_at_raw)
+        except ValueError:
+            acked_at_ms = None
+
     return ManifestEntry(
         mid=decoded.get("mid", mid),
         sender_id=decoded.get("sender_id", ""),
@@ -461,4 +624,5 @@ def _decode_entry(mid: str, raw: dict[Any, Any]) -> ManifestEntry:
         ts_ms=ts_ms,
         content_size=content_size,
         extra=extra,
+        acked_at_ms=acked_at_ms,
     )

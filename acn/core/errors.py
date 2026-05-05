@@ -140,6 +140,54 @@ class ErrorCode(StrEnum):
     MANIFEST_ENTRY_NOT_FOUND = "manifest_entry_not_found"
     MANIFEST_CONTENT_NOT_FOUND = "manifest_content_not_found"
 
+    # ===== Attention fee (Phase 3 — manifest economics) =====
+    # ``attention_fee`` is the sender-pays-recipient mechanism that turns
+    # the manifest queue from a free best-effort firehose into a
+    # signal-quality channel: a sender attaches a small Credits amount
+    # at ``POST /communication/send`` time, the funds are locked in
+    # escrow, and they release to the recipient when (and only when)
+    # the recipient explicitly acks the manifest entry. Refunds back
+    # to the sender on TTL expiry / manual delete.
+    #
+    # Six codes — each maps to a *distinct caller-facing failure mode*
+    # at a different stage of the lock → ack → release pipeline. We do
+    # not collapse them into a single ``ATTENTION_FEE_FAILURE`` because
+    # SDK clients want to branch:
+    #
+    # * ``ATTENTION_FEE_INVALID`` — schema/range violation (negative
+    #   amount, currency not in ``{credits}``, amount above the per-fee
+    #   ceiling). Caller's next step: fix the request body.
+    # * ``ATTENTION_FEE_REQUIRES_MANIFEST_MODE`` — sender attached a
+    #   fee but the recipient's ``communication_policy.mode`` would
+    #   route the message to the inbox or reject it outright. Locking
+    #   the fee in those cases would either let the recipient pocket
+    #   the funds without the manifest UX (open mode = no ack step) or
+    #   waste the lock entirely (closed mode). We refuse loudly so
+    #   the sender knows why their funds were not locked.
+    # * ``ATTENTION_FEE_LOCK_FAILED`` — backend escrow rejected the
+    #   lock (insufficient sender balance, idempotency collision,
+    #   wallet missing). Caller's next step: top up wallet / retry
+    #   later.
+    # * ``ATTENTION_FEE_NOT_LOCKED`` — caller hit the ack endpoint on
+    #   a manifest entry that was never locked (sender did not attach
+    #   a fee). Caller's next step: just call
+    #   ``GET /communication/content`` instead — there is no fee to
+    #   release. Distinct from "already acked" so the recipient SDK
+    #   can suppress the ack call entirely on these entries.
+    # * ``ATTENTION_FEE_ALREADY_ACKED`` — replay/double-ack on an
+    #   already-released fee. Caller's next step: this is idempotent-
+    #   safe; treat as success on the recipient side.
+    # * ``ATTENTION_FEE_RELEASE_FAILED`` — backend escrow rejected
+    #   the release (escrow missing, refunded out from under us,
+    #   service down). 4xx so the SDK retries; the manifest entry's
+    #   ``acked_at`` is left unset so the recipient can retry.
+    ATTENTION_FEE_INVALID = "attention_fee_invalid"
+    ATTENTION_FEE_REQUIRES_MANIFEST_MODE = "attention_fee_requires_manifest_mode"
+    ATTENTION_FEE_LOCK_FAILED = "attention_fee_lock_failed"
+    ATTENTION_FEE_NOT_LOCKED = "attention_fee_not_locked"
+    ATTENTION_FEE_ALREADY_ACKED = "attention_fee_already_acked"
+    ATTENTION_FEE_RELEASE_FAILED = "attention_fee_release_failed"
+
     # ===== Onchain / ERC-8004 routes (sprint row #7) =====
     # All six codes are NEW in sprint #7 and are *route-local* — they
     # only surface from ``acn/routes/onchain.py``. The cross-module
@@ -284,6 +332,31 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.MANIFEST_CONTENT_NOT_FOUND: (
         "The requested manifest content could not be found or has expired."
+    ),
+    ErrorCode.ATTENTION_FEE_INVALID: (
+        "The supplied attention_fee value is invalid. Provide a positive "
+        "integer amount within the allowed range and a supported currency."
+    ),
+    ErrorCode.ATTENTION_FEE_REQUIRES_MANIFEST_MODE: (
+        "attention_fee is only honoured when the recipient is in manifest "
+        "or allowlist mode. Drop the fee or wait for the recipient to "
+        "switch modes."
+    ),
+    ErrorCode.ATTENTION_FEE_LOCK_FAILED: (
+        "The attention_fee could not be locked in escrow. Check the "
+        "sender wallet balance and retry."
+    ),
+    ErrorCode.ATTENTION_FEE_NOT_LOCKED: (
+        "The manifest entry has no attention_fee attached; nothing to "
+        "release. Use GET /communication/content instead."
+    ),
+    ErrorCode.ATTENTION_FEE_ALREADY_ACKED: (
+        "The attention_fee for this manifest entry has already been "
+        "released. Subsequent ack calls are no-ops."
+    ),
+    ErrorCode.ATTENTION_FEE_RELEASE_FAILED: (
+        "The attention_fee could not be released from escrow. Retry the "
+        "ack call after a short backoff."
     ),
     ErrorCode.ERC8004_TOKEN_ID_MISSING: (
         "Agent has no ERC-8004 token ID."

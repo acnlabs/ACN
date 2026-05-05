@@ -16,6 +16,8 @@ from ..infrastructure.messaging.broadcast_service import (
     BroadcastResult,
     BroadcastStrategy,
 )
+from ..infrastructure.messaging.manifest_dispatcher import AttentionFeeLockError
+from ..infrastructure.messaging.message_router import AttentionFeeWrongModeError
 from ..monitoring.audit import AuditEventType
 from .dependencies import (  # type: ignore[import-untyped]
     WALLET_RATE_LIMIT,
@@ -154,6 +156,57 @@ async def _record_broadcast_policy_rejections(
         )
 
 
+# Phase 3 attention_fee bounds.
+#
+# Currency: ``credits`` is the only spendable unit at v1 — Agent
+# Wallets carry a Credits balance plus AP Points. AP Points are
+# rewards-only (cannot be spent), and AP2's broader payment-method
+# enum (USDC / ETH / etc.) is declarative-only on the ACN side until
+# the Backend Escrow grows on-chain settlement support. The schema
+# field is left forward-compatible so adding a currency value later
+# does not require a wire-shape change.
+#
+# Amount window: 1 ≤ amount ≤ 1000 Credits = roughly $0.01 .. $10
+# at the current 1 USD = 100 Credits internal mapping. The lower
+# bound prevents zero-amount "psyops" sends (sender attaches a fee
+# to amplify priority signal without actually paying); the upper
+# bound is a safety ceiling so a single misclick can't drain a
+# wallet on a single message. Whitelist users wanting larger fees
+# can use the task escrow path instead.
+ATTENTION_FEE_MIN_AMOUNT = 1
+ATTENTION_FEE_MAX_AMOUNT = 1000
+ATTENTION_FEE_SUPPORTED_CURRENCIES = {"credits"}
+
+
+class AttentionFee(BaseModel):
+    """Sender-attached fee that pays for the recipient's attention.
+
+    Locked in escrow at send time, released to the recipient when
+    they explicitly call ``POST /communication/manifest/{agent_id}/{mid}/ack``.
+    See ``acn-communication-economic-model.md`` Phase 3 for the full
+    flow rationale.
+    """
+
+    amount: int = Field(
+        ...,
+        ge=ATTENTION_FEE_MIN_AMOUNT,
+        le=ATTENTION_FEE_MAX_AMOUNT,
+        description=(
+            "Integer Credits to lock from the sender's Agent Wallet. "
+            f"Allowed range {ATTENTION_FEE_MIN_AMOUNT}..{ATTENTION_FEE_MAX_AMOUNT}."
+        ),
+    )
+    currency: str = Field(
+        default="credits",
+        max_length=16,
+        description=(
+            "Currency identifier. Only 'credits' is honoured today; "
+            "the schema is forward-compatible for AP Points / on-chain "
+            "USDC once those payment rails are wired into Escrow."
+        ),
+    )
+
+
 class SendMessageRequest(BaseModel):
     from_agent: str = Field(..., max_length=128)
     target_agent: str = Field(..., max_length=128)
@@ -164,6 +217,10 @@ class SendMessageRequest(BaseModel):
     # negatives.
     message: dict
     priority: str = Field(default="normal", max_length=32)
+    # Optional Phase 3 economic-model field. Absence preserves the
+    # legacy free-send behaviour; presence triggers an escrow lock
+    # before the manifest entry is written.
+    attention_fee: AttentionFee | None = None
 
 
 class BroadcastRequest(BaseModel):
@@ -213,11 +270,33 @@ async def send_message(
     try:
         message = _payload_to_a2a_message(body.message)
 
+        send_kwargs: dict[str, object] = {
+            "priority": body.priority,
+        }
+        if body.attention_fee is not None:
+            # Pydantic enforced the integer range; the supported-currency
+            # whitelist lives in code (not types) so a future expansion
+            # can flip behaviour without retro-validating older clients.
+            currency = body.attention_fee.currency.lower()
+            if currency not in ATTENTION_FEE_SUPPORTED_CURRENCIES:
+                raise ACNHTTPError(
+                    ErrorCode.ATTENTION_FEE_INVALID,
+                    400,
+                    details={
+                        "currency": body.attention_fee.currency,
+                        "supported": sorted(ATTENTION_FEE_SUPPORTED_CURRENCIES),
+                    },
+                )
+            send_kwargs["attention_fee"] = {
+                "amount": body.attention_fee.amount,
+                "currency": currency,
+            }
+
         result = await message_service.send_message(
             from_agent_id=body.from_agent,
             to_agent_id=body.target_agent,
             message=message,
-            priority=body.priority,
+            **send_kwargs,
         )
 
         await metrics.inc_message_count(
@@ -238,6 +317,51 @@ async def send_message(
         logger.info("message_sent", from_agent=body.from_agent, to_agent=body.target_agent)
 
         return result
+
+    except ACNHTTPError:
+        # Inline 4xx that we raised ourselves (e.g. ``ATTENTION_FEE_INVALID``
+        # for an unsupported currency above) must propagate to the
+        # app-level ``ACNHTTPError`` handler unchanged. The catch-all
+        # ``except Exception`` below would otherwise convert them to
+        # opaque 500s and lose the structured error_code contract.
+        raise
+
+    except AttentionFeeWrongModeError as e:
+        # Sender attached a fee but the recipient's policy routed the
+        # message to inbox / rejection. We translate to 4xx so the
+        # SDK can drop the fee or wait for the recipient to switch
+        # modes — never silently accept the message without locking.
+        logger.info(
+            "attention_fee_wrong_mode",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            actual_route=e.actual_route,
+        )
+        raise ACNHTTPError(
+            ErrorCode.ATTENTION_FEE_REQUIRES_MANIFEST_MODE,
+            400,
+            details={
+                "recipient_id": e.recipient_id,
+                "actual_route": e.actual_route,
+            },
+        ) from e
+
+    except AttentionFeeLockError as e:
+        # Backend escrow rejected the lock (insufficient balance, wallet
+        # missing, idempotency collision). Surfaced as a 4xx with the
+        # backend-supplied reason so the sender knows whether to top
+        # up vs. drop the field.
+        logger.info(
+            "attention_fee_lock_failed",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            reason=e.reason,
+        )
+        raise ACNHTTPError(
+            ErrorCode.ATTENTION_FEE_LOCK_FAILED,
+            400,
+            details={"reason": e.reason},
+        ) from e
 
     except AgentNotFoundException as e:
         logger.info(

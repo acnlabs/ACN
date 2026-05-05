@@ -41,6 +41,99 @@ Context: commits `39c0ed0`（PR #2 v1+v2+v3）+ `d928a06`（ruff sweep）+ `<P2-
 - ~~**`_http_exception_handler` 的 `Retry-After` lookup 大小写敏感**（v3 P2-A7）~~ ✅
   `next((v for k, v in exc_headers.items() if k.lower() == "retry-after"), None)`。HTTP header 名 case-insensitive（RFC 9110 §5.1）的语义对齐。
 
+### Phase 3 Module B `attention_fee` — TTL refund worker (pending)
+
+Context: 2026-05-05 commit landed the attention_fee `lock + ack-release`
+flow (see [`acn-communication-economic-model.md`](features/acn-communication-economic-model.md#phase-3-module-b-首版实施2026-05-05-上线)).
+Sender attaches `attention_fee` on `POST /communication/send`; the
+ManifestDispatcher locks Credits via Backend Escrow `lock_v2` before
+writing the manifest entry; receiver calls
+`POST /communication/manifest/{agent_id}/{mid}/ack` to release the
+fee via `release_partial`.
+
+What's missing: **no worker yet refunds locked fees when the manifest
+TTL expires without an ack.** Backend Escrow's `auto_release_at`
+mechanism only releases to an *assignee*, but attention_fee escrows
+are created without an assignee on purpose (the recipient is not yet
+committed). Without a refund worker:
+
+- TTL-expired manifest entries leak (fee stays `locked` in escrow,
+  sender's wallet never gets the Credits back)
+- `acn:attn:*` escrow records pile up in Backend's `Escrow` table
+- A misconfigured / abusive sender could reserve large amounts of
+  Credits indefinitely (mitigated short-term by the ≤1000 Credits
+  per-message ceiling, but not a long-term solution)
+
+Plan:
+
+1. Add a periodic ACN-side worker (mirror of the audit-stream
+   reaper or `analytics_aggregator` cadence — every 60 s).
+2. Worker queries manifest entries with `extra.attention_fee.escrow_id`
+   set + `acked_at_ms IS NULL` + `expires_at < now`.
+   - First implementation can SCAN the manifest detail HASHes
+     (`acn:manifest:{<owner>}:<mid>`) and filter; later, lift to a
+     PG mirror once Phase 3 PG mirror lands.
+3. For each match, call Backend `POST /api/labs/escrow/v2/{escrow_id}/refund`
+   with `reason="attention_fee_ttl_expired"`. Record the refund in
+   ACN audit log + emit `attention_fee_refunds_total{reason}` metric.
+4. Mark the manifest entry's `extra.attention_fee.refunded_at` field
+   so a follow-up refund cannot double-refund (idempotency on the ACN
+   side). Backend itself rejects double-refund anyway (`refund` checks
+   `escrow.status` is not already `REFUNDED`), but the ACN-side flag
+   keeps the audit log honest.
+5. Tests: TTL-expired entry happy path, double-refund safety, partial
+   release-then-refund (once `release_partial` lands) interaction,
+   backend 4xx / 5xx response handling.
+
+Until the worker is wired, the recipient-driven exit paths cover most
+non-stuck scenarios:
+- `POST /communication/manifest/{agent_id}/{mid}/ack` releases on consent;
+- `DELETE /communication/manifest/{agent_id}/{mid}` refunds on rejection
+  (refund-first ordering: `refund_v2` before `delete`, so the escrow is
+  never orphaned).
+
+The remaining stuck-lock case is "recipient never visits the queue at all",
+which the TTL worker is meant to bound. Until then ops can replay the
+DELETE path manually, or call the Backend `POST /api/labs/escrow/v2/{escrow_id}/refund`
+directly when the manifest row has already been evicted.
+
+### Phase 3 Module B `attention_fee` — ack crash-recovery race (P2 v1 limitation)
+
+The ack path stamps `acked_at_ms` (HSETNX in
+`ManifestService.mark_acked`) BEFORE calling Backend's
+`release_partial`. The HSETNX guard is the right choice for the
+common case (it bounds local replay so we never double-release), but
+introduces a known crash-recovery race:
+
+1. ACN stamps `acked_at_ms` successfully → HSETNX returns 1.
+2. ACN process exits / crashes / loses network before issuing
+   `release_partial` (or the request is in-flight when a deploy
+   restarts the pod).
+3. SDK retries the ack call → `mark_acked` returns 0 → ACN responds
+   with 4xx `ATTENTION_FEE_ALREADY_ACKED`.
+4. Backend escrow is still LOCKED. Funds are stuck until the TTL
+   refund worker (above) or manual ops intervention reclaims them.
+
+Mitigation options for v2 of this feature:
+
+- **Release-first ordering**: call `release_partial` BEFORE stamping,
+  treat backend's "escrow already RELEASED" 4xx as success on
+  retry, and only then HSETNX. Requires backend to make
+  `release_partial` idempotent on a same-recipient retry, which
+  it currently isn't (it returns a generic 4xx that we'd have to
+  string-match). The robust fix lives in
+  `EscrowService.release_partial` accepting an `idempotency_key`
+  the SDK can echo.
+- **Two-phase commit via a "release in flight" marker**: write a
+  separate `release_in_progress=1` flag before the backend call,
+  flip it to `acked_at_ms` only after a 200. Crash-recovery scan
+  re-attempts releases for entries with the flag set. Heavier
+  but doesn't depend on backend changes.
+
+Both options are deferred to the same release window as the TTL
+refund worker — a single Phase 3 Module B v2 PR will own the
+escrow-side idempotency story end-to-end.
+
 ### Phase 2 Group C #9 — wire-level behaviour change announcement
 
 Context: commit `9fb38b9` collapsed `MessageService.broadcast_message` →

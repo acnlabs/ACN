@@ -46,6 +46,27 @@ from ...core.exceptions import PolicyRejected
 from ...security import SSRFViolation, safe_resolve_target
 from ..persistence.redis.registry import AgentRegistry
 
+
+class AttentionFeeWrongModeError(Exception):
+    """Raised by ``MessageRouter.route`` when ``attention_fee`` was
+    supplied but the policy decision routes to inbox / rejection.
+
+    Phase 3 attention_fee semantics only make sense for the manifest
+    flow: there is no ack step on inbox traffic, so locking funds
+    against an open-mode recipient would be a silent loss. We surface
+    this as a typed exception (caught by the route handler and mapped
+    to ``ATTENTION_FEE_REQUIRES_MANIFEST_MODE`` 4xx) so the sender
+    learns immediately that no escrow lock was created.
+    """
+
+    def __init__(self, *, recipient_id: str, actual_route: str) -> None:
+        super().__init__(
+            f"attention_fee requires manifest mode; "
+            f"recipient {recipient_id!r} routes to {actual_route!r}"
+        )
+        self.recipient_id = recipient_id
+        self.actual_route = actual_route
+
 # ``PolicyCheckService`` is only referenced for type hints; importing
 # the submodule directly (rather than ``from ...services import ...``)
 # avoids triggering ``services/__init__.py`` during this module's
@@ -285,6 +306,8 @@ class MessageRouter:
         from_agent: str,
         to_agent: str,
         message: Message,
+        *,
+        attention_fee: dict[str, Any] | None = None,
     ) -> Any:
         """
         Route an A2A message to a specific agent
@@ -293,12 +316,23 @@ class MessageRouter:
             from_agent: Source agent/service ID
             to_agent: Target agent ID
             message: A2A Message object (from a2a.types)
+            attention_fee: Phase 3 economic-model field. When set,
+                the sender is paying for the recipient's attention;
+                the dispatcher locks the fee in escrow and only
+                releases it on an explicit ack call. Only honoured
+                when the policy decision routes to manifest — any
+                other path raises ``AttentionFeeWrongModeError``
+                so the caller cannot accidentally lock funds the
+                recipient will never see (open/closed mode never
+                triggers the ack flow).
 
         Returns:
             A2A response (Message or Task)
 
         Raises:
             ValueError: If target agent not found
+            AttentionFeeWrongModeError: ``attention_fee`` was supplied
+                but the policy decision routes to inbox / rejection.
             Exception: On delivery failure
         """
         route_id = uuid4().hex[:8]
@@ -366,6 +400,16 @@ class MessageRouter:
                     from_agent=from_agent,
                     to_agent=to_agent,
                     message=message,
+                    attention_fee=attention_fee,
+                )
+            # attention_fee is meaningless when the message is going
+            # to inbox or being rejected outright — surface a hard
+            # error so the sender knows their funds were *not*
+            # locked rather than silently discarding the field.
+            if attention_fee is not None:
+                raise AttentionFeeWrongModeError(
+                    recipient_id=to_agent,
+                    actual_route=decision.route_to or "inbox",
                 )
 
         endpoint = _agent_delivery_endpoint(agent_info)
@@ -789,6 +833,7 @@ class MessageRouter:
         from_agent: str,
         to_agent: str,
         message: Message,
+        attention_fee: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Phase 2 PR #1: divert inbound message into manifest queue.
 
@@ -826,6 +871,7 @@ class MessageRouter:
             message=message,
             path="router",
             route_id=route_id,
+            attention_fee=attention_fee,
         )
         # P1-B2 review fix: keep ``status="sent"`` so existing SDK
         # clients that branch on ``result["status"] == "sent"``
@@ -833,13 +879,26 @@ class MessageRouter:
         # is the new field for clients that want to distinguish
         # inbox vs manifest semantics. Pure additive — Phase 1
         # responses didn't carry ``delivery_mode`` at all.
-        return {
+        response: dict[str, Any] = {
             "status": "sent",
             "delivery_mode": "manifest",
             "route_id": route_id,
             "mid": entry.mid,
             "ts": entry.ts_ms,
         }
+        # Surface the locked escrow id back to the sender so they can
+        # track / reconcile / cancel the lock without depending on a
+        # follow-up read of the manifest entry. ``acked_at`` /
+        # ``release`` happen on the recipient side.
+        attn = entry.extra.get("attention_fee") if entry.extra else None
+        if isinstance(attn, dict) and attn.get("escrow_id"):
+            response["attention_fee"] = {
+                "escrow_id": attn["escrow_id"],
+                "amount": attn.get("amount"),
+                "currency": attn.get("currency"),
+                "status": "locked",
+            }
+        return response
 
     async def _store_inbox(self, to_agent: str, log_entry: dict[str, Any]) -> None:
         """

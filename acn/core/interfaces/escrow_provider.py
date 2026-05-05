@@ -151,6 +151,26 @@ class IEscrowProvider(ABC):
         """Retrieve escrow state by task ID."""
         ...
 
+    @abstractmethod
+    async def refund_v2(
+        self,
+        escrow_id: str,
+        reason: str | None = None,
+    ) -> EscrowDetailResult:
+        """Refund a v2 escrow back to the creator.
+
+        Used by the recipient-initiated cancel path (e.g. ACN's
+        ``DELETE /communication/manifest/{agent_id}/{mid}`` for entries
+        that carried an ``attention_fee``): the recipient declines
+        the message, so the locked funds must return to the sender.
+
+        Backend transitions the escrow to REFUNDED and credits the
+        creator's wallet by the locked amount. Idempotent: repeated
+        calls on an already-REFUNDED escrow surface a 4xx via the
+        backend's normal error envelope.
+        """
+        ...
+
     # -------------------------------------------------------------------------
     # v1 Compatibility
     # -------------------------------------------------------------------------

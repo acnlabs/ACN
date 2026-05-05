@@ -1,9 +1,26 @@
 # ACN 通信经济模型提案
 
-**状态**: 草案 Draft  
+**状态**: 实施中（Phase 1 + Phase 2 全部上线；Phase 3 Module B `attention_fee` lock + ack-release 已落地，TTL refund worker 与 `content_url` 自托管路径仍待开发）
 **作者**: AgentPlanet Team  
-**日期**: 2026-04-29  
-**版本**: 0.11.3
+**日期**: 2026-04-29（Phase 3 Module B 首版：2026-05-05）
+**版本**: 0.12.0
+
+> **当前实施快照（2026-05-05）**：
+>
+> - Phase 1 — `communication_policy` 基础（`open` / `closed` / `allowlist` / `manifest`），网关执行点、policy 检查、合规通知豁免：✅ 全量上线。
+> - Phase 2 — manifest 通知队列（`/communication/manifest/...`、`/communication/content/{mid}`）、内容存储约束、错误码 schema（`acn-error-schema.md`）、broadcast 指标合并：✅ 全量上线。
+> - **Phase 3 Module B（本次新增）** — 发送方在 `POST /communication/send` 上携带 `attention_fee`，网关在写 manifest 之前调用 Backend Escrow `lock_v2` 锁定 Credits。锁定后 fee 必须以下列三种方式之一终结，避免资金陷死：
+>   - 接收方调用 `POST /communication/manifest/{agent_id}/{mid}/ack` 显式确认 → `release_partial` 把 fee 释放到接收方钱包；
+>   - 接收方调用 `DELETE /communication/manifest/{agent_id}/{mid}` 主动拒收 → ACN 先调 `refund_v2` 把 fee 退给发送方，再删除 manifest 记录（refund-first ordering，避免孤儿 escrow）；
+>   - 接收方既不 ack 也不 delete，等待 manifest TTL 过期后由 ACN-side worker 触发 refund（worker 仍待开发，见下面"仍未实现"）。
+>
+>   均已落地：✅ ack 路由 + ✅ DELETE refund 路由 + ✅ 服务层（`mark_acked` HSETNX 幂等、`unmark_acked` 回滚、`refund_v2` provider 接口）+ ✅ 测试（59 个新增/扩展用例）。
+> - **仍未实现**：
+>   - Phase 3 TTL 自动 refund worker（manifest 过期未 ack 时把 fee 退回发送方）；
+>   - Phase 3 `content_url` 自托管路径（manifest 仅存元数据 + URL + hash）；
+>   - 新注册 agent 默认 mode 从 `open` 切换为 `manifest`；
+>   - 链上合约托管（替代当前 Backend 中心化托管）。
+> - **已知 v1 限制**：ack 路径的"先 stamp `acked_at`、后调 `release_partial`"顺序在极小概率下（ACN 进程在两步之间崩溃）会导致重试时 4xx ALREADY_ACKED + escrow 仍 LOCKED。当前依赖 ops 介入或上线后的 TTL refund worker 兜底（已记入 BACKLOG）。
 
 ---
 
@@ -681,7 +698,6 @@ Phase 2 共 11 条决策（Group A 4 + Group B 5 + Group C 2）密集落地，�
   - `tests/infrastructure/test_subnet_manager_allowlist.py`：与 router 6 分支镜像但 path=subnet
   - `tests/protocols/test_a2a_from_agent_middleware.py`：匹配 / 不匹配返 -32600 / 缺失自动 backfill / 匿名改写为 unknown / lookup 失败降级 / malformed JSON 透传 / 非 HTTP 透传
   - `tests/routes/test_allowlist_routes.py`：POST/DELETE/GET 三个端点的 owner-only 鉴权 + 幂等 + 400/404/429/422
-
 - **PR #2 实施期吸收的关键决策（v3 review 后修订）**：
   1. **Redis 永久 sentinel 修复（实施期发现）**：`RedisAllowlistRepository._rebuild` 原本对空名单做 `SADD '__empty__' → SREM '__empty__'` 想要"留下一个空 SET"，但 Redis 在最后一个成员被 SREM 后会**自动删除空集合**——key 消失，下一次 `is_member` 又触发 cache miss + PG load，与 P0-3 fail-closed 设计冲突。修复方案：用永久哨兵成员 `__acn_allowlist_empty_sentinel__`（双下划线前缀，与 agent_id slug 校验规则不可能冲突），始终保留在 SET 内；`add()` co-add sentinel + target_id 保证幂等；`count_for_owner()` 用 `max(0, SCARD - 1)` 扣掉 sentinel
   2. **P1-A1 容量上限 TOCTOU race 由 PG trigger 兜底**：service 层 `count_for_owner() < 500` 预检查与 INSERT 之间是两个独立 round-trip——并发 add 都看到 `count=499` 都 INSERT 就会突破上限。修复：新增 alembic 迁移 `f6a7b8c9d0e1` 安装 `BEFORE INSERT` trigger `trg_agent_allowlist_capacity`，trigger 内用 `pg_advisory_xact_lock(hashtext(NEW.owner_id))` 串行化同一 owner 的并发写、再次 count 后超额则 RAISE SQLSTATE 23514。`PostgresAllowlistRepository.add` catch IntegrityError(pgcode='23514') 转 `AllowlistCapacityExceededError`。service 层预检查保留（性能优化路径），trigger 是最后防线
@@ -709,6 +725,32 @@ Phase 2 共 11 条决策（Group A 4 + Group B 5 + Group C 2）密集落地，�
 - 与任务 Escrow 联动（接受 Session 邀请时可同步锁定任务报酬）
 - 链上合约托管（替代中心化 ACN 托管，消除资产风险）
 - 新注册 agent 默认 mode 从 `open` 切换为 `manifest`
+
+#### Phase 3 Module B 首版实施（2026-05-05 上线）
+
+**已实现**：
+
+- `POST /api/v1/communication/send` 新增可选字段 `attention_fee: { amount: int, currency: "credits" }`：
+  - `amount` ∈ `[1, 1000]` Credits（约 $0.01 ~ $10），上下界由 Pydantic 强校验；超出范围 → 422。
+  - `currency` 仅接受 `"credits"`；其他值 → 400 `attention_fee_invalid`。schema 字段保留扩展位（未来上 AP Points / on-chain USDC 时无需变 wire shape）。
+  - 接收方策略不是 `manifest` 路径（即 `open` / `closed` 模式）→ 400 `attention_fee_requires_manifest_mode`。该 4xx 让发送方知道资金**未被锁定**——这是必须的设计选择，否则 open mode 下 fee 被锁但永远没有 ack 路径，资金会陷死。
+  - 进入 `_route_to_manifest` 前 `ManifestDispatcher` 调用 Backend Escrow `lock_v2`（`creator_id = sender`, `creator_type = "agent"`, `currency = "points"`, `auto_release_days = ceil(manifest_ttl / 86400) + 1`）。锁失败（余额不足、钱包缺失）→ 400 `attention_fee_lock_failed`，且**不会**写入 manifest entry——保证"消息不到 = fee 不锁"。
+  - 锁成功后，`escrow_id`、`task_id`、`amount`、`currency` 一起写入 manifest entry 的 `extra.attention_fee` 字段；响应体里也回传 `attention_fee.escrow_id` / `status: locked` 让发送方做对账。
+- 新增 `POST /api/v1/communication/manifest/{agent_id}/{mid}/ack` 端点：
+  - Owner-only（与 `GET /communication/manifest/{agent_id}` 同 auth），跨租户访问统一 404，不泄漏其他 agent 的 mid。
+  - 通过 `HSETNX` 原子地写入 `acked_at_ms` 字段——同一 mid 重复 ack 永远只会触发一次 Backend 释放，回放请求 → 400 `attention_fee_already_acked`。
+  - ack 成功后调用 Backend Escrow `release_partial`（`recipient_id = ack 者`, `recipient_type = "agent"`, `amount = locked amount`），把锁定金额按平台 3-way split（agent / ACN referral / escrow revenue）打到接收方钱包；返回体里附带 `agent_amount` / `acn_amount` / `provider_amount` / `receipt_id`。
+  - Backend 释放失败 → 400 `attention_fee_release_failed`，并回滚 `acked_at_ms`，让 SDK 可以无副作用地重试。
+  - 不带 fee 的 manifest entry 调 ack → 400 `attention_fee_not_locked`（继续走 `GET /communication/content` 即可）。
+- `ManifestEntry` 新增 `acked_at_ms: int | None` 字段；`GET /communication/manifest/{agent_id}` 在已 ack 的条目上返回 `acked_at` 给客户端做未读高亮。
+- 错误码新增六个（`attention_fee_invalid` / `attention_fee_requires_manifest_mode` / `attention_fee_lock_failed` / `attention_fee_not_locked` / `attention_fee_already_acked` / `attention_fee_release_failed`），全部按 [`acn-error-schema.md`](./acn-error-schema.md) flat schema 输出。
+- 测试：`tests/services/test_attention_fee.py`（service / dispatcher 9 用例）、`tests/routes/test_attention_fee_routes.py`（ack 端点 7 用例）、`tests/routes/test_communication_attention_fee.py`（send 端点 9 用例）共 25 个新增测试覆盖 happy path、idempotency、跨租户、release rollback、schema 边界。
+
+**已知限制 / 待实现**：
+
+- TTL refund worker 还未实现。当前 manifest TTL 到期未 ack 时，escrow 仍 locked。Backend 的 `auto_release_days` 仅在到期时把资金释放给 *assignee*，但 attention_fee 的 escrow 没 accept_v2 步骤（无 assignee），所以现阶段 backend 不会自动 release，资金保持 locked。短期可通过 `POST /api/v1/communication/manifest/{agent_id}/{mid}` DELETE 端点配合人工 refund 处理；长期方案是 ACN 在后台跑 worker，扫描 `expires_at < now` 且 `acked_at IS NULL` 的 manifest entry，调 Backend `refund` 退回发送方钱包。该 worker 已登记到 BACKLOG。
+- AP Points / on-chain USDC 计价仍是 schema 占位，Backend Escrow 当前只接受 Credits。
+- Subnet WebSocket push 路径（`SubnetManager.forward_request` → `manifest_dispatcher.dispatch`）暂不接受 `attention_fee` 参数，HTTP 路径独占该字段——子网内通信成本归属待后续讨论。
 
 **Phase 3 内容存储可选路径**（分散平台存储压力）：
 
@@ -851,19 +893,19 @@ ACN 不通过技术手段强制 agent 留在网内，而是通过提供**离开 
 > ✅ 标记的议题已在 Phase 2 启动前决议完毕，详细推理见上文「Phase 2 Group A 决策记录（架构契约层）」/「Phase 2 Group B 决策记录（模式实现层）」/「Phase 2 Group C 决策记录（独立技术债）」。
 
 
-| #     | 议题                                                           | 倾向方案 / 已决方案                                                                                                                                                                                                                                                                             |
-| ----- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | Notify 路径一的 `summary` 由谁产出？                                  | ✅ **已决（Group B）**：发送方传 `summary?: str(0..200)`（超长 422），未传则 `content[:200]+"…"` 截断兜底；文档明确"截断是兜底丑陋的"，鼓励发送方传；埋点 `acn_manifest_summary_provided_total`，3 个月后回看 N 调整                                                                                                                         |
-| 2     | manifest 通知队列 TTL 清理机制                                       | ✅ **已决（Group B）**：Redis 原生 TTL（`PEXPIREAT`），TTL 范围 `300..86400` 缺省 86400；**Cluster 必用 hash tag** `acn:manifest:{<agent_id>}` / `acn:content:{<agent_id>}:<mid>` 让 ZSET / 详情 hash / content 三 key 落同 slot；MULTI 同 deadline 写入；PG 镜像后台清理延后到 Phase 3                                       |
-| 3     | allowlist 存储结构                                               | ✅ **已决（Group B）**：PG `agent_allowlist(owner_id, target_id)` + `INDEX(target_id)` 持久化；Redis SET `acn:allowlist:{<owner_id>}` cache TTL **30 秒**；写路径 PG 事务 → Redis SADD/SREM 同步；容量 **500 条**；3 个 owner-only API（GET/POST/DELETE），**砍 incoming 反查 API**（隐私语义）                              |
-| 3-bis | mode 切换迁移语义                                                  | ✅ **已决（Group B）**：`PATCH /policy` 入 PG 事务 + 立即 invalidate Redis cache；已落 inbox / manifest queue 老消息**保留**；在途消息以 ACN 收到 send 请求时刻的 policy 为准（请求级快照，不引分布式锁）；mode 切换写 `POLICY_CHANGED` 审计 + 切到 `closed`/`manifest` 触发 logger.warning                                                       |
-| 4     | inbox 与 manifest 通知队列的关系                                     | ✅ **已决（Group A）**：完全独立两套存储 + 独立 API 入口；`acn:inbox:{id}` / `acn:manifest:{id}` / `acn:content:{mid}` 三 namespace；`/communication/inbox/`* 与 `/communication/manifest/`* 平级；最小骨架原型先行                                                                                                      |
-| 5     | Subnet 内通信是否绕过 `communication_policy`？                       | ✅ **已决（Group A）**：不绕过（沿用 Phase 1 `SubnetManager` re-fetch policy）；Phase 2 通过 `allowlist` 联动让 subnet 成员自动互相在白名单中                                                                                                                                                                         |
-| 6     | Internal Token 调用是否绕过 policy？                                | ✅ **已决（Group A）**：绕过 policy + 强制写 audit；豁免严格限定 `system:<slug>`，`assert_system_caller` 把关；audit 必带 `actor_type="system"`                                                                                                                                                                 |
-| 7     | WebSocket 实时投递在 manifest 模式下推什么？                             | ✅ **已决（Group B）**：新 WS event `manifest_notification`，payload `{mid, sender, summary, ts, expires_at}`，**不带 content**；manifest queue 用 ZSET（score=expires_at）+ 详情 hash 双 key 结构（倒灌补 #4 数据结构）；离线补推 `?since=<ts>` 增量；mode 切换到 manifest/allowlist 返回 `X-ACN-SDK-Min-Version` warning header |
-| 8     | A2A 协议入口 `from_agent` 是否要强校验？                                | ✅ **已决（Group A）**：Phase 2 强校验。`/a2a/jsonrpc` 加 `verify_a2a_caller` dep（仿 `verify_proxy_caller` 用 `X-ACN-Authorization`）；`from_agent` 必填 + 与 caller 真实 agent_id 严格相等，否则 `TaskState.rejected` + `from_agent_mismatch`；30 天 SDK warning 过渡期                                                |
-| 9     | `BroadcastService` 与 `MessageService.broadcast_message` 双轨清理 | ✅ **已完成（Group C）**：HTTP `/communication/broadcast` 与 `/broadcast-by-tag` 改走 `BroadcastService.broadcast`（新统一入口，集中处理 sender 校验 / target 解析 / sender 过滤）；删 `MessageService.broadcast_message` + strategy 死字段；HTTP 响应顶层暴露 `broadcast_id`，`responses[]` 旧形状通过 adapter 保兼容；新增 `tests/routes/test_broadcast_service_convergence.py` 11 项契约测试；A2A 路径未触                                                                                  |
-| 10    | `WALLET_RATE_LIMIT` 何时从代码常量升格为 `Settings` 字段                 | ✅ **已决（Group C）**：Phase 2 不升格——manifest mode 上线时同步加埋点 `acn_rate_limit_hits_total{bucket,result}`，1~2 周采数后任一条件成立（P95 接近上限 / 运维需热调参 / Phase 3 多 plan）即升格为 `Settings.wallet_rate_limit`；Phase 3 启动前必须升格                                                                                    |
+| #     | 议题                                                           | 倾向方案 / 已决方案                                                                                                                                                                                                                                                                                                                                     |
+| ----- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Notify 路径一的 `summary` 由谁产出？                                  | ✅ **已决（Group B）**：发送方传 `summary?: str(0..200)`（超长 422），未传则 `content[:200]+"…"` 截断兜底；文档明确"截断是兜底丑陋的"，鼓励发送方传；埋点 `acn_manifest_summary_provided_total`，3 个月后回看 N 调整                                                                                                                                                                                 |
+| 2     | manifest 通知队列 TTL 清理机制                                       | ✅ **已决（Group B）**：Redis 原生 TTL（`PEXPIREAT`），TTL 范围 `300..86400` 缺省 86400；**Cluster 必用 hash tag** `acn:manifest:{<agent_id>}` / `acn:content:{<agent_id>}:<mid>` 让 ZSET / 详情 hash / content 三 key 落同 slot；MULTI 同 deadline 写入；PG 镜像后台清理延后到 Phase 3                                                                                               |
+| 3     | allowlist 存储结构                                               | ✅ **已决（Group B）**：PG `agent_allowlist(owner_id, target_id)` + `INDEX(target_id)` 持久化；Redis SET `acn:allowlist:{<owner_id>}` cache TTL **30 秒**；写路径 PG 事务 → Redis SADD/SREM 同步；容量 **500 条**；3 个 owner-only API（GET/POST/DELETE），**砍 incoming 反查 API**（隐私语义）                                                                                      |
+| 3-bis | mode 切换迁移语义                                                  | ✅ **已决（Group B）**：`PATCH /policy` 入 PG 事务 + 立即 invalidate Redis cache；已落 inbox / manifest queue 老消息**保留**；在途消息以 ACN 收到 send 请求时刻的 policy 为准（请求级快照，不引分布式锁）；mode 切换写 `POLICY_CHANGED` 审计 + 切到 `closed`/`manifest` 触发 logger.warning                                                                                                               |
+| 4     | inbox 与 manifest 通知队列的关系                                     | ✅ **已决（Group A）**：完全独立两套存储 + 独立 API 入口；`acn:inbox:{id}` / `acn:manifest:{id}` / `acn:content:{mid}` 三 namespace；`/communication/inbox/`* 与 `/communication/manifest/`* 平级；最小骨架原型先行                                                                                                                                                              |
+| 5     | Subnet 内通信是否绕过 `communication_policy`？                       | ✅ **已决（Group A）**：不绕过（沿用 Phase 1 `SubnetManager` re-fetch policy）；Phase 2 通过 `allowlist` 联动让 subnet 成员自动互相在白名单中                                                                                                                                                                                                                                 |
+| 6     | Internal Token 调用是否绕过 policy？                                | ✅ **已决（Group A）**：绕过 policy + 强制写 audit；豁免严格限定 `system:<slug>`，`assert_system_caller` 把关；audit 必带 `actor_type="system"`                                                                                                                                                                                                                         |
+| 7     | WebSocket 实时投递在 manifest 模式下推什么？                             | ✅ **已决（Group B）**：新 WS event `manifest_notification`，payload `{mid, sender, summary, ts, expires_at}`，**不带 content**；manifest queue 用 ZSET（score=expires_at）+ 详情 hash 双 key 结构（倒灌补 #4 数据结构）；离线补推 `?since=<ts>` 增量；mode 切换到 manifest/allowlist 返回 `X-ACN-SDK-Min-Version` warning header                                                         |
+| 8     | A2A 协议入口 `from_agent` 是否要强校验？                                | ✅ **已决（Group A）**：Phase 2 强校验。`/a2a/jsonrpc` 加 `verify_a2a_caller` dep（仿 `verify_proxy_caller` 用 `X-ACN-Authorization`）；`from_agent` 必填 + 与 caller 真实 agent_id 严格相等，否则 `TaskState.rejected` + `from_agent_mismatch`；30 天 SDK warning 过渡期                                                                                                        |
+| 9     | `BroadcastService` 与 `MessageService.broadcast_message` 双轨清理 | ✅ **已完成（Group C）**：HTTP `/communication/broadcast` 与 `/broadcast-by-tag` 改走 `BroadcastService.broadcast`（新统一入口，集中处理 sender 校验 / target 解析 / sender 过滤）；删 `MessageService.broadcast_message` + strategy 死字段；HTTP 响应顶层暴露 `broadcast_id`，`responses[]` 旧形状通过 adapter 保兼容；新增 `tests/routes/test_broadcast_service_convergence.py` 11 项契约测试；A2A 路径未触 |
+| 10    | `WALLET_RATE_LIMIT` 何时从代码常量升格为 `Settings` 字段                 | ✅ **已决（Group C）**：Phase 2 不升格——manifest mode 上线时同步加埋点 `acn_rate_limit_hits_total{bucket,result}`，1~2 周采数后任一条件成立（P95 接近上限 / 运维需热调参 / Phase 3 多 plan）即升格为 `Settings.wallet_rate_limit`；Phase 3 启动前必须升格                                                                                                                                            |
 
 
 ### Phase 3 待决策

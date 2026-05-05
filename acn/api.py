@@ -292,6 +292,25 @@ async def lifespan(app: FastAPI):
         max_connections=settings.max_websocket_connections,
     )
 
+    # Phase 3 attention_fee: hoist the escrow client before the
+    # manifest dispatcher so the dispatcher can take an escrow
+    # provider handle (used by the lock branch of dispatch). Tests
+    # that disable ESCROW_ENABLED still get a dispatcher — it just
+    # raises AttentionFeeLockError if any caller actually attaches
+    # a fee, which is the correct behaviour.
+    if settings.escrow_enabled:
+        escrow_client_instance: AgentPlanetEscrowProvider | None = AgentPlanetEscrowProvider(
+            backend_url=settings.backend_url,
+            internal_token=settings.internal_api_token,
+        )
+    else:
+        escrow_client_instance = None
+        logger.warning(
+            "escrow_disabled",
+            escrow_enabled=False,
+            reason="ESCROW_ENABLED=false — tasks will run without payment settlement",
+        )
+
     # Phase 2 PR #1 review fix (P0-A1): single ManifestDispatcher
     # shared by both the HTTP/A2A path (MessageRouter) and the
     # subnet WebSocket path (SubnetManager). Centralising here keeps
@@ -304,6 +323,7 @@ async def lifespan(app: FastAPI):
         manifest_service=manifest_service_instance,
         ws_manager=ws_manager_instance,
         metrics=metrics_instance,
+        escrow_provider=escrow_client_instance,
     )
 
     # Phase 2 PR #2: AllowlistService — dual-layer (PG + Redis).
@@ -434,20 +454,11 @@ async def lifespan(app: FastAPI):
         subnet_repo=subnet_repository,
     )
 
-    # Initialize Escrow Client (for Labs task budget management)
-    # When ESCROW_ENABLED=false, tasks still work but payment settlement is skipped.
-    if settings.escrow_enabled:
-        escrow_client_instance: AgentPlanetEscrowProvider | None = AgentPlanetEscrowProvider(
-            backend_url=settings.backend_url,
-            internal_token=settings.internal_api_token,
-        )
-    else:
-        escrow_client_instance = None
-        logger.warning(
-            "escrow_disabled",
-            escrow_enabled=False,
-            reason="ESCROW_ENABLED=false — tasks will run without payment settlement",
-        )
+    # Escrow client was hoisted to the manifest_dispatcher block
+    # above so attention_fee can lock funds before the manifest
+    # entry is written. ``escrow_client_instance`` is bound there
+    # — reused below for task budget management without
+    # constructing a second client.
 
     # Initialize Task Pool and Service (task_repository already set above)
     task_pool_instance = TaskPool(task_repository)
@@ -487,6 +498,7 @@ async def lifespan(app: FastAPI):
         policy_service=policy_service_instance,
         manifest_service=manifest_service_instance,
         allowlist_service=allowlist_service_instance,
+        escrow_provider=escrow_client_instance,
     )
 
     # Phase 1 wiring guard
