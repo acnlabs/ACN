@@ -279,6 +279,7 @@ class ErrorCode(StrEnum):
     OWNERSHIP_MISMATCH = "ownership_mismatch"
     NOT_SUBNET_MEMBER = "not_subnet_member"
     INVALID_REQUEST = "invalid_request"
+    VALIDATION_FAILED = "validation_failed"
 
     # ===== 5xx fallback (sanitised handler chain) =====
     INTERNAL_SERVER_ERROR = "internal_server_error"
@@ -404,6 +405,9 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.INVALID_REQUEST: (
         "The request contains invalid data."
+    ),
+    ErrorCode.VALIDATION_FAILED: (
+        "Request validation failed."
     ),
     ErrorCode.INSUFFICIENT_BALANCE: (
         "The requested operation cannot be completed due to insufficient balance."

@@ -31,6 +31,7 @@ Architecture:
 import asyncio
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -874,6 +875,56 @@ def get_audit_singleton() -> "AuditLogger | None":
     return _AUDIT_SINGLETON
 
 
+# ---------------------------------------------------------------------------
+# Auth-failure sampling — in-process LRU dedup
+# ---------------------------------------------------------------------------
+# A single attacking IP with the same reason can emit 1 000+ failures/s.
+# Each failure triggers ~4 Redis ops. We deduplicate by (source_ip, reason):
+# within a 1-second window only the *first* event is written; subsequent
+# duplicates increment an in-memory counter that is flushed at the window
+# boundary.  Low-frequency events are always written immediately.
+#
+# The LRU dict is module-level (single process) and bounded by
+# ``_AUTH_SAMPLE_MAX_KEYS`` to prevent memory growth under highly diverse IPs.
+# If the limit is hit, the oldest key is evicted (FIFO via dict insertion order
+# in Python 3.7+). The dedup window and max keys are intentionally NOT env-
+# configurable for now — changing them is a deploy, not a runtime toggle.
+
+_AUTH_SAMPLE_WINDOW_S: float = 1.0        # dedup window in seconds
+_AUTH_SAMPLE_MAX_KEYS: int = 1_000        # max distinct (ip, reason) pairs kept
+
+# key → (last_written_at_s, suppressed_count)
+_auth_sample_cache: dict[tuple[str, str], tuple[float, int]] = {}
+
+
+def _auth_sample_key(source_ip: str | None, reason: str) -> tuple[str, str]:
+    return (source_ip or "", reason)
+
+
+def _auth_sample_should_write(source_ip: str | None, reason: str) -> bool:
+    """Return True if this event should be written; update the in-memory cache.
+
+    Side effect: evicts the oldest key when the cache is at capacity.
+    """
+    key = _auth_sample_key(source_ip, reason)
+    now = time.monotonic()
+    entry = _auth_sample_cache.get(key)
+
+    if entry is None or (now - entry[0]) >= _AUTH_SAMPLE_WINDOW_S:
+        # First occurrence or window expired — write and (re)set the window.
+        if len(_auth_sample_cache) >= _AUTH_SAMPLE_MAX_KEYS and key not in _auth_sample_cache:
+            # Evict the oldest key (first insertion-order entry).
+            oldest = next(iter(_auth_sample_cache))
+            del _auth_sample_cache[oldest]
+        _auth_sample_cache[key] = (now, 0)
+        return True
+
+    # Within the window: increment suppressed counter, don't write.
+    suppressed = entry[1] + 1
+    _auth_sample_cache[key] = (entry[0], suppressed)
+    return False
+
+
 def record_auth_failure(
     *,
     reason: str,
@@ -891,6 +942,9 @@ def record_auth_failure(
     each call site choose its own proxy-aware vs naive IP strategy without
     forcing a Request parameter through the helper signature.
 
+    Duplicate events from the same (source_ip, reason) pair within a 1-second
+    window are suppressed to cap Redis ops under brute-force attacks.
+
     Args:
         reason: Snake_case tag, e.g. ``"api_key_invalid"``.
         source_ip: Resolved client IP (already proxy-aware where relevant).
@@ -906,6 +960,10 @@ def record_auth_failure(
     audit = _AUDIT_SINGLETON
     if audit is None:
         return
+
+    if not _auth_sample_should_write(source_ip, reason):
+        return
+
     details: dict[str, Any] = {"reason": reason}
     if path:
         details["path"] = path

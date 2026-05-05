@@ -1773,12 +1773,21 @@ async def admin_bulk_delete_agents(
     agent_service: AgentServiceDep = None,
     name_prefix: str | None = None,
     owner: str | None = None,
+    agent_ids: str | None = None,
     dry_run: bool = True,
 ):
-    """Admin: bulk delete agents by name prefix or owner (requires X-Internal-Token).
+    """Admin: bulk delete agents by name prefix, owner, or explicit ID list
+    (requires X-Internal-Token).
 
     Use dry_run=true (default) to preview which agents would be deleted.
     Set dry_run=false to actually delete.
+
+    Filter parameters (at least one required when dry_run=false):
+      - ``name_prefix``: delete all agents whose name starts with this prefix.
+      - ``owner``: delete all agents belonging to this owner.
+      - ``agent_ids``: comma-separated list of exact agent IDs to delete
+        (e.g. ``agent_ids=acn_abc123,acn_def456``). Takes precedence over
+        ``name_prefix`` / ``owner`` when all three are supplied together.
 
     Audit (security audit H-audit):
       - Each successful delete writes an ``AGENT_UNREGISTERED`` audit event
@@ -1794,40 +1803,71 @@ async def admin_bulk_delete_agents(
         than the request taking a few extra ms.
 
     Safety guard (security audit H-audit follow-up):
-      ``dry_run=False`` requires at least one of ``name_prefix`` / ``owner``.
-      Without a filter the loop would target every registered agent — the
-      INTERNAL_API_TOKEN gate is the only thing standing between an operator
-      typo and a full-table wipe. The guard is intentionally NOT applied to
-      ``dry_run=True`` so operators can preview the full population before
-      choosing a filter.
+      ``dry_run=False`` requires at least one of ``name_prefix`` / ``owner`` /
+      ``agent_ids``. Without a filter the loop would target every registered
+      agent — the INTERNAL_API_TOKEN gate is the only thing standing between
+      an operator typo and a full-table wipe. The guard is intentionally NOT
+      applied to ``dry_run=True`` so operators can preview the full population
+      before choosing a filter.
     """
-    if not dry_run and not name_prefix and not owner:
+    parsed_agent_ids: list[str] | None = None
+    if agent_ids is not None:
+        parsed_agent_ids = [aid.strip() for aid in agent_ids.split(",") if aid.strip()]
+        if not parsed_agent_ids:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                400,
+                message="agent_ids must be a non-empty comma-separated list of agent IDs.",
+                details={"reason": "bulk_delete_filter_required"},
+            )
+
+    if not dry_run and not name_prefix and not owner and parsed_agent_ids is None:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
             message=(
                 "Refusing to bulk-delete without a filter. "
-                "Pass name_prefix or owner explicitly. "
+                "Pass name_prefix, owner, or agent_ids explicitly. "
                 "Use dry_run=true to preview filterless results."
             ),
             details={"reason": "bulk_delete_filter_required"},
         )
 
-    agents = await agent_service.search_agents(tags=None, status="all")
+    # agent_ids exact-match path — skip the full population scan
+    if parsed_agent_ids is not None:
+        from ..core.models import Agent
 
-    # Apply filters
-    targets = agents
-    if name_prefix:
-        targets = [a for a in targets if a.name.startswith(name_prefix)]
-    if owner is not None:
-        targets = [a for a in targets if (a.owner or "unowned") == owner]
+        async def _fetch_by_id(aid: str) -> "Agent | None":
+            try:
+                return await agent_service.get_agent(aid)
+            except Exception:
+                return None
+
+        fetched = [(aid, await _fetch_by_id(aid)) for aid in parsed_agent_ids]
+        targets = [a for _, a in fetched if a is not None]
+        missing = [aid for aid, a in fetched if a is None]
+        if missing:
+            logger.warning("admin_bulk_delete_ids_not_found", missing=missing)
+    else:
+        agents = await agent_service.search_agents(tags=None, status="all")
+
+        # Apply fuzzy filters
+        targets = agents
+        if name_prefix:
+            targets = [a for a in targets if a.name.startswith(name_prefix)]
+        if owner is not None:
+            targets = [a for a in targets if (a.owner or "unowned") == owner]
+        missing = []
 
     if dry_run:
-        return {
+        result: dict = {
             "dry_run": True,
             "would_delete": len(targets),
             "agents": [{"agent_id": a.agent_id, "name": a.name, "owner": a.owner} for a in targets],
         }
+        if parsed_agent_ids is not None and missing:
+            result["not_found"] = missing
+        return result
 
     audit = get_audit_singleton()
     source_ip = request.client.host if request.client else None
@@ -1892,6 +1932,7 @@ async def admin_bulk_delete_agents(
                 details={
                     "name_prefix": name_prefix,
                     "owner": owner,
+                    "agent_ids": parsed_agent_ids,
                     "matched": len(targets),
                     "deleted": len(deleted),
                     "failed": len(failed),

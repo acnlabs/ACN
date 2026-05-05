@@ -32,6 +32,7 @@ from a2a.compat.v0_3.types import (  # type: ignore[import-untyped]
     SecurityScheme as A2ASecurityScheme,
 )
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from slowapi import _rate_limit_exceeded_handler  # type: ignore[import-untyped]
@@ -928,6 +929,35 @@ async def _acn_http_error_handler(
         },
         headers=response_headers,
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Translate Pydantic ``RequestValidationError`` (422) into the flat ACN schema.
+
+    FastAPI's default 422 body is ``{"detail": [{"loc": [...], "msg": "...",
+    "type": "..."}]}``, which does not match the ``{error_code, message,
+    details, request_id}`` shape used by all migrated routes. This handler
+    replaces it while preserving the full Pydantic error list under
+    ``details.pydantic_errors`` so SDK clients that need location-precise
+    messages can still access them.
+    """
+    from .core.errors import ErrorCode
+
+    request_id = _new_request_id(request)
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error_code": ErrorCode.VALIDATION_FAILED.value,
+            "message": "Request validation failed.",
+            "details": {"pydantic_errors": exc.errors()},
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
+
 
 # CORS
 app.add_middleware(

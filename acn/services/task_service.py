@@ -520,11 +520,25 @@ class TaskService:
         if task.assignee_id != agent_id:
             raise PermissionError("Only the assigned solver can submit")
 
+        # Snapshot the pre-transition status for the CAS below.
+        # Two concurrent submits can both pass the assignee check, both call
+        # task.submit() / task.resubmit(), and both reach the escrow call,
+        # double-triggering submit_v2. CAS lets only one winner through.
+        expected_status = task.status
+
         if task.status == TaskStatus.REJECTED:
             task.resubmit(submission, artifacts)
         else:
             task.submit(submission, artifacts)
-        await self.repository.save(task)
+
+        won = await self.repository.compare_and_save(task, expected_status=expected_status)
+        if not won:
+            logger.info(
+                "submit_task_lost_race",
+                task_id=task_id,
+                agent_id=agent_id,
+            )
+            return await self.get_task(task_id)
 
         # Sync escrow status
         if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
