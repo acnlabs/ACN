@@ -10,12 +10,13 @@ import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi import Request as _Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..auth.middleware import require_permission, verify_token
 from ..config import get_settings
 from ..core.entities import TaskStatus
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
+from ..core.validators import check_dict_size_64k
 from ..services import TaskNotFoundException, TaskService
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
@@ -274,6 +275,18 @@ class TaskCreateRequest(BaseModel):
 
     # ── Extension ─────────────────────────────────────────
     metadata: dict = Field(default_factory=dict, description="Extensible metadata (escrow_config, webhook, etc.)")
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_size(cls, v: dict) -> dict:
+        return check_dict_size_64k("metadata", v)
+
+    @field_validator("ui_spec")
+    @classmethod
+    def _ui_spec_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        return check_dict_size_64k("ui_spec", v)
 
     @model_validator(mode="after")
     def validate_budget_rules(self) -> "TaskCreateRequest":

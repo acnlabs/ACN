@@ -36,6 +36,7 @@ from ..auth.middleware import require_permission, verify_token
 from ..config import Settings, get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
+from ..core.validators import check_dict_size_64k
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from ..monitoring import AuditEventType, AuditLevel, fire_and_forget_event, get_audit_singleton
 from ..security import SSRFViolation, safe_resolve_target, validate_endpoint_url
@@ -127,11 +128,14 @@ class AgentJoinRequest(BaseModel):
         ),
     )
     referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
-    # `agent_card` is a structured A2A Agent Card; total payload size is
-    # bounded by BodySizeLimitMiddleware (security audit H6) — we don't
-    # impose a Pydantic-level dict cap here because the A2A schema itself
-    # already constrains shape.
     agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
+
+    @field_validator("agent_card")
+    @classmethod
+    def _agent_card_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        return check_dict_size_64k("agent_card", v)
 
     @field_validator("name")
     @classmethod

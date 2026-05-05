@@ -674,6 +674,33 @@ async def lifespan(app: FastAPI):
 
     sweeper_task = asyncio.create_task(_payment_sweeper())
 
+    # Background worker: refund locked attention_fee escrows whose
+    # manifest TTL has expired without an ack or recipient-delete.
+    # Runs every 5 minutes; the first run is intentionally delayed
+    # the same interval so startup doesn't collide with a deploy that
+    # just restarted mid-scan.
+    _refund_worker_task: asyncio.Task[None] | None = None
+    if escrow_client_instance is not None:
+        from acn.services.manifest_ttl_refund_worker import run_once as _run_refund_once
+
+        async def _manifest_ttl_refund_worker():
+            while True:
+                await asyncio.sleep(300)
+                try:
+                    counts = await _run_refund_once(
+                        registry_instance.redis,
+                        escrow_client_instance,
+                    )
+                    if counts["refunded"] or counts["errors"]:
+                        logger.info(
+                            "manifest_ttl_refund_worker_ran",
+                            **counts,
+                        )
+                except Exception as e:
+                    logger.error("manifest_ttl_refund_worker_error", error=str(e))
+
+        _refund_worker_task = asyncio.create_task(_manifest_ttl_refund_worker())
+
     yield
 
     # Cleanup. Order matters:
@@ -689,6 +716,8 @@ async def lifespan(app: FastAPI):
     #   6. Dispose PG engine last (it's the outermost resource).
     watchdog_task.cancel()
     sweeper_task.cancel()
+    if _refund_worker_task is not None:
+        _refund_worker_task.cancel()
     logger.info("acn_stopping")
     try:
         await ws_manager_instance.stop()

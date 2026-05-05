@@ -92,7 +92,12 @@ def upgrade() -> None:
         sa.Column("cancelled_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("participation_id"),
-        sa.ForeignKeyConstraint(["task_id"], ["tasks.task_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["task_id"],
+            ["tasks.task_id"],
+            ondelete="CASCADE",
+            name="participations_task_id_fkey",
+        ),
     )
     op.create_index("ix_participations_task_id", "participations", ["task_id"])
     op.create_index("ix_participations_participant_id", "participations", ["participant_id"])

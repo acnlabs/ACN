@@ -8,10 +8,11 @@ import uuid
 import structlog  # type: ignore[import-untyped]
 from a2a.compat.v0_3.types import Message, TextPart  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
+from ..core.validators import check_dict_size_256k
 from ..infrastructure.messaging.broadcast_service import (
     BroadcastResult,
     BroadcastStrategy,
@@ -210,11 +211,11 @@ class AttentionFee(BaseModel):
 class SendMessageRequest(BaseModel):
     from_agent: str = Field(..., max_length=128)
     target_agent: str = Field(..., max_length=128)
-    # `message` is an A2A Message envelope; its size is bounded by the
-    # global BodySizeLimitMiddleware (security audit H6) — we don't enforce a
-    # Pydantic-level dict cap because per-key length policing here would
-    # double-count the body cap and only trade attack surface for false
-    # negatives.
+    # `message` is an A2A Message envelope. H6 body cap (1 MiB) guards
+    # the whole request; this per-field 256 KB cap prevents a single
+    # message from occupying the entire body budget, leaving room for
+    # metadata fields and ensuring inbox-capacity reasoning is simpler
+    # (100 messages × 256 KB = 25 MB cap per agent vs 100 × 1 MB = 100 MB).
     message: dict
     priority: str = Field(default="normal", max_length=32)
     # Optional Phase 3 economic-model field. Absence preserves the
@@ -222,20 +223,35 @@ class SendMessageRequest(BaseModel):
     # before the manifest entry is written.
     attention_fee: AttentionFee | None = None
 
+    @field_validator("message")
+    @classmethod
+    def _message_size(cls, v: dict) -> dict:
+        return check_dict_size_256k("message", v)
+
 
 class BroadcastRequest(BaseModel):
     from_agent: str = Field(..., max_length=128)
-    message: dict  # bounded by BodySizeLimitMiddleware (H6)
+    message: dict
     strategy: str = Field(default="parallel", max_length=32)
     target_subnet: str | None = Field(default=None, max_length=128)
     target_tags: list[str] | None = Field(default=None, max_length=50)
+
+    @field_validator("message")
+    @classmethod
+    def _message_size(cls, v: dict) -> dict:
+        return check_dict_size_256k("message", v)
 
 
 class BroadcastByTagRequest(BaseModel):
     from_agent: str = Field(..., max_length=128)
     tags: list[str] = Field(..., max_length=50)
-    message: dict  # bounded by BodySizeLimitMiddleware (H6)
+    message: dict
     limit: int | None = Field(default=None, ge=1, le=10_000)
+
+    @field_validator("message")
+    @classmethod
+    def _message_size(cls, v: dict) -> dict:
+        return check_dict_size_256k("message", v)
 
 
 @router.post("/send")

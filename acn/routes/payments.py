@@ -2,9 +2,10 @@
 
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
+from ..core.validators import check_dict_size_64k
 from ..protocols.ap2 import (
     CREDITS_PER_USD,
     NETWORK_FEE_RATE,
@@ -50,6 +51,13 @@ class PaymentCapabilityRequest(BaseModel):
     api_endpoint: str | None = Field(default=None, max_length=500)
     webhook_url: str | None = Field(default=None, max_length=500)
 
+    @field_validator("token_pricing")
+    @classmethod
+    def _token_pricing_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        return check_dict_size_64k("token_pricing", v)
+
 
 class CreatePaymentTaskRequest(BaseModel):
     from_agent: str = Field(..., max_length=128)
@@ -59,7 +67,14 @@ class CreatePaymentTaskRequest(BaseModel):
     payment_method: SupportedPaymentMethod
     network: SupportedNetwork
     description: str | None = Field(default=None, max_length=2_000)
-    metadata: dict | None = None  # bounded by BodySizeLimitMiddleware (H6)
+    metadata: dict | None = None
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        return check_dict_size_64k("metadata", v)
 
 
 # =============================================================================

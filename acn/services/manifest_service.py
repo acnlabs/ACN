@@ -121,6 +121,12 @@ class ManifestEntry:
     # ``extra``) so HSETNX can guarantee single-write semantics on
     # the ack hot path.
     acked_at_ms: int | None = None
+    # Wall-clock expiry in ms (epoch). Stored in the detail HASH at
+    # write time so the TTL refund worker can compare ``now >
+    # expires_at_ms`` without a separate Redis TTL command per entry.
+    # ``None`` for entries written before Phase 3 (legacy rows); the
+    # worker treats ``None`` as "cannot determine expiry, skip".
+    expires_at_ms: int | None = None
 
 
 def _zset_key(owner_id: str) -> str:
@@ -252,6 +258,7 @@ class ManifestService:
         # ``mid`` would still let an attacker probe for entries by
         # bruteforcing the path). 32 hex chars is plenty.
         mid = uuid4().hex
+        expires_at_ms = ts_ms + ttl * 1000
 
         detail = {
             "mid": mid,
@@ -259,6 +266,10 @@ class ManifestService:
             "summary": clipped,
             "ts": ts_ms,
             "content_size": size,
+            # Wall-clock expiry written eagerly so the TTL refund
+            # worker can compare ``now > expires_at_ms`` with a
+            # plain HGETALL, without a separate TTL round-trip.
+            "expires_at": expires_at_ms,
         }
         if extra:
             # Stored as a single JSON blob to preserve nested types
@@ -310,6 +321,7 @@ class ManifestService:
             ts_ms=ts_ms,
             content_size=size,
             extra=extra or {},
+            expires_at_ms=expires_at_ms,
         )
 
     async def read_since(
@@ -617,6 +629,19 @@ def _decode_entry(mid: str, raw: dict[Any, Any]) -> ManifestEntry:
         except ValueError:
             acked_at_ms = None
 
+    # ``expires_at`` is only present on entries written after Phase 3.
+    # Legacy rows (written before this field was added) return None —
+    # the TTL refund worker skips those entries gracefully.
+    expires_at_raw = decoded.get("expires_at")
+    expires_at_ms: int | None
+    if expires_at_raw is None or expires_at_raw == "":
+        expires_at_ms = None
+    else:
+        try:
+            expires_at_ms = int(expires_at_raw)
+        except ValueError:
+            expires_at_ms = None
+
     return ManifestEntry(
         mid=decoded.get("mid", mid),
         sender_id=decoded.get("sender_id", ""),
@@ -625,4 +650,5 @@ def _decode_entry(mid: str, raw: dict[Any, Any]) -> ManifestEntry:
         content_size=content_size,
         extra=extra,
         acked_at_ms=acked_at_ms,
+        expires_at_ms=expires_at_ms,
     )
