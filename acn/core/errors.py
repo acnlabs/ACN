@@ -183,6 +183,11 @@ class ErrorCode(StrEnum):
     #   ``acked_at`` is left unset so the recipient can retry.
     ATTENTION_FEE_INVALID = "attention_fee_invalid"
     ATTENTION_FEE_REQUIRES_MANIFEST_MODE = "attention_fee_requires_manifest_mode"
+    # ``content_url`` supplied but recipient policy routes to inbox or
+    # rejection. The full ``message`` payload would be stored on ACN in
+    # those modes, defeating the self-hosted contract. Return loudly so
+    # the sender knows ACN did *not* skip payload storage.
+    CONTENT_URL_REQUIRES_MANIFEST_MODE = "content_url_requires_manifest_mode"
     ATTENTION_FEE_LOCK_FAILED = "attention_fee_lock_failed"
     ATTENTION_FEE_NOT_LOCKED = "attention_fee_not_locked"
     ATTENTION_FEE_ALREADY_ACKED = "attention_fee_already_acked"
@@ -342,6 +347,12 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
         "attention_fee is only honoured when the recipient is in manifest "
         "or allowlist mode. Drop the fee or wait for the recipient to "
         "switch modes."
+    ),
+    ErrorCode.CONTENT_URL_REQUIRES_MANIFEST_MODE: (
+        "content_url is only valid when the recipient is in manifest mode. "
+        "In inbox/open mode the full message payload is stored on ACN, "
+        "defeating the self-hosted contract. Drop content_url or wait for "
+        "the recipient to switch to manifest mode."
     ),
     ErrorCode.ATTENTION_FEE_LOCK_FAILED: (
         "The attention_fee could not be locked in escrow. Check the "

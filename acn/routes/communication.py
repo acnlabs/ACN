@@ -18,7 +18,10 @@ from ..infrastructure.messaging.broadcast_service import (
     BroadcastStrategy,
 )
 from ..infrastructure.messaging.manifest_dispatcher import AttentionFeeLockError
-from ..infrastructure.messaging.message_router import AttentionFeeWrongModeError
+from ..infrastructure.messaging.message_router import (
+    AttentionFeeWrongModeError,
+    ContentUrlWrongModeError,
+)
 from ..monitoring.audit import AuditEventType
 from .dependencies import (  # type: ignore[import-untyped]
     WALLET_RATE_LIMIT,
@@ -394,6 +397,26 @@ async def send_message(
         )
         raise ACNHTTPError(
             ErrorCode.ATTENTION_FEE_REQUIRES_MANIFEST_MODE,
+            400,
+            details={
+                "recipient_id": e.recipient_id,
+                "actual_route": e.actual_route,
+            },
+        ) from e
+
+    except ContentUrlWrongModeError as e:
+        # Sender supplied content_url but the recipient's policy routes
+        # to inbox/rejection. In those modes ACN would store the full
+        # message payload, defeating the self-hosted contract. Return 4xx
+        # so the sender knows no payload storage was skipped.
+        logger.info(
+            "content_url_wrong_mode",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            actual_route=e.actual_route,
+        )
+        raise ACNHTTPError(
+            ErrorCode.CONTENT_URL_REQUIRES_MANIFEST_MODE,
             400,
             details={
                 "recipient_id": e.recipient_id,

@@ -67,6 +67,27 @@ class AttentionFeeWrongModeError(Exception):
         self.recipient_id = recipient_id
         self.actual_route = actual_route
 
+
+class ContentUrlWrongModeError(Exception):
+    """Raised by ``MessageRouter.route`` when ``content_url`` was
+    supplied but the policy decision routes to inbox / rejection.
+
+    ``content_url`` is only meaningful for the manifest flow: in
+    open/inbox mode ACN stores the full ``message`` payload in Redis,
+    which defeats the self-hosted contract ("ACN never touches my
+    content"). We surface this as a hard 4xx so the sender knows
+    ACN did *not* skip payload storage, rather than silently ignoring
+    the field.
+    """
+
+    def __init__(self, *, recipient_id: str, actual_route: str) -> None:
+        super().__init__(
+            f"content_url requires manifest mode; "
+            f"recipient {recipient_id!r} routes to {actual_route!r}"
+        )
+        self.recipient_id = recipient_id
+        self.actual_route = actual_route
+
 # ``PolicyCheckService`` is only referenced for type hints; importing
 # the submodule directly (rather than ``from ...services import ...``)
 # avoids triggering ``services/__init__.py`` during this module's
@@ -406,12 +427,18 @@ class MessageRouter:
                     content_url=content_url,
                     content_hash=content_hash,
                 )
-            # attention_fee is meaningless when the message is going
-            # to inbox or being rejected outright — surface a hard
-            # error so the sender knows their funds were *not*
-            # locked rather than silently discarding the field.
+            # attention_fee and content_url are both only meaningful
+            # when the message enters the manifest flow. In inbox /
+            # rejection mode the full message payload is stored / dropped
+            # on ACN, so surfacing a hard error lets the sender know their
+            # intent was not honoured rather than silently discarding it.
             if attention_fee is not None:
                 raise AttentionFeeWrongModeError(
+                    recipient_id=to_agent,
+                    actual_route=decision.route_to or "inbox",
+                )
+            if content_url is not None:
+                raise ContentUrlWrongModeError(
                     recipient_id=to_agent,
                     actual_route=decision.route_to or "inbox",
                 )
