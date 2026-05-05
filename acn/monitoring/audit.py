@@ -893,8 +893,8 @@ def get_audit_singleton() -> "AuditLogger | None":
 _AUTH_SAMPLE_WINDOW_S: float = 1.0        # dedup window in seconds
 _AUTH_SAMPLE_MAX_KEYS: int = 1_000        # max distinct (ip, reason) pairs kept
 
-# key → (last_written_at_s, suppressed_count)
-_auth_sample_cache: dict[tuple[str, str], tuple[float, int]] = {}
+# key → last_written_at_s (monotonic clock)
+_auth_sample_cache: dict[tuple[str, str], float] = {}
 
 
 def _auth_sample_key(source_ip: str | None, reason: str) -> tuple[str, str]:
@@ -908,20 +908,18 @@ def _auth_sample_should_write(source_ip: str | None, reason: str) -> bool:
     """
     key = _auth_sample_key(source_ip, reason)
     now = time.monotonic()
-    entry = _auth_sample_cache.get(key)
+    last = _auth_sample_cache.get(key)
 
-    if entry is None or (now - entry[0]) >= _AUTH_SAMPLE_WINDOW_S:
+    if last is None or (now - last) >= _AUTH_SAMPLE_WINDOW_S:
         # First occurrence or window expired — write and (re)set the window.
         if len(_auth_sample_cache) >= _AUTH_SAMPLE_MAX_KEYS and key not in _auth_sample_cache:
             # Evict the oldest key (first insertion-order entry).
             oldest = next(iter(_auth_sample_cache))
             del _auth_sample_cache[oldest]
-        _auth_sample_cache[key] = (now, 0)
+        _auth_sample_cache[key] = now
         return True
 
-    # Within the window: increment suppressed counter, don't write.
-    suppressed = entry[1] + 1
-    _auth_sample_cache[key] = (entry[0], suppressed)
+    # Within the dedup window — suppress this duplicate.
     return False
 
 

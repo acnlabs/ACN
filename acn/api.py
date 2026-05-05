@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import get_settings
-from .core.errors import ACNHTTPError
+from .core.errors import ACNHTTPError, ErrorCode
 from .infrastructure.messaging import (
     BroadcastService,
     ManifestDispatcher,
@@ -944,8 +944,6 @@ async def _request_validation_error_handler(
     ``details.pydantic_errors`` so SDK clients that need location-precise
     messages can still access them.
     """
-    from .core.errors import ErrorCode
-
     request_id = _new_request_id(request)
     return JSONResponse(
         status_code=422,

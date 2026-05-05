@@ -1835,9 +1835,7 @@ async def admin_bulk_delete_agents(
 
     # agent_ids exact-match path — skip the full population scan
     if parsed_agent_ids is not None:
-        from ..core.models import Agent
-
-        async def _fetch_by_id(aid: str) -> "Agent | None":
+        async def _fetch_by_id(aid: str):
             try:
                 return await agent_service.get_agent(aid)
             except Exception:
