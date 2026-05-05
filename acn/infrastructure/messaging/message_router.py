@@ -308,6 +308,8 @@ class MessageRouter:
         message: Message,
         *,
         attention_fee: dict[str, Any] | None = None,
+        content_url: str | None = None,
+        content_hash: str | None = None,
     ) -> Any:
         """
         Route an A2A message to a specific agent
@@ -401,6 +403,8 @@ class MessageRouter:
                     to_agent=to_agent,
                     message=message,
                     attention_fee=attention_fee,
+                    content_url=content_url,
+                    content_hash=content_hash,
                 )
             # attention_fee is meaningless when the message is going
             # to inbox or being rejected outright — surface a hard
@@ -834,6 +838,8 @@ class MessageRouter:
         to_agent: str,
         message: Message,
         attention_fee: dict[str, Any] | None = None,
+        content_url: str | None = None,
+        content_hash: str | None = None,
     ) -> dict[str, Any]:
         """Phase 2 PR #1: divert inbound message into manifest queue.
 
@@ -872,6 +878,8 @@ class MessageRouter:
             path="router",
             route_id=route_id,
             attention_fee=attention_fee,
+            content_url=content_url,
+            content_hash=content_hash,
         )
         # P1-B2 review fix: keep ``status="sent"`` so existing SDK
         # clients that branch on ``result["status"] == "sent"``
@@ -886,10 +894,10 @@ class MessageRouter:
             "mid": entry.mid,
             "ts": entry.ts_ms,
         }
-        # Surface the locked escrow id back to the sender so they can
-        # track / reconcile / cancel the lock without depending on a
-        # follow-up read of the manifest entry. ``acked_at`` /
-        # ``release`` happen on the recipient side.
+        if entry.content_url:
+            response["content_url"] = entry.content_url
+            if entry.content_hash:
+                response["content_hash"] = entry.content_hash
         attn = entry.extra.get("attention_fee") if entry.extra else None
         if isinstance(attn, dict) and attn.get("escrow_id"):
             response["attention_fee"] = {

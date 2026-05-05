@@ -200,16 +200,19 @@ class AgentJoinRequest(BaseModel):
         default=None,
         description="Token-based pricing, e.g. {'input_price_per_million': 3.0, 'output_price_per_million': 15.0, 'currency': 'USD'}",
     )
-    # Phase 1 L410: optional inbound policy. Defaults to ``open``
-    # backfill at the entity layer (``Agent.__post_init__``) so a
-    # missing field stays backwards compatible — agents who never
-    # opt in keep receiving traffic exactly as before.
+    # Phase 3: new agents default to ``manifest`` mode so senders
+    # must go through the Notify layer before the full message reaches
+    # the recipient. Existing agents keep their stored policy
+    # (``Agent.__post_init__`` backfills ``None`` → ``open`` for
+    # rows that predate this change). Callers can always override
+    # by passing an explicit ``communication_policy``.
     communication_policy: dict | None = Field(
-        default=None,
+        default={"mode": "manifest"},
         description=(
-            "Inbound message policy. Phase 1 accepts "
-            "{'mode': 'open' | 'closed', 'reject_reason'?: str}. "
-            "Default: open."
+            "Inbound message policy. Accepts "
+            "{'mode': 'open' | 'closed' | 'manifest' | 'allowlist', "
+            "'reject_reason'?: str}. "
+            "Default: manifest (Phase 3+)."
         ),
     )
     # Optional SOCIAL.md pointer — see https://agentsocial.one. ACN stores

@@ -446,7 +446,7 @@ async def fetch_manifest_content(
     agent_info: AgentApiKeyDep,
     manifest_service: ManifestServiceDep,
 ):
-    """Pull the full payload for a manifest entry.
+    """Pull the full payload (or self-hosted pointer) for a manifest entry.
 
     The recipient is *always* derived from the API key, never from
     the path, so:
@@ -454,11 +454,41 @@ async def fetch_manifest_content(
     * Cross-tenant attempts (the API-key agent doesn't own ``mid``)
       → 404 (route layer cannot distinguish from "expired").
     * Expired entries → 404.
-    * Repeatable: this endpoint has no read-once semantics in
-      Phase 2; Phase 3 will introduce an explicit ``ack`` step
-      that releases ``attention_fee``.
+    * Repeatable: no read-once semantics; ``ack`` is the explicit
+      release signal for ``attention_fee``.
+
+    **Self-hosted content (Phase 3)**:
+    When the sender supplied ``content_url``, ACN never stored the
+    body locally. This endpoint returns ``{"self_hosted": true,
+    "content_url": ..., "content_hash": ...}`` so the recipient can
+    fetch the content directly from the sender's server and verify it
+    with the provided hash. The ``content`` field is absent in this
+    response shape.
     """
     owner_id = agent_info["agent_id"]
+
+    # Fast-path: check the entry metadata for a self-hosted URL
+    # BEFORE trying to read the (non-existent) content key.
+    entry = await manifest_service.get_entry(owner_id=owner_id, mid=mid)
+    if entry is None:
+        raise ACNHTTPError(
+            ErrorCode.MANIFEST_CONTENT_NOT_FOUND,
+            status_code=404,
+            details={"owner_id": owner_id, "mid": mid},
+        )
+
+    if entry.content_url:
+        result: dict[str, Any] = {
+            "mid": mid,
+            "owner_id": owner_id,
+            "self_hosted": True,
+            "content_url": entry.content_url,
+        }
+        if entry.content_hash:
+            result["content_hash"] = entry.content_hash
+        return result
+
+    # ACN-hosted path: fall through to the content key.
     payload = await manifest_service.fetch_content(owner_id=owner_id, mid=mid)
     if payload is None:
         raise ACNHTTPError(

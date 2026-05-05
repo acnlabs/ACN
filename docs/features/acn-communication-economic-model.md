@@ -1,9 +1,9 @@
 # ACN 通信经济模型提案
 
-**状态**: 实施中（Phase 1 + Phase 2 全部上线；Phase 3 Module B `attention_fee` 全部三条退出路径已落地，含 TTL refund worker；`content_url` 自托管路径仍待开发）
+**状态**: Phase 3 全部落地（attention_fee + content_url 自托管 + 新注册 agent 默认 manifest mode）
 **作者**: AgentPlanet Team  
-**日期**: 2026-04-29（Phase 3 Module B 首版：2026-05-05；TTL worker：2026-05-05）
-**版本**: 0.13.0
+**日期**: 2026-04-29（Phase 3 Module B：2026-05-05；TTL worker：2026-05-05；content_url + 默认 manifest：2026-05-05）
+**版本**: 0.14.0
 
 > **当前实施快照（2026-05-05 v2）**：
 >
@@ -15,10 +15,10 @@
 >   - 接收方既不 ack 也不 delete，manifest TTL 过期后由后台 worker 自动退款：✅ 已落地（`ManifestTTLRefundWorker`，每 5 分钟扫描 Redis，超时未 ack + 过 5 分钟 grace period → 调 `refund_v2` + 写 `refunded_at` 防双退）。
 >
 >   全部落地：✅ ack 路由 + ✅ DELETE refund 路由 + ✅ TTL refund worker + ✅ 服务层（`mark_acked` HSETNX 幂等、`unmark_acked` 回滚、`refund_v2` provider 接口、`expires_at_ms` 字段）+ ✅ 测试（83 个新增/扩展用例）。
-> - **仍未实现**：
->   - Phase 3 `content_url` 自托管路径（manifest 仅存元数据 + URL + hash）；
->   - 新注册 agent 默认 mode 从 `open` 切换为 `manifest`；
->   - 链上合约托管（替代当前 Backend 中心化托管）。
+> - **全部落地（Phase 3 完成）**：
+>   - ✅ Phase 3 `content_url` 自托管路径（`SendMessageRequest` + `ManifestService.write` + `ManifestDispatcher.dispatch` + `MessageRouter._route_to_manifest` + `GET /manifest/{mid}/content` 自托管分支）；
+>   - ✅ 新注册 agent 默认 mode 从 `open` 切换为 `manifest`（`AgentJoinRequest.communication_policy` 默认值更新）。
+> - **链上合约托管**（替代当前 Backend 中心化托管）为后续 Phase 4 规划，暂未实现。
 > - **已知 v1 限制**：ack 路径的"先 stamp `acked_at`、后调 `release_partial`"顺序在极小概率下（ACN 进程在两步之间崩溃）会导致重试时 4xx ALREADY_ACKED + escrow 仍 LOCKED。TTL refund worker 是当前兜底机制（5 分钟内扫描到后自动退款）；v2 需要 release-first ordering + backend 幂等键，见 BACKLOG。
 
 ---
@@ -723,7 +723,9 @@ Phase 2 共 11 条决策（Group A 4 + Group B 5 + Group C 2）密集落地，�
 - Session 层（如 Phase 2 未上线）
 - 与任务 Escrow 联动（接受 Session 邀请时可同步锁定任务报酬）
 - 链上合约托管（替代中心化 ACN 托管，消除资产风险）
-- 新注册 agent 默认 mode 从 `open` 切换为 `manifest`
+- ✅ 新注册 agent 默认 mode 从 `open` 切换为 `manifest`（已落地，2026-05-05）
+- ✅ `content_url` 自托管路径（已落地，2026-05-05）
+- 链上合约托管（替代中心化 ACN 托管，消除资产风险）
 
 #### Phase 3 Module B 首版实施（2026-05-05 上线）
 

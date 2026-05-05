@@ -127,6 +127,13 @@ class ManifestEntry:
     # ``None`` for entries written before Phase 3 (legacy rows); the
     # worker treats ``None`` as "cannot determine expiry, skip".
     expires_at_ms: int | None = None
+    # Phase 3 self-hosted content path. When set, the full message
+    # body lives at ``content_url`` on the sender's own server; ACN
+    # stores only this pointer. ``content_size`` is 0 for self-hosted
+    # entries. ``content_hash`` is optional sender-supplied integrity
+    # hint (e.g. ``sha256:<hex>``).
+    content_url: str | None = None
+    content_hash: str | None = None
 
 
 def _zset_key(owner_id: str) -> str:
@@ -204,6 +211,8 @@ class ManifestService:
         *,
         ttl_seconds: int | None = None,
         extra: dict[str, Any] | None = None,
+        content_url: str | None = None,
+        content_hash: str | None = None,
     ) -> ManifestEntry:
         """Persist a manifest entry + payload atomically.
 
@@ -218,7 +227,8 @@ class ManifestService:
             content: Full message payload (will be JSON-encoded).
                 Size is capped at ``MAX_CONTENT_BYTES``; oversize
                 payloads raise ``ValueError`` so the router can
-                surface a 422 to the sender.
+                surface a 422 to the sender. Ignored when
+                ``content_url`` is provided (self-hosted path).
             ttl_seconds: Optional TTL override; clamped into
                 ``[MIN_TTL_SECONDS, MAX_TTL_SECONDS]``. Defaults to
                 ``DEFAULT_TTL_SECONDS``.
@@ -226,6 +236,17 @@ class ManifestService:
                 detail HASH as JSON-encoded ``extra`` field. Useful
                 for forwarding compatibility (e.g. ``priority``,
                 ``payment_intent_id``) without changing the schema.
+            content_url: Phase 3 self-hosted content path. When set,
+                ACN stores only the URL + optional hash in the detail
+                HASH and skips the ``acn:content:{owner}:{mid}``
+                blob entirely. The recipient calls
+                ``GET /communication/content/{mid}`` to receive the
+                URL and then fetches the content directly from the
+                sender's own server.
+            content_hash: Optional SHA-256 or similar hash of the
+                self-hosted content (format: ``<algo>:<hex>``). Stored
+                alongside ``content_url`` for recipient-side integrity
+                verification. Ignored when ``content_url`` is absent.
 
         Returns:
             The minted ``ManifestEntry`` (with its server-generated
@@ -233,84 +254,63 @@ class ManifestService:
             the WS notification payload.
 
         Raises:
-            ValueError: When ``content`` exceeds ``MAX_CONTENT_BYTES``
-                after JSON encoding. Picked over a custom exception
-                so the router (which already maps ``ValueError``
-                from upstream validators to 422) doesn't grow a new
-                error path.
+            ValueError: When ACN-hosted ``content`` exceeds
+                ``MAX_CONTENT_BYTES`` after JSON encoding. Not raised
+                on the self-hosted path (no local storage).
         """
         ttl = _clamp_ttl(ttl_seconds)
-
-        # JSON-encode once so the size check, the size field on the
-        # detail HASH, and the STRING write all see the same bytes.
-        content_blob = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
-        content_bytes = content_blob.encode("utf-8")
-        size = len(content_bytes)
-        if size > MAX_CONTENT_BYTES:
-            raise ValueError(
-                f"manifest content exceeds {MAX_CONTENT_BYTES} bytes (got {size})"
-            )
-
         clipped = _truncate_summary(summary)
         ts_ms = _now_ms()
-        # UUID4 ``mid``: unpredictable id is required by Group A #4
-        # (the content endpoint is owner-checked but a guessable
-        # ``mid`` would still let an attacker probe for entries by
-        # bruteforcing the path). 32 hex chars is plenty.
         mid = uuid4().hex
         expires_at_ms = ts_ms + ttl * 1000
 
-        detail = {
+        self_hosted = content_url is not None
+
+        if self_hosted:
+            # Self-hosted path: no content blob storage on ACN.
+            # Store the URL + hash in the detail HASH so the content
+            # endpoint can redirect the recipient without loading any
+            # local content key. ``content_size = 0`` signals "no
+            # local copy" to the listing endpoint.
+            size = 0
+            content_blob: str | None = None
+        else:
+            # ACN-hosted path: encode and size-check the payload.
+            content_blob = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+            content_bytes = content_blob.encode("utf-8")
+            size = len(content_bytes)
+            if size > MAX_CONTENT_BYTES:
+                raise ValueError(
+                    f"manifest content exceeds {MAX_CONTENT_BYTES} bytes (got {size})"
+                )
+
+        detail: dict[str, Any] = {
             "mid": mid,
             "sender_id": sender_id,
             "summary": clipped,
             "ts": ts_ms,
             "content_size": size,
-            # Wall-clock expiry written eagerly so the TTL refund
-            # worker can compare ``now > expires_at_ms`` with a
-            # plain HGETALL, without a separate TTL round-trip.
             "expires_at": expires_at_ms,
         }
+        if self_hosted:
+            detail["content_url"] = content_url
+            if content_hash:
+                detail["content_hash"] = content_hash
         if extra:
-            # Stored as a single JSON blob to preserve nested types
-            # (numeric timestamps, lists). Keeping it under one
-            # field also keeps HSET argument count bounded.
             detail["extra"] = json.dumps(extra, ensure_ascii=False, separators=(",", ":"))
 
         zset = _zset_key(owner_id)
         detail_key = _detail_key(owner_id, mid)
         content_key = _content_key(owner_id, mid)
 
-        # Atomic write: ZADD index → HSET detail → SET content → set
-        # TTLs → trim queue. All three keys share the
-        # ``{owner_id}`` hash tag so the pipeline lands on the same
-        # cluster slot. ``transaction=True`` issues a real
-        # ``MULTI/EXEC`` so a partial failure leaves the queue in a
-        # consistent state (either all three or none committed).
         async with self.redis.pipeline(transaction=True) as pipe:
             pipe.zadd(zset, {mid: ts_ms})
             pipe.hset(detail_key, mapping=detail)
-            pipe.set(content_key, content_blob)
-            # Apply TTLs in the same transaction so a crash between
-            # SET and EXPIRE can't leave us with a dangling row.
+            if not self_hosted and content_blob is not None:
+                pipe.set(content_key, content_blob)
+                pipe.expire(content_key, ttl)
             pipe.expire(detail_key, ttl)
-            pipe.expire(content_key, ttl)
-            # ZSET TTL is the longest-living of the three so a
-            # late-arriving reader can still detect "the entry
-            # existed but content already expired" (returns 404 in
-            # the route layer). We deliberately mirror ``ttl`` here
-            # for simplicity; if/when we want manifest-summary-only
-            # retention longer than content retention, this is the
-            # one knob to tweak.
             pipe.expire(zset, ttl)
-            # Cap the per-owner queue: drop the oldest entries when
-            # we cross ``QUEUE_CAPACITY``. ZREMRANGEBYRANK 0
-            # -(QUEUE_CAPACITY+1) trims everything *except* the
-            # newest ``QUEUE_CAPACITY`` items. Note this trims by
-            # rank from the index ZSET only; the detail/content keys
-            # of evicted entries will linger until their TTL fires.
-            # That's acceptable: the recipient can no longer list
-            # them, and the storage cost is bounded by TTL.
             pipe.zremrangebyrank(zset, 0, -(QUEUE_CAPACITY + 1))
             await pipe.execute()
 
@@ -322,6 +322,8 @@ class ManifestService:
             content_size=size,
             extra=extra or {},
             expires_at_ms=expires_at_ms,
+            content_url=content_url,
+            content_hash=content_hash if content_url else None,
         )
 
     async def read_since(
@@ -651,4 +653,6 @@ def _decode_entry(mid: str, raw: dict[Any, Any]) -> ManifestEntry:
         extra=extra,
         acked_at_ms=acked_at_ms,
         expires_at_ms=expires_at_ms,
+        content_url=decoded.get("content_url") or None,
+        content_hash=decoded.get("content_hash") or None,
     )

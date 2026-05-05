@@ -222,11 +222,46 @@ class SendMessageRequest(BaseModel):
     # legacy free-send behaviour; presence triggers an escrow lock
     # before the manifest entry is written.
     attention_fee: AttentionFee | None = None
+    # Phase 3 self-hosted content path (manifest mode only).
+    # When provided, ACN stores only the URL + hash in the manifest
+    # entry metadata; the full message body is hosted by the sender
+    # and never written to ACN storage. The ``message`` field is still
+    # required (used for WS notification summary extraction) but is
+    # not stored in Redis when content_url is set.
+    # Constraint: only valid when the recipient is in manifest mode.
+    content_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description=(
+            "Self-hosted content URL (manifest mode only). "
+            "When set, ACN stores only this pointer and never caches the full payload."
+        ),
+    )
+    content_hash: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Integrity hash of the self-hosted content, e.g. 'sha256:<hex>'. "
+            "Stored alongside content_url for recipient-side verification."
+        ),
+    )
 
     @field_validator("message")
     @classmethod
     def _message_size(cls, v: dict) -> dict:
         return check_dict_size_256k("message", v)
+
+    @field_validator("content_url")
+    @classmethod
+    def _validate_content_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not (v.lower().startswith("https://") or v.lower().startswith("http://")):
+            raise ValueError("content_url must start with https:// or http://")
+        return v
 
 
 class BroadcastRequest(BaseModel):
@@ -289,6 +324,10 @@ async def send_message(
         send_kwargs: dict[str, object] = {
             "priority": body.priority,
         }
+        if body.content_url is not None:
+            send_kwargs["content_url"] = body.content_url
+            if body.content_hash is not None:
+                send_kwargs["content_hash"] = body.content_hash
         if body.attention_fee is not None:
             # Pydantic enforced the integer range; the supported-currency
             # whitelist lives in code (not types) so a future expansion

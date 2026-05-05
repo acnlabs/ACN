@@ -182,6 +182,8 @@ class ManifestDispatcher:
         path: str,
         route_id: str | None = None,
         attention_fee: dict[str, Any] | None = None,
+        content_url: str | None = None,
+        content_hash: str | None = None,
     ) -> ManifestEntry:
         """Persist the message to the manifest queue + push WS + count.
 
@@ -204,6 +206,11 @@ class ManifestDispatcher:
                 router supplies its own 8-char id; the subnet
                 manager can pass the request_id. ``None`` falls
                 back to the entry's mid in log output.
+            content_url: Phase 3 self-hosted content URL. When set,
+                the manifest entry stores only this pointer; the
+                full message body is never written to Redis.
+            content_hash: Optional integrity hash for the self-hosted
+                content (e.g. ``sha256:<hex>``).
 
         Returns:
             The persisted ``ManifestEntry``. Callers use ``.mid`` /
@@ -277,6 +284,8 @@ class ManifestDispatcher:
             summary=summary,
             content=content_dict,
             extra=extra or None,
+            content_url=content_url,
+            content_hash=content_hash,
         )
 
         # Best-effort WS push. The recipient still gets the manifest
