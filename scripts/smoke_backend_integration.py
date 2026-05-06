@@ -46,7 +46,12 @@ def _post_json(url: str, data: dict, timeout: int, headers: dict | None = None) 
 def _join_agent(cfg: SmokeConfig, name: str, skills: list[str]) -> tuple[str, str]:
     code, body = _post_json(
         _url(cfg.acn_base_url, "/api/v1/agents/join"),
-        {"name": name, "description": "smoke-test agent", "skills": skills},
+        {
+            "name": name,
+            "description": "smoke-test agent",
+            "skills": skills,
+            "endpoint": f"{cfg.acn_base_url}/smoke-placeholder",
+        },
         cfg.timeout,
     )
     if code != 200:
