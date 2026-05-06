@@ -17,7 +17,7 @@ This page is the production runbook for ACN and Agentplanet-backend integration.
 
 | Variable | Example | Notes |
 |---|---|---|
-| `ACN_URL` | `https://acn-production-9ae5.up.railway.app` | ACN base URL used by backend |
+| `ACN_URL` | `https://acn-production.up.railway.app` | ACN base URL used by backend |
 | `ACN_WEBHOOK_SECRET` | `***` | HMAC verification secret (must match ACN `WEBHOOK_SECRET`) |
 | `INTERNAL_API_TOKEN` | `***` | Service-to-service token (must match ACN) |
 

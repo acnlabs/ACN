@@ -407,7 +407,7 @@ python3 scripts/smoke_backend_integration.py
 
 # Optional: override target URLs
 python3 scripts/smoke_backend_integration.py \
-  --acn-base-url "https://acn-production-9ae5.up.railway.app" \
+  --acn-base-url "https://acn-production.up.railway.app" \
   --backend-base-url "https://agentplanet-backend-production.up.railway.app"
 ```
 
