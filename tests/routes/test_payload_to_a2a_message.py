@@ -19,7 +19,6 @@ These tests pin the new contract:
 
 from __future__ import annotations
 
-import pytest
 from a2a.compat.v0_3.types import DataPart, TextPart  # type: ignore[import-untyped]
 
 from acn.routes.communication import _payload_to_a2a_message
