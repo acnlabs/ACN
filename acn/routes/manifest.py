@@ -406,6 +406,7 @@ async def ack_manifest_entry(
                 "agent_id": agent_id,
                 "mid": mid,
                 "reason": release_result.error or "unknown error",
+                "operation": "release",
             },
         )
 
