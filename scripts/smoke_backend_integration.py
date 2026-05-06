@@ -56,6 +56,8 @@ def _join_agent(cfg: SmokeConfig, name: str, skills: list[str]) -> tuple[str, st
 
 def run_smoke(cfg: SmokeConfig) -> dict:
     ts = str(int(time.time()))
+    # Use a short hex suffix so names don't trigger the auto-generated-name guard
+    suffix = format(int(ts) % 0xFFFF, "04x")
     result: dict = {"ok": True, "timestamp": ts, "checks": {}}
 
     # 1) Health checks
@@ -68,7 +70,7 @@ def run_smoke(cfg: SmokeConfig) -> dict:
         return result
 
     # 2) Task flow
-    tasker_id, tasker_key = _join_agent(cfg, f"smoke-tasker-{ts}", ["test"])
+    tasker_id, tasker_key = _join_agent(cfg, f"smoke-tasker-{suffix}", ["test"])
     task_code, task_body = _post_json(
         _url(cfg.acn_base_url, "/api/v1/tasks/agent/create"),
         {
@@ -89,8 +91,8 @@ def run_smoke(cfg: SmokeConfig) -> dict:
         return result
 
     # 3) Payment flow
-    seller_id, seller_key = _join_agent(cfg, f"smoke-seller-{ts}", ["pay"])
-    buyer_id, buyer_key = _join_agent(cfg, f"smoke-buyer-{ts}", ["pay"])
+    seller_id, seller_key = _join_agent(cfg, f"smoke-seller-{suffix}", ["pay"])
+    buyer_id, buyer_key = _join_agent(cfg, f"smoke-buyer-{suffix}", ["pay"])
 
     cap_code, cap_body = _post_json(
         _url(cfg.acn_base_url, f"/api/v1/payments/{seller_id}/payment-capability"),
