@@ -8,7 +8,7 @@ import uuid
 import structlog  # type: ignore[import-untyped]
 from a2a.compat.v0_3.types import Message, TextPart  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
@@ -50,14 +50,61 @@ logger = structlog.get_logger()
 def _payload_to_a2a_message(payload: dict) -> Message:
     """Build an A2A ``Message`` with a fresh per-request ``messageId``.
 
+    Three input shapes are accepted, in priority order:
+
+    1. **Proper A2A envelope** — ``{"role": ..., "parts": [...]}``: parsed
+       as a Message via Pydantic. The caller's ``messageId``/``message_id``
+       is overridden with a freshly generated UUID4 so REST-originated
+       traffic cannot be spoofed by repeating an upstream id.
+    2. **Simple text shape** — ``{"text": "..."}``: wrapped into a single
+       ``TextPart`` carrying just the text. This is the convenience shape
+       used by the CLI and most direct callers.
+    3. **Legacy fallback** — any other dict: stringified into a
+       ``TextPart`` (``str(payload)``). Preserves the pre-Phase-3
+       behaviour for callers sending arbitrary structured payloads, so
+       upgrading the backend doesn't break them.
+
     The ``a2a`` Python models require ``messageId`` on every ``Message``;
     constructing with only ``role`` + ``parts`` raises
     ``pydantic.ValidationError`` and surfaces to callers as HTTP 500 (H4
     sanitised).  One UUID4 per accepted HTTP request is the correct
     envelope identity for REST-originated traffic.
     """
+    fresh_id = str(uuid.uuid4())
+
+    # Branch 1: structured A2A envelope.
+    if isinstance(payload.get("role"), str) and isinstance(payload.get("parts"), list):
+        # Strip any caller-supplied id (both snake_case and camelCase) so
+        # the regenerated ``fresh_id`` cannot be silently overridden by a
+        # stale field on the wire.
+        cleaned = {
+            k: v
+            for k, v in payload.items()
+            if k not in ("message_id", "messageId")
+        }
+        try:
+            return Message.model_validate({**cleaned, "message_id": fresh_id})
+        except ValidationError:
+            # Malformed envelope (e.g. unknown ``parts[].kind``) — fall
+            # through to the legacy fallback so the request still routes
+            # rather than 500ing the caller. The recipient will see the
+            # repr string, mirroring the pre-fix behaviour.
+            pass
+
+    # Branch 2: simple text shape.
+    text = payload.get("text")
+    if isinstance(text, str):
+        return Message(
+            message_id=fresh_id,
+            role="user",
+            parts=[TextPart(text=text)],
+        )
+
+    # Branch 3: legacy fallback — preserve pre-Phase-3 behaviour for
+    # callers sending arbitrary structured payloads we don't yet
+    # understand.
     return Message(
-        message_id=str(uuid.uuid4()),
+        message_id=fresh_id,
         role="user",
         parts=[TextPart(text=str(payload))],
     )
