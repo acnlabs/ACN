@@ -34,12 +34,10 @@ class MessageType(StrEnum):
 
 
 class BroadcastStrategy(StrEnum):
-    """Broadcast strategy"""
+    """Broadcast strategy — aligned with ACN server v0.5+."""
 
-    ALL = "all"
-    RANDOM = "random"
-    ROUND_ROBIN = "round_robin"
-    LOAD_BALANCED = "load_balanced"
+    PARALLEL = "parallel"
+    SEQUENTIAL = "sequential"
 
 
 class PaymentMethod(StrEnum):
@@ -233,18 +231,20 @@ class BroadcastRequest(BaseModel):
 
 
 class ManifestEntry(BaseModel):
-    """A single manifest queue entry as returned by the ACN server."""
+    """A single manifest queue entry as returned by GET /manifest/{agent_id}.
+
+    Field names mirror the server JSON keys exactly.  To get the full
+    payload (for ACN-hosted content) or the self-hosted pointer, call
+    ``ACNClient.fetch_manifest_content(mid)`` after listing.
+    """
 
     mid: str
     sender_id: str
     summary: str
-    ts_ms: int
+    ts: int
     content_size: int
     extra: dict[str, Any] = Field(default_factory=dict)
-    acked_at_ms: int | None = None
-    expires_at_ms: int | None = None
-    content_url: str | None = None
-    content_hash: str | None = None
+    acked_at: int | None = None
 
 
 class ManifestContentResponse(BaseModel):

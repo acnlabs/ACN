@@ -322,8 +322,11 @@ export class ACNClient {
   /**
    * Acknowledge a manifest entry and release its attention_fee escrow.
    *
-   * Idempotent: re-acking an already-acked entry returns 200 with
-   * `already_acked: true` rather than an error.
+   * **Only applicable to entries with an attention_fee locked.**
+   * Entries without a fee → 400 `ATTENTION_FEE_NOT_LOCKED`.
+   * **Not idempotent** — re-acking raises 400 `ATTENTION_FEE_ALREADY_ACKED`.
+   *
+   * On success returns the full fee breakdown including `receipt_id`.
    */
   async ackManifest(agentId: string, mid: string): Promise<Record<string, unknown>> {
     return this.post(`/api/v1/communication/manifest/${agentId}/${mid}/ack`);

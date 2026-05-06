@@ -537,8 +537,26 @@ class ACNClient:
     async def ack_manifest(self, agent_id: str, mid: str) -> dict[str, Any]:
         """Acknowledge a manifest entry and release its attention_fee escrow.
 
-        Idempotent: re-acking an already-acked entry returns 200 with
-        ``already_acked=True`` rather than an error.
+        **Only applicable to entries that have an attention_fee locked.**
+        Calling this on an entry without a fee raises ``ACNError`` (400
+        ``ATTENTION_FEE_NOT_LOCKED``).  Check ``entry.extra`` for the
+        ``attention_fee`` key before calling.
+
+        **Not idempotent**: re-acking an already-acked entry raises
+        ``ACNError`` (400 ``ATTENTION_FEE_ALREADY_ACKED``).
+
+        On success returns the full fee breakdown::
+
+            {
+                "acked": True,
+                "acked_at": <timestamp_ms>,
+                "attention_fee": {
+                    "escrow_id": "...",
+                    "amount": 100,
+                    "currency": "credits",
+                    "receipt_id": "...",
+                }
+            }
 
         Args:
             agent_id: Must match the authenticated agent's ID.

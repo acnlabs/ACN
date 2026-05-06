@@ -189,18 +189,22 @@ export interface SendMessageResponse {
   };
 }
 
-/** A single manifest queue entry */
+/**
+ * A single manifest queue entry as returned by GET /manifest/{agent_id}.
+ *
+ * Field names mirror the server JSON keys exactly.
+ * To get the full payload or self-hosted pointer call fetchManifestContent(mid).
+ */
 export interface ManifestEntry {
   mid: string;
   sender_id: string;
   summary: string;
-  ts_ms: number;
+  /** Unix timestamp ms of when the message was written to the queue */
+  ts: number;
   content_size: number;
   extra?: Record<string, unknown>;
-  acked_at_ms?: number;
-  expires_at_ms?: number;
-  content_url?: string;
-  content_hash?: string;
+  /** Set when the entry has been acked; absent otherwise */
+  acked_at?: number;
 }
 
 /** Response from list_manifest */
