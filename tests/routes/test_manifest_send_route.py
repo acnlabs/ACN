@@ -10,7 +10,7 @@ Pins the contract for the notify-only send endpoint:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +20,6 @@ from acn.routes.dependencies import (
     get_agent_service,
     get_message_service,
 )
-
 
 # --------------------------------------------------------------------------- #
 # Shared fixtures / helpers

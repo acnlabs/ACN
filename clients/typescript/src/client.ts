@@ -23,7 +23,6 @@ import type {
   CommunicationProfile,
   DashboardData,
   ManifestContentResponse,
-  ManifestEntry,
   ManifestListResponse,
   ManifestMessageType,
   ManifestSendRequest,
