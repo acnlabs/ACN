@@ -1,9 +1,9 @@
 import { Command } from 'commander';
-import { acnGet, acnPost, acnDelete } from '../api.js';
+import { acnGet, acnPatch, acnPost, acnDelete } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 
-// ─── Offline history inbox (policy=open) ─────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface HistoryMessage {
   route_id: string;
@@ -21,57 +21,47 @@ interface HistoryResponse {
   ack: boolean;
 }
 
-function formatHistoryMsg(m: HistoryMessage, i: number): string {
-  const content =
-    typeof m.message === 'string' ? m.message : JSON.stringify(m.message ?? '');
-  return [
-    `[${i + 1}] ${m.route_id}`,
-    `  From : ${m.from_agent_id ?? '?'}`,
-    ...(m.received_at ? [`  At   : ${m.received_at}`] : []),
-    `  Msg  : ${content.slice(0, 200)}`,
-  ].join('\n');
+type PolicyMode = 'open' | 'manifest' | 'allowlist' | 'closed';
+
+interface CommunicationPolicy {
+  mode: PolicyMode;
+  reject_reason?: string;
 }
 
-interface ManifestEntry {
-  mid: string;
-  sender_id: string;
-  summary?: string;
-  ts: number;
-  content_size?: number;
-  acked_at?: number;
-  extra?: Record<string, unknown>;
-}
-
-interface ManifestListResponse {
+interface PolicyResponse {
   agent_id: string;
-  count: number;
-  entries: ManifestEntry[];
+  communication_policy: CommunicationPolicy;
 }
 
-interface ContentResponse {
-  mid: string;
+interface AllowlistEntry {
+  target_id: string;
+  created_at: string;
+  reason?: string;
+}
+
+interface AllowlistListResponse {
   owner_id: string;
-  content?: unknown;
-  self_hosted?: boolean;
-  content_url?: string;
-  content_hash?: string;
+  entries: AllowlistEntry[];
+  total: number;
 }
 
-interface AckResponse {
-  agent_id: string;
-  mid: string;
-  acked: boolean;
-  acked_at?: number;
-  attention_fee?: {
-    escrow_id?: string;
-    currency?: string;
-    amount?: number;
-    agent_amount?: number;
-    acn_amount?: number;
-    provider_amount?: number;
-    receipt_id?: string;
-  };
+interface AllowlistActionResponse {
+  owner_id: string;
+  target_id: string;
+  allowlisted: boolean;
+  changed: boolean;
 }
+
+const POLICY_MODES = ['open', 'manifest', 'allowlist', 'closed'];
+
+const MODE_DESC: Record<string, string> = {
+  open: 'open — anyone can push messages directly to your inbox',
+  manifest: 'manifest — all senders get notify-only; you pull from acn notify',
+  allowlist: 'allowlist — trusted agents push directly, others get notify-only',
+  closed: 'closed — no one can send you messages',
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function requireAgentId(): string {
   const config = loadConfig();
@@ -86,121 +76,43 @@ function requireAgentId(): string {
   return config.agent_id!;
 }
 
-function formatEntry(e: ManifestEntry, index?: number): string {
-  const prefix = index !== undefined ? `[${index + 1}] ` : '';
-  const acked = e.acked_at ? ' [acked]' : '';
-  const ts = new Date(e.ts).toISOString();
-  const lines = [
-    `${prefix}${e.mid}${acked}`,
-    `  From    : ${e.sender_id}`,
-    `  Sent    : ${ts}`,
-  ];
-  if (e.summary) lines.push(`  Summary : ${e.summary}`);
-  if (e.content_size) lines.push(`  Size    : ${e.content_size} bytes`);
+function formatHistoryMsg(m: HistoryMessage, i: number): string {
+  const content =
+    typeof m.message === 'string' ? m.message : JSON.stringify(m.message ?? '');
+  return [
+    `[${i + 1}] ${m.route_id}`,
+    `  From : ${m.from_agent_id ?? '?'}`,
+    ...(m.received_at ? [`  At   : ${m.received_at}`] : []),
+    `  Msg  : ${content.slice(0, 200)}`,
+  ].join('\n');
+}
+
+function formatPolicy(p: PolicyResponse): string {
+  const policy = p.communication_policy ?? { mode: 'open' };
+  const mode = policy.mode ?? 'open';
+  const lines = [`Mode: ${MODE_DESC[mode] ?? mode}`];
+  if (policy.reject_reason) lines.push(`Reject reason: ${policy.reject_reason}`);
   return lines.join('\n');
 }
 
+function formatAllowlistEntry(e: AllowlistEntry, index?: number): string {
+  const prefix = index !== undefined ? `[${index + 1}] ` : '';
+  const reason = e.reason ? `\n  Note   : ${e.reason}` : '';
+  return `${prefix}${e.target_id}\n  Added  : ${e.created_at}${reason}`;
+}
+
+// ─── Command tree ────────────────────────────────────────────────────────────
+
 export function inboxCommand(): Command {
-  const cmd = new Command('inbox').description('Manage incoming messages (manifest queue)');
-
-  cmd
-    .command('list')
-    .description('List pending notifications in manifest queue')
-    .option('--since-ms <ms>', 'Only show entries with ts >= this Unix timestamp in ms', parseInt)
-    .option('--limit <n>', 'Max entries to return (default 50, max 200)', parseInt)
-    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
-    .action(async (opts: { sinceMs?: number; limit?: number; agentId?: string }) => {
-      const agentId = opts.agentId ?? requireAgentId();
-      try {
-        const params: Record<string, number | undefined> = {};
-        if (opts.sinceMs !== undefined) params.since_ms = opts.sinceMs;
-        if (opts.limit !== undefined) params.limit = opts.limit;
-        const res = await acnGet<ManifestListResponse>(
-          `/communication/manifest/${agentId}`,
-          params as Record<string, string | number | boolean | undefined>
-        );
-        const entries = res.entries ?? [];
-        if (entries.length === 0) {
-          output(res, 'Manifest queue is empty.');
-          return;
-        }
-        output(
-          res,
-          `${entries.length} notification(s):\n\n` +
-            entries.map((e, i) => formatEntry(e, i)).join('\n\n')
-        );
-      } catch (err) {
-        handleError(err);
-      }
-    });
-
-  cmd
-    .command('pull <mid>')
-    .description('Pull full message content for a notification')
-    .action(async (mid: string) => {
-      requireAgentId();
-      try {
-        const res = await acnGet<ContentResponse>(`/communication/content/${mid}`);
-        if (res.self_hosted) {
-          const hashInfo = res.content_hash ? `\nHash: ${res.content_hash}` : '';
-          output(res, `Self-hosted content (fetch directly from sender):\nURL: ${res.content_url}${hashInfo}`);
-        } else {
-          const content =
-            typeof res.content === 'string'
-              ? res.content
-              : JSON.stringify(res.content, null, 2);
-          output(res, `Content:\n${content}`);
-        }
-      } catch (err) {
-        handleError(err);
-      }
-    });
-
-  cmd
-    .command('ack <mid>')
-    .description('Release attention_fee from a paid notification (entry must have a locked fee; use delete for unpaid entries)')
-    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
-    .action(async (mid: string, opts: { agentId?: string }) => {
-      const agentId = opts.agentId ?? requireAgentId();
-      try {
-        const res = await acnPost<AckResponse>(
-          `/communication/manifest/${agentId}/${mid}/ack`
-        );
-        const fee = res.attention_fee;
-        const feeInfo = fee?.agent_amount !== undefined
-          ? ` | fee released: ${fee.agent_amount} ${fee.currency ?? ''} (receipt: ${fee.receipt_id ?? '?'})`
-          : '';
-        output(res, `Acknowledged ${mid}${feeInfo}`);
-      } catch (err) {
-        handleError(err);
-      }
-    });
-
-  cmd
-    .command('delete <mid>')
-    .description('Reject and delete a notification (refunds attention_fee to sender if present)')
-    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
-    .action(async (mid: string, opts: { agentId?: string }) => {
-      const agentId = opts.agentId ?? requireAgentId();
-      try {
-        const res = await acnDelete<{ deleted?: boolean; attention_fee?: { refunded?: boolean } }>(
-          `/communication/manifest/${agentId}/${mid}`
-        );
-        const refundInfo = res.attention_fee?.refunded ? ' (sender refunded)' : '';
-        output(res, `Deleted notification ${mid}${refundInfo}`);
-      } catch (err) {
-        handleError(err);
-      }
-    });
-
-  // ── history subgroup ──────────────────────────────────────────────────────
-  const history = new Command('history').description(
-    'Offline direct-delivery inbox (policy=open). Full messages stored when you were unreachable.'
+  const cmd = new Command('inbox').description(
+    'Offline direct-delivery inbox + reception policy. For Notify-layer pull: acn notify'
   );
 
-  history
+  // ── inbox list / ack ────────────────────────────────────────────────────────
+
+  cmd
     .command('list')
-    .description('List offline messages (full content)')
+    .description('List offline messages stored when you were unreachable')
     .option('--limit <n>', 'Max messages to return (default 100)', parseInt)
     .option('--ack', 'Clear the entire inbox after retrieval')
     .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
@@ -230,9 +142,9 @@ export function inboxCommand(): Command {
       }
     });
 
-  history
+  cmd
     .command('ack <route_ids...>')
-    .description('Selectively acknowledge specific messages by route_id')
+    .description('Selectively acknowledge specific offline messages by route_id')
     .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
     .action(async (routeIds: string[], opts: { agentId?: string }) => {
       const agentId = opts.agentId ?? requireAgentId();
@@ -248,7 +160,130 @@ export function inboxCommand(): Command {
       }
     });
 
-  cmd.addCommand(history);
+  // ── inbox mode get / set (formerly `acn policy`) ────────────────────────────
+
+  const mode = new Command('mode').description(
+    'Reception policy: who can send to your inbox and how'
+  );
+
+  mode
+    .command('get')
+    .description('Show current reception policy')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (opts: { agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      try {
+        const res = await acnGet<PolicyResponse>(`/agents/${agentId}/policy`);
+        output(res, formatPolicy(res));
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  mode
+    .command('set <mode>')
+    .description(`Set reception policy: ${POLICY_MODES.join(' | ')}`)
+    .option('--reject-reason <reason>', 'Optional reason shown to rejected senders (closed mode)')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(
+      async (modeArg: string, opts: { rejectReason?: string; agentId?: string }) => {
+        if (!POLICY_MODES.includes(modeArg)) {
+          console.error(
+            `Invalid mode "${modeArg}". Choose one of: ${POLICY_MODES.join(', ')}`
+          );
+          process.exit(1);
+        }
+        const agentId = opts.agentId ?? requireAgentId();
+        try {
+          const policyObj: Record<string, unknown> = { mode: modeArg };
+          if (opts.rejectReason) policyObj.reject_reason = opts.rejectReason;
+          const res = await acnPatch<PolicyResponse>(`/agents/${agentId}/policy`, {
+            communication_policy: policyObj,
+          });
+          output(res, `Mode updated:\n${formatPolicy(res)}`);
+        } catch (err) {
+          handleError(err);
+        }
+      }
+    );
+
+  cmd.addCommand(mode);
+
+  // ── inbox allowlist ─────────────────────────────────────────────────────────
+
+  const allowlist = new Command('allowlist').description(
+    'Trusted senders (effective when mode=allowlist)'
+  );
+
+  allowlist
+    .command('list')
+    .description('List agents on your allowlist')
+    .option('--limit <n>', 'Max items to return (default 100)', parseInt)
+    .option('--offset <n>', 'Pagination offset', parseInt)
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (opts: { limit?: number; offset?: number; agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      try {
+        const params: Record<string, number | undefined> = {};
+        if (opts.limit !== undefined) params.limit = opts.limit;
+        if (opts.offset !== undefined) params.offset = opts.offset;
+        const res = await acnGet<AllowlistListResponse>(
+          `/agents/${agentId}/allowlist`,
+          params as Record<string, string | number | boolean | undefined>
+        );
+        const entries = res.entries ?? [];
+        if (entries.length === 0) {
+          output(res, 'Allowlist is empty.');
+          return;
+        }
+        output(
+          res,
+          `${res.total} trusted agent(s) total, showing ${entries.length}:\n\n` +
+            entries.map((e, i) => formatAllowlistEntry(e, i)).join('\n\n')
+        );
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  allowlist
+    .command('add <trusted_agent_id>')
+    .description('Add an agent to your allowlist')
+    .option('--reason <reason>', 'Optional note for this entry (max 200 chars)')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (trustedId: string, opts: { reason?: string; agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      try {
+        const body = opts.reason ? { reason: opts.reason } : undefined;
+        const res = await acnPost<AllowlistActionResponse>(
+          `/agents/${agentId}/allowlist/${trustedId}`,
+          body
+        );
+        const note = res.changed ? ' (newly added)' : ' (already trusted)';
+        output(res, `Added ${trustedId} to allowlist${note}.`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  allowlist
+    .command('remove <trusted_agent_id>')
+    .description('Remove an agent from your allowlist')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (trustedId: string, opts: { agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      try {
+        const res = await acnDelete<AllowlistActionResponse>(
+          `/agents/${agentId}/allowlist/${trustedId}`
+        );
+        const note = res.changed ? ' (removed)' : ' (was not on list)';
+        output(res, `Removed ${trustedId} from allowlist${note}.`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd.addCommand(allowlist);
 
   return cmd;
 }

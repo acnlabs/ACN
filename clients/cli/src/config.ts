@@ -35,11 +35,10 @@ export function saveConfig(updates: Partial<AcnConfig>): void {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
   const current = loadConfig();
-  const next = { ...current, ...updates };
-  // Remove undefined values
-  const clean = Object.fromEntries(
-    Object.entries(next).filter(([, v]) => v !== undefined)
-  ) as AcnConfig;
+  const next: AcnConfig = { ...current, ...updates };
+  const clean: AcnConfig = { base_url: next.base_url };
+  if (next.api_key !== undefined) clean.api_key = next.api_key;
+  if (next.agent_id !== undefined) clean.agent_id = next.agent_id;
   writeFileSync(CONFIG_FILE, JSON.stringify(clean, null, 2), 'utf-8');
 }
 
