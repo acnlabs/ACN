@@ -7,6 +7,7 @@
 import type {
   ACNClientOptions,
   AgentInfo,
+  AgentJoinRequest,
   AgentRegisterRequest,
   AgentRegisterResponse,
   AgentSearchOptions,
@@ -16,6 +17,7 @@ import type {
   AuditEvent,
   AuditQueryOptions,
   BroadcastBySkillRequest,
+  BroadcastByTagRequest,
   BroadcastRequest,
   DashboardData,
   Message,
@@ -157,9 +159,34 @@ export class ACNClient {
   // Agent Management
   // ============================================
 
-  /** Register a new agent */
+  /**
+   * Platform-managed agent registration (requires Auth0 token).
+   * For autonomous agents without Auth0, use joinACN() instead.
+   */
   async registerAgent(agent: AgentRegisterRequest): Promise<AgentRegisterResponse> {
     return this.post('/api/v1/agents/register', agent);
+  }
+
+  /**
+   * Autonomous agent self-registration — no Auth0 required.
+   *
+   * Returns `{ agent_id, api_key, message }` on success. Store the
+   * `api_key` securely; it authenticates all subsequent API calls.
+   *
+   * @example
+   * ```typescript
+   * const result = await client.joinACN({
+   *   name: 'MyAgent',
+   *   description: 'A helpful AI assistant',
+   *   tags: ['coding', 'search'],
+   *   a2a_endpoint: 'https://my-agent.example.com/a2a',
+   *   communication_policy: { mode: 'manifest' },
+   * });
+   * const { agent_id, api_key } = result;
+   * ```
+   */
+  async joinACN(request: AgentJoinRequest): Promise<{ agent_id: string; api_key: string; message: string }> {
+    return this.post('/api/v1/agents/join', request);
   }
 
   /** Get agent by ID */
@@ -250,13 +277,48 @@ export class ACNClient {
     return this.post('/api/v1/communication/send', request);
   }
 
-  /** Broadcast message to multiple agents */
-  async broadcast(request: BroadcastRequest): Promise<{ success: boolean; delivered_count: number }> {
+  /** Broadcast message to multiple agents in a subnet */
+  async broadcast(request: BroadcastRequest): Promise<{
+    status: string;
+    broadcast_id: string;
+    total: number;
+    successful: number;
+    responses: Array<{ agent_id: string; status: string; [key: string]: unknown }>;
+  }> {
     return this.post('/api/v1/communication/broadcast', request);
   }
 
-  /** Broadcast message to agents with specific skill */
+  /**
+   * Broadcast a message to all agents matching ALL specified tags.
+   *
+   * @example
+   * ```typescript
+   * await client.broadcastByTag({
+   *   from_agent: 'my-agent-id',
+   *   tags: ['coding', 'search'],
+   *   message: { role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+   * });
+   * ```
+   */
+  async broadcastByTag(request: BroadcastByTagRequest): Promise<{
+    status: string;
+    broadcast_id: string;
+    total: number;
+    successful: number;
+    responses: Array<{ agent_id: string; status: string; [key: string]: unknown }>;
+  }> {
+    return this.post('/api/v1/communication/broadcast-by-tag', request);
+  }
+
+  /**
+   * @deprecated The server-side /broadcast-by-skill endpoint no longer exists.
+   * Use broadcastByTag({ from_agent, tags: [skill], message }) instead.
+   */
   async broadcastBySkill(request: BroadcastBySkillRequest): Promise<{ success: boolean; delivered_count: number }> {
+    console.warn(
+      'broadcastBySkill() is deprecated: the server endpoint /broadcast-by-skill no longer exists. ' +
+      'Use broadcastByTag({ from_agent, tags: [skill], message }) instead.'
+    );
     return this.post('/api/v1/communication/broadcast-by-skill', request);
   }
 
@@ -293,8 +355,8 @@ export class ACNClient {
    * in a server-side queue. Poll this endpoint to discover pending messages.
    *
    * @param agentId  Must match the authenticated agent's ID.
-   * @param options.limit    Max entries to return (newest first, server cap 100).
-   * @param options.sinceMs  Return only entries with ts_ms > sinceMs (incremental polling).
+   * @param options.limit    Max entries to return (newest first, server hard cap 200).
+   * @param options.sinceMs  Return only entries with ts >= sinceMs (incremental polling).
    */
   async listManifest(
     agentId: string,

@@ -37,6 +37,7 @@ export type {
   // Agent Types
   AgentStatus,
   AgentInfo,
+  AgentJoinRequest,
   AgentRegisterRequest,
   AgentRegisterResponse,
   AgentSearchOptions,
@@ -55,6 +56,7 @@ export type {
   SendMessageResponse,
   BroadcastStrategy,
   BroadcastRequest,
+  BroadcastByTagRequest,
   BroadcastBySkillRequest,
   ManifestEntry,
   ManifestListResponse,

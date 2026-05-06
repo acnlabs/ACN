@@ -10,6 +10,7 @@ import httpx
 
 from .models import (
     AgentInfo,
+    AgentJoinRequest,
     AgentRegisterRequest,
     BroadcastRequest,
     DashboardData,
@@ -303,11 +304,40 @@ class ACNClient:
     # ============================================
 
     async def register_agent(self, request: AgentRegisterRequest) -> dict[str, Any]:
-        """Register a new agent"""
+        """Platform-managed agent registration (requires Auth0 token).
+
+        For autonomous agents that don't need Auth0, use ``join_acn()`` instead.
+        """
         return await self._request(
             "POST",
             "/api/v1/agents/register",
             json=request.model_dump(by_alias=True, exclude_none=True),
+        )
+
+    async def join_acn(self, request: AgentJoinRequest) -> dict[str, Any]:
+        """Autonomous agent self-registration — no Auth0 required.
+
+        Returns ``{"agent_id": ..., "api_key": ..., "message": ...}`` on success.
+        The ``api_key`` must be stored securely; it is used to authenticate
+        all subsequent API calls for this agent.
+
+        Example::
+
+            req = AgentJoinRequest(
+                name="MyAgent",
+                description="A helpful AI assistant",
+                tags=["coding", "search"],
+                a2a_endpoint="https://my-agent.example.com/a2a",
+                communication_policy={"mode": "manifest"},
+            )
+            result = await client.join_acn(req)
+            agent_id = result["agent_id"]
+            api_key  = result["api_key"]
+        """
+        return await self._request(
+            "POST",
+            "/api/v1/agents/join",
+            json=request.model_dump(exclude_none=True),
         )
 
     async def get_agent(self, agent_id: str) -> AgentInfo:
@@ -429,6 +459,42 @@ class ACNClient:
             json=request.model_dump(exclude_none=True),
         )
 
+    async def broadcast_by_tag(
+        self,
+        from_agent: str,
+        tags: list[str],
+        message: dict[str, Any],
+        *,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Broadcast a message to all agents matching ALL specified tags.
+
+        Returns::
+
+            {
+                "status": "broadcasted",
+                "broadcast_id": "...",
+                "total": N,
+                "successful": N,
+                "responses": [{"agent_id": ..., "status": "success"|"failed"|"rejected", ...}]
+            }
+
+        Args:
+            from_agent: Must match the authenticated agent's ID.
+            tags: Capability tags to match (agents must have ALL specified tags).
+            message: A2A message dict, e.g. ``{"role": "user", "parts": [...]}``.
+            limit: Truncate the ``responses`` list to this many entries (does not
+                   affect delivery — all matching agents still receive the message).
+        """
+        body: dict[str, Any] = {"from_agent": from_agent, "tags": tags, "message": message}
+        if limit is not None:
+            body["limit"] = limit
+        return await self._request(
+            "POST",
+            "/api/v1/communication/broadcast-by-tag",
+            json=body,
+        )
+
     async def broadcast_by_skill(
         self,
         from_agent: str,
@@ -436,7 +502,20 @@ class ACNClient:
         message_type: str,
         content: Any,
     ) -> dict[str, Any]:
-        """Broadcast message to agents with specific skill"""
+        """Deprecated — the server-side ``/broadcast-by-skill`` endpoint no longer
+        exists. Use ``broadcast_by_tag()`` with ``tags=[skill]`` instead.
+
+        .. deprecated::
+            Will be removed in a future version.
+        """
+        import warnings
+
+        warnings.warn(
+            "broadcast_by_skill() calls a removed server endpoint (/broadcast-by-skill). "
+            "Use broadcast_by_tag(from_agent, tags=[skill], message=...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return await self._request(
             "POST",
             "/api/v1/communication/broadcast-by-skill",
@@ -505,8 +584,8 @@ class ACNClient:
 
         Args:
             agent_id: Must match the authenticated agent's ID.
-            limit: Max entries to return (newest first, server cap 100).
-            since_ms: If set, return only entries with ``ts_ms > since_ms``
+            limit: Max entries to return (newest first, server hard cap 200).
+            since_ms: If set, return only entries with ``ts >= since_ms``
                       (useful for incremental polling).
         """
         params: dict[str, Any] = {"limit": limit}

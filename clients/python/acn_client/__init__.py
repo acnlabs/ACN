@@ -12,6 +12,7 @@ Example:
 from .client import ACNClient, ACNError
 from .models import (
     AgentInfo,
+    AgentJoinRequest,
     AgentRegisterRequest,
     AgentSearchOptions,
     AgentStatus,
@@ -49,6 +50,7 @@ __all__ = [
     "WSState",
     # Agent models
     "AgentInfo",
+    "AgentJoinRequest",
     "AgentRegisterRequest",
     "AgentSearchOptions",
     "AgentStatus",

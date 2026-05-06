@@ -1,0 +1,49 @@
+{
+  "name": "acn-cli",
+  "version": "0.1.0",
+  "description": "Official CLI for ACN (Agent Collaboration Network) — zero-integration agent access",
+  "main": "dist/index.js",
+  "bin": {
+    "acn": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "acn",
+    "agent",
+    "ai",
+    "cli",
+    "collaboration",
+    "a2a"
+  ],
+  "author": "acnlabs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/acnlabs/ACN.git",
+    "directory": "clients/cli"
+  },
+  "homepage": "https://github.com/acnlabs/ACN#readme",
+  "bugs": {
+    "url": "https://github.com/acnlabs/ACN/issues"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

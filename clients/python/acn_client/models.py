@@ -34,10 +34,11 @@ class MessageType(StrEnum):
 
 
 class BroadcastStrategy(StrEnum):
-    """Broadcast strategy — aligned with ACN server v0.5+."""
+    """Broadcast delivery strategy — aligned with ACN server v0.5+."""
 
     PARALLEL = "parallel"
     SEQUENTIAL = "sequential"
+    BEST_EFFORT = "best_effort"
 
 
 class PaymentMethod(StrEnum):
@@ -114,24 +115,59 @@ class AgentInfo(BaseModel):
 
 
 class AgentRegisterRequest(BaseModel):
-    """Agent registration request - synced with ACN server model"""
+    """Platform-managed agent registration (POST /agents/register, requires Auth0).
 
-    owner: str = Field(..., description="Agent owner (e.g., user-{id} or provider-{id})")
+    For autonomous self-registration without Auth0, see ``AgentJoinRequest``
+    and ``ACNClient.join_acn()``.
+    """
+
+    owner: str = Field(..., description="Agent owner (system/user-{id}/provider-{id})")
     name: str = Field(..., description="Agent name")
-    endpoint: str = Field(..., description="Agent A2A endpoint URL")
-    skills: list[str] = Field(default_factory=list, description="Agent skill IDs")
+    tags: list[str] = Field(default_factory=list, description="Capability tags for discoverability")
+    endpoint: str | None = Field(None, description="[Deprecated] Use a2a_endpoint instead")
+    a2a_endpoint: str | None = Field(None, description="Direct A2A JSON-RPC endpoint URL")
+    agent_card_url: str | None = Field(
+        None, description="A2A Agent Card discovery URL (used when a2a_endpoint is omitted)"
+    )
     agent_card: dict[str, Any] | None = Field(
-        None, description="Optional Agent Card (auto-generated if not provided)"
+        None, description="Optional A2A Agent Card dict (auto-generated if omitted)"
     )
     subnet_ids: list[str] | None = Field(None, description="Subnets to join (default: ['public'])")
-    # Backward compatibility fields (kept for migration)
-    description: str | None = None
-    metadata: dict[str, Any] | None = None
-    wallet_address: str | None = None
-    payment_capability: "PaymentCapability | None" = None
+    communication_policy: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Inbound message policy, e.g. {'mode': 'manifest'} or {'mode': 'open'}. "
+            "Defaults to 'manifest' for new agents."
+        ),
+    )
 
     class Config:
         populate_by_name = True
+
+
+class AgentJoinRequest(BaseModel):
+    """Autonomous agent self-registration (POST /agents/join, no Auth0 required).
+
+    Returns ``{"agent_id": ..., "api_key": ..., ...}`` on success.
+    """
+
+    name: str = Field(..., min_length=2, max_length=100, description="Agent name")
+    description: str = Field(..., min_length=10, max_length=500, description="What this agent does")
+    tags: list[str] = Field(
+        default_factory=list, description="Capability tags (e.g. ['coding', 'search'])"
+    )
+    endpoint: str | None = Field(None, description="[Deprecated] Use a2a_endpoint instead")
+    a2a_endpoint: str | None = Field(None, description="Direct A2A JSON-RPC endpoint URL")
+    agent_card_url: str | None = Field(None, description="A2A Agent Card discovery URL")
+    agent_card: dict[str, Any] | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
+    referrer_id: str | None = Field(None, description="Referrer agent ID")
+    communication_policy: dict[str, Any] | None = Field(
+        default={"mode": "manifest"},
+        description=(
+            "Inbound message policy. Defaults to manifest mode as of v0.5+. "
+            "Pass {'mode': 'open'} for the legacy inline-delivery behaviour."
+        ),
+    )
 
 
 class AgentSearchOptions(BaseModel):

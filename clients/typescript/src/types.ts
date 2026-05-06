@@ -35,16 +35,40 @@ export interface AgentInfo {
   supported_networks?: string[];
 }
 
-/** Agent registration request */
+/**
+ * Platform-managed agent registration (POST /agents/register, requires Auth0).
+ * For autonomous self-registration without Auth0, use AgentJoinRequest.
+ */
 export interface AgentRegisterRequest {
-  id: string;
+  owner: string;
   name: string;
-  description?: string;
-  skills: string[];
+  /** Capability tags for discoverability */
+  tags: string[];
+  /** @deprecated Use a2a_endpoint instead */
   endpoint?: string;
-  metadata?: Record<string, unknown>;
-  wallet_address?: string;
-  payment_capability?: PaymentCapability;
+  a2a_endpoint?: string;
+  agent_card_url?: string;
+  agent_card?: Record<string, unknown>;
+  subnet_ids?: string[];
+  communication_policy?: { mode: 'open' | 'closed' | 'manifest' | 'allowlist'; reject_reason?: string };
+}
+
+/**
+ * Autonomous agent self-registration (POST /agents/join, no Auth0 required).
+ * Returns { agent_id, api_key, message } on success.
+ */
+export interface AgentJoinRequest {
+  name: string;
+  /** Required — min 10 chars, describes what the agent does */
+  description: string;
+  tags?: string[];
+  /** @deprecated Use a2a_endpoint instead */
+  endpoint?: string;
+  a2a_endpoint?: string;
+  agent_card_url?: string;
+  agent_card?: Record<string, unknown>;
+  referrer_id?: string;
+  communication_policy?: { mode: 'open' | 'closed' | 'manifest' | 'allowlist'; reject_reason?: string };
 }
 
 /** Agent registration response */
@@ -146,8 +170,8 @@ export interface SendMessageRequest {
   content_hash?: string;
 }
 
-/** Broadcast strategy */
-export type BroadcastStrategy = 'parallel' | 'sequential';
+/** Broadcast delivery strategy */
+export type BroadcastStrategy = 'parallel' | 'sequential' | 'best_effort';
 
 /** Broadcast request — aligned with ACN server v0.5+ */
 export interface BroadcastRequest {
@@ -158,7 +182,19 @@ export interface BroadcastRequest {
   target_tags?: string[];
 }
 
-/** Broadcast by skill request */
+/** Broadcast to agents matching ALL specified tags (POST /broadcast-by-tag) */
+export interface BroadcastByTagRequest {
+  from_agent: string;
+  tags: string[];
+  message: Record<string, unknown>;
+  /** Truncate the responses list (delivery is unaffected) */
+  limit?: number;
+}
+
+/**
+ * @deprecated The server-side /broadcast-by-skill endpoint no longer exists.
+ * Use BroadcastByTagRequest with tags=[skill] instead.
+ */
 export interface BroadcastBySkillRequest {
   from_agent: string;
   skill: string;
