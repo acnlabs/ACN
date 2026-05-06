@@ -271,9 +271,9 @@ class SendMessageRequest(BaseModel):
 
         {"role": "user", "parts": [{"type": "text", "text": "hello"}]}
 
-    ``attention_fee`` and ``content_url`` only take effect when the
-    recipient is in manifest mode; they are silently ignored or raise
-    400 otherwise (see server docs).
+    ``attention_fee``, ``content_url``, and ``message_type`` only take
+    effect when the recipient is in manifest mode; they are silently
+    ignored or raise 400 otherwise (see server docs).
     """
 
     from_agent: str
@@ -283,6 +283,10 @@ class SendMessageRequest(BaseModel):
     attention_fee: AttentionFee | None = None
     content_url: str | None = None
     content_hash: str | None = None
+    # Phase 3: optional category tag for manifest filtering.
+    # Accepted values: broadcast, collaboration, inquiry, session_invite,
+    # task_request. Absent → entry has no type tag (not filterable by type).
+    message_type: str | None = None
 
 
 class BroadcastRequest(BaseModel):
@@ -310,13 +314,20 @@ class ManifestEntry(BaseModel):
     content_size: int
     extra: dict[str, Any] = Field(default_factory=dict)
     acked_at: int | None = None
+    # Phase 3: ACN message category tag set by the sender.  Absent (None)
+    # for entries written via Path 1 without a message_type.
+    message_type: str | None = None
 
 
 class ManifestContentResponse(BaseModel):
     """Response from GET /communication/content/{mid}.
 
-    ``self_hosted=True`` means the content lives at ``content_url``
-    on the sender's server; ``content`` is absent in that case.
+    ACN-hosted content is returned in chunks:
+    * ``has_more=False`` → entire content in ``content_chunk`` (or first-and-only page).
+    * ``has_more=True``  → more pages available; pass ``next_cursor`` to the next call.
+
+    Self-hosted content (``self_hosted=True``) is always returned in a single
+    response with ``content_url``; cursor/chunk fields are absent.
     """
 
     mid: str
@@ -324,7 +335,80 @@ class ManifestContentResponse(BaseModel):
     self_hosted: bool = False
     content_url: str | None = None
     content_hash: str | None = None
-    content: dict[str, Any] | None = None
+    # ACN-hosted path fields (cursor-based pagination).
+    has_more: bool = False
+    content_chunk: str | None = None
+    next_cursor: str | None = None
+
+
+# ============================================
+# Phase 3: Manifest Send (Path 2)
+# ============================================
+
+
+class ManifestSendRequest(BaseModel):
+    """Path 2 notify-only send (POST /communication/manifest/send).
+
+    Unlike ``SendMessageRequest``, this endpoint:
+    * Requires ``message_type`` (mandatory).
+    * Accepts only a ``summary`` — no full message body stored on ACN.
+    * Only works when the recipient is in ``manifest`` or ``allowlist`` mode.
+    """
+
+    from_agent: str
+    target_agent: str
+    message_type: str
+    summary: str
+    ttl_hours: int | None = None
+    attention_fee: AttentionFee | None = None
+    content_url: str | None = None
+    content_hash: str | None = None
+
+
+# ============================================
+# Phase 3: Communication Profile
+# ============================================
+
+
+class CommunicationProfile(BaseModel):
+    """Public read-only summary of an agent's communication policy.
+
+    Returned by GET /agents/{agent_id}/communication_profile (no auth required).
+    Lets a prospective sender decide whether to attach an attention_fee or
+    whether their message will be accepted before sending.
+    """
+
+    agent_id: str
+    mode: str  # open | manifest | allowlist | closed
+    attention_fee_required: bool
+
+
+# ============================================
+# Phase 3: Session Layer
+# ============================================
+
+
+class SessionEntry(BaseModel):
+    """A real-time session negotiation record.
+
+    Sessions are ephemeral (TTL 1–30 min) and Redis-only. Use the session
+    layer to agree on a bilateral channel before committing resources.
+    """
+
+    session_id: str
+    inviter_id: str
+    invitee_id: str
+    status: str  # pending | accepted | rejected | closed
+    created_at: int  # ms
+    expires_at: int  # ms
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionInviteRequest(BaseModel):
+    """Body for POST /sessions/invite/{target_agent_id}."""
+
+    ttl_seconds: int | None = None  # 60–1800; default 300
+    metadata: dict[str, Any] | None = None
 
 
 # ============================================

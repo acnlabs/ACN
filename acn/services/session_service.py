@@ -317,7 +317,11 @@ class SessionService:
         *,
         limit: int = 50,
     ) -> list[SessionEntry]:
-        """List pending session invitations for an agent (newest-first).
+        """List pending session invitations for an agent (soonest-to-expire first).
+
+        Entries are sorted ascending by ``expires_at_ms`` (ZSET score), so
+        invitations about to expire appear first — helping the recipient
+        prioritise time-sensitive decisions.
 
         Skips expired entries (Redis TTL race) silently.
         """

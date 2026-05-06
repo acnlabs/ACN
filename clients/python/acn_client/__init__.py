@@ -20,8 +20,10 @@ from .models import (
     AttentionFee,
     BroadcastRequest,
     BroadcastStrategy,
+    CommunicationProfile,
     ManifestContentResponse,
     ManifestEntry,
+    ManifestSendRequest,
     MessageType,
     ParticipationInfo,
     PaymentCapability,
@@ -30,6 +32,8 @@ from .models import (
     PaymentTask,
     PaymentTaskStatus,
     SendMessageRequest,
+    SessionEntry,
+    SessionInviteRequest,
     SubnetInfo,
     TaskAcceptRequest,
     TaskAcceptResponse,
@@ -40,7 +44,7 @@ from .models import (
 )
 from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 __all__ = [
     # Client
     "ACNClient",
@@ -60,10 +64,15 @@ __all__ = [
     "AttentionFee",
     "BroadcastRequest",
     "BroadcastStrategy",
+    "CommunicationProfile",
     "ManifestContentResponse",
     "ManifestEntry",
+    "ManifestSendRequest",
     "MessageType",
     "SendMessageRequest",
+    # Session models
+    "SessionEntry",
+    "SessionInviteRequest",
     # Subnet models
     "SubnetInfo",
     # Payment models

@@ -174,13 +174,13 @@ export interface AttentionFee {
 }
 
 /**
- * Send message request — aligned with ACN server v0.5+.
+ * Send message request — aligned with ACN server v0.6+.
  *
  * `message` must follow the A2A message shape, e.g.:
  * `{ role: 'user', parts: [{ type: 'text', text: 'hello' }] }`
  *
- * `attention_fee` and `content_url` only apply when the recipient is
- * in manifest mode; they are silently ignored or return 400 otherwise.
+ * `attention_fee`, `content_url`, and `message_type` only apply when
+ * the recipient is in manifest mode.
  */
 export interface SendMessageRequest {
   from_agent: string;
@@ -191,6 +191,13 @@ export interface SendMessageRequest {
   attention_fee?: AttentionFee;
   content_url?: string;
   content_hash?: string;
+  /**
+   * Optional ACN message category for manifest filtering.
+   * Accepted values: broadcast | collaboration | inquiry |
+   * session_invite | task_request.
+   * Absent → entry has no type tag (excluded from type-filtered listings).
+   */
+  message_type?: ManifestMessageType;
 }
 
 /** Broadcast delivery strategy */
@@ -248,6 +255,14 @@ export interface SendMessageResponse {
   };
 }
 
+/** ACN message category values (Phase 3) */
+export type ManifestMessageType =
+  | 'task_request'
+  | 'collaboration'
+  | 'inquiry'
+  | 'broadcast'
+  | 'session_invite';
+
 /**
  * A single manifest queue entry as returned by GET /manifest/{agent_id}.
  *
@@ -264,25 +279,99 @@ export interface ManifestEntry {
   extra?: Record<string, unknown>;
   /** Set when the entry has been acked; absent otherwise */
   acked_at?: number;
+  /** Phase 3: ACN category tag set by the sender; absent for untagged entries */
+  message_type?: ManifestMessageType;
 }
 
-/** Response from list_manifest */
+/** Response from listManifest */
 export interface ManifestListResponse {
+  agent_id: string;
+  count: number;
   entries: ManifestEntry[];
 }
 
 /**
- * Response from fetch_manifest_content.
- * When self_hosted=true, content lives at content_url on the sender's
- * server; the `content` field is absent.
+ * Response from fetchManifestContent (cursor-based pagination for ACN-hosted).
+ *
+ * ACN-hosted: `has_more=false` → complete payload in `content_chunk`.
+ *             `has_more=true`  → pass `next_cursor` to the next call.
+ * Self-hosted (`self_hosted=true`): URL returned in a single call.
  */
 export interface ManifestContentResponse {
   mid: string;
   owner_id: string;
+  /** True when content lives on the sender's server rather than ACN */
   self_hosted?: boolean;
   content_url?: string;
   content_hash?: string;
-  content?: Record<string, unknown>;
+  /** ACN-hosted path: chunk of the JSON payload */
+  content_chunk?: string;
+  has_more?: boolean;
+  /** Opaque token — pass as `cursor` to retrieve the next chunk */
+  next_cursor?: string;
+}
+
+/**
+ * Path 2 notify-only send (POST /communication/manifest/send).
+ * Unlike SendMessageRequest, stores only metadata — no full payload.
+ * Only works when the recipient is in manifest or allowlist mode.
+ */
+export interface ManifestSendRequest {
+  from_agent: string;
+  target_agent: string;
+  /** Required for Path 2 */
+  message_type: ManifestMessageType;
+  /** Short human-readable preview (≤ 200 chars) */
+  summary: string;
+  /** TTL in hours (1–720); defaults to 7 days */
+  ttl_hours?: number;
+  attention_fee?: AttentionFee;
+  /** HTTPS only */
+  content_url?: string;
+  content_hash?: string;
+}
+
+/**
+ * Public read-only summary of an agent's communication policy.
+ * Returned by GET /agents/{agent_id}/communication_profile (no auth required).
+ */
+export interface CommunicationProfile {
+  agent_id: string;
+  mode: 'open' | 'manifest' | 'allowlist' | 'closed';
+  attention_fee_required: boolean;
+}
+
+/** Session status values */
+export type SessionStatus = 'pending' | 'accepted' | 'rejected' | 'closed';
+
+/**
+ * A real-time session negotiation record.
+ * Sessions are ephemeral (TTL 1–30 min) and Redis-only.
+ */
+export interface SessionEntry {
+  session_id: string;
+  inviter_id: string;
+  invitee_id: string;
+  status: SessionStatus;
+  /** Unix timestamp ms */
+  created_at: number;
+  /** Unix timestamp ms */
+  expires_at: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** Body for POST /sessions/invite/{target_agent_id} */
+export interface SessionInviteRequest {
+  /** 60–1800 seconds; default 300 */
+  ttl_seconds?: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** Response from listPendingSessions */
+export interface PendingSessionsResponse {
+  agent_id: string;
+  count: number;
+  sessions: SessionEntry[];
 }
 
 // ============================================

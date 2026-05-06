@@ -14,9 +14,11 @@ from .models import (
     AgentJoinResponse,
     AgentRegisterRequest,
     BroadcastRequest,
+    CommunicationProfile,
     DashboardData,
     ManifestContentResponse,
     ManifestEntry,
+    ManifestSendRequest,
     ParticipationInfo,
     PaymentCapability,
     PaymentStats,
@@ -579,6 +581,7 @@ class ACNClient:
         *,
         limit: int = 50,
         since_ms: int | None = None,
+        message_type: str | None = None,
     ) -> list[ManifestEntry]:
         """List manifest queue entries for the authenticated agent.
 
@@ -589,13 +592,19 @@ class ACNClient:
 
         Args:
             agent_id: Must match the authenticated agent's ID.
-            limit: Max entries to return (newest first, server hard cap 200).
+            limit: Max entries to return (server hard cap 200).
             since_ms: If set, return only entries with ``ts >= since_ms``
                       (useful for incremental polling).
+            message_type: Optional filter — only return entries whose
+                ``message_type`` matches (e.g. ``"task_request"``).
+                Entries written without a type tag are excluded when
+                this filter is set.
         """
         params: dict[str, Any] = {"limit": limit}
         if since_ms is not None:
             params["since_ms"] = since_ms
+        if message_type is not None:
+            params["type"] = message_type
         data = await self._request(
             "GET",
             f"/api/v1/communication/manifest/{agent_id}",
@@ -603,20 +612,69 @@ class ACNClient:
         )
         return [ManifestEntry(**e) for e in data.get("entries", [])]
 
-    async def fetch_manifest_content(self, mid: str) -> ManifestContentResponse:
-        """Fetch the full payload for a manifest entry.
+    async def fetch_manifest_content(
+        self,
+        mid: str,
+        *,
+        cursor: str | None = None,
+    ) -> ManifestContentResponse:
+        """Fetch the payload for a manifest entry (cursor-based pagination).
 
-        For ACN-hosted content, returns ``content`` dict.
-        For self-hosted content (``content_url`` set), returns
-        ``self_hosted=True`` + ``content_url`` / ``content_hash``
-        without fetching the remote payload — the caller is responsible
-        for downloading and verifying it.
+        For ACN-hosted content, returns ``content_chunk`` (a JSON string
+        fragment).  When ``has_more=True``, pass ``next_cursor`` from the
+        response back as ``cursor`` to retrieve the next page.
+
+        For self-hosted content (``self_hosted=True``), the full URL is
+        returned in a single call; the caller is responsible for downloading
+        and verifying it.
 
         Args:
-            mid: Manifest entry ID (32-hex string from ``ManifestEntry.mid``).
+            mid: Manifest entry ID (32-hex from ``ManifestEntry.mid``).
+            cursor: Pagination token from a previous response.
+                    Omit to start from the beginning.
         """
-        data = await self._request("GET", f"/api/v1/communication/content/{mid}")
+        params: dict[str, Any] = {}
+        if cursor is not None:
+            params["cursor"] = cursor
+        data = await self._request(
+            "GET",
+            f"/api/v1/communication/content/{mid}",
+            params=params or None,
+        )
         return ManifestContentResponse(**data)
+
+    async def manifest_send(self, request: ManifestSendRequest) -> dict[str, Any]:
+        """Path 2 notify-only send (POST /communication/manifest/send).
+
+        Unlike ``send_message``, this endpoint:
+        * Stores only a summary + metadata — no full payload on ACN.
+        * Requires ``message_type`` (mandatory for Path 2).
+        * Only works when the recipient is in ``manifest`` or ``allowlist`` mode.
+        * Supports optional ``attention_fee`` and ``content_url``.
+
+        Returns the same shape as ``send_message`` (``status``, ``mid``, etc.).
+        """
+        return await self._request(
+            "POST",
+            "/api/v1/communication/manifest/send",
+            json=request.model_dump(exclude_none=True),
+        )
+
+    async def get_communication_profile(self, agent_id: str) -> CommunicationProfile:
+        """Fetch the public communication profile for any agent (no auth required).
+
+        Returns the agent's communication mode and whether an attention_fee
+        is required — the two pieces of information a sender needs before
+        deciding how to route a message.
+
+        Args:
+            agent_id: Target agent's ID.
+        """
+        data = await self._request(
+            "GET",
+            f"/api/v1/agents/{agent_id}/communication_profile",
+        )
+        return CommunicationProfile(**data)
 
     async def ack_manifest(self, agent_id: str, mid: str) -> dict[str, Any]:
         """Acknowledge a manifest entry and release its attention_fee escrow.
@@ -665,6 +723,93 @@ class ACNClient:
             "DELETE",
             f"/api/v1/communication/manifest/{agent_id}/{mid}",
         )
+
+    # ============================================
+    # Session Layer (Phase 3)
+    # ============================================
+
+    async def invite_session(
+        self,
+        target_agent_id: str,
+        *,
+        ttl_seconds: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Invite another agent to a real-time session.
+
+        Creates a pending session negotiation token.  The invitee receives
+        a ``session_invite`` WebSocket event so they can react in real time.
+
+        Args:
+            target_agent_id: The agent to invite.
+            ttl_seconds: Invitation TTL in seconds (60–1800; default 300).
+            metadata: Optional context dict attached to the invitation
+                      (task description, capabilities, etc.).  Max 4 KB.
+
+        Returns:
+            Session dict with ``session_id``, ``status="pending"``,
+            ``inviter_id``, ``invitee_id``, ``created_at``, ``expires_at``.
+        """
+        body: dict[str, Any] = {}
+        if ttl_seconds is not None:
+            body["ttl_seconds"] = ttl_seconds
+        if metadata is not None:
+            body["metadata"] = metadata
+        return await self._request(
+            "POST",
+            f"/api/v1/sessions/invite/{target_agent_id}",
+            json=body,
+        )
+
+    async def accept_session(self, session_id: str) -> dict[str, Any]:
+        """Accept a pending session invitation (invitee only).
+
+        The inviter receives a ``session_accepted`` WebSocket event.
+
+        Args:
+            session_id: Session ID from the ``session_invite`` WS event.
+        """
+        return await self._request(
+            "POST",
+            f"/api/v1/sessions/{session_id}/accept",
+        )
+
+    async def reject_session(self, session_id: str) -> dict[str, Any]:
+        """Reject a pending session invitation (invitee only).
+
+        The session is deleted immediately.  The inviter receives a
+        ``session_rejected`` WebSocket event.
+
+        Args:
+            session_id: Session ID from the ``session_invite`` WS event.
+        """
+        return await self._request(
+            "POST",
+            f"/api/v1/sessions/{session_id}/reject",
+        )
+
+    async def close_session(self, session_id: str) -> dict[str, Any]:
+        """Close a session (either participant may close it).
+
+        The session is deleted from Redis.  The other participant receives
+        a ``session_closed`` WebSocket event.
+
+        Args:
+            session_id: Session ID.
+        """
+        return await self._request(
+            "DELETE",
+            f"/api/v1/sessions/{session_id}",
+        )
+
+    async def list_pending_sessions(self) -> list[dict[str, Any]]:
+        """List pending session invitations for the authenticated agent.
+
+        Returns invitations where the authenticated agent is the *invitee*
+        and the status is still ``pending`` (not expired).
+        """
+        data = await self._request("GET", "/api/v1/sessions/pending")
+        return data.get("sessions", [])
 
     # ============================================
     # Payment Discovery

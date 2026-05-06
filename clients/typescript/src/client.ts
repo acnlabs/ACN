@@ -20,18 +20,24 @@ import type {
   BroadcastBySkillRequest,
   BroadcastByTagRequest,
   BroadcastRequest,
+  CommunicationProfile,
   DashboardData,
+  ManifestContentResponse,
+  ManifestEntry,
+  ManifestListResponse,
+  ManifestMessageType,
+  ManifestSendRequest,
   Message,
   MetricsData,
   PaymentCapability,
   PaymentDiscoveryOptions,
   PaymentStats,
   PaymentTask,
-  ManifestContentResponse,
-  ManifestEntry,
-  ManifestListResponse,
+  PendingSessionsResponse,
   SendMessageRequest,
   SendMessageResponse,
+  SessionEntry,
+  SessionInviteRequest,
   SubnetCreateRequest,
   SubnetCreateResponse,
   SubnetInfo,
@@ -359,13 +365,22 @@ export class ACNClient {
    * @param options.limit    Max entries to return (newest first, server hard cap 200).
    * @param options.sinceMs  Return only entries with ts >= sinceMs (incremental polling).
    */
+  /**
+   * List manifest queue entries for an agent.
+   *
+   * @param agentId - Must match the authenticated agent's ID.
+   * @param options.limit - Max entries (server cap: 200).
+   * @param options.sinceMs - Return only entries with ts >= sinceMs.
+   * @param options.messageType - Filter by ACN category tag (Phase 3).
+   */
   async listManifest(
     agentId: string,
-    options?: { limit?: number; sinceMs?: number }
+    options?: { limit?: number; sinceMs?: number; messageType?: ManifestMessageType }
   ): Promise<ManifestListResponse> {
     const params: Record<string, string | number> = {};
     if (options?.limit !== undefined) params.limit = options.limit;
     if (options?.sinceMs !== undefined) params.since_ms = options.sinceMs;
+    if (options?.messageType !== undefined) params.type = options.messageType;
     return this.get(`/api/v1/communication/manifest/${agentId}`, params);
   }
 
@@ -378,8 +393,104 @@ export class ACNClient {
    *
    * @param mid  Manifest entry ID (32-hex string from ManifestEntry.mid).
    */
-  async fetchManifestContent(mid: string): Promise<ManifestContentResponse> {
-    return this.get(`/api/v1/communication/content/${mid}`);
+  /**
+   * Fetch the payload for a manifest entry (cursor-based pagination).
+   *
+   * For ACN-hosted content: pass `cursor` from a previous `next_cursor`
+   * to retrieve subsequent pages. Omit for the first page.
+   * For self-hosted content: returns `content_url` in a single call.
+   *
+   * @param mid - Manifest entry ID.
+   * @param cursor - Pagination token from a previous response's `next_cursor`.
+   */
+  async fetchManifestContent(mid: string, cursor?: string): Promise<ManifestContentResponse> {
+    const params: Record<string, string> = {};
+    if (cursor !== undefined) params.cursor = cursor;
+    return this.get(`/api/v1/communication/content/${mid}`, Object.keys(params).length ? params : undefined);
+  }
+
+  /**
+   * Path 2 notify-only send (POST /communication/manifest/send).
+   *
+   * Stores only metadata (summary + message_type) — no full payload on ACN.
+   * Only works when the recipient is in `manifest` or `allowlist` mode.
+   *
+   * @param request - ManifestSendRequest with required `message_type`.
+   */
+  async manifestSend(request: ManifestSendRequest): Promise<SendMessageResponse> {
+    return this.post('/api/v1/communication/manifest/send', request);
+  }
+
+  /**
+   * Fetch the public communication profile for any agent (no auth required).
+   *
+   * Returns the agent's communication mode and whether an attention_fee is
+   * required — the two pieces of information a sender needs before routing.
+   *
+   * @param agentId - Target agent's ID.
+   */
+  async getCommunicationProfile(agentId: string): Promise<CommunicationProfile> {
+    return this.get(`/api/v1/agents/${agentId}/communication_profile`);
+  }
+
+  // ─────────────────────────────────────────────
+  // Session Layer (Phase 3)
+  // ─────────────────────────────────────────────
+
+  /**
+   * Invite another agent to a real-time session.
+   *
+   * Creates a pending session token.  The invitee receives a
+   * `session_invite` WebSocket event in real time.
+   *
+   * @param targetAgentId - The agent to invite.
+   * @param request - Optional TTL and metadata.
+   */
+  async inviteSession(targetAgentId: string, request?: SessionInviteRequest): Promise<SessionEntry> {
+    return this.post(`/api/v1/sessions/invite/${targetAgentId}`, request ?? {});
+  }
+
+  /**
+   * Accept a pending session invitation (invitee only).
+   *
+   * The inviter receives a `session_accepted` WebSocket event.
+   *
+   * @param sessionId - Session ID from the `session_invite` WS event.
+   */
+  async acceptSession(sessionId: string): Promise<SessionEntry> {
+    return this.post(`/api/v1/sessions/${sessionId}/accept`, {});
+  }
+
+  /**
+   * Reject a pending session invitation (invitee only).
+   *
+   * The session is deleted.  The inviter receives a `session_rejected` event.
+   *
+   * @param sessionId - Session ID from the `session_invite` WS event.
+   */
+  async rejectSession(sessionId: string): Promise<SessionEntry> {
+    return this.post(`/api/v1/sessions/${sessionId}/reject`, {});
+  }
+
+  /**
+   * Close a session (either participant may close it).
+   *
+   * The other participant receives a `session_closed` WebSocket event.
+   *
+   * @param sessionId - Session ID.
+   */
+  async closeSession(sessionId: string): Promise<SessionEntry> {
+    return this.delete(`/api/v1/sessions/${sessionId}`);
+  }
+
+  /**
+   * List pending session invitations for the authenticated agent.
+   *
+   * Returns invitations where the agent is the *invitee* and status is
+   * still `pending` (not expired).
+   */
+  async listPendingSessions(): Promise<PendingSessionsResponse> {
+    return this.get('/api/v1/sessions/pending');
   }
 
   /**
