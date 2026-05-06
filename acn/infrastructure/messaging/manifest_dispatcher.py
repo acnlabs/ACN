@@ -185,6 +185,7 @@ class ManifestDispatcher:
         content_url: str | None = None,
         content_hash: str | None = None,
         message_type: str | None = None,
+        ttl_seconds: int | None = None,
     ) -> ManifestEntry:
         """Persist the message to the manifest queue + push WS + count.
 
@@ -288,6 +289,7 @@ class ManifestDispatcher:
             content_url=content_url,
             content_hash=content_hash,
             message_type=message_type,
+            ttl_seconds=ttl_seconds,
         )
 
         # Best-effort WS push. The recipient still gets the manifest
