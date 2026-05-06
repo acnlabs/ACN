@@ -50,10 +50,15 @@ export type {
   // Communication Types
   MessageType,
   Message,
+  AttentionFee,
   SendMessageRequest,
+  SendMessageResponse,
   BroadcastStrategy,
   BroadcastRequest,
   BroadcastBySkillRequest,
+  ManifestEntry,
+  ManifestListResponse,
+  ManifestContentResponse,
   
   // Payment Types
   PaymentMethod,

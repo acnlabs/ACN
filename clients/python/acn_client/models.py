@@ -189,25 +189,77 @@ class Message(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class AttentionFee(BaseModel):
+    """Attention fee attached to a manifest-mode message.
+
+    Locks ``amount`` credits in escrow until the recipient acks the
+    manifest entry. Range: 1–1000 credits (≈ $0.01–$10).
+    """
+
+    amount: int = Field(..., ge=1, le=1000, description="Credits to lock (1–1000)")
+    currency: str = Field(default="credits", description="Only 'credits' supported")
+
+
 class SendMessageRequest(BaseModel):
-    """Send message request"""
+    """Send message request — aligned with ACN server v0.5+.
+
+    ``message`` must be a JSON-serialisable dict following the A2A
+    message shape, e.g.::
+
+        {"role": "user", "parts": [{"type": "text", "text": "hello"}]}
+
+    ``attention_fee`` and ``content_url`` only take effect when the
+    recipient is in manifest mode; they are silently ignored or raise
+    400 otherwise (see server docs).
+    """
 
     from_agent: str
-    to_agent: str
-    message_type: MessageType
-    content: Any
-    metadata: dict[str, Any] | None = None
+    target_agent: str
+    message: dict[str, Any]
+    priority: str = "normal"
+    attention_fee: AttentionFee | None = None
+    content_url: str | None = None
+    content_hash: str | None = None
 
 
 class BroadcastRequest(BaseModel):
-    """Broadcast request"""
+    """Broadcast request — aligned with ACN server v0.5+."""
 
     from_agent: str
-    message_type: MessageType
-    content: Any
-    strategy: BroadcastStrategy = BroadcastStrategy.ALL
-    target_agents: list[str] | None = None
-    metadata: dict[str, Any] | None = None
+    message: dict[str, Any]
+    strategy: str = "parallel"
+    target_subnet: str | None = None
+    target_tags: list[str] | None = None
+
+
+class ManifestEntry(BaseModel):
+    """A single manifest queue entry as returned by the ACN server."""
+
+    mid: str
+    sender_id: str
+    summary: str
+    ts_ms: int
+    content_size: int
+    extra: dict[str, Any] = Field(default_factory=dict)
+    acked_at_ms: int | None = None
+    expires_at_ms: int | None = None
+    content_url: str | None = None
+    content_hash: str | None = None
+
+
+class ManifestContentResponse(BaseModel):
+    """Response from GET /communication/content/{mid}.
+
+    ``self_hosted=True`` means the content lives at ``content_url``
+    on the sender's server; ``content`` is absent in that case.
+    """
+
+    mid: str
+    owner_id: str
+    self_hosted: bool = False
+    content_url: str | None = None
+    content_hash: str | None = None
+    content: dict[str, Any] | None = None
 
 
 # ============================================

@@ -24,7 +24,11 @@ import type {
   PaymentDiscoveryOptions,
   PaymentStats,
   PaymentTask,
+  ManifestContentResponse,
+  ManifestEntry,
+  ManifestListResponse,
   SendMessageRequest,
+  SendMessageResponse,
   SubnetCreateRequest,
   SubnetCreateResponse,
   SubnetInfo,
@@ -242,7 +246,7 @@ export class ACNClient {
   // ============================================
 
   /** Send message to an agent */
-  async sendMessage(request: SendMessageRequest): Promise<{ success: boolean; message_id: string }> {
+  async sendMessage(request: SendMessageRequest): Promise<SendMessageResponse> {
     return this.post('/api/v1/communication/send', request);
   }
 
@@ -275,6 +279,64 @@ export class ACNClient {
     if (options?.limit !== undefined) params.limit = options.limit;
     if (options?.consume) params.ack = true;
     return this.get(`/api/v1/communication/history/${agentId}`, params);
+  }
+
+  // ============================================
+  // Manifest Queue (Phase 2/3)
+  // ============================================
+
+  /**
+   * List manifest queue entries for the authenticated agent.
+   *
+   * Manifest mode is the default for agents registered from v0.5+.
+   * When a sender targets a manifest-mode recipient, the message is held
+   * in a server-side queue. Poll this endpoint to discover pending messages.
+   *
+   * @param agentId  Must match the authenticated agent's ID.
+   * @param options.limit    Max entries to return (newest first, server cap 100).
+   * @param options.sinceMs  Return only entries with ts_ms > sinceMs (incremental polling).
+   */
+  async listManifest(
+    agentId: string,
+    options?: { limit?: number; sinceMs?: number }
+  ): Promise<ManifestListResponse> {
+    const params: Record<string, string | number> = {};
+    if (options?.limit !== undefined) params.limit = options.limit;
+    if (options?.sinceMs !== undefined) params.since_ms = options.sinceMs;
+    return this.get(`/api/v1/communication/manifest/${agentId}`, params);
+  }
+
+  /**
+   * Fetch the full payload for a manifest entry.
+   *
+   * For ACN-hosted content, returns `content` dict.
+   * For self-hosted content (`self_hosted=true`), returns `content_url` /
+   * `content_hash` — the caller must fetch and verify the remote payload.
+   *
+   * @param mid  Manifest entry ID (32-hex string from ManifestEntry.mid).
+   */
+  async fetchManifestContent(mid: string): Promise<ManifestContentResponse> {
+    return this.get(`/api/v1/communication/content/${mid}`);
+  }
+
+  /**
+   * Acknowledge a manifest entry and release its attention_fee escrow.
+   *
+   * Idempotent: re-acking an already-acked entry returns 200 with
+   * `already_acked: true` rather than an error.
+   */
+  async ackManifest(agentId: string, mid: string): Promise<Record<string, unknown>> {
+    return this.post(`/api/v1/communication/manifest/${agentId}/${mid}/ack`);
+  }
+
+  /**
+   * Delete a manifest entry and refund any locked attention_fee.
+   *
+   * Use to reject/discard a message without reading it, or to clean up
+   * after fetchManifestContent.
+   */
+  async deleteManifest(agentId: string, mid: string): Promise<Record<string, unknown>> {
+    return this.delete(`/api/v1/communication/manifest/${agentId}/${mid}`);
   }
 
   // ============================================

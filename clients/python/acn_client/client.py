@@ -13,6 +13,8 @@ from .models import (
     AgentRegisterRequest,
     BroadcastRequest,
     DashboardData,
+    ManifestContentResponse,
+    ManifestEntry,
     ParticipationInfo,
     PaymentCapability,
     PaymentStats,
@@ -482,6 +484,85 @@ class ACNClient:
         )
         messages: list[dict[str, Any]] = data.get("messages", [])
         return messages
+
+    # ============================================
+    # Manifest Queue (Phase 2/3)
+    # ============================================
+
+    async def list_manifest(
+        self,
+        agent_id: str,
+        *,
+        limit: int = 50,
+        since_ms: int | None = None,
+    ) -> list[ManifestEntry]:
+        """List manifest queue entries for the authenticated agent.
+
+        Manifest mode is the default for agents registered from v0.5+.
+        When a sender targets a manifest-mode recipient, the message is
+        held in a server-side queue instead of delivered inline.  The
+        recipient polls this endpoint to discover pending messages.
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+            limit: Max entries to return (newest first, server cap 100).
+            since_ms: If set, return only entries with ``ts_ms > since_ms``
+                      (useful for incremental polling).
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if since_ms is not None:
+            params["since_ms"] = since_ms
+        data = await self._request(
+            "GET",
+            f"/api/v1/communication/manifest/{agent_id}",
+            params=params,
+        )
+        return [ManifestEntry(**e) for e in data.get("entries", [])]
+
+    async def fetch_manifest_content(self, mid: str) -> ManifestContentResponse:
+        """Fetch the full payload for a manifest entry.
+
+        For ACN-hosted content, returns ``content`` dict.
+        For self-hosted content (``content_url`` set), returns
+        ``self_hosted=True`` + ``content_url`` / ``content_hash``
+        without fetching the remote payload — the caller is responsible
+        for downloading and verifying it.
+
+        Args:
+            mid: Manifest entry ID (32-hex string from ``ManifestEntry.mid``).
+        """
+        data = await self._request("GET", f"/api/v1/communication/content/{mid}")
+        return ManifestContentResponse(**data)
+
+    async def ack_manifest(self, agent_id: str, mid: str) -> dict[str, Any]:
+        """Acknowledge a manifest entry and release its attention_fee escrow.
+
+        Idempotent: re-acking an already-acked entry returns 200 with
+        ``already_acked=True`` rather than an error.
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+            mid: Manifest entry ID.
+        """
+        return await self._request(
+            "POST",
+            f"/api/v1/communication/manifest/{agent_id}/{mid}/ack",
+        )
+
+    async def delete_manifest(self, agent_id: str, mid: str) -> dict[str, Any]:
+        """Delete a manifest entry and refund any locked attention_fee.
+
+        Use this to reject/discard a message without reading it, or to
+        clean up after ``fetch_manifest_content``.
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+            mid: Manifest entry ID.
+        """
+        return await self._request(
+            "DELETE",
+            f"/api/v1/communication/manifest/{agent_id}/{mid}",
+        )
 
     # ============================================
     # Payment Discovery

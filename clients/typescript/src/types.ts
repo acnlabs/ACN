@@ -114,26 +114,48 @@ export interface Message {
   metadata?: Record<string, unknown>;
 }
 
-/** Send message request */
+/**
+ * Attention fee attached to a manifest-mode send.
+ * Locks credits in escrow until the recipient acks the entry.
+ * Range: 1–1000 credits (≈ $0.01–$10).
+ */
+export interface AttentionFee {
+  /** Credits to lock (1–1000) */
+  amount: number;
+  /** Only 'credits' supported */
+  currency?: string;
+}
+
+/**
+ * Send message request — aligned with ACN server v0.5+.
+ *
+ * `message` must follow the A2A message shape, e.g.:
+ * `{ role: 'user', parts: [{ type: 'text', text: 'hello' }] }`
+ *
+ * `attention_fee` and `content_url` only apply when the recipient is
+ * in manifest mode; they are silently ignored or return 400 otherwise.
+ */
 export interface SendMessageRequest {
   from_agent: string;
-  to_agent: string;
-  message_type: MessageType;
-  content: unknown;
-  metadata?: Record<string, unknown>;
+  /** Server field name is target_agent (not to_agent) */
+  target_agent: string;
+  message: Record<string, unknown>;
+  priority?: string;
+  attention_fee?: AttentionFee;
+  content_url?: string;
+  content_hash?: string;
 }
 
 /** Broadcast strategy */
-export type BroadcastStrategy = 'all' | 'random' | 'round_robin' | 'load_balanced';
+export type BroadcastStrategy = 'parallel' | 'sequential';
 
-/** Broadcast request */
+/** Broadcast request — aligned with ACN server v0.5+ */
 export interface BroadcastRequest {
   from_agent: string;
-  message_type: MessageType;
-  content: unknown;
+  message: Record<string, unknown>;
   strategy?: BroadcastStrategy;
-  target_agents?: string[];
-  metadata?: Record<string, unknown>;
+  target_subnet?: string;
+  target_tags?: string[];
 }
 
 /** Broadcast by skill request */
@@ -144,6 +166,60 @@ export interface BroadcastBySkillRequest {
   content: unknown;
   strategy?: BroadcastStrategy;
   metadata?: Record<string, unknown>;
+}
+
+/** Send message response — delivery_mode indicates routing outcome */
+export interface SendMessageResponse {
+  status: string;
+  delivery_mode: 'inbox' | 'manifest';
+  route_id: string;
+  /** Present when delivery_mode === 'manifest' */
+  mid?: string;
+  /** Present when delivery_mode === 'manifest' */
+  ts?: number;
+  /** Present when content_url was set by sender */
+  content_url?: string;
+  content_hash?: string;
+  /** Present when attention_fee was locked */
+  attention_fee?: {
+    escrow_id: string;
+    amount: number;
+    currency: string;
+    status: 'locked';
+  };
+}
+
+/** A single manifest queue entry */
+export interface ManifestEntry {
+  mid: string;
+  sender_id: string;
+  summary: string;
+  ts_ms: number;
+  content_size: number;
+  extra?: Record<string, unknown>;
+  acked_at_ms?: number;
+  expires_at_ms?: number;
+  content_url?: string;
+  content_hash?: string;
+}
+
+/** Response from list_manifest */
+export interface ManifestListResponse {
+  entries: ManifestEntry[];
+}
+
+/**
+ * Response from fetch_manifest_content.
+ * When self_hosted=true, content lives at content_url on the sender's
+ * server; the `content` field is absent.
+ */
+export interface ManifestContentResponse {
+  mid: string;
+  owner_id: string;
+  self_hosted?: boolean;
+  content_url?: string;
+  content_hash?: string;
+  content?: Record<string, unknown>;
 }
 
 // ============================================

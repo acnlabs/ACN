@@ -15,8 +15,11 @@ from .models import (
     AgentRegisterRequest,
     AgentSearchOptions,
     AgentStatus,
+    AttentionFee,
     BroadcastRequest,
     BroadcastStrategy,
+    ManifestContentResponse,
+    ManifestEntry,
     MessageType,
     ParticipationInfo,
     PaymentCapability,
@@ -35,7 +38,7 @@ from .models import (
 )
 from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState
 
-__version__ = "0.4.0"
+__version__ = "0.5.1"
 __all__ = [
     # Client
     "ACNClient",
@@ -50,8 +53,11 @@ __all__ = [
     "AgentSearchOptions",
     "AgentStatus",
     # Communication models
+    "AttentionFee",
     "BroadcastRequest",
     "BroadcastStrategy",
+    "ManifestContentResponse",
+    "ManifestEntry",
     "MessageType",
     "SendMessageRequest",
     # Subnet models
