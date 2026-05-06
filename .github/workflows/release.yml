@@ -35,6 +35,7 @@ jobs:
         run: uv run pytest -v
         env:
           REDIS_URL: redis://localhost:6379
+          ENABLE_DOCS: "true"
 
   # ===========================================
   # Publish Python SDK to PyPI

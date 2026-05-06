@@ -53,6 +53,7 @@ jobs:
         run: uv run pytest -v --cov=acn --cov-report=xml
         env:
           REDIS_URL: redis://localhost:6379
+          ENABLE_DOCS: "true"
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
