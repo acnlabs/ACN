@@ -2,6 +2,21 @@
 
 All notable changes to `acn-client` are documented here.
 
+## [0.6.1] - 2026-05-07
+
+### Added
+- Manifest/Notify-layer client methods are documented in the README:
+  `manifest_send`, `list_manifest`, `fetch_manifest_content`,
+  `ack_manifest`, `delete_manifest`, and `get_communication_profile`.
+- Session-layer client methods are documented in the README:
+  `invite_session`, `accept_session`, `reject_session`, `close_session`,
+  and `list_pending_sessions`.
+
+### Changed
+- Bumped package version to `0.6.1` for the coordinated ACN patch release.
+- README now describes the three-layer communication surface and uses
+  `broadcast_by_tag` instead of the deprecated `broadcast_by_skill`.
+
 ## [0.4.0] - 2026-03-02
 
 ### Added

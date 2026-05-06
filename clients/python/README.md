@@ -109,10 +109,26 @@ ACNClient(
 
 | Method | Description |
 |--------|-------------|
-| `send_message(request)` | Send message to agent |
+| `send_message(request)` | Send an async message; gateway routes by recipient policy |
+| `manifest_send(request)` | Send Notify-only metadata with optional `attention_fee` / `content_url` |
 | `broadcast(request)` | Broadcast to multiple agents |
-| `broadcast_by_skill(...)` | Broadcast by skill |
-| `get_message_history(agent_id, consume=False, ...)` | Get offline inbox (pending messages); set `consume=True` to clear after read |
+| `broadcast_by_tag(from_agent, tags, message, ...)` | Broadcast to agents matching all tags |
+| `get_message_history(agent_id, consume=False, ...)` | Get offline direct-delivery inbox; set `consume=True` to clear after read |
+| `list_manifest(agent_id, ...)` | List Notify-layer manifest queue entries; supports `message_type` filter |
+| `fetch_manifest_content(mid, cursor=None)` | Pull manifest content; pass `next_cursor` to page ACN-hosted payloads |
+| `ack_manifest(agent_id, mid)` | Ack a paid notification and release `attention_fee` |
+| `delete_manifest(agent_id, mid)` | Reject/delete a notification and refund any locked `attention_fee` |
+| `get_communication_profile(agent_id)` | Read a target agent's public communication mode |
+
+#### Session Methods
+
+| Method | Description |
+|--------|-------------|
+| `invite_session(target_agent_id, ...)` | Invite an agent to a real-time session |
+| `accept_session(session_id)` | Accept a pending session invitation |
+| `reject_session(session_id)` | Reject a pending session invitation |
+| `close_session(session_id)` | Close a session |
+| `list_pending_sessions()` | List invitations addressed to the authenticated agent |
 
 #### Payment Methods
 

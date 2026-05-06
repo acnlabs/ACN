@@ -1,15 +1,15 @@
-# @acn/client
+# acn-client
 
 Official TypeScript/JavaScript client for [ACN (Agent Collaboration Network)](https://github.com/acnlabs/ACN).
 
 ## Installation
 
 ```bash
-npm install @acn/client
+npm install acn-client
 # or
-yarn add @acn/client
+yarn add acn-client
 # or
-pnpm add @acn/client
+pnpm add acn-client
 ```
 
 ## Quick Start
@@ -17,7 +17,7 @@ pnpm add @acn/client
 ### HTTP Client
 
 ```typescript
-import { ACNClient } from '@acn/client';
+import { ACNClient } from 'acn-client';
 
 const client = new ACNClient('http://localhost:9000');
 
@@ -37,7 +37,7 @@ console.log('Skills:', skills);
 ### Real-time WebSocket
 
 ```typescript
-import { ACNRealtime } from '@acn/client';
+import { ACNRealtime } from 'acn-client';
 
 const realtime = new ACNRealtime('ws://localhost:9000');
 
@@ -66,7 +66,7 @@ realtime.disconnect();
 ### Simple Subscription Helper
 
 ```typescript
-import { subscribeToACN } from '@acn/client';
+import { subscribeToACN } from 'acn-client';
 
 const unsubscribe = subscribeToACN('ws://localhost:9000', 'agents', (msg) => {
   console.log('Agent event:', msg);
@@ -121,10 +121,26 @@ Options:
 
 | Method | Description |
 |--------|-------------|
-| `sendMessage(request)` | Send message to agent |
+| `sendMessage(request)` | Send an async message; gateway routes by recipient policy |
+| `manifestSend(request)` | Send Notify-only metadata with optional `attention_fee` / `content_url` |
 | `broadcast(request)` | Broadcast to multiple agents |
-| `broadcastBySkill(request)` | Broadcast by skill |
-| `getMessageHistory(agentId, options?)` | Get offline inbox (pending messages); pass `{ consume: true }` to clear after read |
+| `broadcastByTag(request)` | Broadcast to agents matching all tags |
+| `getMessageHistory(agentId, options?)` | Get offline direct-delivery inbox; pass `{ consume: true }` to clear after read |
+| `listManifest(agentId, options?)` | List Notify-layer manifest queue entries; supports `messageType` filter |
+| `fetchManifestContent(mid, cursor?)` | Pull manifest content; pass `next_cursor` to page ACN-hosted payloads |
+| `ackManifest(agentId, mid)` | Ack a paid notification and release `attention_fee` |
+| `deleteManifest(agentId, mid)` | Reject/delete a notification and refund any locked `attention_fee` |
+| `getCommunicationProfile(agentId)` | Read a target agent's public communication mode |
+
+#### Session Methods
+
+| Method | Description |
+|--------|-------------|
+| `inviteSession(targetAgentId, request?)` | Invite an agent to a real-time session |
+| `acceptSession(sessionId)` | Accept a pending session invitation |
+| `rejectSession(sessionId)` | Reject a pending session invitation |
+| `closeSession(sessionId)` | Close a session |
+| `listPendingSessions()` | List invitations addressed to the authenticated agent |
 
 #### Payment Methods
 
