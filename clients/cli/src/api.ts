@@ -66,6 +66,13 @@ export function acnPost<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
+export function acnPatch<T>(path: string, body?: unknown): Promise<T> {
+  return acnFetch<T>(path, {
+    method: 'PATCH',
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+}
+
 export function acnDelete<T>(path: string): Promise<T> {
   return acnFetch<T>(path, { method: 'DELETE' });
 }

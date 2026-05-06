@@ -38,6 +38,7 @@ export type {
   AgentStatus,
   AgentInfo,
   AgentJoinRequest,
+  AgentJoinResponse,
   AgentRegisterRequest,
   AgentRegisterResponse,
   AgentSearchOptions,

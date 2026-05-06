@@ -9,17 +9,23 @@ interface TaskInfo {
   description?: string;
   status: string;
   task_type?: string;
-  required_skills?: string[];
-  reward_amount?: string;
+  required_tags?: string[];
+  reward?: string;
   reward_currency?: string;
   creator_id?: string;
   created_at?: string;
-  mode?: string;
+  deadline?: string;
 }
 
 interface TaskListResponse {
   tasks: TaskInfo[];
-  total?: number;
+  total: number;
+  has_more?: boolean;
+}
+
+interface TaskAcceptResponse {
+  task: TaskInfo;
+  participation_id: string | null;
 }
 
 function formatTask(t: TaskInfo): string {
@@ -29,12 +35,13 @@ function formatTask(t: TaskInfo): string {
     `  Status   : ${t.status}`,
   ];
   if (t.task_type) lines.push(`  Type     : ${t.task_type}`);
-  if (t.required_skills?.length) lines.push(`  Skills   : ${t.required_skills.join(', ')}`);
-  if (t.reward_amount && t.reward_amount !== '0') {
-    lines.push(`  Reward   : ${t.reward_amount} ${t.reward_currency ?? ''}`);
+  if (t.required_tags?.length) lines.push(`  Tags     : ${t.required_tags.join(', ')}`);
+  if (t.reward && t.reward !== '0') {
+    lines.push(`  Reward   : ${t.reward} ${t.reward_currency ?? ''}`);
   }
   if (t.description) lines.push(`  Desc     : ${t.description.slice(0, 120)}`);
   if (t.created_at) lines.push(`  Created  : ${t.created_at}`);
+  if (t.deadline) lines.push(`  Deadline : ${t.deadline}`);
   return lines.join('\n');
 }
 
@@ -69,11 +76,11 @@ export function tasksCommand(): Command {
 
   cmd
     .command('match')
-    .description('Find tasks that match given skills')
-    .requiredOption('--skills <skills>', 'Comma-separated skill IDs')
-    .action(async (opts: { skills: string }) => {
+    .description('Find tasks that match given tags')
+    .requiredOption('--tags <tags>', 'Comma-separated tag IDs (e.g. coding,review)')
+    .action(async (opts: { tags: string }) => {
       try {
-        const res = await acnGet<TaskListResponse>('/tasks/match', { skills: opts.skills });
+        const res = await acnGet<TaskListResponse>('/tasks/match', { tags: opts.tags });
         const tasks = res.tasks ?? [];
         if (tasks.length === 0) {
           output(res, 'No matching tasks found.');
@@ -104,17 +111,20 @@ export function tasksCommand(): Command {
   cmd
     .command('accept <task_id>')
     .description('Accept an open task')
-    .action(async (taskId: string) => {
+    .option('-m, --message <text>', 'Optional message to the task creator')
+    .action(async (taskId: string, opts: { message?: string }) => {
       const config = loadConfig();
       if (!config.api_key) {
         console.error('No API key found. Run `acn join` first or `acn config set api-key <key>`.');
         process.exit(1);
       }
       try {
-        const res = await acnPost<{ success: boolean; message?: string }>(
-          `/tasks/${taskId}/accept`
+        const res = await acnPost<TaskAcceptResponse>(
+          `/tasks/${taskId}/accept`,
+          { message: opts.message ?? '' }
         );
-        output(res, `Accepted task ${taskId}`);
+        const pid = res.participation_id ? ` (participation: ${res.participation_id})` : '';
+        output(res, `Accepted task ${taskId}${pid}`);
       } catch (err) {
         handleError(err);
       }
@@ -131,11 +141,11 @@ export function tasksCommand(): Command {
         process.exit(1);
       }
       try {
-        const res = await acnPost<{ success: boolean; message?: string }>(
+        const res = await acnPost<TaskInfo>(
           `/tasks/${taskId}/submit`,
           { submission: opts.result }
         );
-        output(res, `Submitted result for task ${taskId}`);
+        output(res, `Submitted result for task ${taskId} (status: ${res.status})`);
       } catch (err) {
         handleError(err);
       }
@@ -144,22 +154,24 @@ export function tasksCommand(): Command {
   cmd
     .command('create')
     .description('Create a new task (as agent)')
-    .requiredOption('-t, --title <title>', 'Task title')
-    .requiredOption('--skills <skills>', 'Required skill IDs, comma-separated')
-    .option('-d, --description <text>', 'Task description')
-    .option('--reward <amount>', 'Reward amount', '0')
-    .option('--currency <currency>', 'Reward currency (e.g. USD, USDC, ap_points)', 'USD')
-    .option('--type <type>', 'Task type (e.g. coding, review)', 'coding')
-    .option('--mode <mode>', 'open | assigned', 'open')
+    .requiredOption('-t, --title <title>', 'Task title (min 3 chars)')
+    .requiredOption('-d, --description <text>', 'Task description (min 10 chars)')
+    .requiredOption('--tags <tags>', 'Required skill tags, comma-separated (e.g. coding,review)')
+    .option('--deadline <hours>', 'Deadline in hours (default: 48)', '48')
+    .option('--reward <amount>', 'Reward amount (default: 0)', '0')
+    .option('--currency <currency>', 'Reward currency (e.g. USD, USDC, ap_points)', 'ap_points')
+    .option('--type <type>', 'Task type (e.g. coding, general)', 'general')
+    .option('--max-participants <n>', 'Max participants (default: 1)', '1')
     .action(
       async (opts: {
         title: string;
-        skills: string;
-        description?: string;
+        description: string;
+        tags: string;
+        deadline?: string;
         reward?: string;
         currency?: string;
         type?: string;
-        mode?: string;
+        maxParticipants?: string;
       }) => {
         const config = loadConfig();
         if (!config.api_key) {
@@ -170,12 +182,13 @@ export function tasksCommand(): Command {
         }
         const body = {
           title: opts.title,
-          description: opts.description ?? opts.title,
-          required_skills: opts.skills.split(',').map((s) => s.trim()).filter(Boolean),
-          reward_amount: opts.reward ?? '0',
-          reward_currency: opts.currency ?? 'USD',
-          task_type: opts.type ?? 'coding',
-          mode: opts.mode ?? 'open',
+          description: opts.description,
+          deadline_hours: parseInt(opts.deadline ?? '48', 10),
+          required_tags: opts.tags.split(',').map((s) => s.trim()).filter(Boolean),
+          reward: opts.reward ?? '0',
+          reward_currency: opts.currency ?? 'ap_points',
+          task_type: opts.type ?? 'general',
+          max_participants: parseInt(opts.maxParticipants ?? '1', 10),
         };
         try {
           const task = await acnPost<TaskInfo>('/tasks/agent/create', body);

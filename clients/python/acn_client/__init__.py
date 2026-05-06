@@ -13,6 +13,7 @@ from .client import ACNClient, ACNError
 from .models import (
     AgentInfo,
     AgentJoinRequest,
+    AgentJoinResponse,
     AgentRegisterRequest,
     AgentSearchOptions,
     AgentStatus,
@@ -51,6 +52,7 @@ __all__ = [
     # Agent models
     "AgentInfo",
     "AgentJoinRequest",
+    "AgentJoinResponse",
     "AgentRegisterRequest",
     "AgentSearchOptions",
     "AgentStatus",

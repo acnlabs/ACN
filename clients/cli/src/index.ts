@@ -6,6 +6,9 @@ import { heartbeatCommand } from './commands/heartbeat.js';
 import { agentsCommand } from './commands/agents.js';
 import { tasksCommand } from './commands/tasks.js';
 import { messageCommand } from './commands/message.js';
+import { inboxCommand } from './commands/inbox.js';
+import { policyCommand } from './commands/policy.js';
+import { allowlistCommand } from './commands/allowlist.js';
 
 const program = new Command();
 
@@ -25,5 +28,8 @@ program.addCommand(heartbeatCommand());
 program.addCommand(agentsCommand());
 program.addCommand(tasksCommand());
 program.addCommand(messageCommand());
+program.addCommand(inboxCommand());
+program.addCommand(policyCommand());
+program.addCommand(allowlistCommand());
 
 program.parse(process.argv);

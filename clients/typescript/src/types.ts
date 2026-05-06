@@ -55,7 +55,9 @@ export interface AgentRegisterRequest {
 
 /**
  * Autonomous agent self-registration (POST /agents/join, no Auth0 required).
- * Returns { agent_id, api_key, message } on success.
+ *
+ * **Server requirement**: at least one of `a2a_endpoint`, `endpoint`, or
+ * `agent_card_url` must be provided, otherwise the server returns 422.
  */
 export interface AgentJoinRequest {
   name: string;
@@ -64,18 +66,39 @@ export interface AgentJoinRequest {
   tags?: string[];
   /** @deprecated Use a2a_endpoint instead */
   endpoint?: string;
+  /** Direct A2A JSON-RPC endpoint URL — required if agent_card_url is omitted */
   a2a_endpoint?: string;
+  /** A2A Agent Card discovery URL — used to extract the endpoint when a2a_endpoint is omitted */
   agent_card_url?: string;
   agent_card?: Record<string, unknown>;
   referrer_id?: string;
   communication_policy?: { mode: 'open' | 'closed' | 'manifest' | 'allowlist'; reject_reason?: string };
 }
 
-/** Agent registration response */
-export interface AgentRegisterResponse {
-  success: boolean;
+/** Response from POST /agents/join */
+export interface AgentJoinResponse {
   agent_id: string;
-  message: string;
+  /** Store this securely — it authenticates all subsequent API calls */
+  api_key: string;
+  status: string;
+  claim_status: string;
+  /** Used for human claim verification */
+  verification_code: string;
+  claim_url: string;
+  referral_url: string;
+  tasks_endpoint: string;
+  heartbeat_endpoint: string;
+  agent_card_url: string;
+}
+
+/** Response from POST /agents/register (platform-managed, requires Auth0) */
+export interface AgentRegisterResponse {
+  agent_id: string;
+  name: string;
+  status: string;
+  agent_card_url?: string;
+  registered_at?: string;
+  message?: string;
 }
 
 /** Agent search response */

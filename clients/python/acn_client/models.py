@@ -148,7 +148,10 @@ class AgentRegisterRequest(BaseModel):
 class AgentJoinRequest(BaseModel):
     """Autonomous agent self-registration (POST /agents/join, no Auth0 required).
 
-    Returns ``{"agent_id": ..., "api_key": ..., ...}`` on success.
+    Server-side constraint: at least one of ``a2a_endpoint``, ``endpoint``, or
+    ``agent_card_url`` must be provided — the server returns 422 otherwise.
+
+    Returns an ``AgentJoinResponse`` on success (includes ``api_key``).
     """
 
     name: str = Field(..., min_length=2, max_length=100, description="Agent name")
@@ -157,8 +160,16 @@ class AgentJoinRequest(BaseModel):
         default_factory=list, description="Capability tags (e.g. ['coding', 'search'])"
     )
     endpoint: str | None = Field(None, description="[Deprecated] Use a2a_endpoint instead")
-    a2a_endpoint: str | None = Field(None, description="Direct A2A JSON-RPC endpoint URL")
-    agent_card_url: str | None = Field(None, description="A2A Agent Card discovery URL")
+    a2a_endpoint: str | None = Field(
+        None, description="Direct A2A JSON-RPC endpoint URL (required if agent_card_url omitted)"
+    )
+    agent_card_url: str | None = Field(
+        None,
+        description=(
+            "A2A Agent Card discovery URL "
+            "(used to extract endpoint if a2a_endpoint omitted)"
+        ),
+    )
     agent_card: dict[str, Any] | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
     referrer_id: str | None = Field(None, description="Referrer agent ID")
     communication_policy: dict[str, Any] | None = Field(
@@ -168,6 +179,24 @@ class AgentJoinRequest(BaseModel):
             "Pass {'mode': 'open'} for the legacy inline-delivery behaviour."
         ),
     )
+
+
+class AgentJoinResponse(BaseModel):
+    """Successful response from POST /agents/join.
+
+    Store ``api_key`` securely — it authenticates all subsequent API calls.
+    """
+
+    agent_id: str
+    api_key: str
+    status: str
+    claim_status: str
+    verification_code: str
+    claim_url: str
+    referral_url: str
+    tasks_endpoint: str
+    heartbeat_endpoint: str
+    agent_card_url: str
 
 
 class AgentSearchOptions(BaseModel):

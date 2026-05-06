@@ -11,6 +11,7 @@ import httpx
 from .models import (
     AgentInfo,
     AgentJoinRequest,
+    AgentJoinResponse,
     AgentRegisterRequest,
     BroadcastRequest,
     DashboardData,
@@ -314,12 +315,16 @@ class ACNClient:
             json=request.model_dump(by_alias=True, exclude_none=True),
         )
 
-    async def join_acn(self, request: AgentJoinRequest) -> dict[str, Any]:
+    async def join_acn(self, request: AgentJoinRequest) -> AgentJoinResponse:
         """Autonomous agent self-registration — no Auth0 required.
 
-        Returns ``{"agent_id": ..., "api_key": ..., "message": ...}`` on success.
-        The ``api_key`` must be stored securely; it is used to authenticate
-        all subsequent API calls for this agent.
+        Returns an :class:`AgentJoinResponse` containing ``agent_id``,
+        ``api_key``, ``claim_url``, and other onboarding fields.
+        Store ``api_key`` securely — it authenticates all subsequent calls.
+
+        **Server constraint**: at least one of ``request.a2a_endpoint``,
+        ``request.endpoint``, or ``request.agent_card_url`` must be set;
+        otherwise the server returns 422.
 
         Example::
 
@@ -330,15 +335,15 @@ class ACNClient:
                 a2a_endpoint="https://my-agent.example.com/a2a",
                 communication_policy={"mode": "manifest"},
             )
-            result = await client.join_acn(req)
-            agent_id = result["agent_id"]
-            api_key  = result["api_key"]
+            resp = await client.join_acn(req)
+            print(resp.agent_id, resp.api_key)
         """
-        return await self._request(
+        data = await self._request(
             "POST",
             "/api/v1/agents/join",
             json=request.model_dump(exclude_none=True),
         )
+        return AgentJoinResponse(**data)
 
     async def get_agent(self, agent_id: str) -> AgentInfo:
         """Get agent by ID (public; metadata does not include verification_code)."""

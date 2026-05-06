@@ -8,6 +8,7 @@ import type {
   ACNClientOptions,
   AgentInfo,
   AgentJoinRequest,
+  AgentJoinResponse,
   AgentRegisterRequest,
   AgentRegisterResponse,
   AgentSearchOptions,
@@ -185,7 +186,7 @@ export class ACNClient {
    * const { agent_id, api_key } = result;
    * ```
    */
-  async joinACN(request: AgentJoinRequest): Promise<{ agent_id: string; api_key: string; message: string }> {
+  async joinACN(request: AgentJoinRequest): Promise<AgentJoinResponse> {
     return this.post('/api/v1/agents/join', request);
   }
 
