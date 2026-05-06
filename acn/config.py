@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Service
     service_name: str = "ACN"
-    service_version: str = "0.5.1"
+    service_version: str = "0.6.0"
     host: str = "0.0.0.0"
     port: int = 8000
 
