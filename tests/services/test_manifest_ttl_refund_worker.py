@@ -20,13 +20,12 @@ from __future__ import annotations
 
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from acn.core.interfaces.escrow_provider import EscrowDetailResult
 from acn.services.manifest_ttl_refund_worker import _extract_owner_mid, run_once
-
 
 # ---------------------------------------------------------------------------
 # Helpers
