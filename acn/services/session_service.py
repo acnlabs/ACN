@@ -163,7 +163,13 @@ class SessionService:
             pipe.hset(session_key, mapping=session_hash)
             pipe.expire(session_key, ttl)
             pipe.zadd(invitee_zset, {session_id: expires_at_ms})
-            pipe.expire(invitee_zset, ttl)
+            # Use the ceiling TTL for the ZSET so earlier invitations
+            # (potentially with longer individual TTLs) are never evicted
+            # prematurely when a newer, shorter invitation resets the key.
+            # ZRANGEBYSCORE's ``min=now_ms`` filter handles stale entries at
+            # read time; the ZSET just needs to outlive the longest possible
+            # session within it.
+            pipe.expire(invitee_zset, MAX_SESSION_TTL_SECONDS)
             await pipe.execute()
 
         return SessionEntry(

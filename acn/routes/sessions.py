@@ -182,14 +182,18 @@ async def accept_session(
         ) from e
     except ValueError as e:
         msg = str(e)
-        if "already" in msg.lower() or "accepted" in msg.lower():
-            raise ACNHTTPError(
-                ErrorCode.SESSION_ALREADY_ACCEPTED,
-                400,
-                details={"session_id": session_id, "reason": msg},
-            ) from e
+        # ``SessionService.accept`` embeds the current status in the
+        # message: "...is in status 'accepted'...". Parse it to pick
+        # the most informative error code rather than always falling
+        # back to SESSION_EXPIRED.
+        if "'accepted'" in msg:
+            code = ErrorCode.SESSION_ALREADY_ACCEPTED
+        else:
+            # rejected / closed → SESSION_EXPIRED signals "no longer
+            # actionable" without leaking internal state machine names.
+            code = ErrorCode.SESSION_EXPIRED
         raise ACNHTTPError(
-            ErrorCode.SESSION_EXPIRED,
+            code,
             400,
             details={"session_id": session_id, "reason": msg},
         ) from e

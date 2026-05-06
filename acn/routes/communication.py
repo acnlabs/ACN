@@ -213,6 +213,11 @@ class AttentionFee(BaseModel):
     )
 
 
+_MANIFEST_SEND_VALID_TYPES = frozenset(
+    {"task_request", "collaboration", "inquiry", "broadcast", "session_invite"}
+)
+
+
 class SendMessageRequest(BaseModel):
     from_agent: str = Field(..., max_length=128)
     target_agent: str = Field(..., max_length=128)
@@ -250,11 +255,38 @@ class SendMessageRequest(BaseModel):
             "Stored alongside content_url for recipient-side verification."
         ),
     )
+    # Phase 3: optional ACN-level message category. When set, the manifest
+    # entry carries the type tag so recipients can filter listings via
+    # GET /manifest/{id}?type=... without fetching content. Validated
+    # against the same allowed-values set as ``ManifestSendRequest``.
+    # ``None`` (absent) is fine — legacy sends that predate this field
+    # remain untagged and are excluded from type-filtered listings.
+    message_type: str | None = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional ACN message category for manifest filtering. "
+            "Accepted values: "
+            + ", ".join(sorted(_MANIFEST_SEND_VALID_TYPES))
+            + ". Only meaningful when the recipient is in manifest mode."
+        ),
+    )
 
     @field_validator("message")
     @classmethod
     def _message_size(cls, v: dict) -> dict:
         return check_dict_size_256k("message", v)
+
+    @field_validator("message_type")
+    @classmethod
+    def _validate_message_type(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if v not in _MANIFEST_SEND_VALID_TYPES:
+            raise ValueError(
+                f"message_type must be one of: {sorted(_MANIFEST_SEND_VALID_TYPES)}"
+            )
+        return v
 
     @field_validator("content_url")
     @classmethod
@@ -292,11 +324,6 @@ class BroadcastByTagRequest(BaseModel):
     @classmethod
     def _message_size(cls, v: dict) -> dict:
         return check_dict_size_256k("message", v)
-
-
-_MANIFEST_SEND_VALID_TYPES = frozenset(
-    {"task_request", "collaboration", "inquiry", "broadcast", "session_invite"}
-)
 
 
 class ManifestSendRequest(BaseModel):
@@ -567,6 +594,8 @@ async def send_message(
         send_kwargs: dict[str, object] = {
             "priority": body.priority,
         }
+        if body.message_type is not None:
+            send_kwargs["message_type"] = body.message_type
         if body.content_url is not None:
             try:
                 validate_content_url(body.content_url)
