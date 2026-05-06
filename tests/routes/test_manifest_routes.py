@@ -67,6 +67,9 @@ def stub_manifest_service():
     )
     svc.delete = AsyncMock(return_value=True)
     svc.fetch_content = AsyncMock(return_value={"text": "hi"})
+    # Phase 3: cursor-based content pagination. Returns a single chunk
+    # that fits in one page (has_more=False) for default tests.
+    svc.fetch_content_chunk = AsyncMock(return_value=(b'{"text":"hi"}', False))
     # Phase 3: DELETE pre-fetches the entry to detect attention_fee escrows
     # that need a refund. Default to a fee-less entry so existing tests
     # exercise the no-fee path; tests that need a paid entry override
@@ -280,6 +283,18 @@ class TestDeleteManifestEntry:
 
 class TestFetchManifestContent:
     def test_owner_pulls_content(self, stub_manifest_service, stub_agent_service):
+        # Configure get_entry to return an ACN-hosted entry for the mid
+        # under test (default fixture entry uses a different mid).
+        stub_manifest_service.get_entry = AsyncMock(
+            return_value=ManifestEntry(
+                mid="some-mid",
+                sender_id="sender-x",
+                summary="hello",
+                ts_ms=1_700_000_000_000,
+                content_size=42,
+                content_url=None,
+            )
+        )
         _wire(stub_manifest_service, stub_agent_service)
 
         with TestClient(app) as client:
@@ -292,11 +307,14 @@ class TestFetchManifestContent:
         body = r.json()
         assert body["mid"] == "some-mid"
         assert body["owner_id"] == "agent-target"
-        assert body["content"] == {"text": "hi"}
+        # Phase 3: response now uses content_chunk + has_more for pagination.
+        assert body["content_chunk"] == '{"text":"hi"}'
+        assert body["has_more"] is False
+        assert "content" not in body
         # Owner-id was derived from the API key, NOT the path —
         # this is the security-critical invariant.
-        stub_manifest_service.fetch_content.assert_awaited_once_with(
-            owner_id="agent-target", mid="some-mid"
+        stub_manifest_service.fetch_content_chunk.assert_awaited_once_with(
+            owner_id="agent-target", mid="some-mid", offset=0, size=16384
         )
 
     def test_cross_tenant_returns_404_not_403(
@@ -310,7 +328,7 @@ class TestFetchManifestContent:
         # Service returns None when called with the (correct, derived)
         # owner_id — simulates "mid belongs to someone else, so
         # fetching as agent-other returns nothing".
-        stub_manifest_service.fetch_content = AsyncMock(return_value=None)
+        stub_manifest_service.get_entry = AsyncMock(return_value=None)
         _wire(stub_manifest_service, stub_agent_service)
 
         with TestClient(app) as client:
@@ -322,7 +340,7 @@ class TestFetchManifestContent:
         assert r.status_code == 404, r.text
         # Confirm the service was called with the *caller's* agent_id,
         # not the path/payload.
-        stub_manifest_service.fetch_content.assert_awaited_once_with(
+        stub_manifest_service.get_entry.assert_awaited_once_with(
             owner_id="agent-other", mid="alice-private-mid"
         )
 

@@ -37,6 +37,7 @@ suite.
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import structlog  # type: ignore[import-untyped]
@@ -87,6 +88,14 @@ async def list_manifest(
         description="Cursor: only return entries with ts >= since_ms.",
     ),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
+    type: str | None = Query(
+        default=None,
+        description=(
+            "Filter by message_type. Allowed values: task_request, "
+            "collaboration, inquiry, broadcast, session_invite."
+        ),
+        max_length=64,
+    ),
 ):
     """List an agent's manifest queue.
 
@@ -111,6 +120,7 @@ async def list_manifest(
         owner_id=agent_id,
         since_ms=since_ms,
         limit=limit,
+        message_type=type,
     )
     return {
         "agent_id": agent_id,
@@ -122,11 +132,10 @@ async def list_manifest(
                 "summary": e.summary,
                 "ts": e.ts_ms,
                 "content_size": e.content_size,
+                **({"message_type": e.message_type} if e.message_type else {}),
                 # Phase 3: surface acked_at on the listing so the
                 # recipient client can colour-code which entries
-                # still owe an ack call. ``None`` is dropped from
-                # the response so unfeed entries stay shape-
-                # compatible with the pre-Phase-3 listing schema.
+                # still owe an ack call.
                 **({"acked_at": e.acked_at_ms} if e.acked_at_ms is not None else {}),
                 **({"extra": e.extra} if e.extra else {}),
             }
@@ -436,6 +445,30 @@ async def ack_manifest_entry(
     }
 
 
+# Default chunk size for cursor-based content pagination (Phase 3).
+# 16 KB balances bandwidth (most manifest content < 64 KB) and
+# latency (< 4 round-trips for max-size entries). Configurable via
+# environment but constant per process to keep cursor math simple.
+_CONTENT_CHUNK_SIZE = 16 * 1024  # 16 KB
+
+
+def _encode_cursor(offset: int) -> str:
+    """Encode a byte offset as a URL-safe base64 string cursor token."""
+    return base64.urlsafe_b64encode(str(offset).encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> int:
+    """Decode a cursor token back to a byte offset.
+
+    Raises ``ValueError`` when the token is not a valid base64url-
+    encoded integer, so the route can map it to 400.
+    """
+    try:
+        return int(base64.urlsafe_b64decode(cursor + "==").decode())
+    except Exception as exc:
+        raise ValueError(f"invalid cursor token: {cursor!r}") from exc
+
+
 @router.get("/content/{mid}")
 # Slightly costlier than the listing (single GET of a JSON blob up
 # to MAX_CONTENT_BYTES), but still bounded by Redis bandwidth.
@@ -446,8 +479,16 @@ async def fetch_manifest_content(
     mid: str,
     agent_info: AgentApiKeyDep,
     manifest_service: ManifestServiceDep,
+    cursor: str | None = Query(
+        default=None,
+        description=(
+            "Pagination cursor returned by a previous response as ``next_cursor``. "
+            "Omit to start from the beginning. Only applies to ACN-hosted content; "
+            "self-hosted entries are always returned in a single response."
+        ),
+    ),
 ):
-    """Pull the full payload (or self-hosted pointer) for a manifest entry.
+    """Pull the payload (or self-hosted pointer) for a manifest entry.
 
     The recipient is *always* derived from the API key, never from
     the path, so:
@@ -458,13 +499,19 @@ async def fetch_manifest_content(
     * Repeatable: no read-once semantics; ``ack`` is the explicit
       release signal for ``attention_fee``.
 
+    **Cursor pagination (Phase 3)**:
+    ACN-hosted entries up to 64 KB can be retrieved in chunks.
+    Each response includes ``has_more`` and, when ``True``, a
+    ``next_cursor`` token to pass as ``?cursor=`` on the next call.
+    Clients can stop early (e.g. after reading enough context to
+    decide whether to ack) without fetching the full payload.
+
     **Self-hosted content (Phase 3)**:
     When the sender supplied ``content_url``, ACN never stored the
     body locally. This endpoint returns ``{"self_hosted": true,
-    "content_url": ..., "content_hash": ...}`` so the recipient can
-    fetch the content directly from the sender's server and verify it
-    with the provided hash. The ``content`` field is absent in this
-    response shape.
+    "content_url": ..., "content_hash": ...}`` (``has_more: false``)
+    so the recipient can fetch the content directly from the sender's
+    server and verify it with the provided hash.
     """
     owner_id = agent_info["agent_id"]
 
@@ -479,26 +526,57 @@ async def fetch_manifest_content(
         )
 
     if entry.content_url:
+        # Self-hosted: cursor is meaningless (no ACN-side blob).
         result: dict[str, Any] = {
             "mid": mid,
             "owner_id": owner_id,
             "self_hosted": True,
+            "has_more": False,
             "content_url": entry.content_url,
         }
         if entry.content_hash:
             result["content_hash"] = entry.content_hash
         return result
 
-    # ACN-hosted path: fall through to the content key.
-    payload = await manifest_service.fetch_content(owner_id=owner_id, mid=mid)
-    if payload is None:
+    # Decode cursor → byte offset.
+    offset = 0
+    if cursor is not None:
+        try:
+            offset = _decode_cursor(cursor)
+        except ValueError as e:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                status_code=400,
+                details={"cursor": cursor, "reason": "invalid cursor token"},
+            ) from e
+        if offset < 0:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                status_code=400,
+                details={"cursor": cursor, "reason": "cursor offset must be >= 0"},
+            )
+
+    # ACN-hosted path: chunked fetch.
+    chunk_result = await manifest_service.fetch_content_chunk(
+        owner_id=owner_id,
+        mid=mid,
+        offset=offset,
+        size=_CONTENT_CHUNK_SIZE,
+    )
+    if chunk_result is None:
         raise ACNHTTPError(
             ErrorCode.MANIFEST_CONTENT_NOT_FOUND,
             status_code=404,
             details={"owner_id": owner_id, "mid": mid},
         )
-    return {
+
+    chunk_bytes, has_more = chunk_result
+    response: dict[str, Any] = {
         "mid": mid,
         "owner_id": owner_id,
-        "content": payload,
+        "has_more": has_more,
+        "content_chunk": chunk_bytes.decode("utf-8", errors="replace"),
     }
+    if has_more:
+        response["next_cursor"] = _encode_cursor(offset + len(chunk_bytes))
+    return response

@@ -12,7 +12,7 @@ from fastapi import Request as _Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ..auth.middleware import require_permission, verify_token
+from ..auth.middleware import verify_token
 from ..config import get_settings
 from ..core.entities import TaskStatus
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
@@ -1007,12 +1007,21 @@ async def list_participations(
 async def get_my_participation(
     task_id: TaskIdPath,
     request: Request,
-    payload: dict = Depends(require_permission("acn:read")),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     task_service: TaskServiceDep = None,
 ):
-    """Get the current user's participation in a task"""
-    token_owner = payload.get("sub", "dev@clients")
-    agent_id = (request.headers.get("x-creator-id") if (settings.dev_mode or token_owner == "backend@internal") else None) or token_owner
+    """Get the current user's participation in a task.
+
+    Accepts both Agent API Key (acn_xxx) and Auth0 JWT so agents can check
+    their own participation status with the same credential used for accept/submit.
+    """
+    agent_id = await _resolve_caller_identity(request, credentials)
+    if not agent_id:
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            details={"reason": "authentication_required"},
+        )
 
     p = await task_service.get_user_participation(task_id, agent_id)
     if not p:
@@ -1184,6 +1193,10 @@ async def agent_create_task(
     For autonomous agents to create tasks using their API key.
     """
 
+    merged_metadata = dict(body.metadata)
+    if body.ui_spec is not None:
+        merged_metadata["ui_spec"] = body.ui_spec
+
     task = await task_service.create_task(
         creator_type="agent",
         creator_id=agent_info["agent_id"],
@@ -1203,7 +1216,7 @@ async def agent_create_task(
         use_escrow=body.use_escrow,
         group_id=body.group_id,
         deadline_hours=body.deadline_hours,
-        metadata=body.metadata,
+        metadata=merged_metadata,
     )
 
     return _task_to_response(task)
@@ -1264,6 +1277,7 @@ async def agent_submit_task(
             agent_id=agent_info["agent_id"],
             submission=body.submission,
             artifacts=body.artifacts,
+            participation_id=body.participation_id,
         )
         return _task_to_response(task)
 

@@ -184,6 +184,7 @@ class ManifestDispatcher:
         attention_fee: dict[str, Any] | None = None,
         content_url: str | None = None,
         content_hash: str | None = None,
+        message_type: str | None = None,
     ) -> ManifestEntry:
         """Persist the message to the manifest queue + push WS + count.
 
@@ -286,6 +287,7 @@ class ManifestDispatcher:
             extra=extra or None,
             content_url=content_url,
             content_hash=content_hash,
+            message_type=message_type,
         )
 
         # Best-effort WS push. The recipient still gets the manifest

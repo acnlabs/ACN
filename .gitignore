@@ -73,6 +73,9 @@ yarn-error.log*
 # Lock files (auto-generated)
 clients/python/uv.lock
 
+# Internal drafts (not for public release until finalized)
+docs/_drafts/
+
 
 
 

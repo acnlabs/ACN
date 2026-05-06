@@ -92,6 +92,7 @@ from .routes import (
     onchain,
     payments,
     registry,
+    sessions,
     subnets,
     tasks,
     websocket,
@@ -106,6 +107,7 @@ from .services import (
     ManifestService,
     MessageService,
     PolicyCheckService,
+    SessionService,
     SubnetService,
     TaskService,
 )
@@ -288,6 +290,7 @@ async def lifespan(app: FastAPI):
     # manifest dispatcher can hold a reference for the
     # ``manifest_notification`` push.
     manifest_service_instance = ManifestService(registry_instance.redis)
+    session_service_instance = SessionService(registry_instance.redis)
     ws_manager_instance = WebSocketManager(
         registry_instance.redis,
         max_connections=settings.max_websocket_connections,
@@ -500,6 +503,7 @@ async def lifespan(app: FastAPI):
         manifest_service=manifest_service_instance,
         allowlist_service=allowlist_service_instance,
         escrow_provider=escrow_client_instance,
+        session_service=session_service_instance,
     )
 
     # Phase 1 wiring guard
@@ -1040,6 +1044,7 @@ app.include_router(communication.router)
 # communication.py so the manifest-specific imports (ManifestServiceDep)
 # stay in their own file.
 app.include_router(manifest.router)
+app.include_router(sessions.router)
 app.include_router(subnets.router)
 app.include_router(monitoring.router)
 app.include_router(analytics.router)

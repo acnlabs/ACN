@@ -43,6 +43,7 @@ from ..services import (
     ManifestService,
     MessageService,
     PolicyCheckService,
+    SessionService,
     SubnetService,
 )
 from ..services.activity_service import ActivityService
@@ -301,6 +302,9 @@ _allowlist_service: AllowlistService | None = None
 # working — the ack endpoint surfaces 503 in that mode rather than
 # crashing.
 _escrow_provider: IEscrowProvider | None = None
+# Phase 3 Session layer. ``None`` default keeps environments that do
+# not wire Redis-backed sessions operational.
+_session_service: SessionService | None = None
 
 
 def init_services(
@@ -325,6 +329,7 @@ def init_services(
     manifest_service: ManifestService | None = None,
     allowlist_service: AllowlistService | None = None,
     escrow_provider: IEscrowProvider | None = None,
+    session_service: SessionService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -339,7 +344,7 @@ def init_services(
     global _metrics, _audit, _analytics
     global _payment_discovery, _payment_tasks, _webhook_service, _billing_service
     global _activity_service, _follow_service, _policy_service, _manifest_service
-    global _allowlist_service, _escrow_provider
+    global _allowlist_service, _escrow_provider, _session_service
 
     _registry = registry
     _agent_service = agent_service
@@ -363,6 +368,7 @@ def init_services(
     _manifest_service = manifest_service
     _allowlist_service = allowlist_service
     _escrow_provider = escrow_provider
+    _session_service = session_service
 
 
 # Dependency functions
@@ -500,6 +506,18 @@ def get_manifest_service() -> ManifestService:
     return _manifest_service
 
 
+def get_session_service() -> SessionService:
+    """Get the SessionService instance.
+
+    Raises ``RuntimeError`` when uninitialized so misconfigured
+    environments surface a loud failure rather than silently no-op'ing
+    session requests.
+    """
+    if _session_service is None:
+        raise RuntimeError("SessionService not initialized")
+    return _session_service
+
+
 def get_allowlist_service() -> AllowlistService:
     """Get the AllowlistService instance.
 
@@ -606,6 +624,7 @@ ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 FollowServiceDep = Annotated[FollowService, Depends(get_follow_service)]
 PolicyServiceDep = Annotated["PolicyCheckService | None", Depends(get_policy_service)]
 ManifestServiceDep = Annotated[ManifestService, Depends(get_manifest_service)]
+SessionServiceDep = Annotated[SessionService, Depends(get_session_service)]
 AllowlistServiceDep = Annotated[AllowlistService, Depends(get_allowlist_service)]
 EscrowProviderDep = Annotated[IEscrowProvider, Depends(get_escrow_provider)]
 OptionalEscrowProviderDep = Annotated[

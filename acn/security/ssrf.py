@@ -147,6 +147,43 @@ def validate_endpoint_url(url: str, *, allow_loopback: bool = False) -> None:
         )
 
 
+def validate_content_url(url: str) -> None:
+    """Validate a sender-supplied ``content_url`` against SSRF risks.
+
+    More restrictive than ``validate_endpoint_url`` (which is used for
+    agent registration endpoints):
+    * Only ``https://`` is accepted — ``http://`` is rejected to
+      prevent plaintext interception on the fetch path.
+    * IP literals in private/reserved ranges are blocked (same set as
+      ``validate_endpoint_url``).
+    * Hostnames are accepted at write time; a future runtime fetch via
+      the optional proxy path would additionally run ``safe_resolve_target``.
+
+    Called whenever ``POST /communication/send`` or
+    ``POST /communication/manifest/send`` receives a non-null
+    ``content_url`` field.
+
+    Raises:
+        SSRFViolation: if the URL fails scheme, credential, host, or
+            IP-range checks.
+    """
+    host, _port, scheme = _parse_url_or_raise(url)
+    if scheme != "https":
+        raise SSRFViolation(
+            f"content_url must use https:// scheme; got {scheme!r}. "
+            "Plain http is rejected to prevent content interception."
+        )
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return  # hostname — defer to runtime DNS check
+    if _is_blocked_ip(ip, allow_loopback=False):
+        raise SSRFViolation(
+            f"content_url host {host!r} is in a blocked address range. "
+            "ACN refuses to store pointers to private/reserved IPs."
+        )
+
+
 async def safe_resolve_target(
     url: str, *, allow_loopback: bool = False
 ) -> tuple[str, str]:

@@ -703,6 +703,18 @@ class SubnetManager:
                 ``manifest_dispatcher``. Fail loudly rather than
                 silently bypass the divert.
         """
+        # Design decision (Phase 3): ``attention_fee`` is intentionally
+        # NOT supported on the subnet forward path. Subnets represent
+        # an operator-curated trust circle — agents join by invitation
+        # and share credentials via the gateway handshake. The
+        # ``attention_fee`` mechanism is designed for *open-internet*
+        # communication between unknown agents, where the fee signals
+        # credibility and compensates the recipient for review effort.
+        # Inside a subnet that contract is already satisfied by
+        # membership itself. Supporting fees on this path would add
+        # escrow complexity without delivering meaningful trust benefit.
+        # Senders who want to attach a fee should route via the HTTP
+        # ``POST /communication/send`` path instead.
         if subnet_id not in self._subnets:
             raise ValueError(f"Subnet not found: {subnet_id}")
 

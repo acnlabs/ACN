@@ -212,8 +212,24 @@ class TestContentUrlSchemaValidation:
         assert r.status_code == 422, r.text
         stub_message_service.send_message.assert_not_awaited()
 
-    def test_http_url_accepted(self, stub_metrics, stub_message_service, stub_audit):
-        """Plain http:// (not just https://) must also be accepted."""
+    def test_http_url_rejected_by_schema(
+        self, stub_metrics, stub_message_service, stub_audit
+    ):
+        """Plain http:// is rejected at the schema level (only https:// allowed)."""
+        _wire_send(stub_metrics, stub_message_service, stub_audit)
+
+        with patch("acn.routes.communication.Message", return_value=MagicMock()):
+            with TestClient(app) as client:
+                r = client.post(
+                    "/api/v1/communication/send",
+                    json=_send_body(content_url="http://internal.example.com/p"),
+                )
+
+        assert r.status_code == 422, r.text
+        stub_message_service.send_message.assert_not_awaited()
+
+    def test_https_url_accepted(self, stub_metrics, stub_message_service, stub_audit):
+        """https:// URLs pointing to public hosts are accepted."""
         stub_message_service.send_message.return_value = {
             "status": "sent",
             "delivery_mode": "manifest",
@@ -227,7 +243,7 @@ class TestContentUrlSchemaValidation:
             with TestClient(app) as client:
                 r = client.post(
                     "/api/v1/communication/send",
-                    json=_send_body(content_url="http://internal.example.com/p"),
+                    json=_send_body(content_url="https://external.example.com/payload"),
                 )
 
         assert r.status_code == 200, r.text
@@ -337,8 +353,8 @@ class TestFetchContentSelfHosted:
         assert body["self_hosted"] is True
         assert "content_hash" not in body
 
-    def test_acn_hosted_entry_returns_content_key(self):
-        """Regression: ACN-hosted entries must still return ``content`` as before."""
+    def test_acn_hosted_entry_returns_content_chunk(self):
+        """ACN-hosted entries return paginated content via content_chunk + has_more."""
         mid = "0" * 32
         entry = ManifestEntry(
             mid=mid,
@@ -350,7 +366,7 @@ class TestFetchContentSelfHosted:
         )
         ms = AsyncMock()
         ms.get_entry = AsyncMock(return_value=entry)
-        ms.fetch_content = AsyncMock(return_value={"text": "hello"})
+        ms.fetch_content_chunk = AsyncMock(return_value=(b'{"text":"hello"}', False))
         _wire_fetch(ms)
 
         with TestClient(app) as client:
@@ -358,8 +374,10 @@ class TestFetchContentSelfHosted:
 
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["content"] == {"text": "hello"}
+        assert body["content_chunk"] == '{"text":"hello"}'
+        assert body["has_more"] is False
         assert "self_hosted" not in body
+        assert "content" not in body
 
     def test_missing_entry_returns_404(self):
         ms = AsyncMock()

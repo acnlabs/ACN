@@ -19,6 +19,7 @@ from .follow_service import (
 from .manifest_service import ManifestEntry, ManifestService
 from .message_service import MessageService
 from .policy_service import PolicyCheckService, PolicyDecision
+from .session_service import SessionEntry, SessionService
 from .subnet_service import SubnetService
 from .task_service import TaskNotFoundException, TaskService
 from .wallet_client import WalletClient
@@ -36,6 +37,8 @@ __all__ = [
     "SelfFollowError",
     "ManifestEntry",
     "ManifestService",
+    "SessionEntry",
+    "SessionService",
     "MessageService",
     "PolicyCheckService",
     "PolicyDecision",

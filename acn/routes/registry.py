@@ -1529,6 +1529,44 @@ async def get_agent_policy(
     }
 
 
+@router.get("/{agent_id}/communication_profile")
+@limiter.limit("120/minute")
+async def get_communication_profile(
+    request: Request,
+    agent_id: AgentIdPath,
+    agent_service: AgentServiceDep = None,
+):
+    """Public read-only summary of an agent's communication policy.
+
+    Exposes only the fields a *sender* needs before deciding whether
+    to attach an ``attention_fee`` or whether a message will be
+    accepted at all. Intentionally omits ``reject_reason`` (which
+    may contain sensitive context) and the full allowlist membership.
+
+    Returns:
+        ``{"agent_id": ..., "mode": ..., "attention_fee_required": bool}``
+        ``mode`` is one of ``open | manifest | allowlist | closed``.
+        ``attention_fee_required`` is ``true`` when the policy carries
+        an ``attention_fee`` requirement (reserved for future use;
+        currently always ``false`` — fee is optional at sender side).
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    policy = agent.communication_policy or {"mode": "open"}
+    return {
+        "agent_id": agent_id,
+        "mode": policy.get("mode", "open"),
+        "attention_fee_required": bool(policy.get("attention_fee_required", False)),
+    }
+
+
 @router.patch("/{agent_id}/policy")
 # Phase 1 integration review (P1-1): tighter cap than the read paths
 # because PATCH is destructive — it writes DB (Postgres UPDATE +

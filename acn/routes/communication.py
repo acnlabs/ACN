@@ -23,9 +23,11 @@ from ..infrastructure.messaging.message_router import (
     ContentUrlWrongModeError,
 )
 from ..monitoring.audit import AuditEventType
+from ..security import SSRFViolation, validate_content_url
 from .dependencies import (  # type: ignore[import-untyped]
     WALLET_RATE_LIMIT,
     AgentApiKeyDep,
+    AgentServiceDep,
     AuditDep,
     BroadcastDep,
     InternalTokenDep,
@@ -262,8 +264,8 @@ class SendMessageRequest(BaseModel):
         v = v.strip()
         if not v:
             return None
-        if not (v.lower().startswith("https://") or v.lower().startswith("http://")):
-            raise ValueError("content_url must start with https:// or http://")
+        if not v.lower().startswith("https://"):
+            raise ValueError("content_url must start with https://")
         return v
 
 
@@ -290,6 +292,244 @@ class BroadcastByTagRequest(BaseModel):
     @classmethod
     def _message_size(cls, v: dict) -> dict:
         return check_dict_size_256k("message", v)
+
+
+_MANIFEST_SEND_VALID_TYPES = frozenset(
+    {"task_request", "collaboration", "inquiry", "broadcast", "session_invite"}
+)
+
+
+class ManifestSendRequest(BaseModel):
+    """Path 2 (Phase 3): explicit Notify-only send with optional attention_fee.
+
+    Unlike ``POST /send`` (Path 1), this endpoint accepts only metadata —
+    no full message body — and ONLY works when the recipient's policy is
+    ``manifest`` mode. Use it when you want to attach an ``attention_fee``
+    explicitly or when you want to submit a clean notification without
+    storing the payload on ACN.
+    """
+
+    from_agent: str = Field(..., max_length=128)
+    target_agent: str = Field(..., max_length=128)
+    message_type: str = Field(
+        ...,
+        max_length=64,
+        description=(
+            "ACN message category. Accepted values: "
+            + ", ".join(sorted(_MANIFEST_SEND_VALID_TYPES))
+            + "."
+        ),
+    )
+    summary: str = Field(
+        ...,
+        max_length=200,
+        description=(
+            "Short human-readable preview (≤ 200 chars). "
+            "This is what the recipient sees before deciding to fetch content."
+        ),
+    )
+    ttl_hours: int | None = Field(
+        default=None,
+        ge=1,
+        le=720,
+        description="TTL in hours. Clamped to platform bounds (5min–30d). Defaults to 7 days.",
+    )
+    attention_fee: AttentionFee | None = None
+    content_url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description="Self-hosted content URL (HTTPS only). Stored as pointer; no ACN-side blob.",
+    )
+    content_hash: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Integrity hash, e.g. 'sha256:<hex>'.",
+    )
+
+    @field_validator("message_type")
+    @classmethod
+    def _validate_message_type(cls, v: str) -> str:
+        if v not in _MANIFEST_SEND_VALID_TYPES:
+            raise ValueError(
+                f"message_type must be one of: {sorted(_MANIFEST_SEND_VALID_TYPES)}"
+            )
+        return v
+
+    @field_validator("content_url")
+    @classmethod
+    def _validate_content_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not v.lower().startswith("https://"):
+            raise ValueError("content_url must start with https://")
+        return v
+
+
+@router.post("/manifest/send")
+@limiter.limit("60/minute")
+@limiter.limit(WALLET_RATE_LIMIT, key_func=_wallet_rate_limit_key)
+async def manifest_send(
+    request: Request,
+    body: ManifestSendRequest,
+    agent_info: AgentApiKeyDep,
+    message_service: MessageServiceDep = None,
+    agent_service: AgentServiceDep = None,
+    metrics: MetricsDep = None,
+    audit: AuditDep = None,
+):
+    """Path 2: Notify-only send (manifest mode recipients only).
+
+    Unlike ``POST /send``, this endpoint:
+    * Accepts only metadata (summary, message_type) — no full message body.
+    * Enforces that the recipient is in ``manifest`` mode (400 otherwise).
+    * Supports ``attention_fee`` and ``content_url`` with the same semantics
+      as ``POST /send``.
+
+    Use this when you explicitly want to submit a lightweight notification
+    without pushing a full payload to ACN storage.
+    """
+    if agent_info["agent_id"] != body.from_agent:
+        raise ACNHTTPError(
+            ErrorCode.FROM_AGENT_MISMATCH,
+            403,
+            details={
+                "authenticated_as": agent_info["agent_id"],
+                "from_agent": body.from_agent,
+            },
+        )
+
+    # Pre-check: recipient must be in manifest mode. Open/closed recipients
+    # don't have a manifest queue, so a Notify-only send makes no sense.
+    try:
+        recipient = await agent_service.get_agent(body.target_agent)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": body.target_agent},
+        ) from e
+    policy = getattr(recipient, "communication_policy", None) or {"mode": "open"}
+    mode = policy.get("mode", "open")
+    if mode not in ("manifest", "allowlist"):
+        raise ACNHTTPError(
+            ErrorCode.ATTENTION_FEE_REQUIRES_MANIFEST_MODE,
+            400,
+            details={
+                "recipient_id": body.target_agent,
+                "actual_route": mode,
+            },
+        )
+
+    # Build a synthetic A2A message from the summary so the dispatcher
+    # can extract it back (extract_summary → summary). The summary is
+    # stored explicitly on the manifest entry too, so the round-trip
+    # has no information loss.
+    message = Message(
+        message_id=str(uuid.uuid4()),
+        role="user",
+        parts=[TextPart(text=body.summary)],
+    )
+
+    try:
+        send_kwargs: dict[str, object] = {
+            "message_type": body.message_type,
+        }
+        if body.ttl_hours is not None:
+            send_kwargs["ttl_seconds"] = body.ttl_hours * 3600
+        if body.content_url is not None:
+            try:
+                validate_content_url(body.content_url)
+            except SSRFViolation as e:
+                raise ACNHTTPError(
+                    ErrorCode.CONTENT_URL_BLOCKED,
+                    400,
+                    details={"content_url": body.content_url, "reason": str(e)},
+                ) from e
+            send_kwargs["content_url"] = body.content_url
+            if body.content_hash is not None:
+                send_kwargs["content_hash"] = body.content_hash
+        if body.attention_fee is not None:
+            currency = body.attention_fee.currency.lower()
+            if currency not in ATTENTION_FEE_SUPPORTED_CURRENCIES:
+                raise ACNHTTPError(
+                    ErrorCode.ATTENTION_FEE_INVALID,
+                    400,
+                    details={
+                        "currency": body.attention_fee.currency,
+                        "supported": sorted(ATTENTION_FEE_SUPPORTED_CURRENCIES),
+                    },
+                )
+            send_kwargs["attention_fee"] = {
+                "amount": body.attention_fee.amount,
+                "currency": currency,
+            }
+
+        result = await message_service.send_message(
+            from_agent_id=body.from_agent,
+            to_agent_id=body.target_agent,
+            message=message,
+            **send_kwargs,
+        )
+
+        await metrics.inc_message_count(
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            status="success",
+        )
+        await audit.log_event(
+            event_type=AuditEventType.MESSAGE_SENT,
+            actor_id=body.from_agent,
+            actor_type="agent",
+            target_id=body.target_agent,
+            target_type="agent",
+            message_id=result.get("mid"),
+        )
+        logger.info(
+            "manifest_send_path2",
+            from_agent=body.from_agent,
+            to_agent=body.target_agent,
+            message_type=body.message_type,
+        )
+        return result
+
+    except ACNHTTPError:
+        raise
+    except AttentionFeeWrongModeError as e:
+        raise ACNHTTPError(
+            ErrorCode.ATTENTION_FEE_REQUIRES_MANIFEST_MODE,
+            400,
+            details={"recipient_id": e.recipient_id, "actual_route": e.actual_route},
+        ) from e
+    except AttentionFeeLockError as e:
+        raise ACNHTTPError(
+            ErrorCode.ATTENTION_FEE_LOCK_FAILED,
+            400,
+            details={"reason": e.reason},
+        ) from e
+    except ContentUrlWrongModeError as e:
+        raise ACNHTTPError(
+            ErrorCode.CONTENT_URL_REQUIRES_MANIFEST_MODE,
+            400,
+            details={"recipient_id": e.recipient_id, "actual_route": e.actual_route},
+        ) from e
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": body.target_agent},
+        ) from e
+    except PolicyRejected as e:
+        raise ACNHTTPError(
+            ErrorCode.COMMUNICATION_REJECTED,
+            403,
+            details={"reason": e.reason, "reject_reason": e.reject_reason},
+        ) from e
+    except Exception as e:
+        logger.exception("manifest_send_path2_error", error=str(e))
+        raise ACNHTTPError(ErrorCode.INTERNAL_ERROR, 500) from e
 
 
 @router.post("/send")
@@ -328,6 +568,14 @@ async def send_message(
             "priority": body.priority,
         }
         if body.content_url is not None:
+            try:
+                validate_content_url(body.content_url)
+            except SSRFViolation as e:
+                raise ACNHTTPError(
+                    ErrorCode.CONTENT_URL_BLOCKED,
+                    400,
+                    details={"content_url": body.content_url, "reason": str(e)},
+                ) from e
             send_kwargs["content_url"] = body.content_url
             if body.content_hash is not None:
                 send_kwargs["content_hash"] = body.content_hash

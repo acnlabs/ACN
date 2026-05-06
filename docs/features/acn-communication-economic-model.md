@@ -13,7 +13,6 @@
 >   - 接收方调用 `POST /communication/manifest/{agent_id}/{mid}/ack` 显式确认 → `release_partial` 把 fee 释放到接收方钱包；✅ 已落地
 >   - 接收方调用 `DELETE /communication/manifest/{agent_id}/{mid}` 主动拒收 → ACN 先调 `refund_v2` 把 fee 退给发送方，再删除 manifest 记录（refund-first ordering，避免孤儿 escrow）；✅ 已落地
 >   - 接收方既不 ack 也不 delete，manifest TTL 过期后由后台 worker 自动退款：✅ 已落地（`ManifestTTLRefundWorker`，每 5 分钟扫描 Redis，超时未 ack + 过 5 分钟 grace period → 调 `refund_v2` + 写 `refunded_at` 防双退）。
->
 >   全部落地：✅ ack 路由 + ✅ DELETE refund 路由 + ✅ TTL refund worker + ✅ 服务层（`mark_acked` HSETNX 幂等、`unmark_acked` 回滚、`refund_v2` provider 接口、`expires_at_ms` 字段）+ ✅ 测试（83 个新增/扩展用例）。
 > - **全部落地（Phase 3 完成）**：
 >   - ✅ Phase 3 `content_url` 自托管路径（`SendMessageRequest` + `ManifestService.write` + `ManifestDispatcher.dispatch` + `MessageRouter._route_to_manifest` + `GET /manifest/{mid}/content` 自托管分支）；
@@ -744,7 +743,7 @@ Phase 2 共 11 条决策（Group A 4 + Group B 5 + Group C 2）密集落地，�
   - Backend 释放失败 → 400 `attention_fee_release_failed`，并回滚 `acked_at_ms`，让 SDK 可以无副作用地重试。
   - 不带 fee 的 manifest entry 调 ack → 400 `attention_fee_not_locked`（继续走 `GET /communication/content` 即可）。
 - `ManifestEntry` 新增 `acked_at_ms: int | None` 字段；`GET /communication/manifest/{agent_id}` 在已 ack 的条目上返回 `acked_at` 给客户端做未读高亮。
-- 错误码新增六个（`attention_fee_invalid` / `attention_fee_requires_manifest_mode` / `attention_fee_lock_failed` / `attention_fee_not_locked` / `attention_fee_already_acked` / `attention_fee_release_failed`），全部按 [`acn-error-schema.md`](./acn-error-schema.md) flat schema 输出。
+- 错误码新增六个（`attention_fee_invalid` / `attention_fee_requires_manifest_mode` / `attention_fee_lock_failed` / `attention_fee_not_locked` / `attention_fee_already_acked` / `attention_fee_release_failed`），全部按 `[acn-error-schema.md](./acn-error-schema.md)` flat schema 输出。
 - 测试：`tests/services/test_attention_fee.py`（service / dispatcher 9 用例）、`tests/routes/test_attention_fee_routes.py`（ack 端点 7 用例）、`tests/routes/test_communication_attention_fee.py`（send 端点 9 用例）共 25 个新增测试覆盖 happy path、idempotency、跨租户、release rollback、schema 边界。
 
 **已知限制 / 待实现**：

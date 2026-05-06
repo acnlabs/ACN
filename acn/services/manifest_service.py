@@ -134,6 +134,12 @@ class ManifestEntry:
     # hint (e.g. ``sha256:<hex>``).
     content_url: str | None = None
     content_hash: str | None = None
+    # ACN-level message category (e.g. "task_request", "collaboration",
+    # "inquiry", "broadcast", "session_invite"). Stored on the detail
+    # HASH so recipients can filter manifest listings by type without
+    # pulling content. ``None`` for entries written via the legacy
+    # Path 1 route that does not surface a top-level message_type.
+    message_type: str | None = None
 
 
 def _zset_key(owner_id: str) -> str:
@@ -213,6 +219,7 @@ class ManifestService:
         extra: dict[str, Any] | None = None,
         content_url: str | None = None,
         content_hash: str | None = None,
+        message_type: str | None = None,
     ) -> ManifestEntry:
         """Persist a manifest entry + payload atomically.
 
@@ -292,6 +299,8 @@ class ManifestService:
             "content_size": size,
             "expires_at": expires_at_ms,
         }
+        if message_type:
+            detail["message_type"] = message_type
         if self_hosted:
             detail["content_url"] = content_url
             if content_hash:
@@ -324,6 +333,7 @@ class ManifestService:
             expires_at_ms=expires_at_ms,
             content_url=content_url,
             content_hash=content_hash if content_url else None,
+            message_type=message_type or None,
         )
 
     async def read_since(
@@ -332,6 +342,7 @@ class ManifestService:
         *,
         since_ms: int | None = None,
         limit: int = 50,
+        message_type: str | None = None,
     ) -> list[ManifestEntry]:
         """List manifest entries newer than ``since_ms`` (inclusive lower bound).
 
@@ -385,7 +396,10 @@ class ManifestService:
                 # row will be cleaned up on next eviction.
                 continue
             mid_str = raw_mid.decode() if isinstance(raw_mid, bytes) else raw_mid
-            results.append(_decode_entry(mid_str, detail))
+            entry = _decode_entry(mid_str, detail)
+            if message_type is not None and entry.message_type != message_type:
+                continue
+            results.append(entry)
 
         return results
 
@@ -541,6 +555,56 @@ class ManifestService:
         result = await self.redis.hdel(detail_key, "acked_at")
         return int(result) > 0
 
+    async def fetch_content_raw(
+        self,
+        owner_id: str,
+        mid: str,
+    ) -> bytes | None:
+        """Return the raw JSON bytes stored for a manifest entry.
+
+        Unlike ``fetch_content`` (which parses the JSON), this method
+        returns the serialised blob so callers can slice it for cursor-
+        based pagination without re-serialising back to bytes.
+
+        Returns ``None`` when the key is absent or expired (same
+        semantics as ``fetch_content``).
+        """
+        content_key = _content_key(owner_id, mid)
+        raw = await self.redis.get(content_key)
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        return raw
+
+    async def fetch_content_chunk(
+        self,
+        owner_id: str,
+        mid: str,
+        offset: int,
+        size: int,
+    ) -> tuple[bytes, bool] | None:
+        """Return a byte-range chunk of a manifest entry's content.
+
+        Args:
+            owner_id: Recipient agent id.
+            mid: Manifest entry id.
+            offset: Byte offset into the JSON-serialised payload.
+            size: Maximum bytes to return in this chunk.
+
+        Returns:
+            ``(chunk_bytes, has_more)`` when the content key exists.
+            ``has_more`` is ``True`` when there are bytes beyond
+            ``offset + size``. Returns ``None`` when the content key
+            is absent or expired.
+        """
+        raw = await self.fetch_content_raw(owner_id, mid)
+        if raw is None:
+            return None
+        chunk = raw[offset : offset + size]
+        has_more = (offset + size) < len(raw)
+        return chunk, has_more
+
     async def fetch_content(
         self,
         owner_id: str,
@@ -655,4 +719,5 @@ def _decode_entry(mid: str, raw: dict[Any, Any]) -> ManifestEntry:
         expires_at_ms=expires_at_ms,
         content_url=decoded.get("content_url") or None,
         content_hash=decoded.get("content_hash") or None,
+        message_type=decoded.get("message_type") or None,
     )

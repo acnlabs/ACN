@@ -331,6 +331,7 @@ class MessageRouter:
         attention_fee: dict[str, Any] | None = None,
         content_url: str | None = None,
         content_hash: str | None = None,
+        message_type: str | None = None,
     ) -> Any:
         """
         Route an A2A message to a specific agent
@@ -426,6 +427,7 @@ class MessageRouter:
                     attention_fee=attention_fee,
                     content_url=content_url,
                     content_hash=content_hash,
+                    message_type=message_type,
                 )
             # attention_fee and content_url are both only meaningful
             # when the message enters the manifest flow. In inbox /
@@ -867,6 +869,7 @@ class MessageRouter:
         attention_fee: dict[str, Any] | None = None,
         content_url: str | None = None,
         content_hash: str | None = None,
+        message_type: str | None = None,
     ) -> dict[str, Any]:
         """Phase 2 PR #1: divert inbound message into manifest queue.
 
@@ -907,6 +910,7 @@ class MessageRouter:
             attention_fee=attention_fee,
             content_url=content_url,
             content_hash=content_hash,
+            message_type=message_type,
         )
         # P1-B2 review fix: keep ``status="sent"`` so existing SDK
         # clients that branch on ``result["status"] == "sent"``

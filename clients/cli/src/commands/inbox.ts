@@ -3,6 +3,35 @@ import { acnGet, acnPost, acnDelete } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 
+// ─── Offline history inbox (policy=open) ─────────────────────────────────────
+
+interface HistoryMessage {
+  route_id: string;
+  from_agent_id?: string;
+  message?: unknown;
+  received_at?: string;
+  priority?: string;
+}
+
+interface HistoryResponse {
+  agent_id: string;
+  messages: HistoryMessage[];
+  count: number;
+  limit: number;
+  ack: boolean;
+}
+
+function formatHistoryMsg(m: HistoryMessage, i: number): string {
+  const content =
+    typeof m.message === 'string' ? m.message : JSON.stringify(m.message ?? '');
+  return [
+    `[${i + 1}] ${m.route_id}`,
+    `  From : ${m.from_agent_id ?? '?'}`,
+    ...(m.received_at ? [`  At   : ${m.received_at}`] : []),
+    `  Msg  : ${content.slice(0, 200)}`,
+  ].join('\n');
+}
+
 interface ManifestEntry {
   mid: string;
   sender_id: string;
@@ -163,6 +192,63 @@ export function inboxCommand(): Command {
         handleError(err);
       }
     });
+
+  // ── history subgroup ──────────────────────────────────────────────────────
+  const history = new Command('history').description(
+    'Offline direct-delivery inbox (policy=open). Full messages stored when you were unreachable.'
+  );
+
+  history
+    .command('list')
+    .description('List offline messages (full content)')
+    .option('--limit <n>', 'Max messages to return (default 100)', parseInt)
+    .option('--ack', 'Clear the entire inbox after retrieval')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (opts: { limit?: number; ack?: boolean; agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      try {
+        const params: Record<string, string | number | boolean | undefined> = {};
+        if (opts.limit !== undefined) params.limit = opts.limit;
+        if (opts.ack) params.ack = true;
+        const res = await acnGet<HistoryResponse>(
+          `/communication/history/${agentId}`,
+          params
+        );
+        const msgs = res.messages ?? [];
+        if (msgs.length === 0) {
+          output(res, 'Offline inbox is empty.');
+          return;
+        }
+        const ackNote = opts.ack ? ' [inbox cleared]' : '';
+        output(
+          res,
+          `${msgs.length} message(s)${ackNote}:\n\n` +
+            msgs.map((m, i) => formatHistoryMsg(m, i)).join('\n\n')
+        );
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  history
+    .command('ack <route_ids...>')
+    .description('Selectively acknowledge specific messages by route_id')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (routeIds: string[], opts: { agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      try {
+        const res = await acnPost<{ agent_id: string; acked: string[] }>(
+          `/communication/history/${agentId}/ack`,
+          { route_ids: routeIds }
+        );
+        const acked = Array.isArray(res.acked) ? res.acked.length : routeIds.length;
+        output(res, `Acknowledged ${acked} message(s).`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd.addCommand(history);
 
   return cmd;
 }

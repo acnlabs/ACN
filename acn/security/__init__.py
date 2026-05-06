@@ -13,6 +13,7 @@ from .error_sanitizer import safe_error_payload, safe_external_error
 from .ssrf import (
     SSRFViolation,
     safe_resolve_target,
+    validate_content_url,
     validate_endpoint_url,
 )
 from .tls_check import check_tls_config
@@ -23,5 +24,6 @@ __all__ = [
     "safe_error_payload",
     "safe_external_error",
     "safe_resolve_target",
+    "validate_content_url",
     "validate_endpoint_url",
 ]

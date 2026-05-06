@@ -51,6 +51,18 @@ class MessageType(StrEnum):
     # Payload shape: {type, mid, sender_id, summary, ts}.
     MANIFEST_NOTIFICATION = "manifest_notification"
 
+    # Phase 3 Session layer events. Pushed via WS so participants
+    # can react in real-time without polling.
+    # Payload shapes (all carry ``session_id``):
+    #   session_invite:    {type, session_id, from_agent, metadata}
+    #   session_accepted:  {type, session_id, accepted_by}
+    #   session_rejected:  {type, session_id, rejected_by}
+    #   session_closed:    {type, session_id, closed_by}
+    SESSION_INVITE = "session_invite"
+    SESSION_ACCEPTED = "session_accepted"
+    SESSION_REJECTED = "session_rejected"
+    SESSION_CLOSED = "session_closed"
+
     # Connection management
     PING = "ping"
     PONG = "pong"

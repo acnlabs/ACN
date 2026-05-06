@@ -8,7 +8,9 @@ import { tasksCommand } from './commands/tasks.js';
 import { messageCommand } from './commands/message.js';
 import { inboxCommand } from './commands/inbox.js';
 import { policyCommand } from './commands/policy.js';
-import { allowlistCommand } from './commands/allowlist.js';
+import { subnetCommand } from './commands/subnet.js';
+import { followCommand } from './commands/follow.js';
+import { walletCommand } from './commands/wallet.js';
 
 const program = new Command();
 
@@ -30,6 +32,8 @@ program.addCommand(tasksCommand());
 program.addCommand(messageCommand());
 program.addCommand(inboxCommand());
 program.addCommand(policyCommand());
-program.addCommand(allowlistCommand());
+program.addCommand(subnetCommand());
+program.addCommand(followCommand());
+program.addCommand(walletCommand());
 
 program.parse(process.argv);

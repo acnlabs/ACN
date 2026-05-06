@@ -1,15 +1,27 @@
 import { Command } from 'commander';
 import { acnGet } from '../api.js';
+import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 
 interface AgentInfo {
   agent_id: string;
   name: string;
   status: string;
-  skills: string[];
+  tags?: string[];
   description?: string;
   endpoint?: string;
   created_at?: string;
+  followers_count?: number;
+  follows_count?: number;
+}
+
+interface AgentMeResponse extends AgentInfo {
+  claim_status?: string;
+  owner?: string;
+  registered_at?: string;
+  last_heartbeat?: string;
+  tasks_endpoint?: string;
+  heartbeat_endpoint?: string;
 }
 
 interface AgentSearchResponse {
@@ -22,9 +34,12 @@ function formatAgent(a: AgentInfo): string {
     `  ID       : ${a.agent_id}`,
     `  Name     : ${a.name}`,
     `  Status   : ${a.status}`,
-    `  Skills   : ${a.skills.join(', ') || '(none)'}`,
+    `  Tags     : ${(a.tags ?? []).join(', ') || '(none)'}`,
     ...(a.description ? [`  Desc     : ${a.description}`] : []),
     ...(a.endpoint ? [`  Endpoint : ${a.endpoint}`] : []),
+    ...(a.followers_count !== undefined
+      ? [`  Followers: ${a.followers_count}  Following: ${a.follows_count ?? 0}`]
+      : []),
   ].join('\n');
 }
 
@@ -34,13 +49,13 @@ export function agentsCommand(): Command {
   cmd
     .command('list')
     .description('List agents')
-    .option('--skill <skill>', 'Filter by skill ID')
+    .option('--tag <tag>', 'Filter by capability tag (comma-separated)')
     .option('--name <name>', 'Filter by name')
     .option('--status <status>', 'online | offline | all (default: online)', 'online')
-    .action(async (opts: { skill?: string; name?: string; status?: string }) => {
+    .action(async (opts: { tag?: string; name?: string; status?: string }) => {
       try {
         const res = await acnGet<AgentSearchResponse>('/agents', {
-          skill: opts.skill,
+          tag: opts.tag,
           name: opts.name,
           status: opts.status,
         });
@@ -66,6 +81,34 @@ export function agentsCommand(): Command {
       try {
         const agent = await acnGet<AgentInfo>(`/agents/${agentId}`);
         output(agent, formatAgent(agent));
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd
+    .command('me')
+    .description('Show your own agent info (uses stored API key)')
+    .action(async () => {
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const res = await acnGet<AgentMeResponse>('/agents/me');
+        const lines = [
+          `  ID           : ${res.agent_id}`,
+          `  Name         : ${res.name}`,
+          `  Status       : ${res.status}`,
+          `  Claim status : ${res.claim_status ?? '?'}`,
+          `  Tags         : ${(res.tags ?? []).join(', ') || '(none)'}`,
+          ...(res.owner ? [`  Owner        : ${res.owner}`] : []),
+          ...(res.description ? [`  Desc         : ${res.description}`] : []),
+          ...(res.last_heartbeat ? [`  Last HB      : ${res.last_heartbeat}`] : []),
+          ...(res.registered_at ? [`  Registered   : ${res.registered_at}`] : []),
+        ];
+        output(res, lines.join('\n'));
       } catch (err) {
         handleError(err);
       }

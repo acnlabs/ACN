@@ -140,6 +140,12 @@ class ErrorCode(StrEnum):
     MANIFEST_ENTRY_NOT_FOUND = "manifest_entry_not_found"
     MANIFEST_CONTENT_NOT_FOUND = "manifest_content_not_found"
 
+    # ===== Session layer (Phase 3) =====
+    SESSION_NOT_FOUND = "session_not_found"
+    SESSION_ALREADY_ACCEPTED = "session_already_accepted"
+    SESSION_EXPIRED = "session_expired"
+    SESSION_FORBIDDEN = "session_forbidden"
+
     # ===== Attention fee (Phase 3 — manifest economics) =====
     # ``attention_fee`` is the sender-pays-recipient mechanism that turns
     # the manifest queue from a free best-effort firehose into a
@@ -188,6 +194,7 @@ class ErrorCode(StrEnum):
     # those modes, defeating the self-hosted contract. Return loudly so
     # the sender knows ACN did *not* skip payload storage.
     CONTENT_URL_REQUIRES_MANIFEST_MODE = "content_url_requires_manifest_mode"
+    CONTENT_URL_BLOCKED = "content_url_blocked"
     ATTENTION_FEE_LOCK_FAILED = "attention_fee_lock_failed"
     ATTENTION_FEE_NOT_LOCKED = "attention_fee_not_locked"
     ATTENTION_FEE_ALREADY_ACKED = "attention_fee_already_acked"
@@ -336,6 +343,18 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.MANIFEST_ENTRY_NOT_FOUND: (
         "The requested manifest entry could not be found."
     ),
+    ErrorCode.SESSION_NOT_FOUND: (
+        "The requested session could not be found or has already expired."
+    ),
+    ErrorCode.SESSION_ALREADY_ACCEPTED: (
+        "This session invitation has already been accepted."
+    ),
+    ErrorCode.SESSION_EXPIRED: (
+        "The session invitation has expired. The inviter must send a new invitation."
+    ),
+    ErrorCode.SESSION_FORBIDDEN: (
+        "You are not a participant in this session."
+    ),
     ErrorCode.MANIFEST_CONTENT_NOT_FOUND: (
         "The requested manifest content could not be found or has expired."
     ),
@@ -353,6 +372,11 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
         "In inbox/open mode the full message payload is stored on ACN, "
         "defeating the self-hosted contract. Drop content_url or wait for "
         "the recipient to switch to manifest mode."
+    ),
+    ErrorCode.CONTENT_URL_BLOCKED: (
+        "The provided content_url is not allowed. ACN only accepts https:// URLs "
+        "pointing to public hostnames. Private IPs, loopback addresses, and "
+        "non-HTTPS schemes are rejected to prevent SSRF attacks."
     ),
     ErrorCode.ATTENTION_FEE_LOCK_FAILED: (
         "The attention_fee could not be locked in escrow. Check the "
