@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-07
+
+### Changed
+
+- Renamed the CLI npm package from `acn-cli` to `@acnlabs/acn-cli` after npm rejected the unscoped name during the `v0.6.1` release.
+- Bumped ACN core, Python SDK, TypeScript SDK, and CLI package versions to `0.6.2` for a coordinated patch release.
+
 ## [0.6.1] - 2026-05-07
 
 ### Added
