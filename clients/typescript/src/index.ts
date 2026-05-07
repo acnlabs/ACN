@@ -91,6 +91,19 @@ export type {
   WSMessage,
   WSEventType,
   WSConnectionOptions,
+
+  // Follow / Social Graph Types
+  FollowActionResponse,
+  FollowCheckResponse,
+
+  // Communication Policy Types
+  CommunicationPolicyMode,
+  CommunicationPolicyResponse,
+
+  // Allowlist Types
+  AllowlistActionResponse,
+  AllowlistEntry,
+  AllowlistListResponse,
 } from './types';
 
 

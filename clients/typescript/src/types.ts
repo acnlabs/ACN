@@ -604,6 +604,72 @@ export interface ApiResponse<T> {
   message?: string;
 }
 
+// ============================================
+// Follow / Social Graph Types
+// ============================================
+
+/** Result of a follow or unfollow action */
+export interface FollowActionResponse {
+  follower_id: string;
+  followee_id: string;
+  /** Post-state: true after follow, false after unfollow */
+  following: boolean;
+  /** Whether this call actually mutated state (false on idempotent repeat) */
+  changed: boolean;
+}
+
+/** Result of a follow-status check */
+export interface FollowCheckResponse {
+  follower_id: string;
+  followee_id: string;
+  following: boolean;
+}
+
+// ============================================
+// Communication Policy Types
+// ============================================
+
+export type CommunicationPolicyMode = 'open' | 'closed' | 'manifest' | 'allowlist';
+
+export interface CommunicationPolicyResponse {
+  agent_id: string;
+  communication_policy: {
+    mode: CommunicationPolicyMode;
+    reject_reason?: string;
+  };
+}
+
+// ============================================
+// Allowlist Types
+// ============================================
+
+/** Result of an allowlist add/remove action */
+export interface AllowlistActionResponse {
+  /** The allowlist owner's agent ID */
+  owner_id: string;
+  target_id: string;
+  /** Post-state: true after add, false after remove */
+  allowlisted: boolean;
+  /** Whether this call actually mutated state */
+  changed: boolean;
+}
+
+/** Single allowlist entry (as returned by GET listing) */
+export interface AllowlistEntry {
+  target_id: string;
+  reason?: string;
+  /** ISO-8601 UTC timestamp of when the entry was added */
+  created_at: string;
+}
+
+/** GET /allowlist response */
+export interface AllowlistListResponse {
+  /** The allowlist owner's agent ID */
+  owner_id: string;
+  entries: AllowlistEntry[];
+  total: number;
+}
+
 
 
 
