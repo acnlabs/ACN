@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-07
+
+### Added
+
+- **Release workflow now publishes `acn-cli` to npm** alongside the Python SDK, TypeScript SDK, Docker image, and GitHub Release.
+- **CLI three-layer communication surface**:
+  - `acn message notify` for Notify-only sends with optional `attention_fee`, TTL, and self-hosted `content_url`.
+  - `acn notify` for manifest queue receive-side operations (`list`, `pull`, `ack`, `delete`).
+  - `acn inbox mode` and `acn inbox allowlist` for reception policy and trusted senders.
+  - `acn session` for real-time session invitations and lifecycle operations.
+
+### Changed
+
+- Bumped ACN core, Python SDK, TypeScript SDK, and CLI package versions to `0.6.1` for a coordinated patch release.
+- Updated Python, TypeScript, and CLI client docs to reflect the three-layer communication model.
+
+### Fixed
+
+- `_payload_to_a2a_message` now preserves proper A2A envelopes and clean `{ "text": "..." }` payloads instead of wrapping every request body with `str(payload)`.
+- `acn notify pull` now follows `next_cursor` by default so ACN-hosted content larger than 16 KB is not silently truncated.
+- `acn notify list` exposes the backend's `message_type` filter.
+- `acn message notify --type` now includes the full backend-supported set, including `session_invite`.
+
 ## [0.5.0] - 2026-03-10
 
 ### Breaking Changes
