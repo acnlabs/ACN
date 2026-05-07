@@ -2,6 +2,11 @@
 
 All notable changes to `acn-client` are documented here.
 
+## [0.6.2] - 2026-05-07
+
+### Changed
+- Bumped package version to `0.6.2` for the coordinated ACN patch release after the CLI npm package was renamed to `@acnlabs/acn-cli`.
+
 ## [0.6.1] - 2026-05-07
 
 ### Added
