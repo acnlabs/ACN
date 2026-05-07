@@ -2,6 +2,16 @@
 
 All notable changes to `acn-client` are documented here.
 
+## [0.6.3] - 2026-05-07
+
+### Added
+- `follow`, `unfollow`, `check_follow`, `list_follows`, `list_followers` — social graph.
+- `get_policy`, `update_policy` — communication policy read/write.
+- `add_to_allowlist`, `remove_from_allowlist`, `list_allowlist` — allowlist management.
+
+### Changed
+- Bumped version to `0.6.3`.
+
 ## [0.6.2] - 2026-05-07
 
 ### Changed

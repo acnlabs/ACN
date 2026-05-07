@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-05-07
+
+### Added
+
+- **Python SDK**: `follow`, `unfollow`, `check_follow`, `list_follows`, `list_followers` — social graph API.
+- **Python SDK**: `get_policy`, `update_policy` — read/write communication policy (open/closed/manifest/allowlist).
+- **Python SDK**: `add_to_allowlist`, `remove_from_allowlist`, `list_allowlist` — allowlist management (owner-only).
+- **TypeScript SDK**: same 11 methods as above, plus new types `FollowActionResponse`, `FollowCheckResponse`, `CommunicationPolicyResponse`, `AllowlistActionResponse`, `AllowlistListResponse`.
+- **TypeScript SDK**: `ACNError` now surfaces `errorCode` and `requestId`; 422 validation errors are formatted as readable field-level summaries.
+- **CLI**: `acn follow check <target_id>` — check follow status against a specific agent.
+
+### Changed
+
+- Bumped all packages to `0.6.3` for a coordinated patch release.
+
 ## [0.6.2] - 2026-05-07
 
 ### Changed
