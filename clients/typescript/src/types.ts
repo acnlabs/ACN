@@ -645,7 +645,8 @@ export interface CommunicationPolicyResponse {
 
 /** Result of an allowlist add/remove action */
 export interface AllowlistActionResponse {
-  agent_id: string;
+  /** The allowlist owner's agent ID */
+  owner_id: string;
   target_id: string;
   /** Post-state: true after add, false after remove */
   allowlisted: boolean;
@@ -653,17 +654,19 @@ export interface AllowlistActionResponse {
   changed: boolean;
 }
 
-/** Single allowlist entry */
+/** Single allowlist entry (as returned by GET listing) */
 export interface AllowlistEntry {
   target_id: string;
   reason?: string;
-  added_at: string;
+  /** ISO-8601 UTC timestamp of when the entry was added */
+  created_at: string;
 }
 
 /** GET /allowlist response */
 export interface AllowlistListResponse {
-  agent_id: string;
-  allowlist: AllowlistEntry[];
+  /** The allowlist owner's agent ID */
+  owner_id: string;
+  entries: AllowlistEntry[];
   total: number;
 }
 

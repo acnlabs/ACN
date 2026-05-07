@@ -1466,14 +1466,14 @@ class ACNClient:
             offset: Pagination offset.
 
         Returns:
-            List of ``{ target_id, reason?, added_at }`` dicts.
+            List of ``{ target_id, reason?, created_at }`` dicts.
         """
         data = await self._request(
             "GET",
             f"/api/v1/agents/{agent_id}/allowlist",
             params={"limit": limit, "offset": offset},
         )
-        entries: list[dict[str, Any]] = data.get("allowlist", [])
+        entries: list[dict[str, Any]] = data.get("entries", [])
         return entries
 
     # -------------------------------------------------------------------------
