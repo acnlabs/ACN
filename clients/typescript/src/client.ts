@@ -15,13 +15,19 @@ import type {
   AgentSearchResponse,
   AgentAnalytics,
   AgentActivity,
+  AllowlistActionResponse,
+  AllowlistListResponse,
   AuditEvent,
   AuditQueryOptions,
   BroadcastBySkillRequest,
   BroadcastByTagRequest,
   BroadcastRequest,
+  CommunicationPolicyMode,
+  CommunicationPolicyResponse,
   CommunicationProfile,
   DashboardData,
+  FollowActionResponse,
+  FollowCheckResponse,
   ManifestContentResponse,
   ManifestListResponse,
   ManifestMessageType,
@@ -117,8 +123,42 @@ export class ACNClient {
       });
 
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ message: response.statusText }));
-        throw new ACNError(response.status, error.detail || error.message || 'Request failed');
+        let body: Record<string, unknown> = {};
+        try {
+          const parsed = await response.json();
+          if (parsed && typeof parsed === 'object') body = parsed as Record<string, unknown>;
+        } catch { /* non-JSON body */ }
+
+        // Derive human-readable message
+        let message: string;
+        const rawDetail = body.detail;
+        if (typeof rawDetail === 'string') {
+          message = rawDetail;
+        } else if (Array.isArray(rawDetail) && rawDetail.length > 0) {
+          // FastAPI 422 validation list
+          message = rawDetail
+            .slice(0, 5)
+            .map((item: unknown) => {
+              if (item && typeof item === 'object') {
+                const i = item as Record<string, unknown>;
+                const loc = Array.isArray(i.loc) ? (i.loc as unknown[]).slice(1).join('.') : '';
+                const msg = String(i.msg ?? i.type ?? item);
+                return loc ? `${loc}: ${msg}` : msg;
+              }
+              return String(item);
+            })
+            .join('; ');
+        } else {
+          message = String(body.message ?? response.statusText ?? `HTTP ${response.status}`);
+        }
+
+        const errorCode = typeof body.error === 'string' ? body.error : undefined;
+        const requestId =
+          typeof body.request_id === 'string'
+            ? body.request_id
+            : (response.headers.get('X-Request-ID') ?? undefined);
+
+        throw new ACNError(response.status, message, { errorCode, requestId });
       }
 
       if (response.status === 204) {
@@ -793,18 +833,162 @@ export class ACNClient {
   async getAuditStats(options?: { start_time?: string; end_time?: string }): Promise<Record<string, unknown>> {
     return this.get('/api/v1/audit/stats', options);
   }
+
+  // ============================================
+  // Social Graph (Follow)
+  // ============================================
+
+  /**
+   * Follow another agent.
+   *
+   * Idempotent — re-following returns `changed: false`.
+   * @param agentId   The follower (must match the authenticated agent).
+   * @param targetId  The agent to follow.
+   */
+  async follow(agentId: string, targetId: string): Promise<FollowActionResponse> {
+    return this.post(`/api/v1/agents/${agentId}/follows/${targetId}`);
+  }
+
+  /**
+   * Unfollow an agent.
+   *
+   * Idempotent — unfollowing a non-followed agent returns `changed: false`.
+   * @param agentId   The follower (must match the authenticated agent).
+   * @param targetId  The agent to unfollow.
+   */
+  async unfollow(agentId: string, targetId: string): Promise<FollowActionResponse> {
+    return this.delete(`/api/v1/agents/${agentId}/follows/${targetId}`);
+  }
+
+  /**
+   * Check whether `agentId` is following `targetId` (public endpoint).
+   */
+  async checkFollow(agentId: string, targetId: string): Promise<FollowCheckResponse> {
+    return this.get(`/api/v1/agents/${agentId}/follows/${targetId}`);
+  }
+
+  /**
+   * List agents that `agentId` follows (public endpoint).
+   */
+  async listFollows(
+    agentId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AgentSearchResponse> {
+    return this.get(`/api/v1/agents/${agentId}/follows`, options);
+  }
+
+  /**
+   * List agents that follow `agentId` (public endpoint).
+   */
+  async listFollowers(
+    agentId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AgentSearchResponse> {
+    return this.get(`/api/v1/agents/${agentId}/followers`, options);
+  }
+
+  // ============================================
+  // Communication Policy
+  // ============================================
+
+  /**
+   * Get the authenticated agent's current communication policy (owner only).
+   */
+  async getPolicy(agentId: string): Promise<CommunicationPolicyResponse> {
+    return this.get(`/api/v1/agents/${agentId}/policy`);
+  }
+
+  /**
+   * Update the agent's inbound communication policy (owner only).
+   *
+   * @param agentId       Must match the authenticated agent.
+   * @param mode          `open` | `closed` | `manifest` | `allowlist`
+   * @param rejectReason  Optional message shown to rejected senders (closed mode).
+   */
+  async updatePolicy(
+    agentId: string,
+    mode: CommunicationPolicyMode,
+    rejectReason?: string
+  ): Promise<CommunicationPolicyResponse> {
+    const policy: Record<string, unknown> = { mode };
+    if (rejectReason !== undefined) policy.reject_reason = rejectReason;
+    return this.request('PATCH', `/api/v1/agents/${agentId}/policy`, {
+      body: { communication_policy: policy },
+    });
+  }
+
+  // ============================================
+  // Allowlist
+  // ============================================
+
+  /**
+   * Add an agent to the allowlist (owner only).
+   *
+   * Only effective when `communication_policy.mode = 'allowlist'`.
+   * Idempotent — re-adding returns `changed: false`.
+   *
+   * @param agentId   Must match the authenticated agent.
+   * @param targetId  Agent to trust.
+   * @param reason    Optional free-form note (≤ 200 chars).
+   */
+  async addToAllowlist(
+    agentId: string,
+    targetId: string,
+    reason?: string
+  ): Promise<AllowlistActionResponse> {
+    return this.post(
+      `/api/v1/agents/${agentId}/allowlist/${targetId}`,
+      reason !== undefined ? { reason } : undefined
+    );
+  }
+
+  /**
+   * Remove an agent from the allowlist (owner only).
+   *
+   * Idempotent — removing a non-member returns `changed: false`.
+   */
+  async removeFromAllowlist(agentId: string, targetId: string): Promise<AllowlistActionResponse> {
+    return this.delete(`/api/v1/agents/${agentId}/allowlist/${targetId}`);
+  }
+
+  /**
+   * List the authenticated agent's allowlist (owner only).
+   */
+  async listAllowlist(
+    agentId: string,
+    options?: { limit?: number; offset?: number }
+  ): Promise<AllowlistListResponse> {
+    return this.get(`/api/v1/agents/${agentId}/allowlist`, options);
+  }
 }
 
 /**
  * ACN API Error
+ *
+ * Three body shapes are normalised here:
+ * - 4xx with string detail   → `{ detail: "..." }`
+ * - 422 validation (FastAPI) → `{ detail: [{loc, msg, type}, ...] }`
+ * - 5xx sanitised (H4)       → `{ error: "...", message: "...", request_id: "..." }`
+ *
+ * `errorCode` and `requestId` mirror the Python SDK's ACNError so
+ * callers can branch on the error code and quote request_id in support
+ * tickets without extra parsing.
  */
 export class ACNError extends Error {
+  /** ACN internal error code (present on sanitised 5xx responses) */
+  errorCode?: string;
+  /** Request ID minted by ACN for 5xx responses (useful for support) */
+  requestId?: string;
+
   constructor(
     public status: number,
-    message: string
+    message: string,
+    options?: { errorCode?: string; requestId?: string }
   ) {
     super(message);
     this.name = 'ACNError';
+    this.errorCode = options?.errorCode;
+    this.requestId = options?.requestId;
   }
 }
 

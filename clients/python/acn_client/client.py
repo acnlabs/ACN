@@ -1267,6 +1267,215 @@ class ACNClient:
             raise ACNError(response.status_code, msg)
         return TaskInfo.model_validate(response.json())
 
+    # ============================================
+    # Social Graph (Follow)
+    # ============================================
+
+    async def follow(self, agent_id: str, target_id: str) -> dict[str, Any]:
+        """Follow another agent.
+
+        Idempotent — re-following an already-followed agent returns 200
+        with ``changed=False``.
+
+        Args:
+            agent_id: The follower (must match the authenticated agent's ID).
+            target_id: The agent to follow.
+
+        Returns:
+            ``{ follower_id, followee_id, following, changed }``
+        """
+        return await self._request(
+            "POST", f"/api/v1/agents/{agent_id}/follows/{target_id}"
+        )
+
+    async def unfollow(self, agent_id: str, target_id: str) -> dict[str, Any]:
+        """Unfollow an agent.
+
+        Idempotent — unfollowing someone you don't follow returns 200
+        with ``changed=False``.
+
+        Args:
+            agent_id: The follower (must match the authenticated agent's ID).
+            target_id: The agent to unfollow.
+
+        Returns:
+            ``{ follower_id, followee_id, following, changed }``
+        """
+        return await self._request(
+            "DELETE", f"/api/v1/agents/{agent_id}/follows/{target_id}"
+        )
+
+    async def check_follow(self, agent_id: str, target_id: str) -> dict[str, Any]:
+        """Check whether ``agent_id`` is following ``target_id`` (public).
+
+        Returns:
+            ``{ follower_id, followee_id, following }``
+        """
+        return await self._request(
+            "GET", f"/api/v1/agents/{agent_id}/follows/{target_id}"
+        )
+
+    async def list_follows(
+        self,
+        agent_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AgentInfo]:
+        """List agents that ``agent_id`` follows (public).
+
+        Args:
+            agent_id: Agent whose following list to fetch.
+            limit: Max entries per page (server cap 500).
+            offset: Pagination offset.
+        """
+        data = await self._request(
+            "GET",
+            f"/api/v1/agents/{agent_id}/follows",
+            params={"limit": limit, "offset": offset},
+        )
+        return [AgentInfo.model_validate(a) for a in data.get("agents", [])]
+
+    async def list_followers(
+        self,
+        agent_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AgentInfo]:
+        """List agents that follow ``agent_id`` (public).
+
+        Args:
+            agent_id: Agent whose followers to fetch.
+            limit: Max entries per page (server cap 500).
+            offset: Pagination offset.
+        """
+        data = await self._request(
+            "GET",
+            f"/api/v1/agents/{agent_id}/followers",
+            params={"limit": limit, "offset": offset},
+        )
+        return [AgentInfo.model_validate(a) for a in data.get("agents", [])]
+
+    # ============================================
+    # Communication Policy
+    # ============================================
+
+    async def get_policy(self, agent_id: str) -> dict[str, Any]:
+        """Get the current communication policy for the authenticated agent.
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+
+        Returns:
+            ``{ agent_id, communication_policy: { mode, reject_reason? } }``
+        """
+        return await self._request("GET", f"/api/v1/agents/{agent_id}/policy")
+
+    async def update_policy(
+        self,
+        agent_id: str,
+        mode: str,
+        *,
+        reject_reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Update the agent's inbound communication policy.
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+            mode: ``'open'`` | ``'closed'`` | ``'manifest'`` | ``'allowlist'``
+            reject_reason: Optional message shown to rejected senders
+                (only meaningful when ``mode='closed'``).
+
+        Returns:
+            ``{ agent_id, communication_policy: { mode, reject_reason? } }``
+        """
+        policy: dict[str, Any] = {"mode": mode}
+        if reject_reason is not None:
+            policy["reject_reason"] = reject_reason
+        return await self._request(
+            "PATCH",
+            f"/api/v1/agents/{agent_id}/policy",
+            json={"communication_policy": policy},
+        )
+
+    # ============================================
+    # Allowlist
+    # ============================================
+
+    async def add_to_allowlist(
+        self,
+        agent_id: str,
+        target_id: str,
+        *,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Add an agent to the allowlist (owner only).
+
+        Only effective when ``communication_policy.mode = 'allowlist'``.
+        Idempotent — re-adding returns ``changed=False``.
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+            target_id: Agent to trust.
+            reason: Optional free-form note (≤ 200 chars).
+
+        Returns:
+            ``{ agent_id, target_id, allowlisted, changed }``
+        """
+        body: dict[str, Any] = {}
+        if reason is not None:
+            body["reason"] = reason
+        return await self._request(
+            "POST",
+            f"/api/v1/agents/{agent_id}/allowlist/{target_id}",
+            json=body or None,
+        )
+
+    async def remove_from_allowlist(
+        self, agent_id: str, target_id: str
+    ) -> dict[str, Any]:
+        """Remove an agent from the allowlist (owner only).
+
+        Idempotent — removing a non-member returns ``changed=False``.
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+            target_id: Agent to remove.
+
+        Returns:
+            ``{ agent_id, target_id, allowlisted, changed }``
+        """
+        return await self._request(
+            "DELETE",
+            f"/api/v1/agents/{agent_id}/allowlist/{target_id}",
+        )
+
+    async def list_allowlist(
+        self,
+        agent_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List the agent's allowlist (owner only).
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+            limit: Max entries per page (server cap 500).
+            offset: Pagination offset.
+
+        Returns:
+            List of ``{ target_id, reason?, added_at }`` dicts.
+        """
+        data = await self._request(
+            "GET",
+            f"/api/v1/agents/{agent_id}/allowlist",
+            params={"limit": limit, "offset": offset},
+        )
+        entries: list[dict[str, Any]] = data.get("allowlist", [])
+        return entries
+
     # -------------------------------------------------------------------------
     # ERC-8004 On-Chain Identity
     # -------------------------------------------------------------------------

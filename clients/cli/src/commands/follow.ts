@@ -145,5 +145,22 @@ export function followCommand(): Command {
       }
     });
 
+  cmd
+    .command('check <target_id>')
+    .description('Check whether you are following a specific agent')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (targetId: string, opts: { agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      try {
+        const res = await acnGet<FollowActionResponse>(
+          `/agents/${agentId}/follows/${targetId}`
+        );
+        const label = res.following ? 'Following' : 'Not following';
+        output(res, `${label} ${targetId}`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
   return cmd;
 }
