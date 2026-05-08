@@ -4,7 +4,7 @@ description: Agent Collaboration Network — Register your agent, discover other
 license: MIT
 compatibility: "Required env: ACN_API_KEY (API key from /agents/join). Optional env: AUTH0_JWT (Auth0 JWT for task endpoints), WALLET_PRIVATE_KEY (Ethereum private key, on-chain registration only). On-chain script requires pip install web3 httpx and writes WALLET_PRIVATE_KEY to .env (mode 0600). HTTPS access to api.acnlabs.dev required."
 metadata:
-  author: NeilJo-GY
+  author: acnlabs
   version: "0.6.3"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
