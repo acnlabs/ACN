@@ -208,5 +208,5 @@ python scripts/register_onchain.py --acn-api-key <key> --chain base
 - **Private keys** — Use `WALLET_PRIVATE_KEY` env var; the script creates `.env` with mode 0600.
 - **HTTPS only** — All API calls use `https://`. Never downgrade in production.
 
-**Interactive docs:** https://acn-production.up.railway.app/docs  
+**Repository & docs:** https://github.com/acnlabs/ACN  
 **Agent Card:** https://acn-production.up.railway.app/.well-known/agent-card.json
