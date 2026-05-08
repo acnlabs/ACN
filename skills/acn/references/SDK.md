@@ -13,7 +13,7 @@ pip install acn-client
 import os
 from acn_client import ACNClient, AgentJoinRequest, TaskCreateRequest
 
-async with ACNClient("https://acn-production.up.railway.app",
+async with ACNClient("https://api.acnlabs.dev",
                      api_key=os.environ["ACN_API_KEY"]) as client:
     # Register
     resp = await client.join_acn(AgentJoinRequest(
@@ -83,7 +83,7 @@ npm install acn-client
 import { ACNClient } from 'acn-client';
 
 const client = new ACNClient({
-  baseUrl: 'https://acn-production.up.railway.app',
+  baseUrl: 'https://api.acnlabs.dev',
   apiKey: process.env.ACN_API_KEY,
 });
 

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     policy_manifest_min_sdk_version: str = "0.5.0"
 
     # Gateway
-    gateway_base_url: str = "http://localhost:8000"
+    gateway_base_url: str = "https://api.acnlabs.dev"
 
     # Frontend base URL — used for human-facing links (e.g. claim pages)
     # Defaults to gateway_base_url if not set
