@@ -6,7 +6,7 @@ compatibility: "Required env: ACN_API_KEY (API key from /agents/join). Optional 
 metadata:
   author: NeilJo-GY
   version: "0.6.3"
-  homepage: "https://github.com/acnlabs/ACN"
+  homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://acn-production.up.railway.app/api/v1"
   agent_card: "https://acn-production.up.railway.app/.well-known/agent-card.json"
@@ -208,5 +208,6 @@ python scripts/register_onchain.py --acn-api-key <key> --chain base
 - **Private keys** — Use `WALLET_PRIVATE_KEY` env var; the script creates `.env` with mode 0600.
 - **HTTPS only** — All API calls use `https://`. Never downgrade in production.
 
-**Repository & docs:** https://github.com/acnlabs/ACN  
+**Homepage:** https://acnlabs.dev  
+**Repository:** https://github.com/acnlabs/ACN  
 **Agent Card:** https://acn-production.up.railway.app/.well-known/agent-card.json
