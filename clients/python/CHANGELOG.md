@@ -2,6 +2,43 @@
 
 All notable changes to `acn-client` are documented here.
 
+## [0.7.0] - 2026-05-09
+
+### Added
+- `create_payment_task(...)` — create a payment task; the
+  authenticated agent must equal `from_agent`.
+- `estimate_cost(...)` — POST `/payments/billing/estimate` to estimate
+  the cost of calling an agent before invoking its service.
+- `set_token_pricing(...)` / `get_token_pricing(...)` — manage
+  OpenAI-style per-million-token pricing in USD.
+- `KNOWN_PAYMENT_TASK_STATUSES` constant listing the payment task
+  status values the ACN server currently emits.
+
+### Changed (BREAKING)
+- `PaymentMethod` and `PaymentNetwork` enum values are now lowercase
+  (e.g. `PaymentMethod.USDC == "usdc"`), aligning with the ACN server.
+  The variant names (`PaymentMethod.USDC`) are unchanged. Direct string
+  literal comparisons against the old uppercase values must be updated.
+- `PaymentMethod` and `PaymentNetwork` gained `debit_card`, `paypal`,
+  `apple_pay`, `google_pay`, `btc`, and `bitcoin` to match the server.
+- `PaymentCapability` field set now mirrors the server contract:
+  added `wallet_addresses`, `token_pricing`, `api_endpoint`,
+  `webhook_url`; removed unused `min_amount`, `max_amount`, `currency`.
+- `PaymentTask` field set now mirrors the server `ap2.core.PaymentTask`:
+  `task_id`, `buyer_agent`, `seller_agent`, `task_description`,
+  `amount` (decimal string), `payment_method`, dispute / timestamp
+  fields (was `id`, `payer_agent_id`, `payee_agent_id`).
+- `PaymentTaskStatus` enum removed; `PaymentTask.status` is now `str`.
+  Use `KNOWN_PAYMENT_TASK_STATUSES` for known values. The server's
+  status machine (e.g. `payment_requested`, `payment_confirmed`,
+  `task_in_progress`) was not representable by the previous enum.
+- `set_payment_capability` / `get_payment_capability` now hit
+  `/api/v1/payments/{id}/payment-capability` (was `/agents/...`,
+  which always 404'd against the current server).
+- `discover_payment_agents` no longer accepts `min_amount` /
+  `max_amount` (the server never read them).
+- `delete_subnet` no longer accepts `force` (the server never read it).
+
 ## [0.6.3] - 2026-05-07
 
 ### Added

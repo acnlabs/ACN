@@ -42,36 +42,74 @@ class BroadcastStrategy(StrEnum):
 
 
 class PaymentMethod(StrEnum):
-    """Supported payment methods"""
+    """Supported payment methods.
 
-    USDC = "USDC"
-    USDT = "USDT"
-    ETH = "ETH"
-    DAI = "DAI"
-    CREDIT_CARD = "CREDIT_CARD"
-    BANK_TRANSFER = "BANK_TRANSFER"
-    PLATFORM_CREDITS = "PLATFORM_CREDITS"
+    Values aligned with ACN server ``SupportedPaymentMethod`` (lowercase).
+    """
+
+    # Traditional
+    CREDIT_CARD = "credit_card"
+    DEBIT_CARD = "debit_card"
+    BANK_TRANSFER = "bank_transfer"
+
+    # Digital wallets
+    PAYPAL = "paypal"
+    APPLE_PAY = "apple_pay"
+    GOOGLE_PAY = "google_pay"
+
+    # Crypto stablecoins
+    USDC = "usdc"
+    USDT = "usdt"
+    DAI = "dai"
+
+    # Crypto native
+    ETH = "eth"
+    BTC = "btc"
+
+    # Platform Credits
+    PLATFORM_CREDITS = "platform_credits"
 
 
 class PaymentNetwork(StrEnum):
-    """Supported networks"""
+    """Supported networks.
 
-    ETHEREUM = "ETHEREUM"
-    POLYGON = "POLYGON"
-    BASE = "BASE"
-    ARBITRUM = "ARBITRUM"
-    OPTIMISM = "OPTIMISM"
-    SOLANA = "SOLANA"
+    Values aligned with ACN server ``SupportedNetwork`` (lowercase).
+    """
+
+    # EVM
+    ETHEREUM = "ethereum"
+    BASE = "base"
+    ARBITRUM = "arbitrum"
+    OPTIMISM = "optimism"
+    POLYGON = "polygon"
+
+    # Others
+    SOLANA = "solana"
+    BITCOIN = "bitcoin"
 
 
-class PaymentTaskStatus(StrEnum):
-    """Payment task status"""
-
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+# ACN server payment task status values (informational).
+# Kept as a tuple instead of an Enum because the server's status machine
+# evolves (e.g. payment_requested → payment_confirmed → task_in_progress
+# → task_completed → payment_released, plus dispute/refund branches);
+# pinning an Enum here would force an SDK release every time the server
+# adds a state.  Callers should treat ``PaymentTask.status`` as ``str``
+# and compare against these constants when needed.
+KNOWN_PAYMENT_TASK_STATUSES: tuple[str, ...] = (
+    "created",
+    "payment_requested",
+    "payment_pending",
+    "payment_confirmed",
+    "task_in_progress",
+    "task_completed",
+    "payment_released",
+    "in_progress",
+    "disputed",
+    "cancelled",
+    "failed",
+    "payment_failed",
+    "refunded",
+)
 
 
 # ============================================
@@ -417,32 +455,72 @@ class SessionInviteRequest(BaseModel):
 
 
 class PaymentCapability(BaseModel):
-    """Payment capability"""
+    """Payment capability — aligned with ACN ``PaymentCapabilityRequest``.
 
-    accepts_payment: bool = True
-    wallet_address: str | None = None
+    Used both as the request body for ``set_payment_capability`` and the
+    decoded response of ``get_payment_capability``.  Field set mirrors
+    ``acn.routes.payments.PaymentCapabilityRequest`` plus the optional
+    ``token_pricing`` payload.
+    """
+
     supported_methods: list[PaymentMethod] = Field(default_factory=list)
     supported_networks: list[PaymentNetwork] = Field(default_factory=list)
-    min_amount: float | None = None
-    max_amount: float | None = None
-    currency: str = "USD"
+    wallet_address: str | None = Field(
+        default=None,
+        description="Legacy single-address field; prefer wallet_addresses",
+    )
+    wallet_addresses: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-network wallet addresses, e.g. {'ethereum': '0x...', 'base': '0x...'}",
+    )
+    accepts_payment: bool = True
+    token_pricing: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Token-based pricing, e.g. "
+            "{'input_price_per_million': 2.5, 'output_price_per_million': 10.0, "
+            "'currency': 'USD'}"
+        ),
+    )
+    api_endpoint: str | None = None
+    webhook_url: str | None = None
 
 
 class PaymentTask(BaseModel):
-    """Payment task"""
+    """Payment task — aligned with ACN server ``PaymentTask`` (ap2.core).
 
-    id: str
-    payer_agent_id: str
-    payee_agent_id: str
-    amount: float
-    currency: str
-    method: PaymentMethod
+    ``status`` is intentionally typed as ``str`` so the SDK does not need
+    to be re-released when the server adds a new state value.  See
+    ``KNOWN_PAYMENT_TASK_STATUSES`` for the current set.
+    """
+
+    task_id: str
+    payment_id: str | None = None
+
+    buyer_agent: str
+    seller_agent: str
+
+    task_description: str
+    task_type: str | None = None
+    task_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    amount: str = Field(..., description="Payment amount as a decimal string")
+    currency: str = "USD"
+    payment_method: PaymentMethod | None = None
     network: PaymentNetwork | None = None
-    status: PaymentTaskStatus
+
+    recipient_wallet: str | None = None
+
+    status: str = "created"
+
     created_at: datetime
-    updated_at: datetime
-    transaction_hash: str | None = None
-    metadata: dict[str, Any] | None = None
+    payment_requested_at: datetime | None = None
+    payment_confirmed_at: datetime | None = None
+    task_completed_at: datetime | None = None
+    payment_released_at: datetime | None = None
+
+    tx_hash: str | None = None
+    dispute: dict[str, Any] | None = None
 
 
 class PaymentStats(BaseModel):

@@ -868,44 +868,107 @@ class ACNClient:
         self,
         method: str | None = None,
         network: str | None = None,
-        min_amount: float | None = None,
-        max_amount: float | None = None,
     ) -> list[AgentInfo]:
-        """Discover agents that accept payments"""
+        """Discover agents that accept payments.
+
+        Filters by ``method`` (PaymentMethod value, lowercase) and / or
+        ``network`` (PaymentNetwork value, lowercase).
+        """
         data = await self._request(
             "GET",
             "/api/v1/payments/discover",
             params={
                 "method": method,
                 "network": network,
-                "min_amount": min_amount,
-                "max_amount": max_amount,
             },
         )
         return [AgentInfo.model_validate(a) for a in data.get("agents", [])]
 
+    async def create_payment_task(
+        self,
+        from_agent: str,
+        to_agent: str,
+        amount: float,
+        currency: str,
+        payment_method: str,
+        network: str,
+        description: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a payment task (requires Agent API Key).
+
+        ``from_agent`` must match the authenticated agent — the server
+        rejects spoofed payers with ``from_agent_mismatch``.
+        ``payment_method`` and ``network`` use ACN lowercase values
+        (e.g. ``"usdc"``, ``"base"``).  Returns ``{task_id, status}``.
+        """
+        body: dict[str, Any] = {
+            "from_agent": from_agent,
+            "to_agent": to_agent,
+            "amount": amount,
+            "currency": currency,
+            "payment_method": payment_method,
+            "network": network,
+        }
+        if description is not None:
+            body["description"] = description
+        if metadata is not None:
+            body["metadata"] = metadata
+        return await self._request("POST", "/api/v1/payments/tasks", json=body)
+
+    async def estimate_cost(
+        self,
+        agent_id: str,
+        estimated_input_tokens: int = 0,
+        estimated_output_tokens: int = 0,
+    ) -> dict[str, Any]:
+        """Estimate the cost of calling an agent before invoking its service.
+
+        Returns ``{agent_id, estimate, note}``; ``estimate`` includes
+        ``total_usd``, ``network_fee_usd``, ``agent_income_usd`` and
+        their credit-equivalents, computed from the target agent's
+        registered token-pricing.
+        """
+        return await self._request(
+            "POST",
+            "/api/v1/payments/billing/estimate",
+            json={
+                "agent_id": agent_id,
+                "estimated_input_tokens": estimated_input_tokens,
+                "estimated_output_tokens": estimated_output_tokens,
+            },
+        )
+
     async def get_payment_task(self, task_id: str) -> PaymentTask:
-        """Get payment task by ID"""
+        """Get a payment task by ID.
+
+        Note: ``GET /payments/tasks/{task_id}`` requires the ACN backend's
+        internal token; agents typically reach their own tasks via
+        ``get_agent_payment_tasks`` instead.
+        """
         data = await self._request("GET", f"/api/v1/payments/tasks/{task_id}")
         return PaymentTask.model_validate(data)
 
     async def get_agent_payment_tasks(
         self,
         agent_id: str,
-        role: str | None = None,
         status: str | None = None,
-        limit: int = 100,
+        limit: int = 50,
     ) -> list[PaymentTask]:
-        """Get agent's payment tasks"""
+        """Get the payment tasks an agent is involved in (requires Agent API Key).
+
+        ``status`` (optional) is a value from
+        :data:`KNOWN_PAYMENT_TASK_STATUSES`.
+        """
         data = await self._request(
             "GET",
             f"/api/v1/payments/tasks/agent/{agent_id}",
-            params={"role": role, "status": status, "limit": limit},
+            params={"status": status, "limit": limit},
         )
         return [PaymentTask.model_validate(t) for t in data.get("tasks", [])]
 
     async def get_payment_stats(self, agent_id: str) -> PaymentStats:
-        """Get agent's payment statistics"""
+        """Get an agent's payment statistics (requires Agent API Key)."""
         data = await self._request("GET", f"/api/v1/payments/stats/{agent_id}")
         return PaymentStats.model_validate(data)
 

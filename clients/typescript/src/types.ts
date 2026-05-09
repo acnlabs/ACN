@@ -378,66 +378,123 @@ export interface PendingSessionsResponse {
 // Payment Types
 // ============================================
 
-/** Supported payment methods */
-export type PaymentMethod = 
-  | 'USDC' 
-  | 'USDT' 
-  | 'ETH' 
-  | 'DAI' 
-  | 'CREDIT_CARD' 
-  | 'BANK_TRANSFER'
-  | 'PLATFORM_CREDITS';
+/**
+ * Supported payment methods.
+ *
+ * Values aligned with ACN server `SupportedPaymentMethod` (lowercase).
+ */
+export type PaymentMethod =
+  | 'credit_card'
+  | 'debit_card'
+  | 'bank_transfer'
+  | 'paypal'
+  | 'apple_pay'
+  | 'google_pay'
+  | 'usdc'
+  | 'usdt'
+  | 'dai'
+  | 'eth'
+  | 'btc'
+  | 'platform_credits';
 
-/** Supported networks */
-export type PaymentNetwork = 
-  | 'ETHEREUM' 
-  | 'POLYGON' 
-  | 'BASE' 
-  | 'ARBITRUM' 
-  | 'OPTIMISM'
-  | 'SOLANA';
+/**
+ * Supported networks.
+ *
+ * Values aligned with ACN server `SupportedNetwork` (lowercase).
+ */
+export type PaymentNetwork =
+  | 'ethereum'
+  | 'base'
+  | 'arbitrum'
+  | 'optimism'
+  | 'polygon'
+  | 'solana'
+  | 'bitcoin';
 
-/** Payment capability */
+/**
+ * Payment capability — aligned with ACN `PaymentCapabilityRequest`.
+ *
+ * Used both as the body for `setPaymentCapability` and the response
+ * shape of `getPaymentCapability`.
+ */
 export interface PaymentCapability {
-  accepts_payment: boolean;
-  wallet_address?: string;
   supported_methods: PaymentMethod[];
   supported_networks: PaymentNetwork[];
-  min_amount?: number;
-  max_amount?: number;
-  currency?: string;
+  /** Legacy single-address field; prefer `wallet_addresses`. */
+  wallet_address?: string;
+  /** Per-network wallet addresses, e.g. `{ ethereum: '0x...', base: '0x...' }`. */
+  wallet_addresses?: Record<string, string>;
+  accepts_payment?: boolean;
+  /**
+   * Token-based pricing payload, e.g.
+   * `{ input_price_per_million: 2.5, output_price_per_million: 10.0, currency: 'USD' }`.
+   */
+  token_pricing?: Record<string, unknown> | null;
+  api_endpoint?: string;
+  webhook_url?: string;
 }
 
-/** Payment task status */
-export type PaymentTaskStatus = 
-  | 'pending' 
-  | 'in_progress' 
-  | 'completed' 
-  | 'failed' 
-  | 'cancelled';
+/**
+ * Known ACN payment task status values.
+ *
+ * `PaymentTask.status` is typed as `string` rather than this union so the
+ * SDK does not need a release whenever the server adds a state. Compare
+ * against these constants when branching on status.
+ */
+export const KNOWN_PAYMENT_TASK_STATUSES = [
+  'created',
+  'payment_requested',
+  'payment_pending',
+  'payment_confirmed',
+  'task_in_progress',
+  'task_completed',
+  'payment_released',
+  'in_progress',
+  'disputed',
+  'cancelled',
+  'failed',
+  'payment_failed',
+  'refunded',
+] as const;
+export type PaymentTaskStatus = (typeof KNOWN_PAYMENT_TASK_STATUSES)[number];
 
-/** Payment task */
+/** Payment task — aligned with ACN server `PaymentTask` (ap2.core). */
 export interface PaymentTask {
-  id: string;
-  payer_agent_id: string;
-  payee_agent_id: string;
-  amount: number;
-  currency: string;
-  method: PaymentMethod;
-  network?: PaymentNetwork;
-  status: PaymentTaskStatus;
+  task_id: string;
+  payment_id?: string | null;
+
+  buyer_agent: string;
+  seller_agent: string;
+
+  task_description: string;
+  task_type?: string | null;
+  task_metadata?: Record<string, unknown>;
+
+  /** Decimal amount as a string (matches server contract). */
+  amount: string;
+  currency?: string;
+  payment_method?: PaymentMethod | null;
+  network?: PaymentNetwork | null;
+
+  recipient_wallet?: string | null;
+
+  /** A `KNOWN_PAYMENT_TASK_STATUSES` value, but typed wide for forward-compat. */
+  status: string;
+
   created_at: string;
-  updated_at: string;
-  transaction_hash?: string;
-  metadata?: Record<string, unknown>;
+  payment_requested_at?: string | null;
+  payment_confirmed_at?: string | null;
+  task_completed_at?: string | null;
+  payment_released_at?: string | null;
+
+  tx_hash?: string | null;
+  dispute?: Record<string, unknown> | null;
 }
 
-/** Payment discovery options */
+/** Payment discovery options. */
 export interface PaymentDiscoveryOptions {
   method?: PaymentMethod;
   network?: PaymentNetwork;
-  min_amount?: number;
-  max_amount?: number;
 }
 
 /** Payment statistics */

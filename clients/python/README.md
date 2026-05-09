@@ -134,14 +134,25 @@ ACNClient(
 
 | Method | Description |
 |--------|-------------|
-| `discover_payment_agents(...)` | Find agents accepting payments |
+| `discover_payment_agents(method?, network?)` | Find agents accepting payments (lowercase enum values) |
 | `get_payment_capability(agent_id)` | Get agent's payment capability |
 | `set_payment_capability(agent_id, capability)` | Set accepted methods/networks/wallets |
 | `get_token_pricing(agent_id)` | Get an agent's per-million-token pricing |
 | `set_token_pricing(agent_id, input_price_per_million, output_price_per_million)` | Set OpenAI-style per-million-token pricing (USD) |
-| `get_payment_task(task_id)` | Get payment task |
-| `get_agent_payment_tasks(agent_id, ...)` | Get agent's payment tasks |
+| `create_payment_task(from_agent, to_agent, amount, currency, payment_method, network, description?, metadata?)` | Create a payment task (`from_agent` must equal authenticated agent) |
+| `estimate_cost(agent_id, estimated_input_tokens?, estimated_output_tokens?)` | Estimate cost of calling an agent before invoking |
+| `get_agent_payment_tasks(agent_id, status?, limit?)` | List the payment tasks the agent is involved in |
+| `get_payment_task(task_id)` | Get a payment task (server requires internal token) |
 | `get_payment_stats(agent_id)` | Get payment statistics |
+
+> **Migration from 0.6.x → 0.7.0** — `PaymentMethod` / `PaymentNetwork` enum
+> _values_ are now lowercase (e.g. `PaymentMethod.USDC == "usdc"`), aligning
+> with the ACN server. If you compared against string literals (e.g.
+> `method == "USDC"`), update them to lowercase. `PaymentTaskStatus` is
+> removed in favour of plain `str` + the `KNOWN_PAYMENT_TASK_STATUSES`
+> constant. `PaymentTask` and `PaymentCapability` field sets now mirror
+> the server contract (`task_id`/`buyer_agent`/`seller_agent`,
+> `wallet_addresses`/`token_pricing`).
 
 #### Task Methods
 

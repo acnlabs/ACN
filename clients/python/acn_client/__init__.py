@@ -21,6 +21,7 @@ from .models import (
     BroadcastRequest,
     BroadcastStrategy,
     CommunicationProfile,
+    KNOWN_PAYMENT_TASK_STATUSES,
     ManifestContentResponse,
     ManifestEntry,
     ManifestSendRequest,
@@ -30,7 +31,6 @@ from .models import (
     PaymentMethod,
     PaymentNetwork,
     PaymentTask,
-    PaymentTaskStatus,
     SendMessageRequest,
     SessionEntry,
     SessionInviteRequest,
@@ -44,7 +44,7 @@ from .models import (
 )
 from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState
 
-__version__ = "0.6.3"
+__version__ = "0.7.0"
 __all__ = [
     # Client
     "ACNClient",
@@ -76,11 +76,11 @@ __all__ = [
     # Subnet models
     "SubnetInfo",
     # Payment models
+    "KNOWN_PAYMENT_TASK_STATUSES",
     "PaymentCapability",
     "PaymentMethod",
     "PaymentNetwork",
     "PaymentTask",
-    "PaymentTaskStatus",
     # Task models
     "TaskInfo",
     "TaskCreateRequest",

@@ -36,6 +36,8 @@ import type {
   MetricsData,
   PaymentCapability,
   PaymentDiscoveryOptions,
+  PaymentMethod,
+  PaymentNetwork,
   PaymentStats,
   PaymentTask,
   PendingSessionsResponse,
@@ -592,30 +594,76 @@ export class ACNClient {
     return this.get(`/api/v1/payments/${agentId}/token-pricing`);
   }
 
-  /** Discover agents that accept payments */
+  /** Discover agents that accept payments. Filters by lowercase method/network. */
   async discoverPaymentAgents(options?: PaymentDiscoveryOptions): Promise<{ agents: AgentInfo[] }> {
     return this.get('/api/v1/payments/discover', {
       method: options?.method,
       network: options?.network,
-      min_amount: options?.min_amount,
-      max_amount: options?.max_amount,
     });
   }
 
-  /** Get payment task by ID */
+  /**
+   * Create a payment task (requires Agent API Key).
+   *
+   * `from_agent` must equal the authenticated agent — the server rejects
+   * spoofed payers with `from_agent_mismatch`. `payment_method` and
+   * `network` use ACN lowercase values (e.g. `'usdc'`, `'base'`).
+   */
+  async createPaymentTask(request: {
+    from_agent: string;
+    to_agent: string;
+    amount: number;
+    currency: string;
+    payment_method: PaymentMethod;
+    network: PaymentNetwork;
+    description?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ task_id: string; status: string }> {
+    return this.post('/api/v1/payments/tasks', request);
+  }
+
+  /**
+   * Estimate the cost of calling an agent before invoking its service.
+   *
+   * Returns `{ agent_id, estimate, note }` where `estimate` includes
+   * `total_usd`, `network_fee_usd`, `agent_income_usd` and credit
+   * equivalents derived from the target agent's token-pricing.
+   */
+  async estimateCost(request: {
+    agent_id: string;
+    estimated_input_tokens?: number;
+    estimated_output_tokens?: number;
+  }): Promise<{
+    agent_id: string;
+    estimate: Record<string, number>;
+    note?: string;
+  }> {
+    return this.post('/api/v1/payments/billing/estimate', {
+      agent_id: request.agent_id,
+      estimated_input_tokens: request.estimated_input_tokens ?? 0,
+      estimated_output_tokens: request.estimated_output_tokens ?? 0,
+    });
+  }
+
+  /**
+   * Get a payment task by ID.
+   *
+   * Note: `GET /payments/tasks/{task_id}` requires the ACN backend's
+   * internal token; agents typically use `getAgentPaymentTasks` instead.
+   */
   async getPaymentTask(taskId: string): Promise<PaymentTask> {
     return this.get(`/api/v1/payments/tasks/${taskId}`);
   }
 
-  /** Get agent's payment tasks */
+  /** Get the payment tasks an agent is involved in (requires Agent API Key). */
   async getAgentPaymentTasks(
     agentId: string,
-    options?: { role?: 'payer' | 'payee'; status?: string; limit?: number }
-  ): Promise<{ tasks: PaymentTask[] }> {
+    options?: { status?: string; limit?: number }
+  ): Promise<{ agent_id: string; tasks: PaymentTask[] }> {
     return this.get(`/api/v1/payments/tasks/agent/${agentId}`, options);
   }
 
-  /** Get agent's payment statistics */
+  /** Get an agent's payment statistics (requires Agent API Key). */
   async getPaymentStats(agentId: string): Promise<PaymentStats> {
     return this.get(`/api/v1/payments/stats/${agentId}`);
   }

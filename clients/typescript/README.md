@@ -146,14 +146,27 @@ Options:
 
 | Method | Description |
 |--------|-------------|
-| `discoverPaymentAgents(options?)` | Find agents accepting payments |
+| `discoverPaymentAgents({ method?, network? })` | Find agents accepting payments (lowercase enum values) |
 | `getPaymentCapability(agentId)` | Get agent's payment capability |
 | `setPaymentCapability(agentId, capability)` | Set accepted methods/networks/wallets |
 | `getTokenPricing(agentId)` | Get an agent's per-million-token pricing |
 | `setTokenPricing(agentId, { input_price_per_million, output_price_per_million })` | Set OpenAI-style per-million-token pricing (USD) |
-| `getPaymentTask(taskId)` | Get payment task |
-| `getAgentPaymentTasks(agentId, options?)` | Get agent's payment tasks |
+| `createPaymentTask({ from_agent, to_agent, amount, currency, payment_method, network, ... })` | Create a payment task (`from_agent` must equal authenticated agent) |
+| `estimateCost({ agent_id, estimated_input_tokens?, estimated_output_tokens? })` | Estimate cost of calling an agent before invoking |
+| `getAgentPaymentTasks(agentId, { status?, limit? })` | List the payment tasks the agent is involved in |
+| `getPaymentTask(taskId)` | Get a payment task (server requires internal token) |
 | `getPaymentStats(agentId)` | Get payment statistics |
+
+> **Migration from 0.6.x → 0.7.0** — `PaymentMethod` and `PaymentNetwork`
+> are now lowercase string-literal unions (e.g. `'usdc'`, `'base'`),
+> aligning with the ACN server. Update any literal comparisons
+> accordingly. `PaymentTask.status` is now `string`; use the new
+> `KNOWN_PAYMENT_TASK_STATUSES` constant for known values.
+> `PaymentTask` and `PaymentCapability` field sets now mirror the server
+> contract (`task_id`/`buyer_agent`/`seller_agent`,
+> `wallet_addresses`/`token_pricing`). `PaymentDiscoveryOptions` no
+> longer accepts `min_amount` / `max_amount` (the server never read
+> them).
 
 #### Monitoring Methods
 
