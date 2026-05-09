@@ -321,12 +321,10 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         """``POST /api/v1/subnets`` with a body that the service
         rejects with ``ValueError`` — pins ``INVALID_REQUEST``.
 
-        Auth bypass note
-            ``create_subnet`` is gated by
-            ``require_internal_or_permission("acn:write")``; the
-            JWT path uses dev-mode bypass like
-            ``test_unregister_returns_404_with_flat_shape`` in
-            registry. See that test's docstring for rationale.
+        Auth note
+            ``create_subnet`` is now gated by ``AgentApiKeyDep``;
+            ``owner-key`` resolves to ``agent-target`` via the
+            stub fixture's ``get_agent_by_api_key``.
         """
         stub_subnet_service.create_subnet = AsyncMock(
             side_effect=ValueError("subnet name already taken")
@@ -336,7 +334,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         with TestClient(app) as client:
             r = client.post(
                 "/api/v1/subnets",
-                headers={"Authorization": "Bearer dev-mode-any-token"},
+                headers={"Authorization": "Bearer owner-key"},
                 json={
                     "subnet_id": "test-subnet",
                     "name": "Test Subnet",
@@ -493,9 +491,10 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         ``PermissionError`` — pins ``OWNERSHIP_MISMATCH`` with
         ``subnet_id`` and the underlying reason in ``details``.
 
-        Auth bypass note
-            ``delete_subnet`` is gated by ``require_permission("acn:write")``;
-            dev-mode bypass like the registry tests.
+        Auth note
+            ``delete_subnet`` is now gated by ``AgentApiKeyDep``;
+            ``owner-key`` resolves to ``agent-target`` via the
+            stub fixture's ``get_agent_by_api_key``.
         """
         stub_subnet_service.delete_subnet = AsyncMock(
             side_effect=PermissionError("Only the subnet owner can delete it.")
@@ -505,12 +504,12 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         with TestClient(app) as client:
             r = client.delete(
                 "/api/v1/subnets/subnet-1",
-                headers={"Authorization": "Bearer dev-mode-any-token"},
+                headers={"Authorization": "Bearer owner-key"},
             )
 
         assert r.status_code != 401, (
-            "DELETE /subnets/{id} returned 401 — dev_mode auth bypass "
-            "is no longer in effect."
+            "DELETE /subnets/{id} returned 401 — Agent API Key auth "
+            "is rejecting ``owner-key``; check stub_agent_service."
         )
         assert r.status_code == 403
         body = r.json()
@@ -566,7 +565,7 @@ class TestSubnetsCatchAllDefence:
         with TestClient(app) as client:
             r = client.delete(
                 "/api/v1/subnets/subnet-1",
-                headers={"Authorization": "Bearer dev-mode-any-token"},
+                headers={"Authorization": "Bearer owner-key"},
             )
 
         assert r.status_code == 404, (
@@ -610,7 +609,7 @@ class TestSubnetsCatchAllDefence:
             r = client.post(
                 "/api/v1/subnets/",
                 json={"subnet_id": "sn-x", "name": "x", "owner": "o"},
-                headers={"Authorization": "Bearer dev-mode-any-token"},
+                headers={"Authorization": "Bearer owner-key"},
             )
 
         assert r.status_code == 400, (

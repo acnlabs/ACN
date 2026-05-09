@@ -3,11 +3,14 @@
 Clean Architecture implementation: Route → Service → Repository
 """
 
+import re
+import secrets
+
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from ..auth.middleware import require_internal_or_permission, require_permission, verify_token
+from ..auth.middleware import require_internal_or_permission, verify_token
 from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
@@ -18,6 +21,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     AgentServiceDep,
     SubnetIdPath,
     SubnetServiceDep,
+    limiter,
 )
 
 _optional_bearer = HTTPBearer(auto_error=False)
@@ -45,31 +49,43 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
     )
 
 
+def _generate_subnet_id(name: str) -> str:
+    """Generate a compact, unique subnet_id from a human-readable name.
+
+    Format: ``subnet-{slug}-{rand6}`` where slug is a lowercased, hyphen-
+    delimited form of ``name`` truncated to 32 chars. Total length is
+    bounded by ``len("subnet-") + 32 + 1 + 6 = 46`` — comfortably inside
+    ``SubnetCreateRequest.subnet_id``'s ``max_length=64``.
+    """
+    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:32] or "subnet"
+    return f"subnet-{slug}-{secrets.token_hex(3)}"
+
+
 @router.post("", response_model=SubnetCreateResponse)
+@limiter.limit("5/minute")
 async def create_subnet(
-    request: SubnetCreateRequest,
-    payload: dict = Depends(require_internal_or_permission("acn:write")),
+    request: Request,
+    body: SubnetCreateRequest,
+    agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
 ):
-    """Create a new subnet
+    """Create a new subnet (requires Agent API Key — agent becomes the owner).
 
     Clean Architecture: Route → SubnetService → Repository
     """
-    # Extract owner from Auth0 token
-    owner = payload.get("sub", "dev@clients")
+    owner = agent_info["agent_id"]
 
     try:
-        # Use SubnetService
-        security_cfg = request.security_config or (
-            dict(request.security_schemes) if request.security_schemes else {}
+        security_cfg = body.security_config or (
+            dict(body.security_schemes) if body.security_schemes else {}
         )
+        subnet_id = body.subnet_id or _generate_subnet_id(body.name)
         subnet = await subnet_service.create_subnet(
-            subnet_id=request.subnet_id
-            or f"subnet-{owner}-{request.name.lower().replace(' ', '-')}",
-            name=request.name,
+            subnet_id=subnet_id,
+            name=body.name,
             owner=owner,
-            description=request.description,
-            is_private=request.is_private,
+            description=body.description,
+            is_private=body.is_private,
             security_config=security_cfg,
             metadata={},
         )
@@ -384,17 +400,18 @@ async def get_agent_subnets(
 
 
 @router.delete("/{subnet_id}")
+@limiter.limit("10/minute")
 async def delete_subnet(
+    request: Request,
     subnet_id: SubnetIdPath,
-    payload: dict = Depends(require_permission("acn:write")),
+    agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
 ):
-    """Delete a subnet
+    """Delete a subnet (requires Agent API Key — only the owning agent can delete).
 
     Clean Architecture: Route → SubnetService → Repository
     """
-    # Extract owner from Auth0 token
-    owner = payload.get("sub", "dev@clients")
+    owner = agent_info["agent_id"]
 
     try:
         success = await subnet_service.delete_subnet(subnet_id, owner)

@@ -396,7 +396,12 @@ class SubnetCreateRequest(BaseModel):
         }
     """
 
-    subnet_id: str = Field(..., min_length=1, max_length=64, description="Unique subnet identifier")
+    subnet_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description="Unique subnet identifier. Optional — ACN auto-generates `subnet-{slug}-{rand6}` when omitted.",
+    )
     name: str = Field(..., min_length=1, max_length=128, description="Subnet name")
     description: str | None = Field(None, max_length=500, description="Subnet description")
     is_private: bool = Field(False, description="Whether this is a private subnet")

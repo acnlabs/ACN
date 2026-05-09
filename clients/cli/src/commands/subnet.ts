@@ -18,6 +18,14 @@ interface SubnetListResponse {
   count: number;
 }
 
+interface SubnetCreateResponse {
+  status: string;
+  subnet_id: string;
+  is_public: boolean;
+  gateway_a2a_url: string;
+  gateway_ws_url: string;
+}
+
 function requireAgentId(): string {
   const config = loadConfig();
   if (!config.api_key) {
@@ -134,6 +142,65 @@ export function subnetCommand(): Command {
           `/subnets/${agentId}/subnets/${subnetId}`
         );
         output(res, `Left subnet ${subnetId} (status: ${res.status})`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd
+    .command('create')
+    .description('Create a new subnet (you become the owner)')
+    .requiredOption('--name <name>', 'Subnet name (1-128 chars)')
+    .option('--id <subnet_id>', 'Custom subnet ID (1-64 chars). Omit to let ACN auto-generate.')
+    .option('-d, --description <text>', 'Subnet description (up to 500 chars)')
+    .option('--private', 'Mark this subnet as private', false)
+    .action(
+      async (opts: {
+        name: string;
+        id?: string;
+        description?: string;
+        private?: boolean;
+      }) => {
+        const config = loadConfig();
+        if (!config.api_key) {
+          console.error('No API key found. Run `acn join` first.');
+          process.exit(1);
+        }
+        const body: Record<string, unknown> = {
+          name: opts.name,
+          is_private: !!opts.private,
+        };
+        if (opts.id) body.subnet_id = opts.id;
+        if (opts.description) body.description = opts.description;
+        try {
+          const res = await acnPost<SubnetCreateResponse>('/subnets', body);
+          const lines = [
+            `Subnet created: ${res.subnet_id}`,
+            `  Visibility : ${res.is_public ? 'public' : 'private'}`,
+            `  Gateway A2A: ${res.gateway_a2a_url}`,
+            `  Gateway WS : ${res.gateway_ws_url}`,
+          ];
+          output(res, lines.join('\n'));
+        } catch (err) {
+          handleError(err);
+        }
+      }
+    );
+
+  cmd
+    .command('delete <subnet_id>')
+    .description('Delete a subnet you own')
+    .action(async (subnetId: string) => {
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const res = await acnDelete<{ status: string; subnet_id: string }>(
+          `/subnets/${subnetId}`
+        );
+        output(res, `Subnet ${res.subnet_id} ${res.status}`);
       } catch (err) {
         handleError(err);
       }
