@@ -536,13 +536,30 @@ class PaymentTask(BaseModel):
     dispute: dict[str, Any] | None = None
 
 
-class PaymentStats(BaseModel):
-    """Payment statistics"""
+class PaymentRoleStats(BaseModel):
+    """Per-role aggregate (buyer or seller) within :class:`PaymentStats`."""
 
-    total_received: float = 0
-    total_sent: float = 0
-    transaction_count: int = 0
-    avg_amount: float = 0
+    count: int = 0
+    total_amount: str = Field(
+        default="0",
+        description="Decimal-string amount summed across tasks in this role",
+    )
+
+
+class PaymentStats(BaseModel):
+    """Payment statistics — aligned with ``PaymentTaskManager.get_payment_stats``.
+
+    The server aggregates per-status counts plus per-role
+    (buyer/seller) totals in decimal-string form rather than emitting
+    flat received/sent floats; the SDK mirrors that shape rather than
+    silently dropping the breakdown.
+    """
+
+    total_tasks: int = 0
+    as_buyer: PaymentRoleStats = Field(default_factory=PaymentRoleStats)
+    as_seller: PaymentRoleStats = Field(default_factory=PaymentRoleStats)
+    by_status: dict[str, int] = Field(default_factory=dict)
+    completed_transactions: int = 0
 
 
 # ============================================

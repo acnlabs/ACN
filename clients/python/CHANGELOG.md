@@ -2,6 +2,20 @@
 
 All notable changes to `acn-client` are documented here.
 
+## [0.7.1] - 2026-05-10
+
+### Changed (BREAKING)
+- `PaymentStats` field set now mirrors the server's
+  ``PaymentTaskManager.get_payment_stats`` response — the previous
+  ``total_received / total_sent / transaction_count / avg_amount``
+  fields were never emitted by the server, so reads silently
+  returned all-zero stats.
+  - New shape: `total_tasks`, `as_buyer` (`PaymentRoleStats`),
+    `as_seller` (`PaymentRoleStats`), `by_status: dict[str, int]`,
+    `completed_transactions`.
+  - New helper model `PaymentRoleStats` (`count`, `total_amount` as
+    decimal string) is exported from `acn_client.models`.
+
 ## [0.7.0] - 2026-05-09
 
 ### Added

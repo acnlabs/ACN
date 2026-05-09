@@ -70,6 +70,7 @@ export type {
   PaymentTaskStatus,
   PaymentTask,
   PaymentDiscoveryOptions,
+  PaymentRoleStats,
   PaymentStats,
   
   // Monitoring Types

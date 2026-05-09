@@ -20,11 +20,17 @@ interface AgentPaymentTasksResponse {
   tasks: PaymentTaskSummary[];
 }
 
+interface PaymentRoleStats {
+  count: number;
+  total_amount: string;
+}
+
 interface PaymentStatsResponse {
-  total_received?: number;
-  total_sent?: number;
-  transaction_count?: number;
-  avg_amount?: number;
+  total_tasks?: number;
+  as_buyer?: PaymentRoleStats;
+  as_seller?: PaymentRoleStats;
+  by_status?: Record<string, number>;
+  completed_transactions?: number;
   [key: string]: unknown;
 }
 
@@ -245,9 +251,12 @@ export function walletCommand(): Command {
           output(res, `No payment tasks for ${agentId}.`);
           return;
         }
-        const lines = [`${tasks.length} task(s) for ${agentId}:`];
+        const lines = [
+          `${tasks.length} task(s) for ${agentId}:`,
+          `  ${'TASK_ID'.padEnd(36)}  ROLE  ${'STATUS'.padEnd(20)}  AMOUNT  VIA  COUNTERPARTY`,
+        ];
         for (const t of tasks) {
-          const role = t.buyer_agent === agentId ? 'pay' : 'recv';
+          const role = t.buyer_agent === agentId ? 'pay ' : 'recv';
           const counterparty = t.buyer_agent === agentId ? t.seller_agent : t.buyer_agent;
           const method = t.payment_method ? `${t.payment_method}` : '?';
           const network = t.network ? `/${t.network}` : '';
@@ -271,14 +280,29 @@ export function walletCommand(): Command {
       try {
         const res = await acnGet<PaymentStatsResponse>(`/payments/stats/${agentId}`);
         const lines = [`Stats for ${agentId}:`];
-        if (res.total_received !== undefined)
-          lines.push(`  Total received   : ${res.total_received}`);
-        if (res.total_sent !== undefined)
-          lines.push(`  Total sent       : ${res.total_sent}`);
-        if (res.transaction_count !== undefined)
-          lines.push(`  Transactions     : ${res.transaction_count}`);
-        if (res.avg_amount !== undefined)
-          lines.push(`  Avg amount       : ${res.avg_amount}`);
+        if (res.total_tasks !== undefined)
+          lines.push(`  Total tasks            : ${res.total_tasks}`);
+        if (res.completed_transactions !== undefined)
+          lines.push(`  Completed transactions : ${res.completed_transactions}`);
+        if (res.as_buyer) {
+          lines.push(
+            `  As buyer               : ${res.as_buyer.count} task(s), ` +
+              `total ${res.as_buyer.total_amount}`
+          );
+        }
+        if (res.as_seller) {
+          lines.push(
+            `  As seller              : ${res.as_seller.count} task(s), ` +
+              `total ${res.as_seller.total_amount}`
+          );
+        }
+        if (res.by_status && Object.keys(res.by_status).length) {
+          lines.push('  By status:');
+          const entries = Object.entries(res.by_status).sort((a, b) => b[1] - a[1]);
+          for (const [status, count] of entries) {
+            lines.push(`    ${status.padEnd(20)} ${count}`);
+          }
+        }
         output(res, lines.join('\n'));
       } catch (err) {
         handleError(err);

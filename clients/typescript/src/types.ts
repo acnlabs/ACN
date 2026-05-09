@@ -497,12 +497,28 @@ export interface PaymentDiscoveryOptions {
   network?: PaymentNetwork;
 }
 
-/** Payment statistics */
+/**
+ * Per-role aggregate within {@link PaymentStats} (`as_buyer` / `as_seller`).
+ *
+ * `total_amount` is a decimal string (matches server contract).
+ */
+export interface PaymentRoleStats {
+  count: number;
+  total_amount: string;
+}
+
+/**
+ * Payment statistics — aligned with `PaymentTaskManager.get_payment_stats`.
+ *
+ * The server aggregates per-status counts plus per-role (buyer/seller)
+ * totals as decimal strings, rather than flat received/sent floats.
+ */
 export interface PaymentStats {
-  total_received: number;
-  total_sent: number;
-  transaction_count: number;
-  avg_amount: number;
+  total_tasks: number;
+  as_buyer: PaymentRoleStats;
+  as_seller: PaymentRoleStats;
+  by_status: Record<string, number>;
+  completed_transactions: number;
 }
 
 // ============================================
