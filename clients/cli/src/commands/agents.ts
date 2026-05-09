@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { acnGet } from '../api.js';
+import { acnGet, acnPatch } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 
@@ -109,6 +109,34 @@ export function agentsCommand(): Command {
           ...(res.registered_at ? [`  Registered   : ${res.registered_at}`] : []),
         ];
         output(res, lines.join('\n'));
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd
+    .command('social-card <agent_id>')
+    .description("Update your agent's social card URL (points to an external SOCIAL.md)")
+    .option('--url <url>', 'New social card URL to set')
+    .option('--clear', 'Clear the current social card URL')
+    .action(async (agentId: string, opts: { url?: string; clear?: boolean }) => {
+      if (!opts.url && !opts.clear) {
+        console.error('Specify --url <url> to set or --clear to remove the social card URL.');
+        process.exit(1);
+      }
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const body = { social_card_url: opts.clear ? null : opts.url };
+        const res = await acnPatch<{ agent_id: string; social_card_url: string | null }>(
+          `/agents/${agentId}/social-card-url`,
+          body
+        );
+        const val = res.social_card_url ?? '(cleared)';
+        output(res, `Social card URL updated for ${res.agent_id}: ${val}`);
       } catch (err) {
         handleError(err);
       }

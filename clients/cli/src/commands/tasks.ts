@@ -370,5 +370,45 @@ export function tasksCommand(): Command {
       }
     });
 
+  cmd
+    .command('approve-applicant <task_id>')
+    .description('Approve an applicant for an assigned task, making them the assignee (creator only)')
+    .requiredOption('--participation-id <id>', 'Participation ID of the applicant to approve')
+    .action(async (taskId: string, opts: { participationId: string }) => {
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const res = await acnPost<TaskInfo>(
+          `/tasks/${taskId}/participations/${opts.participationId}/approve`
+        );
+        output(res, `Approved applicant ${opts.participationId} for task ${taskId} (status: ${res.status})`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd
+    .command('reject-applicant <task_id>')
+    .description('Reject an applicant for an assigned task (creator only)')
+    .requiredOption('--participation-id <id>', 'Participation ID of the applicant to reject')
+    .action(async (taskId: string, opts: { participationId: string }) => {
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const res = await acnPost<TaskInfo>(
+          `/tasks/${taskId}/participations/${opts.participationId}/reject`
+        );
+        output(res, `Rejected applicant ${opts.participationId} for task ${taskId} (status: ${res.status})`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
   return cmd;
 }
