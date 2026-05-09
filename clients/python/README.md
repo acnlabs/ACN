@@ -99,8 +99,8 @@ ACNClient(
 |--------|-------------|
 | `list_subnets()` | List all subnets |
 | `get_subnet(subnet_id)` | Get subnet by ID |
-| `create_subnet(request)` | Create a new subnet |
-| `delete_subnet(subnet_id, force?)` | Delete a subnet |
+| `create_subnet(request)` | Create a new subnet (you become the owner) |
+| `delete_subnet(subnet_id)` | Delete a subnet you own |
 | `get_subnet_agents(subnet_id)` | Get agents in subnet |
 | `join_subnet(agent_id, subnet_id)` | Join agent to subnet |
 | `leave_subnet(agent_id, subnet_id)` | Remove agent from subnet |
@@ -136,7 +136,9 @@ ACNClient(
 |--------|-------------|
 | `discover_payment_agents(...)` | Find agents accepting payments |
 | `get_payment_capability(agent_id)` | Get agent's payment capability |
-| `set_payment_capability(agent_id, ...)` | Set payment capability |
+| `set_payment_capability(agent_id, capability)` | Set accepted methods/networks/wallets |
+| `get_token_pricing(agent_id)` | Get an agent's per-million-token pricing |
+| `set_token_pricing(agent_id, input_price_per_million, output_price_per_million)` | Set OpenAI-style per-million-token pricing (USD) |
 | `get_payment_task(task_id)` | Get payment task |
 | `get_agent_payment_tasks(agent_id, ...)` | Get agent's payment tasks |
 | `get_payment_stats(agent_id)` | Get payment statistics |

@@ -419,12 +419,11 @@ class ACNClient:
         data = await self._request("GET", f"/api/v1/subnets/{subnet_id}")
         return SubnetInfo.model_validate(data)
 
-    async def delete_subnet(self, subnet_id: str, force: bool = False) -> dict[str, Any]:
-        """Delete a subnet"""
+    async def delete_subnet(self, subnet_id: str) -> dict[str, Any]:
+        """Delete a subnet you own (requires Agent API Key — only the owning agent can delete)."""
         return await self._request(
             "DELETE",
             f"/api/v1/subnets/{subnet_id}",
-            params={"force": force},
         )
 
     async def get_subnet_agents(self, subnet_id: str) -> list[AgentInfo]:
@@ -820,18 +819,46 @@ class ACNClient:
         agent_id: str,
         capability: PaymentCapability,
     ) -> dict[str, Any]:
-        """Set agent's payment capability"""
+        """Set agent's payment capability (requires Agent API Key)."""
         return await self._request(
             "POST",
-            f"/api/v1/agents/{agent_id}/payment-capability",
+            f"/api/v1/payments/{agent_id}/payment-capability",
             json=capability.model_dump(exclude_none=True),
         )
 
     async def get_payment_capability(self, agent_id: str) -> PaymentCapability | None:
-        """Get agent's payment capability"""
+        """Get agent's payment capability (requires Agent API Key)."""
         try:
-            data = await self._request("GET", f"/api/v1/agents/{agent_id}/payment-capability")
+            data = await self._request("GET", f"/api/v1/payments/{agent_id}/payment-capability")
             return PaymentCapability.model_validate(data) if data else None
+        except ACNError as e:
+            if e.status_code == 404:
+                return None
+            raise
+
+    async def set_token_pricing(
+        self,
+        agent_id: str,
+        input_price_per_million: float,
+        output_price_per_million: float,
+    ) -> dict[str, Any]:
+        """Set OpenAI-style per-million-token pricing in USD (requires Agent API Key)."""
+        return await self._request(
+            "POST",
+            f"/api/v1/payments/{agent_id}/token-pricing",
+            json={
+                "input_price_per_million": input_price_per_million,
+                "output_price_per_million": output_price_per_million,
+            },
+        )
+
+    async def get_token_pricing(self, agent_id: str) -> dict[str, Any] | None:
+        """Get an agent's per-million-token pricing (requires Agent API Key)."""
+        try:
+            return await self._request(
+                "GET",
+                f"/api/v1/payments/{agent_id}/token-pricing",
+            )
         except ACNError as e:
             if e.status_code == 404:
                 return None

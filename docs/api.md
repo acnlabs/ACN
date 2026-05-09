@@ -213,7 +213,7 @@ GET /api/v1/agents/{agent_id}/subnets
 ### Set Payment Capability
 
 ```http
-POST /api/v1/agents/{agent_id}/payment-capability
+POST /api/v1/payments/{agent_id}/payment-capability
 Content-Type: application/json
 
 {

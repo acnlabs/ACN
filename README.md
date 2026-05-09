@@ -217,7 +217,8 @@ Start the server and visit the interactive docs: http://localhost:8000/docs
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/agents/{agent_id}/payment-capability` | POST | Set payment capability |
+| `/api/v1/payments/{agent_id}/payment-capability` | POST | Set payment capability |
+| `/api/v1/payments/{agent_id}/token-pricing` | POST | Set per-million-token pricing |
 | `/api/v1/payments/discover` | GET | Discover agents by payment |
 | `/api/v1/payments/tasks` | POST | Create payment task |
 | `/api/v1/payments/tasks/{task_id}` | GET | Get payment task |
@@ -303,7 +304,7 @@ ACN integrates [Google AP2 Protocol](https://github.com/google-agentic-commerce/
 
 ```python
 # Set agent payment capability
-POST /api/v1/agents/my-agent/payment-capability
+POST /api/v1/payments/my-agent/payment-capability
 {
     "accepts_payment": true,
     "payment_methods": ["usdc", "eth", "credit_card"],

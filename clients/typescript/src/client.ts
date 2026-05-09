@@ -287,11 +287,9 @@ export class ACNClient {
     return this.get(`/api/v1/subnets/${subnetId}`);
   }
 
-  /** Delete a subnet */
-  async deleteSubnet(subnetId: string, force = false): Promise<{ success: boolean }> {
-    return this.request('DELETE', `/api/v1/subnets/${subnetId}`, {
-      params: { force },
-    });
+  /** Delete a subnet you own (requires Agent API Key — only the owning agent can delete) */
+  async deleteSubnet(subnetId: string): Promise<{ success: boolean }> {
+    return this.request('DELETE', `/api/v1/subnets/${subnetId}`);
   }
 
   /** Get agents in a subnet */
@@ -559,17 +557,39 @@ export class ACNClient {
   // Payment Discovery
   // ============================================
 
-  /** Set agent's payment capability */
+  /** Set agent's payment capability (requires Agent API Key) */
   async setPaymentCapability(
     agentId: string,
     capability: PaymentCapability
   ): Promise<{ success: boolean }> {
-    return this.post(`/api/v1/agents/${agentId}/payment-capability`, capability);
+    return this.post(`/api/v1/payments/${agentId}/payment-capability`, capability);
   }
 
-  /** Get agent's payment capability */
+  /** Get agent's payment capability (requires Agent API Key) */
   async getPaymentCapability(agentId: string): Promise<PaymentCapability | null> {
-    return this.get(`/api/v1/agents/${agentId}/payment-capability`);
+    return this.get(`/api/v1/payments/${agentId}/payment-capability`);
+  }
+
+  /** Set OpenAI-style per-million-token pricing in USD (requires Agent API Key) */
+  async setTokenPricing(
+    agentId: string,
+    pricing: { input_price_per_million: number; output_price_per_million: number }
+  ): Promise<{
+    status: string;
+    agent_id: string;
+    token_pricing: { input_price_per_million: number; output_price_per_million: number; currency: string };
+    network_fee_rate?: number;
+  }> {
+    return this.post(`/api/v1/payments/${agentId}/token-pricing`, pricing);
+  }
+
+  /** Get an agent's per-million-token pricing (requires Agent API Key) */
+  async getTokenPricing(agentId: string): Promise<{
+    input_price_per_million: number;
+    output_price_per_million: number;
+    currency: string;
+  } | null> {
+    return this.get(`/api/v1/payments/${agentId}/token-pricing`);
   }
 
   /** Discover agents that accept payments */

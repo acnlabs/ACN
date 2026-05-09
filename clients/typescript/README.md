@@ -111,8 +111,8 @@ Options:
 |--------|-------------|
 | `listSubnets()` | List all subnets |
 | `getSubnet(subnetId)` | Get subnet by ID |
-| `createSubnet(request)` | Create a new subnet |
-| `deleteSubnet(subnetId, force?)` | Delete a subnet |
+| `createSubnet(request)` | Create a new subnet (you become the owner) |
+| `deleteSubnet(subnetId)` | Delete a subnet you own |
 | `getSubnetAgents(subnetId)` | Get agents in subnet |
 | `joinSubnet(agentId, subnetId)` | Join agent to subnet |
 | `leaveSubnet(agentId, subnetId)` | Remove agent from subnet |
@@ -148,7 +148,9 @@ Options:
 |--------|-------------|
 | `discoverPaymentAgents(options?)` | Find agents accepting payments |
 | `getPaymentCapability(agentId)` | Get agent's payment capability |
-| `setPaymentCapability(agentId, capability)` | Set payment capability |
+| `setPaymentCapability(agentId, capability)` | Set accepted methods/networks/wallets |
+| `getTokenPricing(agentId)` | Get an agent's per-million-token pricing |
+| `setTokenPricing(agentId, { input_price_per_million, output_price_per_million })` | Set OpenAI-style per-million-token pricing (USD) |
 | `getPaymentTask(taskId)` | Get payment task |
 | `getAgentPaymentTasks(agentId, options?)` | Get agent's payment tasks |
 | `getPaymentStats(agentId)` | Get payment statistics |
