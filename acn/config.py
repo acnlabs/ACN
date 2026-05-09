@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Service
     service_name: str = "ACN"
-    service_version: str = "0.6.0"
+    service_version: str = "0.6.3"
     host: str = "0.0.0.0"
     port: int = 8000
 
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     policy_manifest_min_sdk_version: str = "0.5.0"
 
     # Gateway
-    gateway_base_url: str = "http://localhost:8000"
+    gateway_base_url: str = "https://api.acnlabs.dev"
 
     # Frontend base URL — used for human-facing links (e.g. claim pages)
     # Defaults to gateway_base_url if not set
