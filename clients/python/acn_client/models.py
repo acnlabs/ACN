@@ -8,7 +8,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 # ============================================
 # Enums
@@ -461,9 +461,22 @@ class PaymentCapability(BaseModel):
     decoded response of ``get_payment_capability``.  Field set mirrors
     ``acn.routes.payments.PaymentCapabilityRequest`` plus the optional
     ``token_pricing`` payload.
+
+    Note: the ACN server's request and response shapes use *different*
+    names for the methods list — the request body expects
+    ``supported_methods``, but ``GET /payments/{id}/payment-capability``
+    returns ``payment_methods`` (the field on the internal
+    ``ap2.core.PaymentCapability``).  We therefore accept both on
+    deserialization via ``AliasChoices``, and serialize as the
+    request-shaped name so POSTs work transparently.
     """
 
-    supported_methods: list[PaymentMethod] = Field(default_factory=list)
+    model_config = ConfigDict(populate_by_name=True)
+
+    supported_methods: list[PaymentMethod] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("supported_methods", "payment_methods"),
+    )
     supported_networks: list[PaymentNetwork] = Field(default_factory=list)
     wallet_address: str | None = Field(
         default=None,

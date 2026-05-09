@@ -567,9 +567,24 @@ export class ACNClient {
     return this.post(`/api/v1/payments/${agentId}/payment-capability`, capability);
   }
 
-  /** Get agent's payment capability (requires Agent API Key) */
+  /**
+   * Get agent's payment capability (requires Agent API Key).
+   *
+   * The ACN server returns this resource using the internal
+   * `ap2.core.PaymentCapability` shape, which calls the methods list
+   * `payment_methods`.  We rewrite it to the request-shaped name
+   * `supported_methods` here so callers see the same field on read
+   * and on write.
+   */
   async getPaymentCapability(agentId: string): Promise<PaymentCapability | null> {
-    return this.get(`/api/v1/payments/${agentId}/payment-capability`);
+    const raw = await this.get<Record<string, unknown> | null>(
+      `/api/v1/payments/${agentId}/payment-capability`,
+    );
+    if (!raw) return null;
+    if (Array.isArray(raw.payment_methods) && raw.supported_methods === undefined) {
+      raw.supported_methods = raw.payment_methods;
+    }
+    return raw as unknown as PaymentCapability;
   }
 
   /** Set OpenAI-style per-million-token pricing in USD (requires Agent API Key) */
