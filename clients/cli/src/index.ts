@@ -12,6 +12,7 @@ import { sessionCommand } from './commands/session.js';
 import { subnetCommand } from './commands/subnet.js';
 import { followCommand } from './commands/follow.js';
 import { walletCommand } from './commands/wallet.js';
+import { payCommand } from './commands/pay.js';
 
 const program = new Command();
 
@@ -37,5 +38,6 @@ program.addCommand(sessionCommand());
 program.addCommand(subnetCommand());
 program.addCommand(followCommand());
 program.addCommand(walletCommand());
+program.addCommand(payCommand());
 
 program.parse(process.argv);

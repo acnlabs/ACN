@@ -3,6 +3,47 @@ import { acnGet, acnPost } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 
+interface PaymentTaskSummary {
+  task_id: string;
+  status: string;
+  buyer_agent: string;
+  seller_agent: string;
+  amount: string;
+  currency?: string;
+  payment_method?: string | null;
+  network?: string | null;
+  created_at?: string;
+}
+
+interface AgentPaymentTasksResponse {
+  agent_id: string;
+  tasks: PaymentTaskSummary[];
+}
+
+interface PaymentStatsResponse {
+  total_received?: number;
+  total_sent?: number;
+  transaction_count?: number;
+  avg_amount?: number;
+  [key: string]: unknown;
+}
+
+interface EstimateCostResponse {
+  agent_id: string;
+  estimate: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_usd?: number;
+    network_fee_usd?: number;
+    agent_income_usd?: number;
+    total_credits?: number;
+    network_fee_credits?: number;
+    agent_income_credits?: number;
+    [key: string]: unknown;
+  };
+  note?: string;
+}
+
 interface AgentWalletsResponse {
   agent_id: string;
   accepts_payment?: boolean;
@@ -170,6 +211,115 @@ export function walletCommand(): Command {
               `output=$${res.token_pricing.output_price_per_million}/1M ` +
               `(${res.token_pricing.currency})${fee}`
           );
+        } catch (err) {
+          handleError(err);
+        }
+      }
+    );
+
+  cmd
+    .command('tasks')
+    .description("List the payment tasks the current agent is involved in")
+    .option('--status <s>', 'Filter by status (e.g. created, payment_confirmed, task_completed)')
+    .option('--limit <n>', 'Max number of tasks to return (default 50)')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (opts: { status?: string; limit?: string; agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      const params: Record<string, string | number | undefined> = {};
+      if (opts.status) params.status = opts.status;
+      if (opts.limit !== undefined) {
+        const limit = Number(opts.limit);
+        if (!Number.isFinite(limit) || limit <= 0) {
+          console.error('--limit must be a positive number.');
+          process.exit(1);
+        }
+        params.limit = limit;
+      }
+      try {
+        const res = await acnGet<AgentPaymentTasksResponse>(
+          `/payments/tasks/agent/${agentId}`,
+          params
+        );
+        const tasks = res.tasks ?? [];
+        if (tasks.length === 0) {
+          output(res, `No payment tasks for ${agentId}.`);
+          return;
+        }
+        const lines = [`${tasks.length} task(s) for ${agentId}:`];
+        for (const t of tasks) {
+          const role = t.buyer_agent === agentId ? 'pay' : 'recv';
+          const counterparty = t.buyer_agent === agentId ? t.seller_agent : t.buyer_agent;
+          const method = t.payment_method ? `${t.payment_method}` : '?';
+          const network = t.network ? `/${t.network}` : '';
+          lines.push(
+            `  ${t.task_id.padEnd(36)}  ${role}  ${t.status.padEnd(20)}  ` +
+              `${t.amount} ${t.currency ?? ''}  via ${method}${network}  -> ${counterparty}`
+          );
+        }
+        output(res, lines.join('\n'));
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd
+    .command('stats')
+    .description("Show the current agent's payment statistics")
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (opts: { agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      try {
+        const res = await acnGet<PaymentStatsResponse>(`/payments/stats/${agentId}`);
+        const lines = [`Stats for ${agentId}:`];
+        if (res.total_received !== undefined)
+          lines.push(`  Total received   : ${res.total_received}`);
+        if (res.total_sent !== undefined)
+          lines.push(`  Total sent       : ${res.total_sent}`);
+        if (res.transaction_count !== undefined)
+          lines.push(`  Transactions     : ${res.transaction_count}`);
+        if (res.avg_amount !== undefined)
+          lines.push(`  Avg amount       : ${res.avg_amount}`);
+        output(res, lines.join('\n'));
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd
+    .command('estimate <agent_id>')
+    .description("Estimate the cost of calling another agent before invoking")
+    .requiredOption('--input-tokens <n>', 'Estimated input token count')
+    .requiredOption('--output-tokens <n>', 'Estimated output token count')
+    .action(
+      async (
+        agentId: string,
+        opts: { inputTokens: string; outputTokens: string }
+      ) => {
+        const inputTokens = Number(opts.inputTokens);
+        const outputTokens = Number(opts.outputTokens);
+        if (!Number.isFinite(inputTokens) || inputTokens < 0) {
+          console.error('--input-tokens must be a non-negative number.');
+          process.exit(1);
+        }
+        if (!Number.isFinite(outputTokens) || outputTokens < 0) {
+          console.error('--output-tokens must be a non-negative number.');
+          process.exit(1);
+        }
+        try {
+          const res = await acnPost<EstimateCostResponse>('/payments/billing/estimate', {
+            agent_id: agentId,
+            estimated_input_tokens: inputTokens,
+            estimated_output_tokens: outputTokens,
+          });
+          const e = res.estimate ?? {};
+          const lines = [
+            `Estimate for ${res.agent_id} (${inputTokens} in / ${outputTokens} out tokens):`,
+            `  Total           : $${e.total_usd ?? '?'}  (${e.total_credits ?? '?'} credits)`,
+            `  Network fee     : $${e.network_fee_usd ?? '?'}  (${e.network_fee_credits ?? '?'} credits)`,
+            `  Agent income    : $${e.agent_income_usd ?? '?'}  (${e.agent_income_credits ?? '?'} credits)`,
+          ];
+          if (res.note) lines.push(`  Note: ${res.note}`);
+          output(res, lines.join('\n'));
         } catch (err) {
           handleError(err);
         }
