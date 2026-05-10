@@ -269,6 +269,7 @@ async def create_payment_task(
             amount=str(request.amount),
             currency=request.currency,
             payment_method=request.payment_method,
+            network=request.network,
             task_type="payment",
             metadata=task_metadata,
         )
@@ -279,6 +280,14 @@ async def create_payment_task(
         raise
     except HTTPException:
         raise
+    except ValueError as e:
+        # The seller does not accept this method/network, or the seller has
+        # no payment capability registered. These are caller-correctable.
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            status_code=400,
+            details={"reason": str(e)},
+        ) from e
     except Exception as e:
         logger.error("create_payment_task_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create payment task") from e
