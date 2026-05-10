@@ -11,6 +11,7 @@ Example:
 
 from .client import ACNClient, ACNError
 from .models import (
+    KNOWN_PAYMENT_TASK_STATUSES,
     AgentInfo,
     AgentJoinRequest,
     AgentJoinResponse,
@@ -21,7 +22,6 @@ from .models import (
     BroadcastRequest,
     BroadcastStrategy,
     CommunicationProfile,
-    KNOWN_PAYMENT_TASK_STATUSES,
     ManifestContentResponse,
     ManifestEntry,
     ManifestSendRequest,
