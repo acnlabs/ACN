@@ -604,6 +604,7 @@ class PaymentTaskManager:
         amount: str,
         currency: str = "USD",
         payment_method: SupportedPaymentMethod | None = None,
+        network: SupportedNetwork | None = None,
         task_type: str | None = None,
         metadata: dict | None = None,
     ) -> PaymentTask:
@@ -611,6 +612,8 @@ class PaymentTaskManager:
         Create a new payment task.
 
         Automatically resolves seller's wallet address from ACN Registry.
+        Honors the buyer-supplied ``network`` when provided; otherwise falls
+        back to the seller capability's first declared network.
         """
         # Get seller's payment capability
         capability = await self.discovery.get_agent_payment_capability(seller_agent)
@@ -639,11 +642,32 @@ class PaymentTaskManager:
             if supported_methods:
                 payment_method = supported_methods[0]
 
-        # Determine network and resolve the correct wallet address for that network
-        network = capability.supported_networks[0] if capability.supported_networks else None
-        if network and capability.wallet_addresses:
+        # Normalize seller's supported networks (tolerate mixed storage formats).
+        supported_networks: list[SupportedNetwork] = []
+        for net in capability.supported_networks or []:
+            if isinstance(net, SupportedNetwork):
+                supported_networks.append(net)
+                continue
+            try:
+                supported_networks.append(SupportedNetwork(str(net)))
+            except ValueError:
+                continue
+
+        # Honor caller-supplied network when seller declares it; otherwise
+        # fall back to the first declared network for backwards compatibility.
+        if network is not None:
+            if supported_networks and network not in supported_networks:
+                raise ValueError(
+                    f"Agent {seller_agent} does not accept network {network.value}"
+                )
+            selected_network = network
+        else:
+            selected_network = supported_networks[0] if supported_networks else None
+
+        # Resolve the correct wallet address for the chosen network.
+        if selected_network and capability.wallet_addresses:
             recipient_wallet = capability.wallet_addresses.get(
-                network.value, capability.wallet_address
+                selected_network.value, capability.wallet_address
             )
         else:
             recipient_wallet = capability.wallet_address
@@ -659,7 +683,7 @@ class PaymentTaskManager:
             currency=currency,
             payment_method=payment_method,
             recipient_wallet=recipient_wallet,
-            network=network,
+            network=selected_network,
         )
 
         # Save task
