@@ -434,9 +434,12 @@ class TestJwtAndPermissionBranches:
     Each path has its own ``record_auth_failure`` call and we want a
     failing test if any branch silently regresses to no-op.
 
-    We hit ``DELETE /api/v1/subnets/{id}`` because it is gated by
+    We hit ``DELETE /api/v1/agents/{id}`` because it is gated by
     ``require_permission("acn:write")`` — the simplest reachable handler
-    that exercises the full middleware stack.
+    that exercises the full middleware stack. (We previously used
+    ``DELETE /api/v1/subnets/{id}`` for the same purpose; that endpoint
+    was migrated to ``AgentApiKeyDep`` when subnet self-service shipped
+    for agents, so it no longer exercises the JWT middleware path.)
     """
 
     def _settings_with_auth0(self):
@@ -468,7 +471,7 @@ class TestJwtAndPermissionBranches:
             return_value=self._settings_with_auth0(),
         ), patch("acn.auth.middleware.record_auth_failure") as record:
             with TestClient(app) as client:
-                r = client.delete("/api/v1/subnets/some-id")
+                r = client.delete("/api/v1/agents/some-id")
             assert r.status_code == 401
             # ``record_auth_failure`` may be called once (verify_token) or
             # not at all if the route never reaches the dependency — pin the
@@ -517,7 +520,7 @@ class TestJwtAndPermissionBranches:
         ) as record:
             with TestClient(app) as client:
                 r = client.delete(
-                    "/api/v1/subnets/some-id",
+                    "/api/v1/agents/some-id",
                     headers={"Authorization": f"Bearer {bogus}"},
                 )
             assert r.status_code == 401
@@ -552,7 +555,7 @@ class TestJwtAndPermissionBranches:
         ) as record:
             with TestClient(app) as client:
                 r = client.delete(
-                    "/api/v1/subnets/some-id",
+                    "/api/v1/agents/some-id",
                     headers={"Authorization": "Bearer not-checked"},
                 )
             assert r.status_code == 403
@@ -568,7 +571,7 @@ class TestJwtAndPermissionBranches:
             assert kwargs.get("actor_id") == "auth0|user-42"
             # The middleware variant doesn't have access to a proxy-aware IP,
             # but it must still pass *some* path/method context.
-            assert kwargs.get("path") == "/api/v1/subnets/some-id"
+            assert kwargs.get("path") == "/api/v1/agents/some-id"
             assert kwargs.get("method") == "DELETE"
             assert kwargs.get("extra", {}).get("permission") == "acn:write"
 
