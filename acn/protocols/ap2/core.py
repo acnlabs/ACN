@@ -491,9 +491,15 @@ class PaymentDiscoveryService:
         key = f"{self._prefix}by_currency:{capability.default_currency}"
         await self.redis.sadd(key, agent_id)
 
-        # Store capability data
+        # Store capability data. Exclude the ``supported_methods`` computed
+        # alias so Redis only persists the canonical ``payment_methods`` —
+        # the alias is rematerialized on serialization out (see
+        # PaymentCapability.supported_methods docstring).
         cap_key = f"{self._prefix}capability:{agent_id}"
-        await self.redis.set(cap_key, capability.model_dump_json())
+        await self.redis.set(
+            cap_key,
+            capability.model_dump_json(exclude={"supported_methods"}),
+        )
 
     async def remove_payment_capability(self, agent_id: str):
         """Remove agent from payment indexes"""

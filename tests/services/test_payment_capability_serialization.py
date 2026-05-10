@@ -110,3 +110,20 @@ def test_extra_supported_methods_on_input_is_ignored_not_stored() -> None:
 
     assert capability.payment_methods == [SupportedPaymentMethod.USDC]
     assert capability.supported_methods == [SupportedPaymentMethod.USDC]
+
+
+def test_redis_storage_excludes_supported_methods_alias() -> None:
+    """Storage path uses ``exclude={"supported_methods"}`` so Redis rows
+    don't carry the duplicate field. The alias is recomputed on every
+    serialization out, so excluding it is lossless.
+    """
+    capability = _make_capability()
+
+    stored = capability.model_dump_json(exclude={"supported_methods"})
+
+    assert '"payment_methods"' in stored
+    assert '"supported_methods"' not in stored
+
+    # Round-trip from the storage shape still materializes the alias.
+    rehydrated = PaymentCapability.model_validate_json(stored)
+    assert rehydrated.supported_methods == capability.payment_methods
