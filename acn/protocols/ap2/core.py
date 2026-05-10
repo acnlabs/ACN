@@ -21,7 +21,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
@@ -305,6 +305,24 @@ class PaymentCapability(BaseModel):
         description="Token-based pricing (per million tokens, OpenAI-style)",
     )
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def supported_methods(self) -> list[SupportedPaymentMethod]:
+        """Read-only alias of ``payment_methods`` exposed in API responses.
+
+        The wire contract is asymmetric for historical reasons:
+        - ``PaymentCapabilityRequest`` (write side) uses ``supported_methods``.
+        - ``PaymentCapability`` (read side) stores ``payment_methods``
+          because that matches the AP2 extension parameter name.
+
+        Emitting both names from the response keeps clients that read
+        either field happy without forcing a coordinated SDK upgrade.
+        Storage on Redis still uses ``payment_methods``; ``supported_methods``
+        is computed at serialization time and ignored on deserialization
+        (Pydantic's default ``extra='ignore'`` keeps round-trips clean).
+        """
+        return self.payment_methods
+
     def to_agent_card_extension(self) -> dict:
         """Convert to Agent Card extension format for A2A discovery"""
         extensions = []
@@ -473,9 +491,15 @@ class PaymentDiscoveryService:
         key = f"{self._prefix}by_currency:{capability.default_currency}"
         await self.redis.sadd(key, agent_id)
 
-        # Store capability data
+        # Store capability data. Exclude the ``supported_methods`` computed
+        # alias so Redis only persists the canonical ``payment_methods`` —
+        # the alias is rematerialized on serialization out (see
+        # PaymentCapability.supported_methods docstring).
         cap_key = f"{self._prefix}capability:{agent_id}"
-        await self.redis.set(cap_key, capability.model_dump_json())
+        await self.redis.set(
+            cap_key,
+            capability.model_dump_json(exclude={"supported_methods"}),
+        )
 
     async def remove_payment_capability(self, agent_id: str):
         """Remove agent from payment indexes"""
