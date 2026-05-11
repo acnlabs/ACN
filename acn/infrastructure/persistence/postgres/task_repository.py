@@ -4,7 +4,9 @@ Persistent task storage backed by Railway PostgreSQL.
 active_participants_count is NOT stored here — Redis Counter is authoritative.
 """
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any
 
 import redis.asyncio as aioredis
 import structlog
@@ -57,6 +59,26 @@ class PostgresTaskRepository(ITaskRepository):
 
     def _completions_key(self, task_id: str) -> str:
         return _COMPLETIONS_KEY.format(task_id=task_id)
+
+    @asynccontextmanager
+    async def _session_scope(self, session: Any | None):
+        """Yield ``session`` if the caller passed one (in which case we
+        do NOT commit or close — caller owns the transaction), otherwise
+        open a new short-lived session and commit it.
+
+        This is the outbox seam: ``task_service.complete_task`` passes an
+        outer session so the CAS save and the settlement-outbox INSERT
+        share one ACID transaction (saga v0.1). Existing callers that
+        leave ``session=None`` see exactly the original behaviour.
+        """
+        if session is not None:
+            # Type narrows to AsyncSession by convention; the interface
+            # types it as Any to keep SQLAlchemy out of the core layer.
+            yield session
+            return
+        async with self._session_factory() as own_session:
+            yield own_session
+            await own_session.commit()
 
     # ---- Task mapping -------------------------------------------------------
 
@@ -226,13 +248,13 @@ class PostgresTaskRepository(ITaskRepository):
     # Task CRUD
     # =========================================================================
 
-    async def save(self, task: Task) -> None:
+    async def save(self, task: Task, *, session: Any | None = None) -> None:
         model = self._task_to_model(task)
-        async with self._session_factory() as session:
-            existing = await session.get(TaskModel, task.task_id)
+        async with self._session_scope(session) as sess:
+            existing = await sess.get(TaskModel, task.task_id)
             if existing:
                 # Update all mutable columns
-                await session.execute(
+                await sess.execute(
                     update(TaskModel)
                     .where(TaskModel.task_id == task.task_id)
                     .values(
@@ -255,20 +277,30 @@ class PostgresTaskRepository(ITaskRepository):
                     )
                 )
             else:
-                session.add(model)
-            await session.commit()
+                sess.add(model)
 
-    async def compare_and_save(self, task: Task, expected_status: TaskStatus) -> bool:
+    async def compare_and_save(
+        self,
+        task: Task,
+        expected_status: TaskStatus,
+        *,
+        session: Any | None = None,
+    ) -> bool:
         """CAS update: persist only if DB status currently equals ``expected_status``.
 
         ``UPDATE ... WHERE task_id=? AND status=?`` is atomic in PostgreSQL —
         if two transactions race, exactly one row will report ``rowcount == 1``;
         the other sees zero rows touched. We surface that as ``True`` / ``False``
         so the service layer can short-circuit double payments.
+
+        When ``session`` is supplied (saga v0.1 outbox seam), the CAS runs
+        inside the caller's transaction and is NOT committed here — the
+        caller commits after writing the outbox row, so the two effects
+        are atomic.
         """
         model = self._task_to_model(task)
-        async with self._session_factory() as session:
-            result = await session.execute(
+        async with self._session_scope(session) as sess:
+            result = await sess.execute(
                 update(TaskModel)
                 .where(TaskModel.task_id == task.task_id)
                 .where(TaskModel.status == expected_status.value)
@@ -291,7 +323,6 @@ class PostgresTaskRepository(ITaskRepository):
                     subnet_id=model.subnet_id,
                 )
             )
-            await session.commit()
             return result.rowcount == 1
 
     async def find_by_id(self, task_id: str) -> Task | None:
@@ -464,12 +495,17 @@ class PostgresTaskRepository(ITaskRepository):
     # Participation CRUD
     # =========================================================================
 
-    async def save_participation(self, participation: Participation) -> None:
+    async def save_participation(
+        self,
+        participation: Participation,
+        *,
+        session: Any | None = None,
+    ) -> None:
         model = self._participation_to_model(participation)
-        async with self._session_factory() as session:
-            existing = await session.get(ParticipationModel, participation.participation_id)
+        async with self._session_scope(session) as sess:
+            existing = await sess.get(ParticipationModel, participation.participation_id)
             if existing:
-                await session.execute(
+                await sess.execute(
                     update(ParticipationModel)
                     .where(ParticipationModel.participation_id == participation.participation_id)
                     .values(
@@ -488,8 +524,7 @@ class PostgresTaskRepository(ITaskRepository):
                     )
                 )
             else:
-                session.add(model)
-            await session.commit()
+                sess.add(model)
 
     async def add_application(self, task_id: str, participation: Participation) -> None:
         """Save an APPLIED participation without touching the Redis active count."""

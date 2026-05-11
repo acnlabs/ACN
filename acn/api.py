@@ -55,8 +55,11 @@ from .infrastructure.persistence.postgres import (
     PostgresAgentRepository,
     PostgresAllowlistRepository,
     PostgresBillingRepository,
+    PostgresReputationRepository,
+    PostgresSettlementOutboxRepository,
     PostgresSubnetRepository,
     PostgresTaskRepository,
+    PostgresUnitOfWork,
     get_engine,
     get_session_factory,
 )
@@ -115,6 +118,9 @@ from .services.activity_service import ActivityService
 from .services.auth0_client import Auth0CredentialClient
 from .services.erc8004_client import ERC8004Client
 from .services.escrow_client import AgentPlanetEscrowProvider
+from .services.reputation_query_service import ReputationQueryService
+from .services.reputation_service import ReputationService
+from .services.settlement_worker import SettlementWorker
 
 # Settings
 settings = get_settings()
@@ -245,6 +251,15 @@ async def lifespan(app: FastAPI):
     _pg_engine = None
     _billing_repository = None
     _activity_repository = None
+    # Settlement saga v0.1 wiring — only available in PG mode. See
+    # acn/docs/_drafts/settlement-saga-design.md and task_service.py
+    # ``_saga_enabled`` for the contract.
+    _settlement_outbox_repository: PostgresSettlementOutboxRepository | None = None
+    _unit_of_work: PostgresUnitOfWork | None = None
+    # Saga v0.1 reputation — same conditional shape as the outbox. The
+    # ``reputation_events`` table is PG-only; Redis-only deployments
+    # surface 503 on the reputation write routes.
+    _reputation_repository: PostgresReputationRepository | None = None
     if settings.database_url:
         logger.info("persistence_postgres", database_url=settings.database_url[:30] + "...")
         _pg_engine = get_engine(settings.database_url)
@@ -254,6 +269,9 @@ async def lifespan(app: FastAPI):
         task_repository = PostgresTaskRepository(_pg_session, registry_instance.redis)
         _billing_repository = PostgresBillingRepository(_pg_session)
         _activity_repository = PostgresActivityRepository(_pg_session)
+        _settlement_outbox_repository = PostgresSettlementOutboxRepository(_pg_session)
+        _unit_of_work = PostgresUnitOfWork(_pg_session)
+        _reputation_repository = PostgresReputationRepository(_pg_session)
     else:
         logger.info("persistence_redis", reason="DATABASE_URL not set, using Redis fallback")
         agent_repository = RedisAgentRepository(registry_instance.redis)
@@ -475,10 +493,40 @@ async def lifespan(app: FastAPI):
         escrow_client=escrow_client_instance,
         agent_repository=agent_repository,
         subnet_repository=subnet_repository,
+        # Settlement saga v0.1 — both are None in Redis-only mode,
+        # which forces ``complete_task`` onto its legacy non-atomic
+        # path (existing pre-v0.1 behavior). In PG mode the saga
+        # path activates whenever ``outbox_enqueue_required`` is also
+        # True (default), atomically committing CAS + outbox enqueue.
+        settlement_outbox=_settlement_outbox_repository,
+        unit_of_work=_unit_of_work,
+        outbox_enqueue_required=settings.outbox_enqueue_required,
     )
 
     # Set task service for routes
     tasks.set_task_service(task_service_instance)
+
+    # Saga v0.1 reputation services.
+    #
+    # ``ReputationService`` (write path) is PG-only — without a
+    # repository there's nowhere to store rows, so it stays None in
+    # Redis-only deployments and the POST endpoints surface 503.
+    #
+    # ``ReputationQueryService`` (read path) supports a None repository
+    # by returning zero-filled off-chain counts; we construct it
+    # unconditionally so the GET /reputation/summary endpoint can
+    # still serve chain-only numbers in Redis-only deployments
+    # (review fix R3 — previously the route built a per-request
+    # fallback instance, which was wasteful and hid the contract).
+    # The ERC-8004 client is attached later in lifespan once it's
+    # been pre-warmed (chain_id verification round-trip).
+    reputation_service_instance: ReputationService | None = None
+    if _reputation_repository is not None:
+        reputation_service_instance = ReputationService(_reputation_repository)
+    reputation_query_service_instance = ReputationQueryService(
+        repository=_reputation_repository,
+        erc8004_client=None,
+    )
 
     # Initialize dependencies
     dependencies.init_services(
@@ -504,6 +552,8 @@ async def lifespan(app: FastAPI):
         allowlist_service=allowlist_service_instance,
         escrow_provider=escrow_client_instance,
         session_service=session_service_instance,
+        reputation_service=reputation_service_instance,
+        reputation_query_service=reputation_query_service_instance,
     )
 
     # Phase 1 wiring guard
@@ -546,6 +596,7 @@ async def lifespan(app: FastAPI):
             redis=registry_instance.redis,
             metrics=metrics_instance,
         )
+
         # Phase 2 PR #2 P0-1: wrap the A2A app in the from_agent
         # validation middleware so ``allowlist`` mode cannot be
         # bypassed by spoofing ``metadata.from_agent``. The closure
@@ -600,9 +651,7 @@ async def lifespan(app: FastAPI):
             validation_contract=settings.erc8004_validation_contract,
         )
         try:
-            matches, actual = await erc8004_warm.verify_chain_id(
-                settings.erc8004_chain_id
-            )
+            matches, actual = await erc8004_warm.verify_chain_id(settings.erc8004_chain_id)
         except Exception as exc:  # noqa: BLE001 — startup must surface RPC errors clearly
             logger.error(
                 "erc8004_startup_verify_failed",
@@ -640,6 +689,12 @@ async def lifespan(app: FastAPI):
         # so subsequent bind requests reuse it — preserves the chain_id
         # cache so binds don't pay an extra RPC roundtrip.
         onchain.set_erc8004_client(erc8004_warm)
+        # Same client also feeds the merged reputation summary so the
+        # off-chain + on-chain view in v0.1 can return the chain numbers
+        # without ever having to construct a second client. None-safe:
+        # in Redis-only deployments the query service is None.
+        if reputation_query_service_instance is not None:
+            reputation_query_service_instance.attach_erc8004_client(erc8004_warm)
 
     # Activate audit writes for the lifetime of the app.  Without this,
     # ``AuditLogger._started`` stays False and every ``fire_and_forget_event``
@@ -706,6 +761,85 @@ async def lifespan(app: FastAPI):
 
         _refund_worker_task = asyncio.create_task(_manifest_ttl_refund_worker())
 
+    # Settlement saga worker (Todo 4 framework / Todo 6 step bodies).
+    # Default OFF in code: production envs that have wired the outbox
+    # via DATABASE_URL still need to flip SETTLEMENT_WORKER_ENABLED
+    # explicitly. The reason this is gated behind two checks (env
+    # flag AND repo presence) is so that a misconfigured deployment
+    # — e.g. Redis-only mode with the flag accidentally on — fails
+    # loudly via the warning log below instead of crashing.
+    settlement_worker_instance: SettlementWorker | None = None
+    if settings.settlement_worker_enabled:
+        if _settlement_outbox_repository is None:
+            logger.warning(
+                "settlement_worker_disabled_no_outbox",
+                reason=(
+                    "SETTLEMENT_WORKER_ENABLED=true but no PG outbox "
+                    "repository is wired (DATABASE_URL unset?). Worker "
+                    "skipped — events will accumulate in the bypass path."
+                ),
+            )
+        else:
+            settlement_worker_instance = SettlementWorker(
+                outbox=_settlement_outbox_repository,
+                escrow_provider=escrow_client_instance,
+                reputation_service=reputation_service_instance,
+                metrics_collector=metrics_instance,
+                poll_interval_sec=settings.settlement_poll_interval_sec,
+                batch_size=settings.settlement_batch_size,
+                max_attempts=settings.settlement_max_attempts,
+                backoff_base_sec=settings.settlement_backoff_base_sec,
+                backoff_max_sec=settings.settlement_backoff_max_sec,
+                janitor_interval_sec=settings.settlement_janitor_interval_sec,
+                janitor_stuck_threshold_sec=settings.settlement_janitor_stuck_threshold_sec,
+                dlq_alert_webhook=settings.settlement_dlq_alert_webhook,
+            )
+            await settlement_worker_instance.start()
+
+    # Settlement reconciler (Todo 9c) — daily cross-check between
+    # ``settlement_outbox`` (state='done') and ``reputation_events``
+    # (kind='feedback'). The two MUST match once the saga is the
+    # only writer; non-zero deltas surface via
+    # ``acn_settlement_reconcile_delta`` and block Todo 7
+    # (legacy bypass cleanup). The job is gated on the same PG
+    # outbox prerequisite as the worker because there's no point
+    # reconciling if no rows exist.
+    reconciler_task: asyncio.Task[None] | None = None
+    if (
+        settings.settlement_reconciler_enabled
+        and _settlement_outbox_repository is not None
+        and _reputation_repository is not None
+    ):
+        from acn.services.settlement_reconciler import SettlementReconciler
+
+        reconciler_instance = SettlementReconciler(
+            outbox=_settlement_outbox_repository,
+            reputation=_reputation_repository,
+            metrics_collector=metrics_instance,
+        )
+        reconcile_interval = settings.settlement_reconcile_interval_sec
+
+        async def _settlement_reconciler_loop() -> None:
+            # Run once on startup so the gauge isn't a stale value
+            # from before the restart — operators expect "fresh on
+            # last deploy". Then settle into the configured cadence.
+            #
+            # ``run_with_retry`` (not ``run_once``) handles the
+            # short-retry-on-PG-blip case described in
+            # settlement-saga-design.md §6.2: a single transient
+            # failure shouldn't burn a 24h reconciliation window.
+            # Exhausted retries return None and we wait for the
+            # next tick rather than hammering the DB further.
+            await reconciler_instance.run_with_retry(window_seconds=reconcile_interval)
+            while True:
+                try:
+                    await asyncio.sleep(reconcile_interval)
+                except asyncio.CancelledError:
+                    return
+                await reconciler_instance.run_with_retry(window_seconds=reconcile_interval)
+
+        reconciler_task = asyncio.create_task(_settlement_reconciler_loop())
+
     yield
 
     # Cleanup. Order matters:
@@ -723,6 +857,17 @@ async def lifespan(app: FastAPI):
     sweeper_task.cancel()
     if _refund_worker_task is not None:
         _refund_worker_task.cancel()
+    # Settlement worker: graceful stop with bounded timeout so a
+    # stuck step can't hang the lifespan shutdown. ``stop()`` flips
+    # the internal stop event, awaits the poll + janitor tasks,
+    # and cancels them if they don't return in time.
+    if settlement_worker_instance is not None:
+        try:
+            await settlement_worker_instance.stop(timeout=10.0)
+        except Exception as exc:  # noqa: BLE001 — never block teardown
+            logger.error("settlement_worker_stop_error", error=str(exc))
+    if reconciler_task is not None:
+        reconciler_task.cancel()
     logger.info("acn_stopping")
     try:
         await ws_manager_instance.stop()
@@ -808,9 +953,7 @@ def _new_request_id(request: Request) -> str:
 
 
 @app.exception_handler(StarletteHTTPException)
-async def _http_exception_handler(
-    request: Request, exc: StarletteHTTPException
-) -> JSONResponse:
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """Sanitise 5xx HTTPExceptions; pass 4xx through unchanged."""
     if exc.status_code < 500:
         # 4xx semantics are part of the API contract — keep them verbatim.
@@ -891,9 +1034,7 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 
 
 @app.exception_handler(ACNHTTPError)
-async def _acn_http_error_handler(
-    request: Request, exc: ACNHTTPError
-) -> JSONResponse:
+async def _acn_http_error_handler(request: Request, exc: ACNHTTPError) -> JSONResponse:
     """Translate an ``ACNHTTPError`` into a flat ACN error response.
 
     Phase 2 review v2 P1 #11 — pilot: communication routes.

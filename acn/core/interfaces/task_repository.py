@@ -4,6 +4,7 @@ Defines contract for task persistence operations.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from ..entities import Participation, Task, TaskStatus
 
@@ -13,17 +14,40 @@ class ITaskRepository(ABC):
     Abstract interface for Task persistence
 
     Infrastructure layer provides concrete implementation (e.g., Redis).
+
+    Some write methods accept an optional ``session`` keyword (typed as
+    ``Any`` to avoid leaking SQLAlchemy into the core layer). It is the
+    transactional-outbox seam used by ``task_service.complete_task`` to
+    keep a CAS save and a settlement-outbox INSERT in the same ACID
+    transaction (saga v0.1). Behaviour by impl:
+
+    * ``PostgresTaskRepository``: when ``session`` is passed, runs the
+      query on that session and does NOT commit / open a new session.
+      When ``None``, opens its own session + commits, matching the
+      original behaviour.
+    * ``RedisTaskRepository``: ignores ``session`` entirely (Redis
+      transactions and SQL sessions are different abstractions; the
+      saga path in v0.1 only runs against PostgreSQL).
     """
 
     # ========== Task CRUD ==========
 
     @abstractmethod
-    async def save(self, task: Task) -> None:
-        """Save or update a task"""
+    async def save(self, task: Task, *, session: Any | None = None) -> None:
+        """Save or update a task.
+
+        ``session`` is optional — see class docstring.
+        """
         pass
 
     @abstractmethod
-    async def compare_and_save(self, task: Task, expected_status: TaskStatus) -> bool:
+    async def compare_and_save(
+        self,
+        task: Task,
+        expected_status: TaskStatus,
+        *,
+        session: Any | None = None,
+    ) -> bool:
         """Atomically save the task only if the persisted status equals
         ``expected_status``.
 
@@ -36,6 +60,10 @@ class ITaskRepository(ABC):
         Implementations MUST perform the status check and the field write in
         a single atomic operation (e.g. ``UPDATE ... WHERE status=?`` for SQL,
         a Lua script or WATCH/MULTI for Redis).
+
+        ``session`` is optional — see class docstring. Critical to the saga
+        v0.1 atomicity guarantee: ``complete_task`` passes its outer session
+        in so the CAS and the outbox INSERT share one transaction.
 
         Returns:
             True if the CAS won and the task was persisted, False if the
@@ -115,8 +143,16 @@ class ITaskRepository(ABC):
     # ========== Participation CRUD ==========
 
     @abstractmethod
-    async def save_participation(self, participation: Participation) -> None:
-        """Save or update a participation"""
+    async def save_participation(
+        self,
+        participation: Participation,
+        *,
+        session: Any | None = None,
+    ) -> None:
+        """Save or update a participation.
+
+        ``session`` is optional — see class docstring.
+        """
         pass
 
     @abstractmethod

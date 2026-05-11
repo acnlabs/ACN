@@ -19,6 +19,13 @@ from .follow_service import (
 from .manifest_service import ManifestEntry, ManifestService
 from .message_service import MessageService
 from .policy_service import PolicyCheckService, PolicyDecision
+from .reputation_query_service import (
+    OffChainReputationSummary,
+    OnChainReputationSummary,
+    ReputationQueryService,
+    ReputationSummary,
+)
+from .reputation_service import ReputationService
 from .session_service import SessionEntry, SessionService
 from .subnet_service import SubnetService
 from .task_service import TaskNotFoundException, TaskService
@@ -42,6 +49,11 @@ __all__ = [
     "MessageService",
     "PolicyCheckService",
     "PolicyDecision",
+    "OffChainReputationSummary",
+    "OnChainReputationSummary",
+    "ReputationQueryService",
+    "ReputationService",
+    "ReputationSummary",
     "SubnetService",
     "TaskService",
     "TaskNotFoundException",
