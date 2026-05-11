@@ -93,6 +93,14 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 addopts = "--cov=acn --cov-report=term-missing --cov-report=html"
+markers = [
+    # Real-PG integration tests. They skip silently unless
+    # ``ACN_INTEGRATION_PG_URL`` is set to an async PG DSN
+    # (e.g. ``postgresql+asyncpg://acn:acn@localhost:5432/acn_test``).
+    # CI sets it; local devs typically don't, so these tests
+    # don't block ``pytest`` on a laptop without docker.
+    "integration: requires a running PostgreSQL pointed at by ACN_INTEGRATION_PG_URL",
+]
 
 [tool.black]
 line-length = 100

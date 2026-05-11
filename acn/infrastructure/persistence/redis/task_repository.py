@@ -225,8 +225,15 @@ class RedisTaskRepository(ITaskRepository):
             self._cas_status_script = self.redis.register_script(LUA_CAS_TASK_STATUS)
         return self._cas_status_script
 
-    async def save(self, task: Task) -> None:
-        """Save or update a task in Redis"""
+    async def save(self, task: Task, *, session: Any | None = None) -> None:
+        """Save or update a task in Redis.
+
+        ``session`` is part of the ITaskRepository contract for the
+        PostgreSQL impl's outbox seam (saga v0.1). Redis impl has no
+        SQL-style transactional session, so this parameter is silently
+        ignored. See the interface docstring for the cross-impl rule.
+        """
+        del session  # unused; preserved for interface parity
         task_key = f"acn:task:{task.task_id}"
 
         # Check for existing task to clean up old indices
@@ -291,7 +298,13 @@ class RedisTaskRepository(ITaskRepository):
 
             await pipe.execute()
 
-    async def compare_and_save(self, task: Task, expected_status: TaskStatus) -> bool:
+    async def compare_and_save(
+        self,
+        task: Task,
+        expected_status: TaskStatus,
+        *,
+        session: Any | None = None,
+    ) -> bool:
         """CAS save — security audit H3.
 
         Two-phase implementation: a Lua script atomically flips the
@@ -306,7 +319,11 @@ class RedisTaskRepository(ITaskRepository):
         task's *previous* indexes for cleanup. A successful CAS pins the
         state-machine outcome; the index updates that follow are convergent.
         Two losing concurrent callers can never *both* trigger payments.
+
+        ``session`` is the saga v0.1 outbox seam used by the PostgreSQL
+        impl; Redis impl ignores it (see interface docstring).
         """
+        del session  # unused; preserved for interface parity
         task_key = f"acn:task:{task.task_id}"
         cas = self._get_cas_status_script()
         won = await cas(
@@ -535,8 +552,18 @@ class RedisTaskRepository(ITaskRepository):
 
     # ========== Participation CRUD ==========
 
-    async def save_participation(self, participation: Participation) -> None:
-        """Save or update a participation in Redis"""
+    async def save_participation(
+        self,
+        participation: Participation,
+        *,
+        session: Any | None = None,
+    ) -> None:
+        """Save or update a participation in Redis.
+
+        ``session`` is the saga v0.1 outbox seam used by the PostgreSQL
+        impl; Redis impl ignores it (see interface docstring).
+        """
+        del session  # unused; preserved for interface parity
         key = f"acn:participation:{participation.participation_id}"
         p_dict = participation.to_dict()
 

@@ -159,7 +159,7 @@ class Settings(BaseSettings):
 
     # Anti-spam / join controls
     # Max registrations from one IP per day (endpoint-less agents are cheaper to spam)
-    join_daily_limit_no_endpoint: int = 5   # IP/day — agents without an A2A endpoint
+    join_daily_limit_no_endpoint: int = 5  # IP/day — agents without an A2A endpoint
     join_daily_limit_with_endpoint: int = 20  # IP/day — agents with a real endpoint
 
     # Labs features (experimental)
@@ -179,6 +179,130 @@ class Settings(BaseSettings):
     # Set via ERC8004_VALIDATION_CONTRACT env var when the address becomes available.
     erc8004_validation_contract: str | None = None
     erc8004_validation_contract_testnet: str | None = None
+
+    # ------------------------------------------------------------------
+    # Settlement Saga (v0.1) — see acn/docs/_drafts/settlement-saga-design.md
+    # ------------------------------------------------------------------
+    # Env var: OUTBOX_ENQUEUE_REQUIRED  (Pydantic upper-cases the field;
+    # ``case_sensitive=False`` in ``model_config`` accepts either case).
+    #
+    # When True, ``task_service.complete_task`` runs in saga mode:
+    # CAS save on ``tasks`` and INSERT on ``settlement_outbox`` execute
+    # in a single ACID transaction. An enqueue failure rolls back the
+    # state transition and bubbles up as HTTP 500.
+    #
+    # When False, ``complete_task`` short-circuits to the legacy
+    # non-atomic path: CAS save commits independently in its own
+    # transaction, NO outbox row is enqueued, and payment + reward
+    # release runs synchronously exactly like pre-v0.1 production.
+    # Use this ONLY as an emergency lever — production should always
+    # run with True. The flag exists so an on-call operator can disarm
+    # the new write path without a redeploy if a regression slips
+    # through:
+    #
+    #     # Rollback drill (no source change):
+    #     railway variables set OUTBOX_ENQUEUE_REQUIRED=false
+    #     # ACN picks the new value up on next instance restart;
+    #     # railway redeploy --no-cache forces it within ~30s.
+    #
+    # NB: SettlementWorker (below) is governed by its own flag
+    # (``settlement_worker_enabled``); together they form the v0.1
+    # rollout control. See plan §2 + §6 for the matrix.
+    outbox_enqueue_required: bool = True
+
+    # ------------------------------------------------------------------
+    # SettlementWorker (v0.1) — async consumer of ``settlement_outbox``.
+    # ------------------------------------------------------------------
+    # Env var: SETTLEMENT_WORKER_ENABLED
+    #
+    # ``False`` in the code default: even if everything else is wired
+    # up (PG mode, outbox table present, ``OUTBOX_ENQUEUE_REQUIRED=true``)
+    # the worker DOES NOT start unless an operator flips this ON.
+    # Rationale:
+    # - In Todo 4 the step handlers are no-op placeholders — turning
+    #   the worker on in production would silently mark events ``done``
+    #   without doing any settlement work, while ``pending_count`` reads
+    #   zero on Prometheus dashboards, giving false confidence the
+    #   system is healthy. The legacy in-line bypass keeps real money
+    #   flowing in the meantime.
+    # - Todo 6 fills in the real step bodies; the cleanup PR that
+    #   does that flips this flag to ``true`` in the same deploy.
+    # - Staging / smoke envs that need to verify the outbox plumbing
+    #   should set ``SETTLEMENT_WORKER_ENABLED=true`` explicitly.
+    settlement_worker_enabled: bool = False
+
+    # Env var: SETTLEMENT_POLL_INTERVAL_SEC
+    # How often the worker polls ``claim_batch`` when the previous
+    # batch was empty. Low enough that completions feel "instant" to
+    # the user (1 s); high enough that idle workers don't hammer the
+    # DB. Bump to e.g. 5 s if the deployment is connection-pool
+    # constrained.
+    settlement_poll_interval_sec: float = 1.0
+
+    # Env var: SETTLEMENT_BATCH_SIZE
+    # Max rows claimed in one round of the polling loop. 10 keeps the
+    # worker latency-bounded under load — a single slow step can hold
+    # a batch but not the whole table. Raise if you see ``pending``
+    # building up faster than the worker can drain.
+    settlement_batch_size: int = 10
+
+    # Env var: SETTLEMENT_MAX_ATTEMPTS
+    # After this many failed retries (each with exponential backoff),
+    # an event is moved to ``state='dead'`` and the DLQ alert fires.
+    # 12 attempts × backoff 2..900 s ≈ ~80 minutes of self-healing
+    # before human eyes are needed.
+    settlement_max_attempts: int = 12
+
+    # Env var: SETTLEMENT_BACKOFF_BASE_SEC / SETTLEMENT_BACKOFF_MAX_SEC
+    # Exponential backoff: ``min(base * 2^attempts, max)`` for each
+    # retry. Defaults: 2 → 4 → 8 → 16 → ... → 900 s (15 min, the cap).
+    # The cap exists so a transient outage doesn't drag retries out
+    # to multi-hour intervals — once a single retry waits ≥ 15 min,
+    # we're already in "alert engineer" territory.
+    settlement_backoff_base_sec: float = 2.0
+    settlement_backoff_max_sec: float = 900.0
+
+    # Env var: SETTLEMENT_JANITOR_INTERVAL_SEC / SETTLEMENT_JANITOR_STUCK_THRESHOLD_SEC
+    # Janitor loop that resurrects rows stuck in ``state='paying'``
+    # (worker crashed mid-step). Default: every 30 s, reset rows
+    # whose ``updated_at`` is older than 5 min. The 5 min threshold
+    # is intentionally well above the expected step latency (a few
+    # hundred ms each) so we never racewith a healthy worker that's
+    # just slow on one IO call.
+    settlement_janitor_interval_sec: float = 30.0
+    settlement_janitor_stuck_threshold_sec: float = 300.0
+
+    # Env var: SETTLEMENT_DLQ_ALERT_WEBHOOK
+    # Optional generic HTTP POST endpoint receiving ``{event_id,
+    # task_id, last_error, attempts}`` as JSON whenever an event
+    # transitions to ``state='dead'``. Slack / Discord / PagerDuty
+    # incoming-webhook URLs are all valid shapes. ``None`` (default)
+    # disables the alert path — operators must monitor
+    # ``acn_settlement_outbox_dead_count`` via Prometheus instead.
+    settlement_dlq_alert_webhook: str | None = None
+
+    # ------------------------------------------------------------------
+    # SettlementReconciler (v0.1) — daily cross-check between
+    # ``settlement_outbox`` and ``reputation_events``.
+    # ------------------------------------------------------------------
+    # Env var: SETTLEMENT_RECONCILER_ENABLED
+    #
+    # When True (default), the API lifespan starts a background loop
+    # that periodically runs ``SettlementReconciler.run_once`` and
+    # publishes ``acn_settlement_reconcile_delta``. It's safe to
+    # leave on in production because the loop performs only two
+    # SELECT COUNT queries — far less load than the saga worker.
+    # The flag exists so chaos / smoke envs can disable the reconciler
+    # while exercising deliberately broken saga paths that would
+    # otherwise spam the divergence log.
+    settlement_reconciler_enabled: bool = True
+
+    # Env var: SETTLEMENT_RECONCILE_INTERVAL_SEC
+    # How often the reconciler loop wakes up. Default: 24h (one
+    # window per day). The interval doubles as the trailing window
+    # width — each run covers ``[now - interval, now]`` so they
+    # tile back-to-back with zero gap and no double-counting.
+    settlement_reconcile_interval_sec: int = 86_400
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -247,8 +371,7 @@ class Settings(BaseSettings):
 
         if errors:
             raise ValueError(
-                "Security configuration errors detected:\n"
-                + "\n".join(f"  - {e}" for e in errors)
+                "Security configuration errors detected:\n" + "\n".join(f"  - {e}" for e in errors)
             )
 
         return self

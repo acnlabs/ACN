@@ -4,18 +4,49 @@ Business logic for task management, including AP2 payment integration.
 """
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import structlog
 
 from ..core.entities import Participation, ParticipationStatus, Task, TaskStatus
-from ..core.interfaces import IAgentRepository, IEscrowProvider, ISubnetRepository, ITaskRepository
+from ..core.interfaces import (
+    IAgentRepository,
+    IEscrowProvider,
+    ISettlementOutboxRepository,
+    ISubnetRepository,
+    ITaskRepository,
+    IUnitOfWork,
+    SettlementEvent,
+)
 from ..infrastructure.task_pool import TaskPool
 from ..protocols.ap2 import PaymentTaskManager, WebhookEventType, WebhookService
 from ..protocols.ap2.core import AP_POINTS
 from .activity_service import ActivityService
 
 logger = structlog.get_logger()
+
+# Namespace for ``event_id = uuid5(NS, f"{task_id}:{trigger}")``. Using a
+# fixed URL-based namespace means the same (task_id, trigger) pair always
+# resolves to the same event_id across processes/replicas — the outbox
+# UNIQUE(event_id) constraint then guarantees at-most-once enqueue even
+# if ``complete_task`` is retried by an upstream caller.
+#
+# DO NOT CHANGE THIS STRING.
+# It's the seed for every event_id ever written to ``settlement_outbox``.
+# Changing it on a v0.2 upgrade would cause new ``complete_task`` calls
+# to mint event_ids that miss the existing UNIQUE(event_id) collisions
+# with in-flight retried events — silently re-enqueueing the same
+# (task_id, trigger) pair and causing the worker to settle twice.
+#
+# Forward-compatible evolution: when v0.2 needs to change the
+# semantics of an event, do NOT touch this namespace. Instead, bump
+# the TRIGGER string passed to ``uuid5`` (e.g.
+# ``review_pass`` → ``review_pass_v2``). That changes the input to
+# the hash without disturbing already-enqueued rows: legacy retries
+# of ``review_pass`` events keep their event_ids; new ``review_pass_v2``
+# events live in a disjoint id space. The namespace UUID is
+# write-once, the trigger string is the actual versioning lever.
+_OUTBOX_EVENT_NS = uuid5(NAMESPACE_URL, "https://acnlabs.dev/settlement-outbox/v0.1")
 
 
 class TaskNotFoundException(Exception):
@@ -45,6 +76,17 @@ class TaskService:
         escrow_client: IEscrowProvider | None = None,
         agent_repository: IAgentRepository | None = None,
         subnet_repository: ISubnetRepository | None = None,
+        # Settlement saga v0.1 — keyword-only, all three OPTIONAL so
+        # Redis-only / in-memory deployments and legacy test fixtures
+        # constructed without saga wiring keep working unchanged. The
+        # saga path activates only when ``settlement_outbox``,
+        # ``unit_of_work`` and ``outbox_enqueue_required=True`` are all
+        # satisfied; otherwise ``complete_task`` falls back to its
+        # legacy non-atomic path — which IS the pre-v0.1 production
+        # behavior, no warning needed.
+        settlement_outbox: ISettlementOutboxRepository | None = None,
+        unit_of_work: IUnitOfWork | None = None,
+        outbox_enqueue_required: bool = True,
     ):
         """
         Initialize Task Service
@@ -58,6 +100,16 @@ class TaskService:
             escrow_client: Labs escrow client for budget management (optional)
             agent_repository: Agent repository for looking up agent owners (optional)
             subnet_repository: Subnet repository for visibility/access control (optional)
+            settlement_outbox: Outbox repository for the settlement saga
+                (v0.1). When None, ``complete_task`` uses its legacy
+                non-atomic path — see docstring there.
+            unit_of_work: Transaction boundary used to atomically commit
+                the CAS save + outbox enqueue. When None, saga is off.
+            outbox_enqueue_required: Emergency lever. When False, the
+                saga path is force-disabled at runtime regardless of
+                the two dependencies above. Production should always
+                run True; the flag exists so an on-call operator can
+                disarm the new write path without a redeploy.
         """
         self.repository = repository
         self.task_pool = task_pool or TaskPool(repository)
@@ -67,6 +119,30 @@ class TaskService:
         self.escrow = escrow_client
         self.agent_repository = agent_repository
         self.subnet_repository = subnet_repository
+        # Saga wiring — see attribute docstrings on each, and the
+        # decision matrix on ``_saga_enabled`` below.
+        self.settlement_outbox = settlement_outbox
+        self.unit_of_work = unit_of_work
+        self.outbox_enqueue_required = outbox_enqueue_required
+
+    @property
+    def _saga_enabled(self) -> bool:
+        """Whether ``complete_task`` should run the atomic CAS+enqueue
+        path on this call.
+
+        All three must hold:
+        - ``settlement_outbox`` injected (PG-mode deployment)
+        - ``unit_of_work`` injected (PG-mode deployment)
+        - ``outbox_enqueue_required=True`` (no emergency disarm)
+
+        Read on every call so flipping the env var mid-run is honored
+        without restart for the next invocation. We don't memoize.
+        """
+        return (
+            self.settlement_outbox is not None
+            and self.unit_of_work is not None
+            and self.outbox_enqueue_required
+        )
 
     async def create_task(
         self,
@@ -995,6 +1071,130 @@ class TaskService:
         """Get a user's current participation in a task"""
         return await self.task_pool.get_user_participation(task_id, user_id, active_only=False)
 
+    def _build_review_pass_event(
+        self,
+        task: Task,
+        approver_id: str,
+        notes: str | None,
+    ) -> SettlementEvent:
+        """Construct the outbox event for a ``review_pass`` completion.
+
+        ``event_id`` is deterministic — uuid5 of ``(task_id, trigger)``
+        — so an upstream caller retrying ``complete_task`` after a
+        timeout cannot create a second outbox row. The DB UNIQUE
+        constraint silently drops the dup (see ``enqueue``).
+
+        ``step_status`` is pre-computed: any step that's a no-op for
+        this specific task (no escrow, or zero reward, etc.) is marked
+        ``skipped`` up front. This means:
+
+        - The worker never has to re-derive "is there anything to do
+          for step N?" from the payload — it just trusts step_status.
+        - DLQ counts and step-duration metrics aren't polluted by
+          synthetic "completed in 0ms" no-op steps.
+        - The downstream business invariant "step in {pending, done,
+          skipped}" is preserved when read by ops dashboards.
+
+        ``payload`` snapshot is what the worker will read at
+        execution time — by then ``tasks`` may have been mutated
+        (e.g. status moved forward), so we freeze the values the
+        saga needs *now*. Currency normalization here matches the
+        legacy reward-distribution branch one-to-one.
+        """
+        currency_lower = task.reward_currency.lower()
+        reward_value = float(task.reward) if task.reward else 0.0
+
+        # Decide per-step status up front. Note the gating criteria are
+        # NOT the same as the legacy ``complete_task`` branches:
+        #
+        # - ``has_reward`` is the same criterion ``_distribute_reward``
+        #   uses (ap_points currency + positive reward + assignee
+        #   present). It's a precondition for BOTH ``escrow_release``
+        #   AND ``reward_distribute`` — a zero-reward escrow has
+        #   nothing for the worker to release, so producing such an
+        #   event would just trigger 12 worker retries before DLQ
+        #   (worker rejects ``amount <= 0``).
+        #
+        # - ``escrow_release`` additionally requires ``task.use_escrow``
+        #   to be True. ``payment_task_id`` is the AP2-protocol
+        #   tracking handle and exists for many tasks that never
+        #   touched escrow; gating on it would have the worker call
+        #   backend ``POST /release`` for tasks with no escrow row,
+        #   which 404/400s every time. ``task.use_escrow=True`` is
+        #   the only signal that actually predicts "there's an
+        #   escrow to release".
+        #
+        # - ``reward_distribute`` is ``pending`` whenever
+        #   ``has_reward`` holds. For ``use_escrow=True`` tasks the
+        #   actual money movement is folded into ``escrow.release``
+        #   already, so the worker's reward step is a logged no-op.
+        #   For ``use_escrow=False`` tasks the reward concept is
+        #   off-chain bookkeeping — legacy ``_distribute_reward``
+        #   returns ``via=off_chain`` without moving funds. Keeping
+        #   the step ``pending`` here ensures the saga step_status
+        #   matrix reflects "reward exists conceptually" so a future
+        #   on-chain reward distributor has a hook to slot into
+        #   without producer-side schema churn.
+        #
+        # - ``reputation_write`` runs for every accepted task with a
+        #   counterparty — reward-less / payment-less tasks still
+        #   earn reputation, that's the whole point of reputation.
+        has_reward = (
+            currency_lower in (AP_POINTS, "points") and reward_value > 0 and bool(task.assignee_id)
+        )
+        needs_escrow_release = bool(task.use_escrow) and has_reward
+
+        step_status: dict[str, str] = {
+            "escrow_release": "pending" if needs_escrow_release else "skipped",
+            "reward_distribute": "pending" if has_reward else "skipped",
+            "reputation_write": "pending" if task.assignee_id else "skipped",
+        }
+
+        # The worker reads ``payload`` instead of refetching ``tasks``
+        # so a parallel mutation (e.g. soft-delete) doesn't corrupt
+        # settlement. Keep the dict JSON-serialisable.
+        #
+        # ``is_multi`` is captured at enqueue time, NOT computed by the
+        # worker. Two reasons:
+        #   1. The worker uses it to pick between ``escrow.release``
+        #      (single) and ``escrow.release_partial`` (multi). The
+        #      two endpoints have different state transitions and
+        #      different return shapes — the worker must not guess.
+        #   2. ``max_participants`` could in principle be mutated
+        #      after submission (it can't today, but the producer
+        #      side is the only place that holds the task entity, so
+        #      freezing it is cheap insurance). Freezing matches the
+        #      "payload is a snapshot" contract in plan §3.
+        #
+        # ``use_escrow`` is a DIAGNOSTIC field — the worker does NOT
+        # read it. The actual control signal for the escrow step is
+        # ``step_status['escrow_release']`` decided above. We snapshot
+        # ``use_escrow`` here so operators triaging a DLQ row can see
+        # at a glance whether the task was supposed to lock funds at
+        # creation, without joining back to the ``tasks`` table.
+        payload: dict[str, object] = {
+            "task_id": task.task_id,
+            "creator_id": task.creator_id,
+            "assignee_id": task.assignee_id,
+            "payment_task_id": task.payment_task_id,
+            "reward": str(task.reward),
+            "reward_currency": task.reward_currency,
+            "task_title": task.title,
+            "approver_id": approver_id,
+            "review_notes": notes,
+            "use_escrow": bool(task.use_escrow),
+            "is_multi": task._is_multi(),
+            "metadata": dict(task.metadata) if task.metadata else {},
+        }
+
+        return SettlementEvent(
+            event_id=str(uuid5(_OUTBOX_EVENT_NS, f"{task.task_id}:review_pass")),
+            task_id=task.task_id,
+            trigger="review_pass",
+            payload=payload,
+            step_status=step_status,
+        )
+
     async def complete_task(
         self,
         task_id: str,
@@ -1002,7 +1202,7 @@ class TaskService:
         notes: str | None = None,
     ) -> Task:
         """
-        Complete/approve a task
+        Complete/approve a task.
 
         Args:
             task_id: Task identifier
@@ -1018,18 +1218,55 @@ class TaskService:
             ValueError: If task is not submitted
 
         Concurrency model (security audit H3):
-            Two concurrent ``complete_task`` calls on the same task previously
-            both passed the in-memory ``status == SUBMITTED`` check, both ran
-            ``task.complete()``, and both reached
-            ``record_completion`` / ``payment release`` / ``_distribute_reward``
-            — i.e. a *double-pay* race. The fix is a CAS save: the second
-            caller loses the ``SUBMITTED → COMPLETED`` transition at the
-            repository layer and short-circuits before any side effect runs,
-            returning the current task state for idempotent semantics.
+            Two concurrent ``complete_task`` calls on the same task
+            previously both passed the in-memory ``status == SUBMITTED``
+            check, both ran ``task.complete()``, and both reached
+            ``record_completion`` / ``payment release`` /
+            ``_distribute_reward`` — i.e. a *double-pay* race. The fix
+            is a CAS save: the second caller loses the ``SUBMITTED →
+            COMPLETED`` transition at the repository layer and
+            short-circuits before any side effect runs, returning the
+            current task state for idempotent semantics.
+
+        Settlement saga v0.1 — see
+        ``acn/docs/_drafts/settlement-saga-design.md``:
+            When all of ``settlement_outbox`` / ``unit_of_work`` /
+            ``outbox_enqueue_required`` are present, this method runs
+            CAS save + outbox INSERT inside a single ACID transaction
+            (the "atomic" path). An enqueue failure rolls back the
+            state transition and raises HTTP 500 — the caller MUST
+            retry. The legacy synchronous payment + reward branches
+            below are KEPT AS-IS as a double-write transition until
+            the worker has been observed stable in production for
+            ≥ 7 days (Todo 7). After that, the cleanup PR deletes
+            this in-line payment branch and the worker becomes the
+            only settlement path.
+
+            When the saga deps are not all present (Redis-only mode,
+            test fixtures, or emergency disarm), the legacy path runs
+            alone — CAS save in its own transaction, no outbox row,
+            payment + reward synchronously as before. This is what
+            production ran prior to v0.1.
+
+        Known limitation — HTTP retry vs state-machine non-idempotency:
+            If a caller retries this endpoint after a network failure
+            but the FIRST call already fully committed (CAS + enqueue
+            + commit + side effects), the second call's
+            ``task.complete()`` will raise ``ValueError`` because the
+            task is no longer in ``SUBMITTED``. The caller observes
+            an error response even though the operation succeeded.
+            Workaround for clients: treat 4xx "task not in SUBMITTED"
+            from ``complete_task`` as a probable success and confirm
+            via ``GET /tasks/{id}``. We do NOT auto-recover here
+            because returning success for a re-entrant call that
+            crossed a state-machine boundary would silently swallow
+            genuine client bugs (e.g. trying to approve an already
+            rejected task). A future v0.2 may add a separate
+            ``GET /tasks/{id}/settlement`` to give clients an
+            explicit settlement-status read path.
         """
         task = await self.get_task(task_id)
 
-        # Verify approver is the creator
         if task.creator_id != approver_id:
             raise PermissionError("Only the task creator can approve")
 
@@ -1038,25 +1275,103 @@ class TaskService:
         # check alone is not concurrency-safe — see the docstring above.
         task.complete(approver_id, notes)
 
-        # CAS-save: only persist if the persisted status is still SUBMITTED.
-        # If we lose the race, return the latest task so the API stays
-        # idempotent (caller sees the already-completed task instead of an error).
-        won = await self.repository.compare_and_save(
-            task, expected_status=TaskStatus.SUBMITTED
-        )
+        # === Step 1: CAS persist (saga or legacy) ===
+        # We deliberately keep the transaction window narrow: only the
+        # CAS UPDATE and the outbox INSERT live inside it. Reading the
+        # already-completed task for an idempotent return value
+        # (``get_task`` on a lost race) is done AFTER the transaction
+        # exits — running a second SELECT inside the active UoW would
+        # borrow a second connection from the pool, inflate the
+        # transaction footprint, and risk PgBouncer pool exhaustion
+        # under load.
+        won: bool = False
+        if self._saga_enabled:
+            # Saga path — CAS save and outbox enqueue execute in a
+            # single transaction. If either fails the other reverts;
+            # the API surfaces 500 and the caller retries.
+            # ``_build_review_pass_event`` is pure (no IO) so we build
+            # the event before opening the transaction — keeps the
+            # session window short.
+            assert self.settlement_outbox is not None  # noqa: S101 — narrows for type checker
+            assert self.unit_of_work is not None  # noqa: S101 — narrows for type checker
+            event = self._build_review_pass_event(task, approver_id, notes)
+            try:
+                async with self.unit_of_work.transaction() as session:
+                    won = await self.repository.compare_and_save(
+                        task,
+                        expected_status=TaskStatus.SUBMITTED,
+                        session=session,
+                    )
+                    if won:
+                        await self.settlement_outbox.enqueue(event, session=session)
+                    # Lost-race branch falls through: tx exits with no
+                    # dirty changes; the empty commit is harmless and
+                    # cheaper than threading rollback through the UoW.
+            except Exception as exc:
+                # The saga's atomicity guarantee: if we reach here,
+                # neither the CAS nor the enqueue committed. The
+                # caller sees 500 and we expect a retry.
+                logger.error(
+                    "complete_task_saga_failed",
+                    task_id=task_id,
+                    approver_id=approver_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                raise
+            if won:
+                # Transaction committed atomically. From this point on
+                # the outbox row exists and the worker will eventually
+                # drive settlement to completion; the legacy in-line
+                # branches below are the double-write
+                # belt-and-suspenders.
+                logger.info(
+                    "settlement_outbox_enqueued",
+                    task_id=task_id,
+                    event_id=event.event_id,
+                    step_status=event.step_status,
+                )
+        else:
+            # Legacy path — repository opens / commits its own
+            # transaction; no outbox row.
+            won = await self.repository.compare_and_save(task, expected_status=TaskStatus.SUBMITTED)
+
+        # Idempotent short-circuit on lost CAS. Runs AFTER the saga
+        # transaction has closed, so the SELECT here doesn't share a
+        # session with the writer and doesn't hold the writer's lock
+        # any longer than necessary.
         if not won:
             logger.info(
                 "complete_task_lost_race",
                 task_id=task_id,
                 approver_id=approver_id,
+                path="saga" if self._saga_enabled else "legacy",
             )
             return await self.get_task(task_id)
 
-        # Record completion for the agent
+        # === Step 2: side effects ===
+        # ``record_completion`` is a Redis index update for the task
+        # pool. It's NOT part of the settlement saga and runs
+        # unconditionally after a successful CAS regardless of which
+        # path produced the CAS.
         if task.assignee_id:
             await self.task_pool.record_completion(task_id, task.assignee_id)
 
-        # Release payment if exists
+        # === Step 3: legacy synchronous payment + reward (kept until Todo 7) ===
+        # These two blocks are the double-write bypass. When saga is
+        # on, the worker will independently drive escrow release +
+        # reward distribute (Todo 6) — these in-line calls then act
+        # as the synchronous belt-and-suspenders. Both sides MUST be
+        # idempotent or one will eventually corrupt the other:
+        # - escrow release: backend rejects double-release with 400
+        #   ("Cannot release escrow in status: released"); worker
+        #   read-before-write covers the rest.
+        # - reward distribute: worker checks Redis
+        #   ``acn:payment_tasks:{id}`` hash field ``reward_distributed_at``
+        #   before re-running.
+        # When saga is off (Redis-only / disarmed), these calls are
+        # the only path and the existing try/except / log behavior is
+        # preserved — that's what production ran prior to v0.1.
         if task.payment_task_id and self.payment_manager:
             try:
                 await self.payment_manager.update_status(
@@ -1071,7 +1386,6 @@ class TaskService:
             except Exception as e:
                 logger.error("failed_to_release_payment", error=str(e))
 
-        # Distribute reward for points-based tasks
         if (
             task.reward_currency.lower() in (AP_POINTS, "points")
             and float(task.reward) > 0
@@ -1155,9 +1469,7 @@ class TaskService:
             raise PermissionError("Only the task creator can reject")
 
         task.reject(reviewer_id, notes)
-        won = await self.repository.compare_and_save(
-            task, expected_status=TaskStatus.SUBMITTED
-        )
+        won = await self.repository.compare_and_save(task, expected_status=TaskStatus.SUBMITTED)
         if not won:
             logger.info(
                 "reject_task_lost_race",
@@ -1214,9 +1526,7 @@ class TaskService:
         # (e.g. ``Task.cancel()`` raises if status is COMPLETED). CAS comes next
         # — only when CAS wins do we touch participations / payment / escrow.
         task.cancel()
-        won = await self.repository.compare_and_save(
-            task, expected_status=expected_status
-        )
+        won = await self.repository.compare_and_save(task, expected_status=expected_status)
         if not won:
             logger.info(
                 "cancel_task_lost_race",

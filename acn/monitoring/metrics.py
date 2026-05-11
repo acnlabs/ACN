@@ -173,10 +173,82 @@ class MetricsCollector:
             "help": "Number of frontend WebSocket connections",
             "labels": ["channel"],
         },
+        # ---------------------------------------------------------------
+        # Settlement saga v0.1 (plan §6.2)
+        # ---------------------------------------------------------------
+        # The four metrics below are the operator's view into the
+        # ``settlement_outbox`` state machine. They feed the Todo 7
+        # cleanup decision: only when the saga has settled enough
+        # events under healthy retry / dead behaviour can the legacy
+        # synchronous bypass in ``complete_task`` be deleted. See
+        # ``acn/docs/_drafts/settlement-saga-design.md`` §6.2 / §6.3.
+        #
+        # Cardinality notes:
+        # - ``state`` is bounded to the 5 canonical states (pending,
+        #   paying, retrying, done, dead). No high-cardinality trap.
+        # - ``result`` on attempts_total is bounded to 3 values
+        #   (success / retry / dead).
+        # - ``step`` × ``result`` on steps_total is bounded to
+        #   3 steps × 3 outcomes = 9 combos.
+        # We do NOT label by task_id or event_id — those would be
+        # unbounded and recreate the cardinality trap noted on
+        # ``acn_messages_total`` above.
+        "acn_settlement_outbox_count": {
+            "type": MetricType.GAUGE,
+            "help": (
+                "Outbox rows by state. Operator dashboard alerts when "
+                "state='dead' > 0 (DLQ accumulator) and when "
+                "state='pending' or 'retrying' steady-state > 50 "
+                "(worker not draining)."
+            ),
+            "labels": ["state"],
+        },
+        "acn_settlement_attempts_total": {
+            "type": MetricType.COUNTER,
+            "help": (
+                "Settlement event attempts grouped by terminal outcome "
+                "of this attempt. ``success`` = event reached "
+                "mark_done; ``retry`` = step raised and the event was "
+                "mark_retry'd with backoff; ``dead`` = attempts ceiling "
+                "hit, mark_dead + DLQ webhook fired."
+            ),
+            "labels": ["result"],
+        },
+        "acn_settlement_steps_total": {
+            "type": MetricType.COUNTER,
+            "help": (
+                "Settlement saga steps grouped by step name and "
+                "outcome. ``ok`` = handler ran to completion; "
+                "``fail`` = handler raised (event will be mark_retry'd "
+                "or mark_dead'd); ``skipped`` = step was already done "
+                "or marked skipped by producer."
+            ),
+            "labels": ["step", "result"],
+        },
+        "acn_settlement_reconcile_delta": {
+            "type": MetricType.GAUGE,
+            "help": (
+                "Difference between settlement-saga done count "
+                "(``trigger='review_pass'``) and reputation feedback "
+                "row count over the trailing reconciliation window. "
+                "Zero means the two persistent side effects are in "
+                "lockstep. Non-zero is the trigger for Todo 7 "
+                "(legacy bypass cleanup) blocker investigation. "
+                "Emitted by SettlementReconciler.run_once."
+            ),
+            "labels": [],
+        },
         # Histograms
         "acn_latency_seconds": {
             "type": MetricType.HISTOGRAM,
-            "help": "Latency in seconds",
+            "help": (
+                "Latency in seconds. Settlement step durations are "
+                "emitted on this metric with operation="
+                "``settlement_step_<name>``, e.g. "
+                "``settlement_step_escrow_release``. Same buckets "
+                "(0.001..5s) cover both fast API operations and the "
+                "typical settlement step latency."
+            ),
             "labels": ["operation"],
             "buckets": [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
         },
@@ -320,9 +392,7 @@ class MetricsCollector:
             operation: Operation name (e.g., "route_message", "register")
             latency_seconds: Latency in seconds
         """
-        labels = self._sanitize_labels(
-            "acn_latency_seconds", {"operation": operation}
-        )
+        labels = self._sanitize_labels("acn_latency_seconds", {"operation": operation})
         key = self._build_key("acn_latency_seconds", labels)
 
         # Store in a Redis list for histogram calculation
@@ -345,9 +415,7 @@ class MetricsCollector:
             size_bytes: Message size in bytes
             direction: "incoming" or "outgoing"
         """
-        labels = self._sanitize_labels(
-            "acn_message_size_bytes", {"direction": direction}
-        )
+        labels = self._sanitize_labels("acn_message_size_bytes", {"direction": direction})
         key = self._build_key("acn_message_size_bytes", labels)
 
         _ttl = 90 * 86400  # 90 days
@@ -548,9 +616,7 @@ class MetricsCollector:
     # Internal Helpers
     # =========================================================================
 
-    def _sanitize_labels(
-        self, full_name: str, labels: dict[str, str] | None
-    ) -> dict[str, str]:
+    def _sanitize_labels(self, full_name: str, labels: dict[str, str] | None) -> dict[str, str]:
         """Apply schema whitelist + cardinality guards to label values.
 
         The core threat model: every unique (metric_name, label_values)

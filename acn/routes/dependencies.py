@@ -47,6 +47,8 @@ from ..services import (
     SubnetService,
 )
 from ..services.activity_service import ActivityService
+from ..services.reputation_query_service import ReputationQueryService
+from ..services.reputation_service import ReputationService
 
 settings = get_settings()
 
@@ -305,6 +307,19 @@ _escrow_provider: IEscrowProvider | None = None
 # Phase 3 Session layer. ``None`` default keeps environments that do
 # not wire Redis-backed sessions operational.
 _session_service: SessionService | None = None
+# Saga v0.1 off-chain reputation.
+#
+# ``_reputation_service`` (writes) is None in Redis-only deployments —
+# the routes that need it surface 503 (same degradation pattern as
+# ``_policy_service``).
+#
+# ``_reputation_query_service`` (reads) is *always* installed because
+# the query service supports a None repository internally (returns
+# zero-filled off-chain counts) and can still serve the chain-only
+# projection when the agent has a bound token. Review fix R3 lifted
+# the per-request fallback construction up to lifespan time.
+_reputation_service: ReputationService | None = None
+_reputation_query_service: ReputationQueryService | None = None
 
 
 def init_services(
@@ -330,6 +345,8 @@ def init_services(
     allowlist_service: AllowlistService | None = None,
     escrow_provider: IEscrowProvider | None = None,
     session_service: SessionService | None = None,
+    reputation_service: ReputationService | None = None,
+    reputation_query_service: ReputationQueryService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -345,6 +362,7 @@ def init_services(
     global _payment_discovery, _payment_tasks, _webhook_service, _billing_service
     global _activity_service, _follow_service, _policy_service, _manifest_service
     global _allowlist_service, _escrow_provider, _session_service
+    global _reputation_service, _reputation_query_service
 
     _registry = registry
     _agent_service = agent_service
@@ -369,6 +387,8 @@ def init_services(
     _allowlist_service = allowlist_service
     _escrow_provider = escrow_provider
     _session_service = session_service
+    _reputation_service = reputation_service
+    _reputation_query_service = reputation_query_service
 
 
 # Dependency functions
@@ -604,6 +624,30 @@ def get_policy_service() -> PolicyCheckService | None:
     return _policy_service
 
 
+def get_reputation_service() -> ReputationService | None:
+    """Get the ReputationService instance, or ``None`` in Redis-only deployments.
+
+    Returns ``None`` rather than raising so the write endpoints can
+    respond with 503 instead of 500 when reputation is unavailable.
+    PostgreSQL is required for v0.1 reputation (``reputation_events``
+    table); deployments without PG keep working for everything except
+    the reputation routes.
+    """
+    return _reputation_service
+
+
+def get_reputation_query_service() -> ReputationQueryService | None:
+    """Get the ReputationQueryService instance.
+
+    Returns ``None`` only when ``init_services`` was not called (test
+    fixtures bringing up partial app state). In normal app boot the
+    query service is always present — it handles a missing repository
+    internally by returning zero-filled off-chain counts, so callers
+    don't need a Redis-only branch.
+    """
+    return _reputation_query_service
+
+
 # Type aliases for cleaner dependency injection
 RegistryDep = Annotated[AgentRegistry, Depends(get_registry)]
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
@@ -629,6 +673,12 @@ AllowlistServiceDep = Annotated[AllowlistService, Depends(get_allowlist_service)
 EscrowProviderDep = Annotated[IEscrowProvider, Depends(get_escrow_provider)]
 OptionalEscrowProviderDep = Annotated[
     "IEscrowProvider | None", Depends(get_escrow_provider_optional)
+]
+ReputationServiceDep = Annotated[
+    "ReputationService | None", Depends(get_reputation_service)
+]
+ReputationQueryServiceDep = Annotated[
+    "ReputationQueryService | None", Depends(get_reputation_query_service)
 ]
 
 # Auth dependencies

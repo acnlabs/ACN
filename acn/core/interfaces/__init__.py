@@ -13,8 +13,13 @@ from .escrow_provider import (
     ReleaseResult,
 )
 from .follow_repository import IFollowRepository
+from .settlement_outbox_repository import (
+    ISettlementOutboxRepository,
+    SettlementEvent,
+)
 from .subnet_repository import ISubnetRepository
 from .task_repository import ITaskRepository
+from .unit_of_work import IUnitOfWork
 
 # IActivityRepository and IBillingRepository are imported directly from their
 # modules to avoid circular imports (they reference service-layer types).
@@ -23,8 +28,11 @@ __all__ = [
     "IAllowlistRepository",
     "AllowlistEntry",
     "IFollowRepository",
+    "ISettlementOutboxRepository",
+    "SettlementEvent",
     "ISubnetRepository",
     "ITaskRepository",
+    "IUnitOfWork",
     "IEscrowProvider",
     "ReleaseResult",
     "EscrowResult",
