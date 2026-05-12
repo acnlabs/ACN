@@ -276,6 +276,20 @@ class PostgresSettlementOutboxRepository(ISettlementOutboxRepository):
         ``updated_at`` is passed from the Python side (not ``now()``)
         for consistency with the other write paths: tests that
         ``freeze_time`` can pin all timestamps in one place.
+
+        Why no ``::text`` cast on ``:status``:
+            An earlier version wrote ``to_jsonb(:status::text)``.
+            SQLAlchemy's ``text()`` parser refused to recognise
+            ``:status`` as a bound parameter in that form (the ``::``
+            PostgreSQL cast suffix collided with the ``:param``
+            placeholder rule), raising
+            ``ArgumentError: This text() construct doesn't define a
+            bound parameter named 'status'`` at runtime. The
+            ``bindparam("status", value=str)`` already binds the
+            value as text, so ``to_jsonb(:status)`` is both correct
+            and unambiguous. Cross-checked by
+            ``test_update_step_status_persists_step_value`` against
+            a real PG instance to keep this from regressing.
         """
         async with self._session_factory() as sess:
             await sess.execute(
@@ -285,7 +299,7 @@ class PostgresSettlementOutboxRepository(ISettlementOutboxRepository):
                     SET step_status = jsonb_set(
                             COALESCE(step_status, '{}'::jsonb),
                             :path,
-                            to_jsonb(:status::text),
+                            to_jsonb(:status),
                             true
                         ),
                         updated_at = :updated_at

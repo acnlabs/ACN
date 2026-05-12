@@ -262,3 +262,71 @@ async def test_enqueue_claim_done_round_trip(
     assert counts["done"] == 1
     assert counts["pending"] == 0
     assert counts["paying"] == 0
+
+
+# =============================================================================
+# 8. update_step_status — JSONB merge round-trip on real PG
+# =============================================================================
+#
+# This guards against a real production regression:
+# the original ``update_step_status`` SQL wrote ``to_jsonb(:status::text)``
+# but SQLAlchemy's ``text()`` parser refused to recognise ``:status``
+# as a bound parameter because the ``::`` PostgreSQL cast suffix
+# collided with the ``:param`` placeholder rule, raising
+# ``ArgumentError: This text() construct doesn't define a bound
+# parameter named 'status'`` at runtime — but ONLY against a real PG;
+# every fake-repo test in the suite happily passed.
+#
+# Production symptom: worker's business steps all succeeded
+# (``reputation_write`` wrote the row, ``escrow_release`` /
+# ``reward_distribute`` correctly skipped) but ``step_status`` was
+# never persisted, so the saga state machine looped at ``retrying``
+# until ``max_attempts``. Fix: drop the redundant ``::text`` cast
+# (``bindparam`` already binds Python ``str`` to PG ``text``).
+#
+# This test runs the actual SQL and asserts the JSONB merge
+# materialised — guarantees we never regress to the broken form
+# without a real-PG test catching it.
+
+
+@pytest.mark.asyncio
+async def test_update_step_status_persists_step_value(
+    engine_and_factory: tuple[Any, Any],
+) -> None:
+    _engine, factory = engine_and_factory
+    repo = PostgresSettlementOutboxRepository(session_factory=factory)
+
+    # Start from the default step_status the producer writes.
+    await repo.enqueue(_event("evt-step"))
+
+    # Patch one step — this is the path that was broken in prod.
+    await repo.update_step_status(
+        event_id="evt-step",
+        step="reputation_write",
+        status="ok",
+    )
+
+    # Patch a second step to verify multi-key JSONB merge survives.
+    await repo.update_step_status(
+        event_id="evt-step",
+        step="escrow_release",
+        status="skipped",
+    )
+
+    # Read back via raw SQL to bypass any ORM-side caching.
+    async with factory() as session:
+        row = (
+            await session.execute(
+                SettlementOutboxModel.__table__.select().where(
+                    SettlementOutboxModel.event_id == "evt-step"
+                )
+            )
+        ).first()
+        assert row is not None
+        assert row.step_status == {
+            "escrow_release": "skipped",
+            "reward_distribute": "pending",
+            "reputation_write": "ok",
+        }, (
+            f"update_step_status JSONB merge broken: got {row.step_status!r}"
+        )
