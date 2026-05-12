@@ -25,6 +25,7 @@ import asyncio
 import os
 from datetime import UTC, datetime
 from typing import Any
+from uuid import NAMESPACE_OID, uuid5
 
 import pytest
 from sqlalchemy.ext.asyncio import (
@@ -82,13 +83,34 @@ async def engine_and_factory() -> tuple[Any, Any]:
     await engine.dispose()
 
 
-def _event(event_id: str, task_id: str | None = None) -> SettlementEvent:
+def _uuid_for(label: str) -> str:
+    """Derive a stable UUID string from a human-readable label.
+
+    ``SettlementOutboxModel.event_id`` is a real PG ``uuid`` column, so
+    short tags like ``"evt-A"`` blow up at INSERT time with
+    ``invalid input syntax for type uuid``. UUID5 is deterministic
+    (same label → same UUID across runs), so assertions can still
+    pivot on the label without leaking randomness into the test
+    output.
+    """
+    return str(uuid5(NAMESPACE_OID, label))
+
+
+def _event(label: str, task_id: str | None = None) -> SettlementEvent:
+    """Build a settlement event keyed by ``label``.
+
+    ``label`` is a human-friendly tag (e.g. ``"evt-A"``); the
+    underlying ``event_id`` is the deterministic UUID derived via
+    :func:`_uuid_for`. Tests use ``_uuid_for(label)`` directly when
+    they need to assert on the persisted ``event_id``.
+    """
+    event_id = _uuid_for(label)
     return SettlementEvent(
         event_id=event_id,
-        task_id=task_id or f"task-{event_id}",
+        task_id=task_id or f"task-{label}",
         trigger="review_pass",
         payload={
-            "task_id": task_id or f"task-{event_id}",
+            "task_id": task_id or f"task-{label}",
             "creator_id": "user-creator",
             "assignee_id": "agent-worker",
             "reward": "100",
@@ -183,7 +205,7 @@ async def test_skip_locked_prevents_double_claim_across_replicas(
     a_can_commit.set()
     a_event = await a_task
 
-    assert {a_event, b_event} == {"evt-A", "evt-B"}, (
+    assert {a_event, b_event} == {_uuid_for("evt-A"), _uuid_for("evt-B")}, (
         f"SKIP LOCKED contract violated: A={a_event}, B={b_event}"
     )
 
@@ -224,7 +246,7 @@ async def test_uow_rollback_drops_enqueued_outbox_row(
     async with factory() as session:
         result = await session.execute(
             SettlementOutboxModel.__table__.select().where(
-                SettlementOutboxModel.event_id == "evt-rollback"
+                SettlementOutboxModel.event_id == _uuid_for("evt-rollback")
             )
         )
         rows = result.all()
@@ -251,13 +273,14 @@ async def test_enqueue_claim_done_round_trip(
     _engine, factory = engine_and_factory
     repo = PostgresSettlementOutboxRepository(session_factory=factory)
 
+    rt_id = _uuid_for("evt-rt")
     await repo.enqueue(_event("evt-rt"))
 
     batch = await repo.claim_batch(limit=10, now=datetime.now(UTC))
     assert len(batch) == 1
-    assert batch[0].event_id == "evt-rt"
+    assert batch[0].event_id == rt_id
 
-    await repo.mark_done("evt-rt")
+    await repo.mark_done(rt_id)
     counts = await repo.count_by_state()
     assert counts["done"] == 1
     assert counts["pending"] == 0
@@ -296,34 +319,10 @@ async def test_update_step_status_persists_step_value(
     _engine, factory = engine_and_factory
     repo = PostgresSettlementOutboxRepository(session_factory=factory)
 
-    # The production schema declares ``event_id`` as PG ``uuid``, so
-    # the test must use a syntactically valid UUID — passing a
-    # placeholder like ``"evt-step"`` would fail at INSERT time with
-    # ``invalid input syntax for type uuid``. We derive a stable UUID
-    # from a seed so the test is deterministic across runs.
-    from uuid import NAMESPACE_OID, uuid5
-
-    event_id = str(uuid5(NAMESPACE_OID, "evt-step"))
-    event = SettlementEvent(
-        event_id=event_id,
-        task_id=f"task-{event_id}",
-        trigger="review_pass",
-        payload={
-            "task_id": f"task-{event_id}",
-            "creator_id": "user-creator",
-            "assignee_id": "agent-worker",
-            "reward": "100",
-            "reward_currency": "ap_points",
-            "use_escrow": True,
-            "is_multi": False,
-            "metadata": {},
-        },
-        step_status={
-            "escrow_release": "pending",
-            "reward_distribute": "pending",
-            "reputation_write": "pending",
-        },
-    )
+    # ``event_id`` is a real PG ``uuid`` column — ``_uuid_for`` derives
+    # a deterministic UUID from a label so the test is reproducible.
+    event = _event("evt-step")
+    event_id = event.event_id
     await repo.enqueue(event)
 
     # Patch one step — this is the path that was broken in prod.
