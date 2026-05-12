@@ -15,6 +15,29 @@ interface TaskInfo {
   creator_id?: string;
   created_at?: string;
   deadline?: string;
+  max_resubmit_attempts?: number | null;
+}
+
+interface TaskHistoryItem {
+  task_id: string;
+  task_title: string;
+  task_type: string;
+  role: string;
+  status: string;
+  submission?: string | null;
+  review_notes?: string | null;
+  rejection_reason?: string | null;
+  resubmit_count: number;
+  reward: string;
+  reward_currency: string;
+  submitted_at?: string | null;
+  completed_at?: string | null;
+}
+
+interface TaskHistoryResponse {
+  agent_id: string;
+  total: number;
+  items: TaskHistoryItem[];
 }
 
 interface TaskListResponse {
@@ -162,6 +185,7 @@ export function tasksCommand(): Command {
     .option('--currency <currency>', 'Reward currency (e.g. USD, USDC, ap_points)', 'ap_points')
     .option('--type <type>', 'Task type (e.g. coding, general)', 'general')
     .option('--max-participants <n>', 'Max participants (default: 1)', '1')
+    .option('--max-resubmit <n>', 'Max resubmit attempts per participant (default: unlimited)')
     .action(
       async (opts: {
         title: string;
@@ -172,6 +196,7 @@ export function tasksCommand(): Command {
         currency?: string;
         type?: string;
         maxParticipants?: string;
+        maxResubmit?: string;
       }) => {
         const config = loadConfig();
         if (!config.api_key) {
@@ -180,7 +205,7 @@ export function tasksCommand(): Command {
           );
           process.exit(1);
         }
-        const body = {
+        const body: Record<string, unknown> = {
           title: opts.title,
           description: opts.description,
           deadline_hours: parseInt(opts.deadline ?? '48', 10),
@@ -190,6 +215,9 @@ export function tasksCommand(): Command {
           task_type: opts.type ?? 'general',
           max_participants: parseInt(opts.maxParticipants ?? '1', 10),
         };
+        if (opts.maxResubmit !== undefined) {
+          body.max_resubmit_attempts = parseInt(opts.maxResubmit, 10);
+        }
         try {
           const task = await acnPost<TaskInfo>('/tasks/agent/create', body);
           output(task, [`Task created!\n`, formatTask(task)].join(''));
@@ -198,6 +226,41 @@ export function tasksCommand(): Command {
         }
       }
     );
+
+  cmd
+    .command('history <agent_id>')
+    .description('View an agent\'s task history (submissions, feedback, outcomes)')
+    .option('--limit <n>', 'Max entries to return (default: 50)', '50')
+    .action(async (agentId: string, opts: { limit?: string }) => {
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const res = await acnGet<TaskHistoryResponse>(
+          `/tasks/agent/${agentId}/history`,
+          { limit: opts.limit ?? '50' }
+        );
+        const lines = res.items.map((item, i) => {
+          const parts = [
+            `\n[${i + 1}] ${item.task_title} (${item.task_type}) — ${item.status}`,
+            `    Role       : ${item.role}`,
+            `    Reward     : ${item.reward} ${item.reward_currency}`,
+          ];
+          if (item.submitted_at) parts.push(`    Submitted  : ${item.submitted_at}`);
+          if (item.resubmit_count) parts.push(`    Resubmits  : ${item.resubmit_count}`);
+          if (item.review_notes) parts.push(`    Feedback   : ${item.review_notes}`);
+          if (item.rejection_reason) parts.push(`    Rejected   : ${item.rejection_reason}`);
+          if (item.submission) parts.push(`    Submission : ${item.submission.slice(0, 80)}...`);
+          return parts.join('\n');
+        });
+        const summary = `Agent history for ${agentId} (${res.total} entries):`;
+        output(res, [summary, ...lines].join('\n'));
+      } catch (err) {
+        handleError(err);
+      }
+    });
 
   cmd
     .command('cancel <task_id>')

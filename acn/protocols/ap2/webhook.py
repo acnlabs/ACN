@@ -63,6 +63,9 @@ class WebhookEventType(StrEnum):
     TASK_REJECTED = "task.rejected"
     TASK_CANCELLED = "task.cancelled"
 
+    # Participation events (multi-participant tasks)
+    PARTICIPATION_REJECTED = "participation.rejected"
+
     # ===== Subnet / Org Harness Events =====
 
     # Agent ↔ subnet membership lifecycle. Delivered to the subnet's

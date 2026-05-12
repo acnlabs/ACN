@@ -486,3 +486,202 @@ class TestNotifyWebhookDualDelivery:
         task = _make_task_with_harness()
         # Should not raise
         await task_service._notify_webhook(WebhookEventType.TASK_ACCEPTED, task)
+
+
+# ============================================================================
+# Participation resubmit cap  (max_resubmit_attempts + resubmit_count)
+# ============================================================================
+
+
+def _make_participation(**overrides):
+    from acn.core.entities.task import Participation, ParticipationStatus
+
+    defaults = {
+        "participation_id": "p-001",
+        "task_id": "t-001",
+        "participant_id": "agent-worker",
+        "participant_name": "Worker",
+        "status": ParticipationStatus.REJECTED,
+        "resubmit_count": 0,
+    }
+    defaults.update(overrides)
+    return Participation(**defaults)
+
+
+class TestResubmitCap:
+    """Verify that max_resubmit_attempts is enforced in submit_task and
+    that resubmit_count increments correctly on the entity."""
+
+    def test_resubmit_increments_count(self):
+        """Participation.resubmit() bumps resubmit_count by 1."""
+        p = _make_participation(resubmit_count=2)
+        p.resubmit("second try")
+        assert p.resubmit_count == 3
+
+    def test_resubmit_resets_rejection_fields(self):
+        """After resubmit, rejection fields are cleared."""
+        from datetime import UTC, datetime
+
+        p = _make_participation(
+            rejection_reason="not good",
+            rejected_at=datetime.now(UTC),
+            review_notes="try harder",
+        )
+        p.resubmit("better attempt")
+        assert p.rejection_reason is None
+        assert p.rejected_at is None
+        assert p.review_notes is None
+
+    async def test_submit_task_blocks_when_cap_reached(
+        self, task_service, mock_task_repo, mock_task_pool
+    ):
+        """submit_task raises ValueError once resubmit_count >= max_resubmit_attempts."""
+        from acn.core.entities.task import ParticipationStatus, TaskStatus
+
+        task = _make_task_with_harness(
+            max_participants=3,
+            status=TaskStatus.OPEN,
+            max_resubmit_attempts=2,
+        )
+        mock_task_repo.find_by_id.return_value = task
+
+        p = _make_participation(
+            task_id=task.task_id,
+            status=ParticipationStatus.REJECTED,
+            resubmit_count=2,  # already at cap
+        )
+        # _resolve_participation uses task_pool.get_user_participation
+        mock_task_pool.get_user_participation.return_value = p
+
+        with pytest.raises(ValueError, match="Max resubmit attempts"):
+            await task_service.submit_task(
+                task_id=task.task_id,
+                agent_id="agent-worker",
+                submission="third try — should be blocked",
+            )
+
+    async def test_submit_task_allows_when_under_cap(
+        self, task_service, mock_task_repo, mock_task_pool
+    ):
+        """submit_task succeeds when resubmit_count < max_resubmit_attempts."""
+        from acn.core.entities.task import ParticipationStatus, TaskStatus
+
+        task = _make_task_with_harness(
+            max_participants=3,
+            status=TaskStatus.OPEN,
+            max_resubmit_attempts=3,
+        )
+        mock_task_repo.find_by_id.return_value = task
+
+        p = _make_participation(
+            task_id=task.task_id,
+            status=ParticipationStatus.REJECTED,
+            resubmit_count=2,  # one slot remaining
+        )
+        mock_task_pool.get_user_participation.return_value = p
+        mock_task_repo.save_participation = AsyncMock()
+
+        returned_task = await task_service.submit_task(
+            task_id=task.task_id,
+            agent_id="agent-worker",
+            submission="third try — should pass",
+        )
+        assert returned_task is task
+        assert p.resubmit_count == 3
+
+    async def test_submit_task_no_cap_when_max_resubmit_none(
+        self, task_service, mock_task_repo, mock_task_pool
+    ):
+        """max_resubmit_attempts=None means unlimited resubmits."""
+        from acn.core.entities.task import ParticipationStatus, TaskStatus
+
+        task = _make_task_with_harness(
+            max_participants=3,
+            status=TaskStatus.OPEN,
+            max_resubmit_attempts=None,
+        )
+        mock_task_repo.find_by_id.return_value = task
+
+        p = _make_participation(
+            task_id=task.task_id,
+            status=ParticipationStatus.REJECTED,
+            resubmit_count=999,
+        )
+        mock_task_pool.get_user_participation.return_value = p
+        mock_task_repo.save_participation = AsyncMock()
+
+        # Should not raise
+        await task_service.submit_task(
+            task_id=task.task_id,
+            agent_id="agent-worker",
+            submission="attempt 1000",
+        )
+        assert p.resubmit_count == 1000
+
+
+# ============================================================================
+# PARTICIPATION_REJECTED webhook
+# ============================================================================
+
+
+class TestParticipationRejectedWebhook:
+    """_notify_participation_webhook sends PARTICIPATION_REJECTED to both
+    platform webhook and per-subnet harness, with participation-level fields."""
+
+    async def test_delivers_participation_fields_to_harness(self, task_service):
+        from acn.core.entities.task import Participation, ParticipationStatus
+
+        webhook = AsyncMock()
+        task_service.webhook = webhook
+        task = _make_task_with_harness()
+        p = _make_participation(
+            task_id=task.task_id,
+            status=ParticipationStatus.REJECTED,
+            rejection_reason="output too short",
+            resubmit_count=1,
+        )
+
+        await task_service._notify_participation_webhook(
+            WebhookEventType.PARTICIPATION_REJECTED, task, p
+        )
+
+        # Platform webhook receives participation context
+        webhook.send_event.assert_awaited_once()
+        data = webhook.send_event.await_args.kwargs["data"]
+        assert data["participant_id"] == "agent-worker"
+        assert data["participation_id"] == "p-001"
+        assert data["rejection_reason"] == "output too short"
+        assert data["resubmit_count"] == 1
+        assert data["max_resubmit_attempts"] == task.max_resubmit_attempts
+
+        # Harness also receives the same payload
+        webhook.send_to.assert_awaited_once()
+        assert webhook.send_to.await_args.kwargs["event"] == WebhookEventType.PARTICIPATION_REJECTED
+
+    async def test_no_webhook_service_is_noop(self, task_service):
+        from acn.core.entities.task import Participation, ParticipationStatus
+
+        task_service.webhook = None
+        p = _make_participation(status=ParticipationStatus.REJECTED)
+        task = _make_task_with_harness()
+        # Should not raise
+        await task_service._notify_participation_webhook(
+            WebhookEventType.PARTICIPATION_REJECTED, task, p
+        )
+
+    async def test_harness_failure_does_not_surface(self, task_service):
+        """A harness delivery failure must not propagate to the caller."""
+        from acn.core.entities.task import ParticipationStatus
+
+        webhook = AsyncMock()
+        webhook.send_event = AsyncMock(return_value=True)
+        webhook.send_to = AsyncMock(side_effect=RuntimeError("network error"))
+        task_service.webhook = webhook
+
+        p = _make_participation(status=ParticipationStatus.REJECTED)
+        task = _make_task_with_harness()
+
+        # Should not raise
+        await task_service._notify_participation_webhook(
+            WebhookEventType.PARTICIPATION_REJECTED, task, p
+        )

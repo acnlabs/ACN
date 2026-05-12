@@ -166,6 +166,7 @@ class TaskService:
         deadline_hours: int | None = None,
         metadata: dict | None = None,
         subnet_id: str | None = None,
+        max_resubmit_attempts: int | None = None,
     ) -> Task:
         """
         Create a new task.
@@ -257,6 +258,7 @@ class TaskService:
             deadline=deadline,
             metadata=metadata or {},
             subnet_id=subnet_id,
+            max_resubmit_attempts=max_resubmit_attempts,
         )
 
         # Escrow lock: explicit opt-in only
@@ -592,6 +594,13 @@ class TaskService:
         if task._is_multi():
             p = await self._resolve_participation(task_id, agent_id, participation_id)
             if p.status == ParticipationStatus.REJECTED:
+                if (
+                    task.max_resubmit_attempts is not None
+                    and p.resubmit_count >= task.max_resubmit_attempts
+                ):
+                    raise ValueError(
+                        f"Max resubmit attempts ({task.max_resubmit_attempts}) reached"
+                    )
                 p.resubmit(submission, artifacts)
             else:
                 p.submit(submission, artifacts)
@@ -630,7 +639,14 @@ class TaskService:
         expected_status = task.status
 
         if task.status == TaskStatus.REJECTED:
-            task.resubmit(submission, artifacts)
+            if (
+                task.max_resubmit_attempts is not None
+                and task.resubmit_count >= task.max_resubmit_attempts
+            ):
+                raise ValueError(
+                    f"Max resubmit attempts ({task.max_resubmit_attempts}) reached"
+                )
+            task.resubmit(submission, artifacts)  # increments task.resubmit_count
         else:
             task.submit(submission, artifacts)
 
@@ -954,6 +970,10 @@ class TaskService:
                 "participation_rejected",
                 task_id=task_id,
                 participation_id=p.participation_id,
+            )
+
+            await self._notify_participation_webhook(
+                WebhookEventType.PARTICIPATION_REJECTED, task, p
             )
 
         return await self.get_task(task_id)
@@ -1527,6 +1547,7 @@ class TaskService:
             reviewer_id=reviewer_id,
         )
 
+        await self._notify_webhook(WebhookEventType.TASK_REJECTED, task)
         return task
 
     async def cancel_task(self, task_id: str, canceller_id: str) -> Task:
@@ -1699,6 +1720,91 @@ class TaskService:
         """
         return await self.task_pool.find_tasks_for_agent(agent_tags, limit)
 
+    async def get_agent_task_history(
+        self,
+        agent_id: str,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Return a condensed task history for an agent, suitable for Dreaming / self-reflection.
+
+        Merges two sources:
+        - Single-participant tasks where the agent is the assignee
+        - Multi-participant participations
+
+        Each entry contains the task spec, the agent's submission, and all
+        review feedback so the agent (or a Harness dreaming loop) can extract
+        patterns and update its own memory without issuing multiple API calls.
+        """
+        results: list[dict] = []
+        seen_task_ids: set[str] = set()
+
+        # ── Single-participant tasks (agent was the sole assignee) ──────────
+        single_tasks = await self.repository.find_by_assignee(agent_id, limit)
+        for task in single_tasks:
+            seen_task_ids.add(task.task_id)
+            results.append({
+                "task_id": task.task_id,
+                "task_title": task.title,
+                "task_type": task.task_type,
+                "task_description": task.description,
+                "role": "assignee",
+                "status": task.status.value,
+                "submission": task.submission,
+                "review_notes": task.review_notes,
+                "rejection_reason": None,
+                "resubmit_count": task.resubmit_count,
+                "reward": task.reward,
+                "reward_currency": task.reward_currency,
+                "participation_id": None,
+                "subnet_id": task.subnet_id,
+                "joined_at": task.assigned_at.isoformat() if task.assigned_at else None,
+                "submitted_at": task.submitted_at.isoformat() if task.submitted_at else None,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+            })
+
+        # ── Multi-participant: agent joined as a participant ─────────────────
+        participations = await self.repository.find_participations_by_user(agent_id, limit)
+        # Batch-fetch all distinct task IDs (including ones already in single-task results,
+        # in the unlikely case the same task appears in both paths)
+        multi_task_ids = {p.task_id for p in participations}
+        task_cache: dict[str, Task] = {}
+        for tid in multi_task_ids:
+            try:
+                task_cache[tid] = await self.get_task(tid)
+            except Exception:  # noqa: BLE001
+                pass  # task deleted/inaccessible — skip
+
+        for p in participations:
+            task = task_cache.get(p.task_id)
+            if not task:
+                continue
+            results.append({
+                "task_id": task.task_id,
+                "task_title": task.title,
+                "task_type": task.task_type,
+                "task_description": task.description,
+                "role": "participant",
+                "status": p.status.value,
+                "submission": p.submission,
+                "review_notes": p.review_notes,
+                "rejection_reason": p.rejection_reason,
+                "resubmit_count": p.resubmit_count,
+                "reward": task.reward,
+                "reward_currency": task.reward_currency,
+                "participation_id": p.participation_id,
+                "subnet_id": task.subnet_id,
+                "joined_at": p.joined_at.isoformat() if p.joined_at else None,
+                "submitted_at": p.submitted_at.isoformat() if p.submitted_at else None,
+                "completed_at": p.completed_at.isoformat() if p.completed_at else None,
+            })
+
+        # Sort newest-first by submitted_at, falling back to joined_at
+        def _sort_key(e: dict) -> str:
+            return e.get("submitted_at") or e.get("joined_at") or ""
+
+        results.sort(key=_sort_key, reverse=True)
+        return results[:limit]
+
     async def is_subnet_member(self, subnet_id: str, agent_id: str) -> bool:
         """Check whether an agent is a member of the given subnet."""
         if not self.subnet_repository:
@@ -1759,6 +1865,63 @@ class TaskService:
             except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "task_harness_webhook_failed",
+                    task_id=task.task_id,
+                    subnet_id=task.subnet_id,
+                    webhook_event=event.value if hasattr(event, "value") else str(event),
+                    error=str(e),
+                )
+
+    async def _notify_participation_webhook(
+        self,
+        event: WebhookEventType,
+        task: Task,
+        participation: Participation,
+    ) -> None:
+        """Send webhook for participation-level events (e.g. PARTICIPATION_REJECTED).
+
+        Extends :meth:`_notify_webhook` with participation-specific fields so
+        that Org Harnesses can identify *which* participant was affected and
+        trigger targeted follow-up actions (re-assign, notify, grade again).
+        """
+        if not self.webhook:
+            return
+
+        payload = {
+            "status": task.status.value,
+            "creator_id": task.creator_id,
+            "subnet_id": task.subnet_id,
+            "participation_id": participation.participation_id,
+            "participant_id": participation.participant_id,
+            "participant_name": participation.participant_name,
+            "participation_status": participation.status.value,
+            "resubmit_count": participation.resubmit_count,
+            "max_resubmit_attempts": task.max_resubmit_attempts,
+            "rejection_reason": participation.rejection_reason,
+        }
+
+        try:
+            await self.webhook.send_event(
+                event=event,
+                task_id=task.task_id,
+                data=payload,
+            )
+        except Exception as e:
+            logger.warning("participation_webhook_notification_failed", error=str(e))
+
+        harness_url = (task.metadata or {}).get("harness_url")
+        if harness_url:
+            harness_secret = (task.metadata or {}).get("harness_secret")
+            try:
+                await self.webhook.send_to(
+                    url=harness_url,
+                    secret=harness_secret,
+                    event=event,
+                    task_id=task.task_id,
+                    data=payload,
+                )
+            except Exception as e:
+                logger.warning(
+                    "task_harness_participation_webhook_failed",
                     task_id=task.task_id,
                     subnet_id=task.subnet_id,
                     webhook_event=event.value if hasattr(event, "value") else str(event),

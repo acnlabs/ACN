@@ -86,6 +86,7 @@ def _public_task() -> SimpleNamespace:
         max_participants=1,
         completed_count=0,
         active_participants_count=0,
+        max_resubmit_attempts=None,
     )
 
 

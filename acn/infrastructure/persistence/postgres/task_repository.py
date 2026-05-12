@@ -141,6 +141,8 @@ class PostgresTaskRepository(ITaskRepository):
             invited_agent_ids=meta.get("invited_agent_ids", []),
             metadata=meta.get("extra_metadata", {}),
             subnet_id=row.subnet_id,
+            max_resubmit_attempts=meta.get("max_resubmit_attempts"),
+            resubmit_count=int(meta.get("resubmit_count", 0)),
         )
 
     def _task_to_model(self, task: Task) -> TaskModel:
@@ -173,6 +175,10 @@ class PostgresTaskRepository(ITaskRepository):
         }
         if task.max_total_budget is not None:
             extra_meta["max_total_budget"] = task.max_total_budget
+        if task.max_resubmit_attempts is not None:
+            extra_meta["max_resubmit_attempts"] = task.max_resubmit_attempts
+        if task.resubmit_count:
+            extra_meta["resubmit_count"] = task.resubmit_count
         # DB mode column: keep writing for legacy index; "assigned" if require_join_approval
         db_mode = "assigned" if task.require_join_approval else "open"
         # DB is_multi_participant: True when max_participants != 1
@@ -220,6 +226,7 @@ class PostgresTaskRepository(ITaskRepository):
             reviewed_by=row.reviewed_by,
             cancelled_at=row.cancelled_at,
             completed_at=row.completed_at,
+            resubmit_count=row.resubmit_count,
         )
 
     def _participation_to_model(self, p: Participation) -> ParticipationModel:
@@ -242,6 +249,7 @@ class PostgresTaskRepository(ITaskRepository):
             reviewed_by=p.reviewed_by,
             cancelled_at=_tz(p.cancelled_at),
             completed_at=_tz(p.completed_at),
+            resubmit_count=p.resubmit_count,
         )
 
     # =========================================================================
@@ -521,6 +529,7 @@ class PostgresTaskRepository(ITaskRepository):
                         reviewed_by=model.reviewed_by,
                         cancelled_at=model.cancelled_at,
                         completed_at=model.completed_at,
+                        resubmit_count=model.resubmit_count,
                     )
                 )
             else:

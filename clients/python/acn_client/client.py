@@ -1158,6 +1158,42 @@ class ACNClient:
         )
         return [TaskInfo.model_validate(t) for t in data.get("tasks", [])]
 
+    async def get_agent_task_history(
+        self,
+        agent_id: str,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Fetch an agent's task history — submissions, feedback, and outcomes.
+
+        Returns a condensed list sorted newest-first. Each entry contains the
+        task spec, the agent's submission, and all review feedback so the agent
+        (or a Harness dreaming loop) can extract patterns and update memory.
+
+        Args:
+            agent_id: The agent whose history to fetch.
+            limit: Maximum number of entries to return (1–200, default 50).
+
+        Returns:
+            List of history dicts, each with keys:
+            task_id, task_title, task_type, task_description, role,
+            status, submission, review_notes, rejection_reason,
+            resubmit_count, reward, reward_currency,
+            participation_id, subnet_id,
+            joined_at, submitted_at, completed_at.
+        """
+        response = await self._client.get(
+            f"/api/v1/tasks/agent/{agent_id}/history",
+            params={"limit": limit},
+        )
+        if not response.is_success:
+            try:
+                error = response.json()
+                message = error.get("detail", response.text)
+            except Exception:
+                message = response.text
+            raise ACNError(response.status_code, message)
+        return response.json().get("items", [])
+
     async def create_task(
         self,
         request: TaskCreateRequest,

@@ -70,6 +70,10 @@ class Participation:
     completed_at: datetime | None = None
     cancelled_at: datetime | None = None
 
+    # Resubmit tracking — incremented each time resubmit() is called.
+    # Harnesses can enforce a cap via Task.max_resubmit_attempts.
+    resubmit_count: int = 0
+
     def submit(self, submission: str, artifacts: list[dict] | None = None) -> None:
         """Submit work for this participation"""
         if self.status != ParticipationStatus.ACTIVE:
@@ -105,7 +109,7 @@ class Participation:
         self.status = ParticipationStatus.CANCELLED
 
     def resubmit(self, submission: str, artifacts: list[dict] | None = None) -> None:
-        """Resubmit after rejection"""
+        """Resubmit after rejection. Increments resubmit_count."""
         if self.status != ParticipationStatus.REJECTED:
             raise ValueError(f"Cannot resubmit in status: {self.status}")
         self.submission = submission
@@ -117,6 +121,7 @@ class Participation:
         self.review_request_id = None
         self.review_notes = None
         self.reviewed_by = None
+        self.resubmit_count += 1
         self.status = ParticipationStatus.SUBMITTED
 
     # ========== Serialization ==========
@@ -144,6 +149,7 @@ class Participation:
             "reviewed_by": self.reviewed_by,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "cancelled_at": self.cancelled_at.isoformat() if self.cancelled_at else None,
+            "resubmit_count": self.resubmit_count,
         }
 
     @classmethod
@@ -175,6 +181,10 @@ class Participation:
             import json
 
             data["submission_artifacts"] = json.loads(data["submission_artifacts"])
+
+        # Parse resubmit_count (may come as str from Redis)
+        if isinstance(data.get("resubmit_count"), str):
+            data["resubmit_count"] = int(data["resubmit_count"])
 
         return cls(**data)
 
@@ -261,6 +271,13 @@ class Task:
 
     # Visibility — NULL means public; set to an ACN Subnet ID to restrict to members only
     subnet_id: str | None = None
+
+    # Max resubmit attempts per participation. None = unlimited.
+    # Org Harnesses use this to prevent infinite grader-retry loops.
+    max_resubmit_attempts: int | None = None
+
+    # Resubmit counter for single-participant path (mirrors Participation.resubmit_count).
+    resubmit_count: int = 0
 
     # Progress
     completed_count: int = 0
@@ -438,7 +455,7 @@ class Task:
 
     def resubmit(self, submission: str, artifacts: list[dict] | None = None) -> None:
         """
-        Resubmit after rejection (single-participant path).
+        Resubmit after rejection (single-participant path). Increments resubmit_count.
 
         Raises:
             ValueError: If task is not in rejected status
@@ -450,6 +467,7 @@ class Task:
         self.submitted_at = datetime.now(UTC)
         self.review_notes = None
         self.reviewed_by = None
+        self.resubmit_count += 1
         self.status = TaskStatus.SUBMITTED
 
     def cancel(self) -> None:
@@ -552,6 +570,8 @@ class Task:
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "metadata": self.metadata,
             "subnet_id": self.subnet_id,
+            "max_resubmit_attempts": self.max_resubmit_attempts,
+            "resubmit_count": self.resubmit_count,
         }
 
     @classmethod
@@ -574,6 +594,15 @@ class Task:
         for field_name in datetime_fields:
             if data.get(field_name) and isinstance(data[field_name], str):
                 data[field_name] = datetime.fromisoformat(data[field_name])
+
+        # Parse max_resubmit_attempts (may come as str from Redis)
+        if isinstance(data.get("max_resubmit_attempts"), str):
+            val = data["max_resubmit_attempts"]
+            data["max_resubmit_attempts"] = int(val) if val else None
+
+        # Parse resubmit_count (may come as str from Redis)
+        if isinstance(data.get("resubmit_count"), str):
+            data["resubmit_count"] = int(data["resubmit_count"])
 
         # Strip removed fields that may come from old serialized data
         for old_field in (

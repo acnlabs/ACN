@@ -604,6 +604,7 @@ class TaskInfo(BaseModel):
     created_at: str = ""
     deadline: str | None = None
     metadata: dict | None = None
+    max_resubmit_attempts: int | None = None
 
 
 class TaskCreateRequest(BaseModel):
@@ -645,6 +646,12 @@ class TaskCreateRequest(BaseModel):
 
     # ── Collaboration ─────────────────────────────────────
     group_id: str | None = Field(default=None, description="Link subtasks into a group")
+
+    # ── Grader loop cap ───────────────────────────────────
+    max_resubmit_attempts: int | None = Field(
+        default=None,
+        description="Max resubmits per participant after rejection. None=unlimited.",
+    )
 
     # ── Extension ─────────────────────────────────────────
     metadata: dict = Field(default_factory=dict)

@@ -17,6 +17,7 @@ from ..config import get_settings
 from ..core.entities import TaskStatus
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.validators import check_dict_size_64k
+from ..core.exceptions import AgentNotFoundException
 from ..services import TaskNotFoundException, TaskService
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
@@ -273,6 +274,13 @@ class TaskCreateRequest(BaseModel):
         ),
     )
 
+    # ── Grader loop cap ───────────────────────────────────
+    max_resubmit_attempts: int | None = Field(
+        default=None,
+        ge=1,
+        description="Max times a participant can resubmit after rejection. None=unlimited. Useful for Harness grader loops.",
+    )
+
     # ── Extension ─────────────────────────────────────────
     metadata: dict = Field(default_factory=dict, description="Extensible metadata (escrow_config, webhook, etc.)")
 
@@ -355,6 +363,7 @@ class TaskResponse(BaseModel):
     submission: str | None = None
     submission_artifacts: list[dict] = Field(default_factory=list)
     subnet_id: str | None = None
+    max_resubmit_attempts: int | None = None
 
 
 class ParticipationResponse(BaseModel):
@@ -375,6 +384,7 @@ class ParticipationResponse(BaseModel):
     reviewed_by: str | None = None
     completed_at: str | None = None
     cancelled_at: str | None = None
+    resubmit_count: int = 0
 
 
 class ParticipationListResponse(BaseModel):
@@ -390,6 +400,44 @@ class TaskListResponse(BaseModel):
     tasks: list[TaskResponse]
     total: int
     has_more: bool = False
+
+
+class TaskHistoryItem(BaseModel):
+    """One entry in an agent's task history — optimised for Dreaming / self-reflection."""
+
+    task_id: str
+    task_title: str
+    task_type: str
+    task_description: str
+    role: str = Field(description="assignee (single-participant) or participant (multi-participant)")
+
+    # My outcome
+    status: str
+    submission: str | None = None
+    review_notes: str | None = None
+    rejection_reason: str | None = None
+    resubmit_count: int = 0
+
+    # Reward
+    reward: str = "0"
+    reward_currency: str = "credits"
+
+    # Context
+    participation_id: str | None = None
+    subnet_id: str | None = None
+
+    # Timestamps
+    joined_at: str | None = None
+    submitted_at: str | None = None
+    completed_at: str | None = None
+
+
+class TaskHistoryResponse(BaseModel):
+    """Agent task history response."""
+
+    agent_id: str
+    items: list[TaskHistoryItem]
+    total: int
 
 
 class TaskAcceptRequest(BaseModel):
@@ -473,6 +521,7 @@ def _task_to_response(task) -> TaskResponse:
         submission=task.submission,
         submission_artifacts=task.submission_artifacts or [],
         subnet_id=task.subnet_id,
+        max_resubmit_attempts=task.max_resubmit_attempts,
     )
 
 
@@ -494,10 +543,94 @@ def _participation_to_response(p) -> ParticipationResponse:
         reviewed_by=p.reviewed_by,
         completed_at=p.completed_at.isoformat() if p.completed_at else None,
         cancelled_at=p.cancelled_at.isoformat() if p.cancelled_at else None,
+        resubmit_count=p.resubmit_count,
     )
 
 
 # ========== Public Endpoints ==========
+
+
+@router.get("/agent/{agent_id}/history", response_model=TaskHistoryResponse)
+@limiter.limit("30/minute")
+async def get_agent_task_history(
+    request: _Request,
+    agent_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    task_service: TaskServiceDep = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+):
+    """
+    Retrieve an agent's task history — submissions, feedback, and outcomes.
+
+    Designed as the data source for agent self-reflection and Dreaming loops:
+    returns everything the agent submitted, plus all review feedback, so an
+    Org Harness or the agent itself can extract patterns without issuing
+    multiple API calls.
+
+    **Auth**:
+    - Agent API key: may only query its own history (key must belong to ``agent_id``).
+    - JWT / human: must be the registered owner of ``agent_id``.
+    - Internal backend token: unrestricted.
+    """
+    if not credentials:
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Authentication required to view task history",
+        )
+
+    token = credentials.credentials
+
+    # Internal backend: unrestricted access
+    if (
+        settings.internal_api_token
+        and token
+        and secrets.compare_digest(token, settings.internal_api_token)
+    ):
+        items_raw = await task_service.get_agent_task_history(agent_id, limit=limit)
+        return TaskHistoryResponse(
+            agent_id=agent_id,
+            items=[TaskHistoryItem(**e) for e in items_raw],
+            total=len(items_raw),
+        )
+
+    caller_id = await _resolve_caller_identity(request, credentials)
+    if not caller_id:
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Invalid or expired credentials",
+        )
+
+    if token.startswith("acn_"):
+        # Agent API key: must be the agent itself
+        if caller_id != agent_id:
+            raise ACNHTTPError(
+                ErrorCode.MISSING_PERMISSION,
+                403,
+                message="Agents can only view their own task history",
+            )
+    else:
+        # JWT (human): must be the registered owner of the agent
+        agent_svc = get_agent_service()
+        try:
+            target_agent = await agent_svc.get_agent(agent_id)
+        except AgentNotFoundException:
+            raise ACNHTTPError(ErrorCode.RESOURCE_NOT_FOUND, 404, message="Agent not found")
+        if target_agent.owner != caller_id:
+            raise ACNHTTPError(
+                ErrorCode.MISSING_PERMISSION,
+                403,
+                message="You are not the owner of this agent",
+            )
+
+    items_raw = await task_service.get_agent_task_history(agent_id, limit=limit)
+    items = [TaskHistoryItem(**entry) for entry in items_raw]
+    return TaskHistoryResponse(
+        agent_id=agent_id,
+        items=items,
+        total=len(items),
+    )
 
 
 @router.get("", response_model=TaskListResponse)
@@ -718,6 +851,7 @@ async def create_task(
             deadline_hours=body.deadline_hours,
             metadata=merged_metadata,
             subnet_id=body.subnet_id,
+            max_resubmit_attempts=body.max_resubmit_attempts,
         )
 
         logger.info(

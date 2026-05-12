@@ -98,6 +98,7 @@ class ParticipationModel(Base):
     reviewed_by: Mapped[str | None] = mapped_column(String, nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resubmit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     __table_args__ = (
         Index("ix_participations_task_participant", "task_id", "participant_id"),
