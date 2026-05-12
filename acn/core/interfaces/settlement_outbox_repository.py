@@ -309,8 +309,9 @@ class ISettlementOutboxRepository(ABC):
         Used by the daily reconciliation job (see
         ``acn/services/settlement_reconciler.py``) to compare the saga
         completion count against the number of reputation events
-        written in the same window — the two should be equal once
-        the saga is the only writer (Todo 7 cleanup gate).
+        written in the same window — the two are equal under normal
+        operation (saga is the sole writer). A non-zero delta is the
+        first signal of saga drift in production.
 
         Args:
             since: Lower bound on ``updated_at`` (UTC). Implementations

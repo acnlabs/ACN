@@ -218,17 +218,19 @@ class Settings(BaseSettings):
     # ``False`` in the code default: even if everything else is wired
     # up (PG mode, outbox table present, ``OUTBOX_ENQUEUE_REQUIRED=true``)
     # the worker DOES NOT start unless an operator flips this ON.
-    # Rationale:
-    # - In Todo 4 the step handlers are no-op placeholders — turning
-    #   the worker on in production would silently mark events ``done``
-    #   without doing any settlement work, while ``pending_count`` reads
-    #   zero on Prometheus dashboards, giving false confidence the
-    #   system is healthy. The legacy in-line bypass keeps real money
-    #   flowing in the meantime.
-    # - Todo 6 fills in the real step bodies; the cleanup PR that
-    #   does that flips this flag to ``true`` in the same deploy.
-    # - Staging / smoke envs that need to verify the outbox plumbing
-    #   should set ``SETTLEMENT_WORKER_ENABLED=true`` explicitly.
+    # This is the "safe by default" posture: a deploy that runs the
+    # Alembic migration but isn't yet ready to process events will
+    # accumulate ``state='pending'`` rows visibly rather than silently
+    # firing side effects.
+    #
+    # Production is expected to set this to ``true`` alongside the
+    # outbox migration; staging / smoke envs that need to verify the
+    # plumbing should set ``SETTLEMENT_WORKER_ENABLED=true`` explicitly.
+    # Flipping back to ``false`` is a soft emergency stop — events
+    # keep landing in the outbox but no settlement happens until the
+    # worker comes back up. For a *full* emergency disarm that also
+    # routes ``complete_task`` through the legacy synchronous path,
+    # set ``OUTBOX_ENQUEUE_REQUIRED=false`` as well.
     settlement_worker_enabled: bool = False
 
     # Env var: SETTLEMENT_POLL_INTERVAL_SEC

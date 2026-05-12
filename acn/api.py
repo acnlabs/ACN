@@ -796,14 +796,14 @@ async def lifespan(app: FastAPI):
             )
             await settlement_worker_instance.start()
 
-    # Settlement reconciler (Todo 9c) — daily cross-check between
+    # Settlement reconciler — daily cross-check between
     # ``settlement_outbox`` (state='done') and ``reputation_events``
-    # (kind='feedback'). The two MUST match once the saga is the
-    # only writer; non-zero deltas surface via
-    # ``acn_settlement_reconcile_delta`` and block Todo 7
-    # (legacy bypass cleanup). The job is gated on the same PG
-    # outbox prerequisite as the worker because there's no point
-    # reconciling if no rows exist.
+    # (kind='feedback'). The two MUST match because the saga is the
+    # sole writer of settlement side effects; non-zero deltas surface
+    # via ``acn_settlement_reconcile_delta`` and are the first signal
+    # of saga drift. The job is gated on the same PG outbox
+    # prerequisite as the worker because there's no point reconciling
+    # if no rows exist.
     reconciler_task: asyncio.Task[None] | None = None
     if (
         settings.settlement_reconciler_enabled
