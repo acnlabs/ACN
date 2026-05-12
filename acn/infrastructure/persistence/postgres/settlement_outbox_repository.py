@@ -33,6 +33,7 @@ from datetime import UTC, datetime
 
 import structlog
 from sqlalchemy import bindparam, func, select, text, update
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -290,6 +291,24 @@ class PostgresSettlementOutboxRepository(ISettlementOutboxRepository):
             and unambiguous. Cross-checked by
             ``test_update_step_status_persists_step_value`` against
             a real PG instance to keep this from regressing.
+
+        Why ``type_=PGUUID(as_uuid=False)`` on ``:event_id``:
+            The ``event_id`` column is declared as PG ``uuid`` (see
+            ``SettlementOutboxModel``). Every OTHER write path in
+            this repository goes through ORM constructs
+            (``update(SettlementOutboxModel).where(...)``) where
+            SQLAlchemy reads the column type from the mapper and
+            generates the correct PG cast automatically. This method
+            uses raw ``text()`` because it needs ``jsonb_set`` (no
+            ergonomic ORM construct), which bypasses the mapper.
+            Without an explicit ``type_`` on the bindparam,
+            SQLAlchemy defaults the Python ``str`` to VARCHAR, so
+            the rendered SQL becomes ``WHERE event_id = $4::VARCHAR``
+            and PG raises ``UndefinedFunctionError: operator does
+            not exist: uuid = character varying``. Setting
+            ``type_=PGUUID(as_uuid=False)`` tells SQLAlchemy "this
+            string is a uuid, render it as ``$4::uuid``" — matching
+            the column type and producing a valid equality.
         """
         async with self._session_factory() as sess:
             await sess.execute(
@@ -308,7 +327,11 @@ class PostgresSettlementOutboxRepository(ISettlementOutboxRepository):
                 ).bindparams(
                     bindparam("path", value=[step]),
                     bindparam("status", value=status),
-                    bindparam("event_id", value=event_id),
+                    bindparam(
+                        "event_id",
+                        value=event_id,
+                        type_=PGUUID(as_uuid=False),
+                    ),
                     bindparam("updated_at", value=datetime.now(UTC)),
                 )
             )
