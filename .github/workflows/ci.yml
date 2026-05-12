@@ -29,6 +29,25 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Real Postgres for tests under ``tests/integration/`` that
+      # exercise raw ``text()`` SQL (PR #33 / #34 were both silent
+      # bugs that in-memory fakes could not catch). Gated behind
+      # ``ACN_INTEGRATION_PG_URL``; without that env var the tests
+      # ``pytest.skip`` and a laptop ``pytest`` still passes.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: acn
+          POSTGRES_PASSWORD: acn
+          POSTGRES_DB: acn_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U acn -d acn_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +73,11 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379
           ENABLE_DOCS: "true"
+          # Enables ``tests/integration/test_settlement_outbox_pg.py``.
+          # Without this, the integration tests in that file skip
+          # silently — exactly the gap that let PR #33 (text() parser
+          # collision) and PR #34 (uuid type mismatch) ship to prod.
+          ACN_INTEGRATION_PG_URL: postgresql+asyncpg://acn:acn@localhost:5432/acn_test
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
