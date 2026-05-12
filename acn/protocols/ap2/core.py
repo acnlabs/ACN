@@ -65,22 +65,14 @@ CREDITS_PER_USD = 100.0  # 1 USD = 100 Credits (AgentPlanet backend convention)
 # Credits are the tradeable, escrow-capable currency on the backend
 # (wallet.balance, 1 USD = 100 Credits). All Labs task rewards and
 # escrow lock/release operations use Credits.
+#
+# NOTE: backend ap_points (wallet.ap_points) is a separate, non-transferable
+# field for platform behaviour rewards (register/referral). It does NOT
+# participate in escrow and is not a valid task reward_currency.
 CREDITS = "credits"
 
-# Legacy currency identifier kept for backward compatibility.
-# Existing tasks stored with reward_currency="ap_points" must still
-# settle correctly — all settlement gates include AP_POINTS alongside
-# CREDITS. New tasks should use CREDITS.
-#
-# NOTE: backend ap_points (wallet.ap_points) is a *separate* field —
-# platform behaviour rewards (register/referral) that are non-transferable
-# and do NOT participate in escrow. The string "ap_points" as a
-# reward_currency in ACN tasks was a historical mislabelling.
-AP_POINTS = "ap_points"
-
-# Convenience set for settlement gate checks — covers both the new
-# canonical value and legacy values that appear in existing DB rows.
-PLATFORM_CURRENCIES: frozenset[str] = frozenset({CREDITS, AP_POINTS, "points"})
+# Settlement gate: only Credits is a valid task reward currency.
+PLATFORM_CURRENCIES: frozenset[str] = frozenset({CREDITS})
 
 
 class SupportedPaymentMethod(StrEnum):

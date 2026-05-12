@@ -28,7 +28,7 @@ def _build_task(
     creator_id: str = "user-creator",
     assignee_id: str | None = "agent-worker",
     reward: str = "100",
-    reward_currency: str = "ap_points",
+    reward_currency: str = "credits",
     use_escrow: bool = True,
     max_participants: int | None = 1,
     metadata: dict | None = None,
@@ -69,7 +69,7 @@ def _service() -> TaskService:
 
 
 def test_main_path_escrow_and_reward_both_pending() -> None:
-    """The mainline production case: use_escrow=True + ap_points +
+    """The mainline production case: use_escrow=True + credits +
     positive reward + assignee present. All three steps pending.
     """
     event = _service()._build_review_pass_event(
@@ -120,8 +120,8 @@ def test_zero_reward_escrow_task_skips_both_payment_steps() -> None:
     assert event.step_status["reputation_write"] == "pending"
 
 
-def test_non_ap_points_currency_skips_reward_and_escrow() -> None:
-    """Non-ap_points reward: ACN v0.1 escrow only supports ap_points
+def test_non_credits_currency_skips_reward_and_escrow() -> None:
+    """Non-Credits reward: ACN escrow only supports Credits
     (see ``AgentPlanetEscrowProvider``), so reward_distribute is
     skipped and — per B-2 — escrow_release is too. This avoids
     enqueuing events for currencies the worker can't actually

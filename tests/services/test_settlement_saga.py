@@ -65,7 +65,7 @@ def _event(
     step_status: dict[str, str] | None = None,
 ) -> SettlementEvent:
     """Producer-shaped event: use_escrow=True, single-participant,
-    100 ap_points reward, assignee + creator both present. This is
+    100 credits reward, assignee + creator both present. This is
     the mainline production saga input.
     """
     return SettlementEvent(

@@ -39,7 +39,7 @@ from acn.services.task_service import TaskService
 def _submitted_task(**overrides: Any) -> Task:
     """A reward-bearing single-participant task awaiting completion.
 
-    Reward + assignee + ap_points currency are deliberately set so the
+    Reward + assignee + credits currency are deliberately set so the
     legacy ``_distribute_reward`` branch *would* fire if it ran — that
     lets the saga-on test prove suppression rather than vacuously
     pass.

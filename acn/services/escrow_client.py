@@ -18,7 +18,7 @@ from acn.core.interfaces.escrow_provider import (
     IEscrowProvider,
     ReleaseResult,
 )
-from acn.protocols.ap2.core import AP_POINTS
+from acn.protocols.ap2.core import CREDITS
 
 logger = structlog.get_logger()
 
@@ -43,7 +43,7 @@ class AgentPlanetEscrowProvider(IEscrowProvider):
 
     @property
     def supported_currencies(self) -> list[str]:
-        return [AP_POINTS]
+        return [CREDITS]
 
     def _get_headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
