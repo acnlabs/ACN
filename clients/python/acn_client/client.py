@@ -939,6 +939,28 @@ class ACNClient:
             },
         )
 
+    async def confirm_payment(self, task_id: str, tx_hash: str) -> dict[str, Any]:
+        """Confirm that an external payment has been made (requires Agent API Key).
+
+        Call this after you have executed the actual payment (on-chain transfer,
+        Stripe charge, etc.). ACN stores the ``tx_hash``, transitions the task
+        to ``payment_confirmed``, and sends a ``payment_task.payment_confirmed``
+        webhook to the seller so they can release their goods or service.
+
+        Args:
+            task_id: The payment task ID returned by ``create_payment_task``.
+            tx_hash: On-chain transaction hash or any external payment reference
+                     (e.g. Stripe charge ID, PayPal transaction ID).
+
+        Returns:
+            ``{"task_id": ..., "status": "payment_confirmed", "tx_hash": ...}``
+        """
+        return await self._request(
+            "POST",
+            f"/api/v1/payments/tasks/{task_id}/confirm",
+            json={"tx_hash": tx_hash},
+        )
+
     async def get_payment_task(self, task_id: str) -> PaymentTask:
         """Get a payment task by ID.
 

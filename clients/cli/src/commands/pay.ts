@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { acnPost } from '../api.js';
+import { acnGet, acnPost } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 
@@ -22,9 +22,11 @@ function requireAgentId(): string {
 }
 
 export function payCommand(): Command {
-  const cmd = new Command('pay').description('Create a payment task to another agent');
+  const cmd = new Command('pay').description('Manage payment tasks between agents');
 
-  cmd
+  // ── sub-command: create ──────────────────────────────────────────────
+  const createCmd = new Command('create').description('Create a payment task to another agent');
+  createCmd
     .requiredOption('--to <agent>', 'Recipient agent ID')
     .requiredOption('--amount <n>', 'Payment amount (positive number)')
     .requiredOption('--currency <c>', 'Currency code, e.g. USD, USDC')
@@ -89,6 +91,57 @@ export function payCommand(): Command {
         }
       }
     );
+
+  // ── sub-command: confirm ─────────────────────────────────────────────
+  const confirmCmd = new Command('confirm').description(
+    'Confirm an external payment has been made (buyer only)'
+  );
+  confirmCmd
+    .requiredOption('--task-id <id>', 'Payment task ID to confirm')
+    .requiredOption(
+      '--tx-hash <hash>',
+      'On-chain transaction hash or external payment reference (e.g. Stripe charge ID)'
+    )
+    .action(async (opts: { taskId: string; txHash: string }) => {
+      try {
+        const res = await acnPost<{ task_id: string; status: string; tx_hash: string }>(
+          `/payments/tasks/${opts.taskId}/confirm`,
+          { tx_hash: opts.txHash }
+        );
+        output(
+          res,
+          `Payment confirmed: ${res.task_id}\n` +
+            `  status : ${res.status}\n` +
+            `  tx_hash: ${res.tx_hash}`
+        );
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  // ── sub-command: status ──────────────────────────────────────────────
+  const statusCmd = new Command('status').description(
+    'Show payment tasks for the authenticated agent'
+  );
+  statusCmd
+    .option('--status <s>', 'Filter by status (e.g. created, payment_confirmed)')
+    .option('--limit <n>', 'Max results (default 50)', '50')
+    .action(async (opts: { status?: string; limit: string }) => {
+      const agentId = requireAgentId();
+      try {
+        const res = await acnGet<{ agent_id: string; tasks: unknown[] }>(
+          `/payments/tasks/agent/${agentId}`,
+          { status: opts.status, limit: Number(opts.limit) }
+        );
+        output(res, `${res.tasks.length} payment task(s) for ${res.agent_id}`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd.addCommand(createCmd);
+  cmd.addCommand(confirmCmd);
+  cmd.addCommand(statusCmd);
 
   return cmd;
 }

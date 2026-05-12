@@ -293,6 +293,70 @@ async def create_payment_task(
         raise HTTPException(status_code=500, detail="Failed to create payment task") from e
 
 
+class ConfirmPaymentRequest(BaseModel):
+    tx_hash: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        description="On-chain transaction hash (or any external payment reference)",
+    )
+
+
+@router.post("/tasks/{task_id}/confirm")
+async def confirm_payment_task(
+    task_id: str,
+    body: ConfirmPaymentRequest,
+    agent_info: AgentApiKeyDep,
+    payment_tasks: PaymentTasksDep = None,
+):
+    """Confirm that an external payment has been made (requires Agent API Key).
+
+    The authenticated agent must be the buyer of the payment task.
+    Transitions the task to ``payment_confirmed`` and stores the
+    ``tx_hash`` so the seller can verify on-chain or in the external
+    payment system.
+
+    Typical flow::
+
+        1. Buyer calls ``POST /payments/tasks`` → gets ``task_id`` + seller wallet address
+        2. Buyer executes the actual payment (on-chain transfer, Stripe, etc.)
+        3. Buyer calls ``POST /payments/tasks/{task_id}/confirm`` with the ``tx_hash``
+        4. Seller receives ``payment_task.payment_confirmed`` webhook → releases goods/service
+    """
+    task = await payment_tasks.get_task(task_id)
+    if not task:
+        raise ACNHTTPError(
+            ErrorCode.PAYMENT_TASK_NOT_FOUND,
+            status_code=404,
+            details={"task_id": task_id},
+        )
+
+    if agent_info["agent_id"] != task.buyer_agent:
+        raise ACNHTTPError(
+            ErrorCode.FROM_AGENT_MISMATCH,
+            status_code=403,
+            details={
+                "authenticated_as": agent_info["agent_id"],
+                "from_agent": task.buyer_agent,
+            },
+        )
+
+    try:
+        updated = await payment_tasks.update_task_status(
+            task_id=task_id,
+            status=PaymentTaskStatus.PAYMENT_CONFIRMED,
+            tx_hash=body.tx_hash,
+        )
+        return {
+            "task_id": updated.task_id,
+            "status": updated.status.value,
+            "tx_hash": updated.tx_hash,
+        }
+    except Exception as e:
+        logger.error("confirm_payment_task_failed", task_id=task_id, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to confirm payment task") from e
+
+
 @router.get("/tasks/{task_id}")
 async def get_payment_task(task_id: str, _: InternalTokenDep, payment_tasks: PaymentTasksDep = None):
     """Get payment task status (internal only)"""
