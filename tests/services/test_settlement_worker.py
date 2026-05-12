@@ -69,7 +69,7 @@ def _build_event(
         "assignee_id": assignee_id,
         "payment_task_id": None,
         "reward": reward,
-        "reward_currency": "ap_points",
+        "reward_currency": "credits",
         "task_title": "test",
         "approver_id": creator_id,
         "review_notes": None,

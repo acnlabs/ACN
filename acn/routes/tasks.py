@@ -243,7 +243,7 @@ class TaskCreateRequest(BaseModel):
     auto_approve: bool = Field(default=False, description="True: submissions auto-complete without review")
     task_type: str = Field(default="general", max_length=64, description="Task type category")
     required_tags: list[str] = Field(default_factory=list, max_length=20)
-    reward_currency: str = Field(default="ap_points", max_length=32, description="Currency: ap_points, USD, USDC, ETH")
+    reward_currency: str = Field(default="credits", max_length=32, description="Currency: credits (platform Credits, default), ap_points (legacy), USD, USDC, ETH")
 
     # ── Layer 3: Advanced options ─────────────────────────
     require_join_approval: bool = Field(default=False, description="True: solvers must apply and be approved to join")

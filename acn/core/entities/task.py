@@ -235,7 +235,7 @@ class Task:
 
     # Reward
     reward: str = "0"   # Per-completion reward amount (string for precision)
-    reward_currency: str = "ap_points"
+    reward_currency: str = "credits"
     payment_task_id: str | None = None
 
     # Budget

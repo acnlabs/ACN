@@ -39,13 +39,13 @@ Step handler implementations (Todo 6)
   ``release_partial`` (multi-participant) per ``payload['is_multi']``.
 - ``_step_reward_distribute``: logged no-op at v0.1. The producer
   side (``task_service._build_review_pass_event``) sets this step to
-  ``pending`` whenever ``has_reward`` holds (ap_points + positive
-  amount + assignee), independent of ``use_escrow``. Two valid
-  on-chain semantics get the step to this handler:
+  ``pending`` whenever ``has_reward`` holds (platform currency +
+  positive amount + assignee), independent of ``use_escrow``. Two
+  valid on-chain semantics get the step to this handler:
     * ``use_escrow=True`` — the agent / ACN / provider three-way
       split already settled inside ``escrow.release`` /
       ``release_partial``. There is nothing left to move.
-    * ``use_escrow=False`` — ap_points reward is pure off-chain
+    * ``use_escrow=False`` — Credits reward is pure off-chain
       bookkeeping in v0.1; legacy ``_distribute_reward`` returns
       ``{success: True, via: 'off_chain'}`` without moving funds.
       The worker matches that no-op semantics.
@@ -625,7 +625,7 @@ class SettlementWorker:
 
         Producer-side gating (``task_service._build_review_pass_event``)
         sets this step ``pending`` whenever ``has_reward`` holds:
-        ``currency in (ap_points, points) AND reward > 0 AND
+        ``currency in PLATFORM_CURRENCIES AND reward > 0 AND
         assignee``. Critically, this is INDEPENDENT of ``use_escrow``
         — both branches reach this handler with different "no-op"
         semantics:
@@ -643,7 +643,7 @@ class SettlementWorker:
             Off-chain reward bookkeeping. Legacy
             ``_distribute_reward`` returns
             ``{success: True, via: 'off_chain'}`` without moving any
-            funds — ap_points reward without escrow is a conceptual
+            funds — Credits reward without escrow is a conceptual
             credit in v0.1, not a transferred balance. The worker
             matches that no-op semantics so saga and legacy paths
             settle identically.

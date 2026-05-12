@@ -20,7 +20,7 @@ from ..core.interfaces import (
 )
 from ..infrastructure.task_pool import TaskPool
 from ..protocols.ap2 import PaymentTaskManager, WebhookEventType, WebhookService
-from ..protocols.ap2.core import AP_POINTS
+from ..protocols.ap2.core import PLATFORM_CURRENCIES
 from .activity_service import ActivityService
 
 logger = structlog.get_logger()
@@ -154,7 +154,7 @@ class TaskService:
         task_type: str = "general",
         required_tags: list[str] | None = None,
         reward: str = "0",
-        reward_currency: str = "ap_points",
+        reward_currency: str = "credits",
         max_participants: int | None = 1,
         completion_mode: str = "independent",
         auto_approve: bool = False,
@@ -179,7 +179,7 @@ class TaskService:
             task_type: Task type category
             required_tags: Tags needed to complete
             reward: Reward per completion (numeric string)
-            reward_currency: Currency (ap_points, USD, USDC, ETH)
+            reward_currency: Currency (credits, ap_points legacy, USD, USDC, ETH)
             max_participants: 1=single, N=fixed, None=unlimited
             completion_mode: "independent" | "competitive" | "collaborative"
             auto_approve: True → submissions auto-complete without review
@@ -267,7 +267,7 @@ class TaskService:
             )
 
         # Create AP2 payment task if real currency
-        if reward_currency.lower() not in [AP_POINTS, "points", "0"] and float(reward) > 0:
+        if reward_currency.lower() not in PLATFORM_CURRENCIES | {"0"} and float(reward) > 0:
             if self.payment_manager:
                 try:
                     payment_task = await self.payment_manager.create_task(
@@ -406,7 +406,7 @@ class TaskService:
         await self.repository.save(task)
 
         # Update escrow: set assignee + IN_PROGRESS
-        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
+        if self.escrow and task.reward_currency.lower() in PLATFORM_CURRENCIES:
             try:
                 escrow_info = await self.escrow.get_by_task(task_id)
                 if escrow_info.success and escrow_info.escrow_id:
@@ -506,7 +506,7 @@ class TaskService:
         )
 
         # Activate escrow pool on first join (LOCKED -> ACTIVE)
-        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
+        if self.escrow and task.reward_currency.lower() in PLATFORM_CURRENCIES:
             try:
                 escrow_info = await self.escrow.get_by_task(task.task_id)
                 if escrow_info.success and escrow_info.escrow_id:
@@ -617,7 +617,7 @@ class TaskService:
             return await self.get_task(task_id)
 
         # Sync escrow status
-        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
+        if self.escrow and task.reward_currency.lower() in PLATFORM_CURRENCIES:
             try:
                 escrow_info = await self.escrow.get_by_task(task_id)
                 if escrow_info.success and escrow_info.escrow_id:
@@ -697,7 +697,7 @@ class TaskService:
 
         # Distribute reward for points-based tasks
         if (
-            task.reward_currency.lower() in (AP_POINTS, "points")
+            task.reward_currency.lower() in PLATFORM_CURRENCIES
             and float(task.reward) > 0
             and task.assignee_id
         ):
@@ -787,7 +787,7 @@ class TaskService:
         await self.task_pool.record_completion(task.task_id, p.participant_id)
 
         # Distribute reward
-        if task.reward_currency.lower() in (AP_POINTS, "points") and float(task.reward) > 0:
+        if task.reward_currency.lower() in PLATFORM_CURRENCIES and float(task.reward) > 0:
             reward_result = await self._distribute_reward(
                 task=task,
                 amount=float(task.reward),
@@ -862,7 +862,7 @@ class TaskService:
             await self.task_pool.record_completion(task_id, p.participant_id)
 
             # Distribute per-completion reward
-            if task.reward_currency.lower() in (AP_POINTS, "points") and float(task.reward) > 0:
+            if task.reward_currency.lower() in PLATFORM_CURRENCIES and float(task.reward) > 0:
                 await self._distribute_reward(
                     task=task,
                     amount=float(task.reward),
@@ -982,7 +982,7 @@ class TaskService:
         await self.repository.save_participation(p)
 
         # Escrow: set assignee + IN_PROGRESS
-        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
+        if self.escrow and task.reward_currency.lower() in PLATFORM_CURRENCIES:
             try:
                 escrow_info = await self.escrow.get_by_task(task_id)
                 if escrow_info.success and escrow_info.escrow_id:
@@ -1108,7 +1108,7 @@ class TaskService:
         # NOT the same as the legacy ``complete_task`` branches:
         #
         # - ``has_reward`` is the same criterion ``_distribute_reward``
-        #   uses (ap_points currency + positive reward + assignee
+        #   uses (platform currency + positive reward + assignee
         #   present). It's a precondition for BOTH ``escrow_release``
         #   AND ``reward_distribute`` — a zero-reward escrow has
         #   nothing for the worker to release, so producing such an
@@ -1140,7 +1140,7 @@ class TaskService:
         #   counterparty — reward-less / payment-less tasks still
         #   earn reputation, that's the whole point of reputation.
         has_reward = (
-            currency_lower in (AP_POINTS, "points") and reward_value > 0 and bool(task.assignee_id)
+            currency_lower in PLATFORM_CURRENCIES and reward_value > 0 and bool(task.assignee_id)
         )
         needs_escrow_release = bool(task.use_escrow) and has_reward
 
@@ -1389,7 +1389,7 @@ class TaskService:
                     logger.error("failed_to_release_payment", error=str(e))
 
             if (
-                task.reward_currency.lower() in (AP_POINTS, "points")
+                task.reward_currency.lower() in PLATFORM_CURRENCIES
                 and float(task.reward) > 0
                 and task.assignee_id
             ):
@@ -1563,7 +1563,7 @@ class TaskService:
                 logger.error("failed_to_cancel_payment", error=str(e))
 
         # 统一 escrow 退款：human 和 agent 创建者都走 escrow refund
-        if self.escrow and task.reward_currency.lower() in (AP_POINTS, "points"):
+        if self.escrow and task.reward_currency.lower() in PLATFORM_CURRENCIES:
             remaining = task.remaining_budget()
             if remaining > 0:
                 result = await self.escrow.refund(
