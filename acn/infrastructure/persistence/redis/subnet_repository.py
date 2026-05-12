@@ -35,12 +35,19 @@ class RedisSubnetRepository(ISubnetRepository):
         """Save or update a subnet in Redis"""
         subnet_key = f"acn:subnets:info:{subnet.subnet_id}"
 
-        # Serialize subnet to dict
-        subnet_dict = subnet.to_dict()
+        # Serialize subnet to dict (include harness_secret for persistence)
+        subnet_dict = subnet.to_dict(include_secret=True)
         # Convert complex types to JSON
         subnet_dict["security_config"] = json.dumps(subnet_dict["security_config"])
         subnet_dict["metadata"] = json.dumps(subnet_dict["metadata"])
         subnet_dict["member_agent_ids"] = json.dumps(subnet_dict["member_agent_ids"])
+        # Redis HSET cannot store None values
+        if subnet_dict.get("harness_url") is None:
+            subnet_dict["harness_url"] = ""
+        if subnet_dict.get("harness_secret") is None:
+            subnet_dict["harness_secret"] = ""
+        if subnet_dict.get("description") is None:
+            subnet_dict["description"] = ""
 
         # Save to Redis hash
         await self.redis.hset(subnet_key, mapping=subnet_dict)  # type: ignore[arg-type]
@@ -131,11 +138,16 @@ class RedisSubnetRepository(ISubnetRepository):
 
     def _dict_to_subnet(self, subnet_dict: dict) -> Subnet:
         """Convert Redis dict to Subnet entity"""
+        # Empty strings stored in Redis mean NULL — translate back to None.
+        description = subnet_dict.get("description") or None
+        harness_url = subnet_dict.get("harness_url") or None
+        harness_secret = subnet_dict.get("harness_secret") or None
+
         data = {
             "subnet_id": subnet_dict["subnet_id"],
             "name": subnet_dict["name"],
             "owner": subnet_dict["owner"],
-            "description": subnet_dict.get("description"),
+            "description": description,
             "is_private": subnet_dict.get("is_private") == "True",
             "security_config": self._safe_loads(subnet_dict.get("security_config", "{}"), {}),
             "member_agent_ids": set(
@@ -145,6 +157,8 @@ class RedisSubnetRepository(ISubnetRepository):
                 subnet_dict.get("created_at"), datetime.now(UTC)
             ),
             "metadata": self._safe_loads(subnet_dict.get("metadata", "{}"), {}),
+            "harness_url": harness_url,
+            "harness_secret": harness_secret,
         }
 
         return Subnet(**data)

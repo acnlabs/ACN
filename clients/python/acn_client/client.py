@@ -439,6 +439,47 @@ class ACNClient:
         """Remove agent from subnet"""
         return await self._request("DELETE", f"/api/v1/agents/{agent_id}/subnets/{subnet_id}")
 
+    async def set_subnet_harness(
+        self,
+        subnet_id: str,
+        harness_url: str | None,
+        harness_secret: str | None = None,
+    ) -> dict[str, Any]:
+        """Register or update the Org Harness webhook for a subnet.
+
+        Only the subnet owner can call this method (the Agent API Key used
+        to construct the client must belong to the subnet's owner agent).
+
+        Pass ``harness_url=None`` to unregister the current harness.
+        ``harness_secret`` is used to HMAC-SHA256 sign outbound webhook
+        payloads (``X-ACN-Signature: sha256=<hex>`` header).  If ``None``,
+        payloads are delivered unsigned.
+
+        Returns the updated subnet summary::
+
+            {
+                "status": "updated",
+                "subnet_id": "my-subnet",
+                "harness_url": "https://harness.example.com/acn/webhook",
+                "harness_registered": True,
+            }
+
+        Example::
+
+            await client.set_subnet_harness(
+                subnet_id="my-subnet",
+                harness_url="https://paperclip.example.com/acn/webhook",
+                harness_secret="your-hmac-secret",
+            )
+            # To unregister:
+            await client.set_subnet_harness("my-subnet", harness_url=None)
+        """
+        return await self._request(
+            "PATCH",
+            f"/api/v1/subnets/{subnet_id}/harness",
+            json={"harness_url": harness_url, "harness_secret": harness_secret},
+        )
+
     async def get_agent_subnets(self, agent_id: str) -> list[str]:
         """Get agent's subnets"""
         data = await self._request("GET", f"/api/v1/agents/{agent_id}/subnets")

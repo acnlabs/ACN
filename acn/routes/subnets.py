@@ -9,18 +9,21 @@ import secrets
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 
 from ..auth.middleware import require_internal_or_permission, verify_token
 from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
+from ..protocols.ap2 import WebhookEventType
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     AgentIdPath,
     AgentServiceDep,
     SubnetIdPath,
     SubnetServiceDep,
+    WebhookServiceDep,
     limiter,
 )
 
@@ -46,6 +49,8 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
         security_config=subnet.security_config,
         created_at=subnet.created_at,
         metadata=subnet.metadata,
+        harness_url=subnet.harness_url,
+        harness_registered=subnet.harness_url is not None,
     )
 
 
@@ -266,6 +271,7 @@ async def join_subnet(
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
+    webhook_service: WebhookServiceDep = None,
 ):
     """Agent joins a subnet (requires Agent API Key)
 
@@ -282,9 +288,9 @@ async def join_subnet(
             },
         )
 
-    # Verify subnet exists
+    # Verify subnet exists (and capture entity for harness-webhook delivery)
     try:
-        await subnet_service.get_subnet(subnet_id)
+        subnet = await subnet_service.get_subnet(subnet_id)
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
@@ -300,6 +306,28 @@ async def join_subnet(
         await subnet_service.add_member(subnet_id, agent_id)
 
         logger.info("agent_joined_subnet", agent_id=agent_id, subnet_id=subnet_id)
+
+        # Notify the subnet's Org Harness (if registered)
+        if subnet.harness_url and webhook_service is not None:
+            try:
+                await webhook_service.send_to(
+                    url=subnet.harness_url,
+                    secret=subnet.harness_secret,
+                    event=WebhookEventType.AGENT_JOINED_SUBNET,
+                    task_id=subnet_id,  # no task; use subnet_id for trace correlation
+                    data={
+                        "subnet_id": subnet_id,
+                        "agent_id": agent_id,
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 - never break join on webhook failure
+                logger.warning(
+                    "subnet_harness_webhook_failed",
+                    subnet_id=subnet_id,
+                    agent_id=agent_id,
+                    webhook_event="agent.joined_subnet",
+                    error=str(e),
+                )
 
         return {"status": "joined", "agent_id": agent_id, "subnet_id": subnet_id}
     except AgentNotFoundException as e:
@@ -324,6 +352,7 @@ async def leave_subnet(
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
+    webhook_service: WebhookServiceDep = None,
 ):
     """Agent leaves a subnet (requires Agent API Key)
 
@@ -340,11 +369,40 @@ async def leave_subnet(
             },
         )
 
+    # Capture subnet up-front so we still know the harness_url even if the
+    # subnet later gets unmodified (it doesn't, but keeps symmetry with join).
+    try:
+        subnet = await subnet_service.get_subnet(subnet_id)
+    except SubnetNotFoundException:
+        subnet = None  # let downstream raise the canonical error
+
     try:
         await agent_service.leave_subnet(agent_id, subnet_id)
         await subnet_service.remove_member(subnet_id, agent_id)
 
         logger.info("agent_left_subnet", agent_id=agent_id, subnet_id=subnet_id)
+
+        # Notify the subnet's Org Harness (if registered)
+        if subnet and subnet.harness_url and webhook_service is not None:
+            try:
+                await webhook_service.send_to(
+                    url=subnet.harness_url,
+                    secret=subnet.harness_secret,
+                    event=WebhookEventType.AGENT_LEFT_SUBNET,
+                    task_id=subnet_id,
+                    data={
+                        "subnet_id": subnet_id,
+                        "agent_id": agent_id,
+                    },
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "subnet_harness_webhook_failed",
+                    subnet_id=subnet_id,
+                    agent_id=agent_id,
+                    webhook_event="agent.left_subnet",
+                    error=str(e),
+                )
 
         return {"status": "left", "agent_id": agent_id, "subnet_id": subnet_id}
     except AgentNotFoundException as e:
@@ -366,6 +424,73 @@ async def leave_subnet(
     except Exception as e:
         logger.error("leave_subnet_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to leave subnet") from e
+
+
+# ---------------------------------------------------------------------------
+# Org Harness registration (pluggable webhook target per subnet)
+# ---------------------------------------------------------------------------
+
+
+class UpdateHarnessRequest(BaseModel):
+    """Register or clear the Org Harness webhook for a subnet.
+
+    Pass ``harness_url=null`` to unregister (delivery stops). When a non-null
+    URL is registered, ACN POSTs lifecycle events (`agent.joined_subnet`,
+    `agent.left_subnet`, `task.created`, `task.accepted`, `task.submitted`,
+    `task.completed`, `task.cancelled`) to that URL, HMAC-SHA256 signed with
+    ``harness_secret`` (same scheme as payment webhooks). The secret is
+    write-only — it is never returned by any GET endpoint.
+    """
+
+    harness_url: str | None = Field(
+        default=None,
+        max_length=500,
+        description="External Org Harness webhook URL. Null clears registration.",
+    )
+    harness_secret: str | None = Field(
+        default=None,
+        max_length=256,
+        description="HMAC-SHA256 secret. Null disables signing on outbound webhooks.",
+    )
+
+
+@router.patch("/{subnet_id}/harness")
+async def update_subnet_harness(
+    subnet_id: SubnetIdPath,
+    body: UpdateHarnessRequest,
+    agent_info: AgentApiKeyDep,
+    subnet_service: SubnetServiceDep = None,
+):
+    """Register or clear the Org Harness webhook for this subnet.
+
+    Only the subnet owner may call this endpoint.
+    """
+    try:
+        subnet = await subnet_service.update_harness(
+            subnet_id=subnet_id,
+            owner=agent_info["agent_id"],
+            harness_url=body.harness_url,
+            harness_secret=body.harness_secret,
+        )
+    except SubnetNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
+    except PermissionError as e:
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"subnet_id": subnet_id, "reason": str(e)},
+        ) from e
+
+    return {
+        "status": "updated",
+        "subnet_id": subnet.subnet_id,
+        "harness_url": subnet.harness_url,
+        "harness_registered": subnet.harness_url is not None,
+    }
 
 
 @router.get("/{agent_id}/subnets")

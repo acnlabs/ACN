@@ -24,6 +24,8 @@ class Subnet:
     member_agent_ids: set[str] = field(default_factory=set)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict = field(default_factory=dict)
+    harness_url: str | None = None
+    harness_secret: str | None = None
 
     def __post_init__(self):
         """Validate invariants"""
@@ -62,9 +64,14 @@ class Subnet:
         """Check if subnet requires authentication"""
         return self.is_private and bool(self.security_config)
 
-    def to_dict(self) -> dict:
-        """Convert to dictionary for serialization"""
-        return {
+    def to_dict(self, include_secret: bool = False) -> dict:
+        """Convert to dictionary for serialization.
+
+        By default ``harness_secret`` is omitted from the output to avoid
+        accidentally exposing it in API responses. Set ``include_secret=True``
+        for internal use (e.g. snapshotting onto Task.metadata).
+        """
+        out = {
             "subnet_id": self.subnet_id,
             "name": self.name,
             "owner": self.owner,
@@ -74,7 +81,11 @@ class Subnet:
             "member_agent_ids": list(self.member_agent_ids),
             "created_at": self.created_at.isoformat(),
             "metadata": self.metadata,
+            "harness_url": self.harness_url,
         }
+        if include_secret:
+            out["harness_secret"] = self.harness_secret
+        return out
 
     @classmethod
     def from_dict(cls, data: dict) -> "Subnet":

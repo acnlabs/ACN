@@ -202,3 +202,47 @@ class SubnetService:
             True if subnet exists
         """
         return await self.repository.exists(subnet_id)
+
+    async def update_harness(
+        self,
+        subnet_id: str,
+        owner: str,
+        harness_url: str | None,
+        harness_secret: str | None,
+    ) -> Subnet:
+        """
+        Register or update the Org Harness webhook for a subnet.
+
+        Only the subnet owner may register a harness. Pass ``harness_url=None``
+        to unregister (subnet will fall back to platform-level webhook only).
+        ``harness_secret`` is stored as-is and used to HMAC-sign outgoing
+        webhook payloads delivered to ``harness_url``.
+
+        Args:
+            subnet_id: Subnet identifier
+            owner: Authenticated agent making the request (for authz)
+            harness_url: External webhook URL (or None to clear)
+            harness_secret: HMAC secret (optional; None disables signing)
+
+        Returns:
+            Updated subnet entity
+
+        Raises:
+            SubnetNotFoundException: If subnet not found
+            PermissionError: If owner mismatch
+        """
+        subnet = await self.get_subnet(subnet_id)
+
+        if subnet.owner != owner and owner != "system":
+            raise PermissionError(f"Owner mismatch: {owner} != {subnet.owner}")
+
+        subnet.harness_url = harness_url
+        subnet.harness_secret = harness_secret
+        await self.repository.save(subnet)
+        logger.info(
+            "subnet_harness_updated",
+            subnet_id=subnet_id,
+            has_url=harness_url is not None,
+            has_secret=harness_secret is not None,
+        )
+        return subnet

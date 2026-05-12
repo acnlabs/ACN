@@ -184,6 +184,8 @@ class SubnetModel(Base):
     security_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     member_agent_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     subnet_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    harness_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    harness_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

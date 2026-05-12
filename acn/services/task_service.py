@@ -210,6 +210,29 @@ class TaskService:
         else:
             total_budget = str(reward_float)
 
+        # Snapshot Org Harness URL+secret from the parent subnet onto the task.
+        # Done at creation only so all later events (TASK_ACCEPTED / SUBMITTED /
+        # COMPLETED / CANCELLED) can deliver to the harness without paying for
+        # an extra subnet read per event. If the subnet owner rotates the
+        # harness URL later, only NEW tasks pick it up — in-flight tasks stay
+        # bound to the harness that owned them at creation, which is the
+        # desired guarantee for any orchestrator that has already taken over.
+        metadata = dict(metadata) if metadata else {}
+        if subnet_id and self.subnet_repository:
+            try:
+                parent_subnet = await self.subnet_repository.find_by_id(subnet_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "task_create_subnet_harness_snapshot_failed",
+                    subnet_id=subnet_id,
+                    error=str(e),
+                )
+                parent_subnet = None
+            if parent_subnet and parent_subnet.harness_url:
+                metadata["harness_url"] = parent_subnet.harness_url
+                if parent_subnet.harness_secret:
+                    metadata["harness_secret"] = parent_subnet.harness_secret
+
         task = Task(
             task_id=task_id,
             creator_type=creator_type,
@@ -542,6 +565,8 @@ class TaskService:
             participation_id=pid,
             agent_id=agent_id,
         )
+
+        await self._notify_webhook(WebhookEventType.TASK_ACCEPTED, task)
         return task, pid
 
     async def submit_task(
@@ -579,6 +604,8 @@ class TaskService:
                     task_id=task_id,
                     task_title=task.title,
                 )
+
+            await self._notify_webhook(WebhookEventType.TASK_SUBMITTED, task)
 
             # Auto-approval for participation
             if task.auto_approve:
@@ -652,6 +679,8 @@ class TaskService:
             agent_id=agent_id,
             auto_approve=task.auto_approve,
         )
+
+        await self._notify_webhook(WebhookEventType.TASK_SUBMITTED, task)
 
         if task.auto_approve:
             logger.info("auto_approving_task", task_id=task_id)
@@ -1680,25 +1709,61 @@ class TaskService:
         return agent_id in (subnet.member_agent_ids or set())
 
     async def _notify_webhook(self, event: WebhookEventType, task: Task) -> None:
-        """Send webhook notification"""
+        """Send webhook notification.
+
+        Two delivery targets:
+
+        1. Platform-level default webhook (``self.webhook.send_event``) — same
+           as before; configured via ``ACN_WEBHOOK_URL`` env.
+        2. Per-subnet Org Harness — if the task carries ``harness_url`` in
+           ``metadata`` (snapshotted at creation in :meth:`create_task`),
+           deliver the same payload there too, HMAC-signed with the snapshotted
+           ``harness_secret``. This is what makes Org Harnesses pluggable:
+           Paperclip / OpenHarness / etc. only need to register a URL on the
+           subnet and they will receive the full task lifecycle.
+        """
         if not self.webhook:
             return
+
+        payload = {
+            "status": task.status.value,
+            "creator_id": task.creator_id,
+            "assignee_id": task.assignee_id,
+            "reward": task.reward,
+            "reward_currency": task.reward_currency,
+            "max_participants": task.max_participants,
+            "subnet_id": task.subnet_id,
+        }
 
         try:
             await self.webhook.send_event(
                 event=event,
                 task_id=task.task_id,
-                data={
-                    "status": task.status.value,
-                    "creator_id": task.creator_id,
-                    "assignee_id": task.assignee_id,
-                    "reward": task.reward,
-                    "reward_currency": task.reward_currency,
-                    "max_participants": task.max_participants,
-                },
+                data=payload,
             )
         except Exception as e:
             logger.warning("webhook_notification_failed", error=str(e))
+
+        # Per-subnet Org Harness delivery (uses snapshot on task.metadata).
+        harness_url = (task.metadata or {}).get("harness_url")
+        if harness_url:
+            harness_secret = (task.metadata or {}).get("harness_secret")
+            try:
+                await self.webhook.send_to(
+                    url=harness_url,
+                    secret=harness_secret,
+                    event=event,
+                    task_id=task.task_id,
+                    data=payload,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "task_harness_webhook_failed",
+                    task_id=task.task_id,
+                    subnet_id=task.subnet_id,
+                    webhook_event=event.value if hasattr(event, "value") else str(event),
+                    error=str(e),
+                )
 
     async def _get_agent_owner_id(self, agent_id: str) -> str | None:
         """

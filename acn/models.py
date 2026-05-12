@@ -360,6 +360,17 @@ class SubnetInfo(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
 
+    # Org Harness — the external webhook target registered by the subnet owner.
+    # Exposed so prospective joiners can discover which orchestration system
+    # governs this subnet before deciding to join.  ``harness_secret`` is
+    # intentionally omitted (write-only, never returned).
+    harness_url: str | None = Field(
+        None, description="Registered Org Harness webhook URL, if any"
+    )
+    harness_registered: bool = Field(
+        False, description="Whether an Org Harness is registered for this subnet"
+    )
+
 
 class SubnetCreateRequest(BaseModel):
     """

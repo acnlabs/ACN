@@ -264,6 +264,11 @@ class SubnetInfo(BaseModel):
     agent_count: int = 0
     metadata: dict[str, Any] | None = None
 
+    # Org Harness — registered external orchestration webhook.
+    # ``harness_secret`` is write-only and never returned by the API.
+    harness_url: str | None = None
+    harness_registered: bool = False
+
 
 class SubnetCreateRequest(BaseModel):
     """Subnet creation request"""

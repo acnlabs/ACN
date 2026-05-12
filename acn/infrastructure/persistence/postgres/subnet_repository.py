@@ -28,6 +28,8 @@ class PostgresSubnetRepository(ISubnetRepository):
             member_agent_ids=set(row.member_agent_ids or []),
             created_at=row.created_at,
             metadata=meta,
+            harness_url=row.harness_url,
+            harness_secret=row.harness_secret,
         )
 
     def _subnet_to_model(self, subnet: Subnet) -> SubnetModel:
@@ -44,6 +46,8 @@ class PostgresSubnetRepository(ISubnetRepository):
             security_config=subnet.security_config or None,
             member_agent_ids=list(subnet.member_agent_ids) if subnet.member_agent_ids else None,
             subnet_metadata=subnet.metadata or None,
+            harness_url=subnet.harness_url,
+            harness_secret=subnet.harness_secret,
             created_at=created,
         )
 
@@ -67,6 +71,8 @@ class PostgresSubnetRepository(ISubnetRepository):
                         security_config=model.security_config,
                         member_agent_ids=model.member_agent_ids,
                         subnet_metadata=model.subnet_metadata,
+                        harness_url=model.harness_url,
+                        harness_secret=model.harness_secret,
                     )
                 )
             else:

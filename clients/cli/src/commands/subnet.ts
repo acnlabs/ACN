@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { acnGet, acnPost, acnDelete } from '../api.js';
+import { acnGet, acnPost, acnDelete, acnPatch } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 
@@ -9,6 +9,8 @@ interface SubnetInfo {
   owner?: string;
   description?: string;
   is_private?: boolean;
+  harness_url?: string | null;
+  harness_registered?: boolean;
   created_at?: string;
   metadata?: Record<string, unknown>;
 }
@@ -46,6 +48,11 @@ function formatSubnet(s: SubnetInfo, index?: number): string {
   if (s.owner) lines.push(`  Owner : ${s.owner}`);
   if (s.description) lines.push(`  Desc  : ${s.description}`);
   if (s.created_at) lines.push(`  Since : ${s.created_at}`);
+  if (s.harness_registered) {
+    lines.push(`  Harness: ${s.harness_url ?? '(registered)'}`);
+  } else {
+    lines.push(`  Harness: none`);
+  }
   return lines.join('\n');
 }
 
@@ -205,6 +212,70 @@ export function subnetCommand(): Command {
         handleError(err);
       }
     });
+
+  // -------------------------------------------------------------------------
+  // acn subnet harness — Org Harness registration
+  // -------------------------------------------------------------------------
+  const harness = new Command('harness').description('Manage Org Harness webhook for a subnet');
+
+  harness
+    .command('set <subnet_id>')
+    .description('Register an Org Harness webhook on a subnet you own')
+    .requiredOption('--url <url>', 'Harness webhook URL (HTTPS)')
+    .option('--secret <secret>', 'HMAC-SHA256 signing secret (recommended)')
+    .action(async (subnetId: string, opts: { url: string; secret?: string }) => {
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const res = await acnPatch<{
+          status: string;
+          subnet_id: string;
+          harness_url: string | null;
+          harness_registered: boolean;
+        }>(`/subnets/${subnetId}/harness`, {
+          harness_url: opts.url,
+          harness_secret: opts.secret ?? null,
+        });
+        const lines = [
+          `Harness registered on subnet ${res.subnet_id}`,
+          `  URL       : ${res.harness_url}`,
+          `  Signed    : ${opts.secret ? 'yes (HMAC-SHA256)' : 'no (unsigned)'}`,
+        ];
+        output(res, lines.join('\n'));
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  harness
+    .command('clear <subnet_id>')
+    .description('Unregister the Org Harness from a subnet you own')
+    .action(async (subnetId: string) => {
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const res = await acnPatch<{
+          status: string;
+          subnet_id: string;
+          harness_url: string | null;
+          harness_registered: boolean;
+        }>(`/subnets/${subnetId}/harness`, {
+          harness_url: null,
+          harness_secret: null,
+        });
+        output(res, `Harness unregistered from subnet ${res.subnet_id}`);
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+  cmd.addCommand(harness);
 
   return cmd;
 }

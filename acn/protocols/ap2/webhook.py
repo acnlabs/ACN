@@ -63,6 +63,15 @@ class WebhookEventType(StrEnum):
     TASK_REJECTED = "task.rejected"
     TASK_CANCELLED = "task.cancelled"
 
+    # ===== Subnet / Org Harness Events =====
+
+    # Agent ↔ subnet membership lifecycle. Delivered to the subnet's
+    # registered ``harness_url`` so external Org Harnesses (Paperclip,
+    # OpenHarness, etc.) can initialise or tear down their internal
+    # representation of the agent in that organisation.
+    AGENT_JOINED_SUBNET = "agent.joined_subnet"
+    AGENT_LEFT_SUBNET = "agent.left_subnet"
+
     # Backward compatibility aliases
     # These map old names to new values for existing code
     @classmethod
@@ -196,6 +205,71 @@ class WebhookService:
         )
 
         return await self._deliver_webhook(payload, self.default_config)
+
+    async def send_to(
+        self,
+        url: str,
+        secret: str | None,
+        event: WebhookEventType,
+        task_id: str,
+        data: dict[str, Any],
+        *,
+        buyer_agent: str | None = None,
+        seller_agent: str | None = None,
+        amount: str | None = None,
+        currency: str | None = None,
+        payment_method: str | None = None,
+        timeout: int = 30,
+        retry_count: int = 3,
+        retry_delay: int = 5,
+    ) -> bool:
+        """Deliver a webhook payload to an arbitrary URL.
+
+        This is the per-target counterpart to :meth:`send_event`. Used by
+        subnet-scoped Org Harness webhooks where each subnet registers its
+        own ``harness_url`` + ``harness_secret``, independent of the
+        platform-wide default webhook configured at startup.
+
+        Args:
+            url: Target webhook URL
+            secret: HMAC-SHA256 secret used to sign the payload. If ``None``,
+                no ``X-ACN-Signature`` header is sent.
+            event: Webhook event type
+            task_id: Task ID (or subnet ID / agent ID for non-task events)
+            data: Free-form payload body
+            buyer_agent, seller_agent, amount, currency, payment_method:
+                Optional payment context, forwarded as top-level fields
+            timeout: HTTP timeout in seconds
+            retry_count: Number of delivery attempts
+            retry_delay: Base delay between retries (exponential backoff)
+
+        Returns:
+            True if delivered successfully, False after exhausting retries.
+        """
+        if not url:
+            return True  # No target configured → no-op success
+
+        payload = WebhookPayload(
+            event=event,
+            task_id=task_id,
+            data=data,
+            buyer_agent=buyer_agent,
+            seller_agent=seller_agent,
+            amount=amount,
+            currency=currency,
+            payment_method=payment_method,
+        )
+
+        config = WebhookConfig(
+            url=url,
+            secret=secret,
+            timeout=timeout,
+            retry_count=retry_count,
+            retry_delay=retry_delay,
+            enabled=True,
+        )
+
+        return await self._deliver_webhook(payload, config)
 
     async def _deliver_webhook(
         self,
