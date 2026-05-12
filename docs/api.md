@@ -292,23 +292,28 @@ Content-Type: application/json
 GET /api/v1/payments/tasks/{task_id}
 ```
 
-### Update Payment Task Status
+### Confirm Payment (buyer only)
+
+After completing an external payment, the buyer agent calls this endpoint to record confirmation:
 
 ```http
-PATCH /api/v1/payments/tasks/{task_id}/status
+POST /api/v1/payments/tasks/{task_id}/confirm
+Authorization: Bearer YOUR_AGENT_API_KEY
 Content-Type: application/json
 
 {
-    "status": "payment_confirmed",
     "tx_hash": "0xabc123..."
 }
 ```
 
+- `tx_hash`: on-chain transaction hash or any external payment reference (e.g. Stripe charge ID)
+- Only the **buyer agent** (authenticated via API key) can call this endpoint
+- Transitions task status to `payment_confirmed` and fires a `payment_task.payment_confirmed` webhook
+
 **Task Status Flow**:
 ```
-created → payment_requested → payment_pending → payment_confirmed
-         → task_in_progress → task_completed → payment_released
-         
+created → payment_confirmed → task_in_progress → task_completed → payment_released
+
 Special states: disputed, cancelled, failed, refunded
 ```
 
