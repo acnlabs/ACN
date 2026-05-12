@@ -31,7 +31,7 @@ def _make_task() -> Task:
         title="cas",
         description="cas test",
         reward="0",
-        reward_currency="ap_points",
+        reward_currency="credits",
         max_participants=1,
         status=TaskStatus.COMPLETED,  # the *new* status the caller wants
     )

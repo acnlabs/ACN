@@ -78,7 +78,7 @@ def _event(
             "assignee_id": "agent-worker",
             "payment_task_id": None,
             "reward": "100",
-            "reward_currency": "ap_points",
+            "reward_currency": "credits",
             "task_title": "title",
             "approver_id": "user-creator",
             "review_notes": None,

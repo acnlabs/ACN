@@ -55,7 +55,7 @@ def _public_task() -> SimpleNamespace:
         description="public task",
         task_type="general",
         reward="0",
-        reward_currency="ap_points",
+        reward_currency="credits",
         status=TaskStatus.OPEN,
         required_tags=[],
         created_at=datetime.now(UTC),

@@ -114,7 +114,7 @@ def _event(label: str, task_id: str | None = None) -> SettlementEvent:
             "creator_id": "user-creator",
             "assignee_id": "agent-worker",
             "reward": "100",
-            "reward_currency": "ap_points",
+            "reward_currency": "credits",
             "use_escrow": True,
             "is_multi": False,
             "metadata": {},

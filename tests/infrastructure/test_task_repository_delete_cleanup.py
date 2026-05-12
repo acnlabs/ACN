@@ -45,7 +45,7 @@ def _make_task(**overrides) -> Task:
         "title": "Test",
         "description": "",
         "reward": "10",
-        "reward_currency": "ap_points",
+        "reward_currency": "credits",
         "max_participants": 5,
         "status": TaskStatus.OPEN,
         "require_join_approval": False,

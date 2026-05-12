@@ -52,7 +52,7 @@ def _submitted_task(**overrides: Any) -> Task:
         "title": "Saga boundary test",
         "description": "completion fires saga or legacy, never both",
         "reward": "10",
-        "reward_currency": "ap_points",
+        "reward_currency": "credits",
         "max_participants": 1,
         "status": TaskStatus.SUBMITTED,
         "assignee_id": "agent-1",

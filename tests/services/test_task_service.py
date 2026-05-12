@@ -33,7 +33,7 @@ def _make_task(**overrides) -> Task:
         "title": "Test Multi Task",
         "description": "A multi-participant task",
         "reward": "50",
-        "reward_currency": "ap_points",
+        "reward_currency": "credits",
         "max_participants": 5,
     }
     defaults.update(overrides)

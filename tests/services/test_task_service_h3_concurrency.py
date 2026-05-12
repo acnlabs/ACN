@@ -44,7 +44,7 @@ def _submitted_task(**overrides) -> Task:
         "title": "H3",
         "description": "concurrency test",
         "reward": "10",
-        "reward_currency": "ap_points",
+        "reward_currency": "credits",
         "max_participants": 1,
         "status": TaskStatus.SUBMITTED,
         "assignee_id": "agent-1",
@@ -274,7 +274,7 @@ class TestCancelTaskCAS:
         task = _submitted_task(
             status=TaskStatus.IN_PROGRESS,
             reward="10",
-            reward_currency="ap_points",
+            reward_currency="credits",
             total_budget="10",
         )
         winner_view = _submitted_task(status=TaskStatus.COMPLETED)
@@ -303,7 +303,7 @@ class TestCancelTaskCAS:
             title="multi",
             description="multi",
             reward="0",
-            reward_currency="ap_points",
+            reward_currency="credits",
             max_participants=5,  # _is_multi() == True
             status=TaskStatus.IN_PROGRESS,
         )

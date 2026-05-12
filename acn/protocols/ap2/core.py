@@ -59,12 +59,28 @@ ACN_TOKEN_PRICING_EXTENSION_URI = "https://agentplanet.com/acn/token-pricing/v1"
 # =============================================================================
 
 NETWORK_FEE_RATE = 0.15  # 15% network fee, deducted from agent income
-CREDITS_PER_USD = 10.0  # 1 USD = 10 ap_points (Agent Planet Points)
+CREDITS_PER_USD = 100.0  # 1 USD = 100 Credits (AgentPlanet backend convention)
 
-# Currency identifier for Agent Planet Points.
-# Used as reward_currency in ACN tasks. Namespaced to avoid collision with
-# other deployments' point systems (e.g. third-party ACN instances).
+# Canonical task reward currency — AgentPlanet Credits.
+# Credits are the tradeable, escrow-capable currency on the backend
+# (wallet.balance, 1 USD = 100 Credits). All Labs task rewards and
+# escrow lock/release operations use Credits.
+CREDITS = "credits"
+
+# Legacy currency identifier kept for backward compatibility.
+# Existing tasks stored with reward_currency="ap_points" must still
+# settle correctly — all settlement gates include AP_POINTS alongside
+# CREDITS. New tasks should use CREDITS.
+#
+# NOTE: backend ap_points (wallet.ap_points) is a *separate* field —
+# platform behaviour rewards (register/referral) that are non-transferable
+# and do NOT participate in escrow. The string "ap_points" as a
+# reward_currency in ACN tasks was a historical mislabelling.
 AP_POINTS = "ap_points"
+
+# Convenience set for settlement gate checks — covers both the new
+# canonical value and legacy values that appear in existing DB rows.
+PLATFORM_CURRENCIES: frozenset[str] = frozenset({CREDITS, AP_POINTS, "points"})
 
 
 class SupportedPaymentMethod(StrEnum):

@@ -30,7 +30,7 @@ def _make_task(**overrides) -> Task:
         "title": "T",
         "description": "",
         "reward": "10",
-        "reward_currency": "ap_points",
+        "reward_currency": "credits",
         "max_participants": 1,
         "status": TaskStatus.OPEN,
         "required_tags": [],
