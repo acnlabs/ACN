@@ -58,10 +58,15 @@ Step handler implementations (Todo 6)
   ``POST /feedback`` is the path that carries those today.
 
 ``settlement_worker_enabled`` defaults to FALSE in ``acn.config``
-until the saga path has been verified in staging. The legacy
-synchronous path in ``task_service.complete_task`` is still active
-under that flag — see plan §6 Todo 7 for the cleanup PR that
-retires it.
+so a deploy that wires the outbox table without intending to start
+processing (e.g. mid-migration) doesn't accidentally fire side
+effects. In production this flag is flipped to TRUE alongside the
+PG-mode rollout; with ``OUTBOX_ENQUEUE_REQUIRED=true`` (also the
+default) the saga is the sole settlement path. The legacy
+synchronous path in ``task_service.complete_task`` remains gated by
+``_saga_enabled`` as an in-place rollback lever — flipping either
+flag back to false routes ``complete_task`` through the legacy
+inline payment + reward branch instead of the outbox.
 
 Concurrency model
 -----------------

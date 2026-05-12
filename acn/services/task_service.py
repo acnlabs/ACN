@@ -1231,22 +1231,23 @@ class TaskService:
         Settlement saga v0.1 — see
         ``acn/docs/_drafts/settlement-saga-design.md``:
             When all of ``settlement_outbox`` / ``unit_of_work`` /
-            ``outbox_enqueue_required`` are present, this method runs
-            CAS save + outbox INSERT inside a single ACID transaction
-            (the "atomic" path). An enqueue failure rolls back the
-            state transition and raises HTTP 500 — the caller MUST
-            retry. The legacy synchronous payment + reward branches
-            below are KEPT AS-IS as a double-write transition until
-            the worker has been observed stable in production for
-            ≥ 7 days (Todo 7). After that, the cleanup PR deletes
-            this in-line payment branch and the worker becomes the
-            only settlement path.
+            ``outbox_enqueue_required`` are present (default production
+            wiring), this method runs CAS save + outbox INSERT inside
+            a single ACID transaction (the "atomic" path) and returns.
+            The ``SettlementWorker`` then drives escrow release +
+            reward distribute + reputation write asynchronously. An
+            enqueue failure rolls back the state transition and raises
+            HTTP 500 — the caller MUST retry.
 
             When the saga deps are not all present (Redis-only mode,
-            test fixtures, or emergency disarm), the legacy path runs
-            alone — CAS save in its own transaction, no outbox row,
-            payment + reward synchronously as before. This is what
-            production ran prior to v0.1.
+            test fixtures, or emergency disarm via
+            ``OUTBOX_ENQUEUE_REQUIRED=false``), the legacy synchronous
+            path runs — CAS save in its own transaction, no outbox
+            row, payment + reward synchronously inline. This is what
+            production ran prior to v0.1, kept as an in-place rollback
+            lever should the saga need to be disabled urgently without
+            redeploying. The two paths are mutually exclusive — there
+            is no longer a double-write window.
 
         Known limitation — HTTP retry vs state-machine non-idempotency:
             If a caller retries this endpoint after a network failure
@@ -1321,10 +1322,11 @@ class TaskService:
                 raise
             if won:
                 # Transaction committed atomically. From this point on
-                # the outbox row exists and the worker will eventually
-                # drive settlement to completion; the legacy in-line
-                # branches below are the double-write
-                # belt-and-suspenders.
+                # the outbox row exists and the worker drives
+                # settlement to completion asynchronously. The legacy
+                # inline branches below are gated by ``_saga_enabled``
+                # and only run when the saga is explicitly disabled —
+                # no double-write window.
                 logger.info(
                     "settlement_outbox_enqueued",
                     task_id=task_id,
@@ -1357,59 +1359,59 @@ class TaskService:
         if task.assignee_id:
             await self.task_pool.record_completion(task_id, task.assignee_id)
 
-        # === Step 3: legacy synchronous payment + reward (kept until Todo 7) ===
-        # These two blocks are the double-write bypass. When saga is
-        # on, the worker will independently drive escrow release +
-        # reward distribute (Todo 6) — these in-line calls then act
-        # as the synchronous belt-and-suspenders. Both sides MUST be
-        # idempotent or one will eventually corrupt the other:
-        # - escrow release: backend rejects double-release with 400
-        #   ("Cannot release escrow in status: released"); worker
-        #   read-before-write covers the rest.
-        # - reward distribute: worker checks Redis
-        #   ``acn:payment_tasks:{id}`` hash field ``reward_distributed_at``
-        #   before re-running.
-        # When saga is off (Redis-only / disarmed), these calls are
-        # the only path and the existing try/except / log behavior is
-        # preserved — that's what production ran prior to v0.1.
-        if task.payment_task_id and self.payment_manager:
-            try:
-                await self.payment_manager.update_status(
-                    task.payment_task_id,
-                    "completed",
-                )
-                logger.info(
-                    "payment_released",
-                    task_id=task_id,
-                    payment_task_id=task.payment_task_id,
-                )
-            except Exception as e:
-                logger.error("failed_to_release_payment", error=str(e))
+        # === Step 3: legacy synchronous payment + reward (emergency-disarm only) ===
+        # When saga is enabled (production default), the SettlementWorker
+        # drives escrow release + reward distribute + reputation write
+        # asynchronously from the outbox row enqueued above — these
+        # inline calls are skipped entirely to avoid the previous
+        # double-write window where both paths could race on the
+        # same payment/reward and silently corrupt each other.
+        #
+        # When saga is disabled (``OUTBOX_ENQUEUE_REQUIRED=false`` or
+        # missing PG deps in Redis-only / test fixtures), this block
+        # is the only settlement path: synchronous payment status flip
+        # and synchronous reward distribute, exactly as production ran
+        # prior to the saga rollout. Kept as an in-place rollback lever
+        # so saga can be disarmed without a redeploy.
+        if not self._saga_enabled:
+            if task.payment_task_id and self.payment_manager:
+                try:
+                    await self.payment_manager.update_status(
+                        task.payment_task_id,
+                        "completed",
+                    )
+                    logger.info(
+                        "payment_released",
+                        task_id=task_id,
+                        payment_task_id=task.payment_task_id,
+                    )
+                except Exception as e:
+                    logger.error("failed_to_release_payment", error=str(e))
 
-        if (
-            task.reward_currency.lower() in (AP_POINTS, "points")
-            and float(task.reward) > 0
-            and task.assignee_id
-        ):
-            reward_result = await self._distribute_reward(
-                task=task,
-                amount=float(task.reward),
-                description=f"Reward for task: {task.title}",
-            )
-            if reward_result["success"]:
-                logger.info(
-                    "reward_distributed",
-                    task_id=task_id,
-                    agent_amount=reward_result.get("agent_amount"),
-                    acn_amount=reward_result.get("acn_amount"),
-                    provider_amount=reward_result.get("provider_amount"),
+            if (
+                task.reward_currency.lower() in (AP_POINTS, "points")
+                and float(task.reward) > 0
+                and task.assignee_id
+            ):
+                reward_result = await self._distribute_reward(
+                    task=task,
+                    amount=float(task.reward),
+                    description=f"Reward for task: {task.title}",
                 )
-            else:
-                logger.error(
-                    "reward_distribution_failed",
-                    task_id=task_id,
-                    error=reward_result.get("error"),
-                )
+                if reward_result["success"]:
+                    logger.info(
+                        "reward_distributed",
+                        task_id=task_id,
+                        agent_amount=reward_result.get("agent_amount"),
+                        acn_amount=reward_result.get("acn_amount"),
+                        provider_amount=reward_result.get("provider_amount"),
+                    )
+                else:
+                    logger.error(
+                        "reward_distribution_failed",
+                        task_id=task_id,
+                        error=reward_result.get("error"),
+                    )
 
         # Send webhook notification
         await self._notify_webhook(WebhookEventType.TASK_COMPLETED, task)

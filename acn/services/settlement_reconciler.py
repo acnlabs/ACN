@@ -27,13 +27,15 @@ and reads point-in-time totals is the cleanest signal. Keeping it
 outside the worker also means a worker crash cannot mask a
 divergence: the reconciler reads the same tables independently.
 
-Why this also gates Todo 7 (legacy bypass cleanup)
---------------------------------------------------
-The "promotion criteria" replacing the vague "7 days stable"
-condition (see plan §6.3) requires *zero divergence* over a
-multi-day window before we delete the legacy synchronous bypass
-in ``task_service.complete_task``. The metric this job emits is
-the canonical signal for that decision.
+Standing audit, not a one-shot gate
+-----------------------------------
+This reconciler was originally introduced as the gate for the
+double-write cleanup (Todo 7, completed). After that PR landed
+the saga became the sole writer of settlement side effects, and
+``acn_settlement_reconcile_delta`` became the standing audit
+between the two persistent tables. A non-zero delta is now the
+first signal of saga drift in production — either a saga step
+silently failed without DLQ, or a reputation write was lost.
 
 Testability
 -----------

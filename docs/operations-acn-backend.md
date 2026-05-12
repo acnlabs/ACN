@@ -82,8 +82,13 @@ railway logs --service Agentplanet-backend --environment production --lines 300 
 Design doc: `acn/docs/_drafts/settlement-saga-design.md`. The saga
 moves task completion side effects (escrow release / reward / reputation)
 from a synchronous best-effort path into a retried, idempotent
-outbox-driven async worker. Until Todo 7 cleanup lands, the legacy
-synchronous path **also runs** so a saga regression cannot drop money.
+outbox-driven async worker. As of Todo 7 cleanup the saga is the
+**sole** settlement path when `OUTBOX_ENQUEUE_REQUIRED=true` (default);
+the legacy synchronous path remains in code as an in-place rollback
+lever, activated only when the flag is flipped to `false` or when
+the PG-mode outbox / unit-of-work deps aren't wired
+(Redis-only / test fixtures). The two paths are mutually exclusive
+— no double-write window remains.
 
 ### 6.1 Required environment variables (ACN service)
 
@@ -96,7 +101,7 @@ synchronous path **also runs** so a saga regression cannot drop money.
 | `SETTLEMENT_BATCH_SIZE` | `10` | Rows per claim. Raise if `pending` count grows faster than the worker drains. |
 | `SETTLEMENT_MAX_ATTEMPTS` | `12` | Retries before DLQ. Backoff is `min(2 * 2^n, 900)` seconds. 12 attempts ≈ 2h of self-healing. |
 | `SETTLEMENT_DLQ_ALERT_WEBHOOK` | unset | Required for production. Slack/PagerDuty incoming-webhook URL. Unset = operators must watch `acn_settlement_outbox_count{state="dead"}` themselves. |
-| `SETTLEMENT_RECONCILER_ENABLED` | `true` | Keep on in production — the reconciler is what gates Todo 7 cleanup. |
+| `SETTLEMENT_RECONCILER_ENABLED` | `true` | Keep on in production — the reconciler is the standing audit between saga `done` events and `reputation_events` rows; a non-zero `acn_settlement_reconcile_delta` is the first signal of saga drift. |
 | `SETTLEMENT_RECONCILE_INTERVAL_SEC` | `86400` | 24h window. Don't shorten in production (each run is a real Postgres count); fine to shorten in staging. |
 
 ### 6.2 First-deploy checklist
@@ -107,15 +112,20 @@ silently double-spends.
 
 - [ ] **6.2.1 Migration**: `alembic upgrade head` runs on deploy.
   Verify `settlement_outbox` and `reputation_events` tables exist.
-- [ ] **6.2.2 Producer first**: deploy with `SETTLEMENT_WORKER_ENABLED=false`,
-  `OUTBOX_ENQUEUE_REQUIRED=true`. After one `complete_task` succeeds,
+- [ ] **6.2.2 Producer-only smoke** (initial PG-mode rollout only,
+  no longer needed on subsequent deploys): set
+  `SETTLEMENT_WORKER_ENABLED=false`, `OUTBOX_ENQUEUE_REQUIRED=false`
+  so the legacy synchronous path stays active while you confirm the
+  outbox migration is sound. After one `complete_task` succeeds,
+  flip `OUTBOX_ENQUEUE_REQUIRED=true` and confirm
   `SELECT count(*) FROM settlement_outbox WHERE state='pending';`
-  must return ≥ 1. **The legacy bypass also ran**, so the user got
-  paid — the outbox row is the new audit trail.
+  returns ≥ 1 on the next completion. The outbox row is the new
+  audit trail.
 - [ ] **6.2.3 Worker on**: flip `SETTLEMENT_WORKER_ENABLED=true`,
-  redeploy. Within 30s the row should be `state='done'`. The worker
-  short-circuits because the legacy bypass already released the
-  escrow (`status='released'` triggers idempotent skip).
+  redeploy. Within 30s the row should be `state='done'`. From this
+  point the saga is the sole settlement path; the legacy inline
+  branch only runs if you flip `OUTBOX_ENQUEUE_REQUIRED=false`
+  again (emergency disarm).
 - [ ] **6.2.4 DLQ webhook**: set `SETTLEMENT_DLQ_ALERT_WEBHOOK` and
   test by injecting a permanent failure in staging (e.g. point
   `BACKEND_URL` at an invalid host). After 12 retries the webhook
@@ -174,10 +184,17 @@ curl -s https://acn-production.up.railway.app/metrics \
 
 ## 7) Settlement DLQ — Handling Procedure
 
-A row in `state='dead'` means **12 attempts failed and the legacy
-bypass ran** (until Todo 7 cleanup ships). The user side effect
-already happened or will be unrecoverable; this section is about
-diagnosing the cause and deciding whether to manually retry.
+A row in `state='dead'` means **12 attempts failed**: the saga
+worker has exhausted its retry budget and the settlement side
+effects (escrow release / reward distribute / reputation write) for
+that task have NOT all happened. Some steps may have partially
+succeeded — `step_status` on the row tells you which ones. The
+inline legacy path is OFF in production, so dead rows represent
+genuine settlement debt that requires operator intervention; this
+section is about diagnosing the cause and choosing between replay
+(fix the upstream condition and let the worker retry) and mark-done
+(operator manually completed settlement, mark the outbox row to
+satisfy the reconciler).
 
 ### 7.1 Triage in under 5 minutes
 
@@ -186,16 +203,17 @@ diagnosing the cause and deciding whether to manually retry.
    step is the failure point. v0.1 steps: `escrow_release`,
    `reward_distribute`, `reputation_write`.
 3. **Was the user paid**: cross-reference with backend logs for the
-   same `task_id`. The legacy bypass in `complete_task` runs
-   independently of the saga, so most DLQ rows correlate with
-   already-completed user-facing side effects.
+   same `task_id`. With the saga as the sole settlement path, a dead
+   row means user-facing side effects did NOT all happen — pick
+   either replay (after fixing the upstream condition) or mark-done
+   (after manually completing settlement out-of-band) below.
 
 ### 7.2 Decision matrix
 
 | step_status[failed_step] | Likely cause | Action |
 |---|---|---|
 | `escrow_release` fail + escrow status `rejected`/`refunded` | Terminal escrow state, fast-fail path triggered | Investigate why the escrow was rejected (Backend logs). Do NOT replay — the funds are gone. |
-| `escrow_release` fail + escrow status `released` | Race with the legacy bypass — bypass released first, then saga retried unnecessarily | Manual `mark_done` (see 7.3); no funds movement needed. |
+| `escrow_release` fail + escrow status `released` | Backend admin or out-of-band release fired between worker tries — worker's read-before-write should have short-circuited but timing window race | Manual `mark_done` (see 7.3); no funds movement needed. |
 | `escrow_release` fail + escrow status `locked`/`in_progress` | Backend 5xx or network blip exhausted retries | Investigate Backend. If healthy, manual replay (see 7.3) or one-shot manual release via Backend admin. |
 | `reward_distribute` fail | Should not happen in v0.1 (handler is a no-op). | Investigate worker logs; this is a code bug — file an issue. |
 | `reputation_write` fail | Postgres outage or `reputation_events` UNIQUE violation | If PG is healthy: manual replay (idempotent on `(agent_id, task_id, kind)`). If unique-violation: row already exists — manual `mark_done`. |
@@ -203,8 +221,10 @@ diagnosing the cause and deciding whether to manually retry.
 ### 7.3 Manual operations
 
 ```sql
--- Manual mark_done (use when the side effect already happened
--- via the legacy bypass and the saga retry was redundant)
+-- Manual mark_done (use when the side effect was already
+-- completed out-of-band by an operator — typically a manual
+-- backend release or an admin tool — and the saga retry would
+-- otherwise be redundant)
 UPDATE settlement_outbox
 SET state='done', updated_at=now()
 WHERE event_id='<event_id>' AND state='dead';
@@ -249,7 +269,9 @@ If the saga is misbehaving and the on-call wants to disable it
 **without redeploying**:
 
 ```bash
-# Stop the worker (no rollback needed — legacy bypass is still wired)
+# Stop the worker (settlement halts; flip OUTBOX_ENQUEUE_REQUIRED=false
+# in the same command if you also want producers to fall back to the
+# legacy synchronous path while you triage)
 railway variables set --service ACN \
   SETTLEMENT_WORKER_ENABLED=false \
   SETTLEMENT_RECONCILER_ENABLED=false

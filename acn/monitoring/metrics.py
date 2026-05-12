@@ -177,11 +177,12 @@ class MetricsCollector:
         # Settlement saga v0.1 (plan §6.2)
         # ---------------------------------------------------------------
         # The four metrics below are the operator's view into the
-        # ``settlement_outbox`` state machine. They feed the Todo 7
-        # cleanup decision: only when the saga has settled enough
-        # events under healthy retry / dead behaviour can the legacy
-        # synchronous bypass in ``complete_task`` be deleted. See
-        # ``acn/docs/_drafts/settlement-saga-design.md`` §6.2 / §6.3.
+        # ``settlement_outbox`` state machine and the saga's
+        # consistency invariant. They started as the gating signal
+        # for the double-write cleanup (Todo 7, completed) and are
+        # now the standing health view for the sole settlement path.
+        # See ``acn/docs/_drafts/settlement-saga-design.md`` §6.2 /
+        # §6.3.
         #
         # Cardinality notes:
         # - ``state`` is bounded to the 5 canonical states (pending,
@@ -232,9 +233,10 @@ class MetricsCollector:
                 "(``trigger='review_pass'``) and reputation feedback "
                 "row count over the trailing reconciliation window. "
                 "Zero means the two persistent side effects are in "
-                "lockstep. Non-zero is the trigger for Todo 7 "
-                "(legacy bypass cleanup) blocker investigation. "
-                "Emitted by SettlementReconciler.run_once."
+                "lockstep. Non-zero is the first signal of saga "
+                "drift — either a step silently failed without DLQ "
+                "or a reputation write was lost. Emitted by "
+                "SettlementReconciler.run_once."
             ),
             "labels": [],
         },
