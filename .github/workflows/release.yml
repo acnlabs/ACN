@@ -63,7 +63,12 @@ jobs:
       - name: Publish to PyPI
         run: |
           cd clients/python
-          uv publish
+          PKG_VER=$(python -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(d['project']['version'])")
+          if pip index versions acn-client 2>/dev/null | grep -q "${PKG_VER}"; then
+            echo "acn-client ${PKG_VER} already on PyPI, skipping"
+          else
+            uv publish
+          fi
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
@@ -98,7 +103,13 @@ jobs:
       - name: Publish to npm
         run: |
           cd clients/typescript
-          npm publish --access public
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VER=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VER}" version 2>/dev/null | grep -q "^${PKG_VER}$"; then
+            echo "${PKG_NAME}@${PKG_VER} already on npm, skipping"
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -133,7 +144,13 @@ jobs:
       - name: Publish to npm
         run: |
           cd clients/cli
-          npm publish --access public
+          PKG_NAME=$(node -p "require('./package.json').name")
+          PKG_VER=$(node -p "require('./package.json').version")
+          if npm view "${PKG_NAME}@${PKG_VER}" version 2>/dev/null | grep -q "^${PKG_VER}$"; then
+            echo "${PKG_NAME}@${PKG_VER} already on npm, skipping"
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
