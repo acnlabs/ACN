@@ -296,19 +296,46 @@ async def test_update_step_status_persists_step_value(
     _engine, factory = engine_and_factory
     repo = PostgresSettlementOutboxRepository(session_factory=factory)
 
-    # Start from the default step_status the producer writes.
-    await repo.enqueue(_event("evt-step"))
+    # The production schema declares ``event_id`` as PG ``uuid``, so
+    # the test must use a syntactically valid UUID — passing a
+    # placeholder like ``"evt-step"`` would fail at INSERT time with
+    # ``invalid input syntax for type uuid``. We derive a stable UUID
+    # from a seed so the test is deterministic across runs.
+    from uuid import NAMESPACE_OID, uuid5
+
+    event_id = str(uuid5(NAMESPACE_OID, "evt-step"))
+    event = SettlementEvent(
+        event_id=event_id,
+        task_id=f"task-{event_id}",
+        trigger="review_pass",
+        payload={
+            "task_id": f"task-{event_id}",
+            "creator_id": "user-creator",
+            "assignee_id": "agent-worker",
+            "reward": "100",
+            "reward_currency": "ap_points",
+            "use_escrow": True,
+            "is_multi": False,
+            "metadata": {},
+        },
+        step_status={
+            "escrow_release": "pending",
+            "reward_distribute": "pending",
+            "reputation_write": "pending",
+        },
+    )
+    await repo.enqueue(event)
 
     # Patch one step — this is the path that was broken in prod.
     await repo.update_step_status(
-        event_id="evt-step",
+        event_id=event_id,
         step="reputation_write",
         status="ok",
     )
 
     # Patch a second step to verify multi-key JSONB merge survives.
     await repo.update_step_status(
-        event_id="evt-step",
+        event_id=event_id,
         step="escrow_release",
         status="skipped",
     )
@@ -318,7 +345,7 @@ async def test_update_step_status_persists_step_value(
         row = (
             await session.execute(
                 SettlementOutboxModel.__table__.select().where(
-                    SettlementOutboxModel.event_id == "evt-step"
+                    SettlementOutboxModel.event_id == event_id
                 )
             )
         ).first()
