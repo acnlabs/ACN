@@ -244,10 +244,20 @@ class PostgresAgentRepository(IAgentRepository):
             )
             return result.scalar() or 0
 
-    async def find_by_api_key(self, api_key: str) -> Agent | None:
+    async def find_by_api_key(self, key_hash: str) -> Agent | None:
+        """Find agent by SHA-256 hash of their API key."""
         async with self._session_factory() as session:
             result = await session.execute(
-                select(AgentModel).where(AgentModel.api_key == api_key)
+                select(AgentModel).where(AgentModel.api_key == key_hash)
+            )
+            row = result.scalar_one_or_none()
+            return self._model_to_agent(row) if row else None
+
+    async def find_by_api_key_legacy(self, raw_key: str) -> Agent | None:
+        """Find agent by plaintext API key (pre-H1 migration fallback)."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(AgentModel).where(AgentModel.api_key == raw_key)
             )
             row = result.scalar_one_or_none()
             return self._model_to_agent(row) if row else None

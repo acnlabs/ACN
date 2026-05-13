@@ -143,12 +143,27 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_api_key(self, api_key: str) -> Agent | None:
-        """
-        Find agent by API key (for autonomous agent authentication)
+    async def find_by_api_key(self, key_hash: str) -> Agent | None:
+        """Find agent by SHA-256 hash of their API key.
 
         Args:
-            api_key: Agent API key
+            key_hash: SHA-256 hex digest of the raw API key
+
+        Returns:
+            Agent entity or None if not found
+        """
+        pass
+
+    @abstractmethod
+    async def find_by_api_key_legacy(self, raw_key: str) -> Agent | None:
+        """Find agent by plaintext API key (pre-H1 records only).
+
+        Used exclusively during the auto-migration window for agents registered
+        before API-key hashing was introduced.  Remove once all agents have been
+        migrated (``api_key`` field is a SHA-256 hex digest for all records).
+
+        Args:
+            raw_key: Plaintext API key as originally issued
 
         Returns:
             Agent entity or None if not found

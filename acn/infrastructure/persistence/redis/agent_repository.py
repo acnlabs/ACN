@@ -23,7 +23,7 @@ class RedisAgentRepository(IAgentRepository):
     - acn:agents:{agent_id}        → Agent hash (permanent)
     - acn:agents:{agent_id}:alive  → Alive signal key with TTL (ephemeral)
     - acn:agents:by_endpoint:{owner}:{endpoint} → agent_id
-    - acn:agents:by_api_key:{api_key} → agent_id
+    - acn:agents:by_api_key:{sha256(api_key)} → agent_id
     - acn:agents:by_owner:{owner}  → Set of agent_ids
     - acn:agents:unclaimed         → Set of agent_ids
     - acn:subnets:{subnet_id}:agents → Set of agent_ids
@@ -276,14 +276,18 @@ class RedisAgentRepository(IAgentRepository):
         """Count agents in a subnet"""
         return await self.redis.scard(f"acn:subnets:{subnet_id}:agents")
 
-    async def find_by_api_key(self, api_key: str) -> Agent | None:
-        """Find agent by API key (for autonomous agent authentication)"""
-        api_key_index = f"acn:agents:by_api_key:{api_key}"
-        agent_id = await self.redis.get(api_key_index)
-
+    async def find_by_api_key(self, key_hash: str) -> Agent | None:
+        """Find agent by SHA-256 hash of their API key."""
+        agent_id = await self.redis.get(f"acn:agents:by_api_key:{key_hash}")
         if not agent_id:
             return None
+        return await self.find_by_id(agent_id)
 
+    async def find_by_api_key_legacy(self, raw_key: str) -> Agent | None:
+        """Find agent by plaintext API key (pre-H1 migration fallback)."""
+        agent_id = await self.redis.get(f"acn:agents:by_api_key:{raw_key}")
+        if not agent_id:
+            return None
         return await self.find_by_id(agent_id)
 
     async def find_unclaimed(self, limit: int = 100) -> list[Agent]:

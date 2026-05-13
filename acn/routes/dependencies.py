@@ -47,6 +47,7 @@ from ..services import (
     SubnetService,
 )
 from ..services.activity_service import ActivityService
+from ..services.agent_service import hash_api_key
 from ..services.reputation_query_service import ReputationQueryService
 from ..services.reputation_service import ReputationService
 
@@ -702,7 +703,9 @@ _api_key_cache: dict[str, tuple[str, str, str | None, float]] = {}
 
 
 def _get_cached_agent(api_key: str) -> dict | None:
-    entry = _api_key_cache.get(api_key)
+    # Cache key is the SHA-256 hash of the raw key — no plaintext in memory
+    cache_key = hash_api_key(api_key)
+    entry = _api_key_cache.get(cache_key)
     if entry and entry[3] > time.monotonic():
         return {
             "agent_id": entry[0],
@@ -710,7 +713,7 @@ def _get_cached_agent(api_key: str) -> dict | None:
             "wallet_address": entry[2],
         }
     if entry:
-        del _api_key_cache[api_key]
+        del _api_key_cache[cache_key]
     return None
 
 
@@ -720,13 +723,15 @@ def _cache_agent(
     name: str,
     wallet_address: str | None = None,
 ) -> dict:
+    # Cache key is the SHA-256 hash of the raw key — no plaintext in memory
+    cache_key = hash_api_key(api_key)
     # Evict all expired entries when the cache is full
     if len(_api_key_cache) >= _API_KEY_CACHE_MAX:
         now = time.monotonic()
         expired = [k for k, v in _api_key_cache.items() if v[3] <= now]
         for k in expired:
             del _api_key_cache[k]
-    _api_key_cache[api_key] = (
+    _api_key_cache[cache_key] = (
         agent_id,
         name,
         wallet_address,

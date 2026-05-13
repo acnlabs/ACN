@@ -3,6 +3,7 @@
 Business logic for agent registration, discovery, and management.
 """
 
+import hashlib
 import secrets
 from uuid import uuid4
 
@@ -31,6 +32,17 @@ logger = structlog.get_logger()
 def generate_api_key() -> str:
     """Generate a secure API key"""
     return f"acn_{secrets.token_urlsafe(32)}"
+
+
+def hash_api_key(api_key: str) -> str:
+    """Return the SHA-256 hex digest of an API key.
+
+    API keys are high-entropy (~256-bit) so plain SHA-256 (no salt) is
+    sufficient — rainbow-table attacks are infeasible.  The hash is what
+    gets stored in Redis/Postgres; the plaintext is only held in memory
+    for the duration of a single request.
+    """
+    return hashlib.sha256(api_key.encode()).hexdigest()
 
 
 def generate_verification_code() -> str:
@@ -531,7 +543,7 @@ class AgentService:
             tags=tags or [],
             subnet_ids=["public"],
             metadata=metadata or {},
-            api_key=api_key,
+            api_key=hash_api_key(api_key),  # store hash only; plaintext returned once below
             claim_status=ClaimStatus.UNCLAIMED,
             verification_code=verification_code,
             referrer_id=referrer_id,
@@ -590,16 +602,24 @@ class AgentService:
             logger.warning("payment_discovery_sync_failed", agent_id=agent.agent_id, exc_info=True)
 
     async def get_agent_by_api_key(self, api_key: str) -> Agent | None:
-        """
-        Find agent by API key (for authentication)
+        """Find agent by API key (for authentication).
 
-        Args:
-            api_key: Agent API key
-
-        Returns:
-            Agent entity or None
+        Looks up by SHA-256 hash.  Falls back to legacy plaintext lookup for
+        agents registered before H1 and auto-migrates them on first use.
         """
-        return await self.repository.find_by_api_key(api_key)
+        key_hash = hash_api_key(api_key)
+        agent = await self.repository.find_by_api_key(key_hash)
+        if agent is not None:
+            return agent
+
+        # Legacy fallback: agents registered before API-key hashing (H1).
+        # Auto-migrate on first successful auth so they are re-indexed by hash.
+        agent = await self.repository.find_by_api_key_legacy(api_key)
+        if agent is not None:
+            agent.api_key = key_hash
+            await self.repository.save(agent)
+            logger.info("api_key_hash_migrated", agent_id=agent.agent_id)
+        return agent
 
     async def claim_agent(
         self,
