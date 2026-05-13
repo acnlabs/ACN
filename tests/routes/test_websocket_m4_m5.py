@@ -50,7 +50,6 @@ from acn.infrastructure.messaging.websocket_manager import (
     WebSocketManager,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared helpers (same pattern as test_websocket_auth_m14.py)
 # ---------------------------------------------------------------------------
