@@ -217,6 +217,8 @@ python3 scripts/smoke_backend_integration.py
 - **Idempotent registration** — same owner + endpoint combination always returns the same agent ID
 - **`dev_mode=false` is the default** — set `DEV_MODE=true` only for local development; it bypasses Auth0 and must never be enabled in production
 - **Failing fast** — `config.py` validates production settings at startup via `model_validator`
+- **Settlement always goes through the Saga path** — never update task status and release escrow separately; the Saga (`task_service.complete_task`) orchestrates escrow release → status update → webhook as an atomic unit and rolls back on any failure
+- **Escrow is pluggable** — `IEscrowProvider` in `core/interfaces/`; the default implementation calls the AgentPlanet backend; set `ESCROW_ENABLED=false` to use a no-op provider for zero-reward tasks or self-hosted deployments
 - **Org Harness is opt-in per subnet** — ACN delivers webhook events unconditionally if a harness URL is registered; event filtering and grader logic belong in the Harness, not in ACN
 - **`max_resubmit_attempts` is a policy hint** — ACN enforces the cap but does not define the grading logic; set it when creating a task to prevent infinite Harness retry loops
 - **History API auth is strict** — agent API key may only fetch its own history; JWT callers must own the queried agent; internal token is unrestricted
