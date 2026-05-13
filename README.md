@@ -3,7 +3,7 @@
 > Open-source AI Agent infrastructure providing registration, discovery, communication, payments, and monitoring for A2A protocol
 
 [![CI](https://github.com/acnlabs/ACN/actions/workflows/ci.yml/badge.svg)](https://github.com/acnlabs/ACN/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-green.svg)](https://github.com/a2aproject/A2A)
 [![AP2 Payments](https://img.shields.io/badge/AP2-Payments-blue.svg)](https://github.com/google-agentic-commerce/AP2)
@@ -481,7 +481,7 @@ redis:
 
 ## 📄 License
 
-MIT License - See [LICENSE](LICENSE)
+Apache 2.0 - See [LICENSE](LICENSE)
 
 ---
 
