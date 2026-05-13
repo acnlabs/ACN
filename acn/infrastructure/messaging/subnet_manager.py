@@ -35,6 +35,7 @@ Usage:
 """
 
 import asyncio
+import json
 import logging
 import secrets
 from dataclasses import dataclass, field
@@ -60,6 +61,13 @@ if TYPE_CHECKING:
     from .manifest_dispatcher import ManifestDispatcher
 
 logger = logging.getLogger(__name__)
+
+# M4 — inbound frame size cap for the subnet gateway WebSocket channel.
+# ``receive_json()`` buffers the entire text payload before parsing; without
+# an app-level cap a malicious agent can send a 1 GB registration or heartbeat
+# frame and exhaust memory.  We receive as raw text, reject if oversized, then
+# call json.loads() so the check runs before any deserialization work.
+_SUBNET_WS_MAX_FRAME_BYTES: int = 1_048_576  # 1 MiB — matches HTTP body cap
 
 
 class GatewayMessageType(StrEnum):
@@ -513,12 +521,21 @@ class SubnetManager:
     ):
         """Wait for and process registration message"""
         try:
-            data = await asyncio.wait_for(
-                connection.websocket.receive_json(),
+            # M4: receive as raw text first so we can enforce the frame size
+            # cap before any JSON parsing work is done.
+            raw = await asyncio.wait_for(
+                connection.websocket.receive_text(),
                 timeout=timeout,
             )
         except TimeoutError as e:
             raise ValueError("Registration timeout") from e
+
+        if len(raw.encode("utf-8")) > _SUBNET_WS_MAX_FRAME_BYTES:
+            raise ValueError(
+                f"Registration frame too large: {len(raw.encode('utf-8'))} bytes "
+                f"(limit {_SUBNET_WS_MAX_FRAME_BYTES})"
+            )
+        data = json.loads(raw)
 
         if data.get("type") != GatewayMessageType.REGISTER:
             raise ValueError(f"Expected REGISTER, got {data.get('type')}")
@@ -584,7 +601,22 @@ class SubnetManager:
     async def _message_loop(self, connection: GatewayConnection):
         """Process messages from subnet agent"""
         while True:
-            data = await connection.websocket.receive_json()
+            # M4: receive as text first, enforce size cap, then parse.
+            raw = await connection.websocket.receive_text()
+            if len(raw.encode("utf-8")) > _SUBNET_WS_MAX_FRAME_BYTES:
+                logger.warning(
+                    "subnet_ws_frame_too_large",
+                    subnet_id=connection.subnet_id,
+                    agent_id=connection.agent_id,
+                    frame_bytes=len(raw.encode("utf-8")),
+                    limit=_SUBNET_WS_MAX_FRAME_BYTES,
+                )
+                await self._send_error(
+                    connection.websocket, "frame_too_large: message exceeds 1 MiB limit"
+                )
+                await connection.websocket.close(code=4400, reason="frame_too_large")
+                return
+            data = json.loads(raw)
             msg_type = data.get("type")
 
             if msg_type == GatewayMessageType.HEARTBEAT:

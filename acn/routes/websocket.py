@@ -30,6 +30,30 @@ from .dependencies import (  # type: ignore[import-untyped]
 # ``details`` cannot silently truncate-on-the-wire.
 _CLOSE_REASON_MAX_BYTES = 123
 
+# M4 — inbound frame size caps.
+#
+# Starlette's ``receive_text()`` buffers the entire frame payload before
+# returning. Without an application-level cap an attacker can send a
+# single multi-GB frame and exhaust process memory before we parse a
+# single byte.
+#
+# Two distinct limits because the auth handshake payload is structurally
+# tiny ({"type":"auth","token":"<key>"} < 200 bytes in practice) while
+# application messages may carry legitimate large content.
+#
+#   _MAX_WS_AUTH_FRAME_BYTES  — covers first-message auth and any future
+#       handshake sub-frames.  4 KB is several times the maximum API key
+#       length (128 hex chars) plus JSON envelope overhead; anything
+#       larger is unambiguously malicious.
+#
+#   _MAX_WS_MESSAGE_FRAME_BYTES — covers application messages in the
+#       main message loop.  1 MiB matches the HTTP body cap (H6) so
+#       every transport tier enforces the same policy.  Operators who
+#       need larger payloads (e.g. base64-encoded files) should use
+#       the REST upload API instead.
+_MAX_WS_AUTH_FRAME_BYTES: int = 4_096  # 4 KB
+_MAX_WS_MESSAGE_FRAME_BYTES: int = 1_048_576  # 1 MiB
+
 # ``responses=`` only affects HTTP routes registered on this APIRouter
 # (see ``get_active_connections`` and ``get_agent_websocket_status``
 # below). The ``@router.websocket(...)`` endpoint at L65 is not an HTTP
@@ -321,6 +345,17 @@ async def websocket_endpoint(
         # First-message auth: wait for {"type": "auth", "token": "..."}
         try:
             raw = await websocket.receive_text()
+            # M4: reject oversized auth frames before parsing to prevent
+            # memory exhaustion from a malicious multi-MB first message.
+            if len(raw.encode("utf-8")) > _MAX_WS_AUTH_FRAME_BYTES:
+                await _send_error_and_close(
+                    websocket,
+                    code=4400,
+                    error_code=ErrorCode.AUTHENTICATION_REQUIRED,
+                    request_id=request_id,
+                    details={"reason": "ws_frame_too_large"},
+                )
+                return
             msg = json.loads(raw)
             if msg.get("type") == "auth" and msg.get("token"):
                 resolved_token = msg["token"]
@@ -431,6 +466,26 @@ async def websocket_endpoint(
         # Keep connection alive and handle messages
         while True:
             data = await websocket.receive_text()
+            # M4: drop oversized frames immediately so a single connection
+            # cannot exhaust process memory.  Close with 4400 (bad-request)
+            # rather than 1009 (message-too-big) so the SDK error vocabulary
+            # stays consistent with the auth-phase size rejection above.
+            if len(data.encode("utf-8")) > _MAX_WS_MESSAGE_FRAME_BYTES:
+                logger.warning(
+                    "websocket_frame_too_large",
+                    agent_id=agent_id,
+                    frame_bytes=len(data.encode("utf-8")),
+                    limit=_MAX_WS_MESSAGE_FRAME_BYTES,
+                    request_id=request_id,
+                )
+                await _send_error_and_close(
+                    websocket,
+                    code=4400,
+                    error_code=ErrorCode.AUTHENTICATION_REQUIRED,
+                    request_id=request_id,
+                    details={"reason": "ws_frame_too_large"},
+                )
+                return
             logger.debug("websocket_message_received", agent_id=agent_id, data=data)
 
             # Echo back for now (can extend with message routing)

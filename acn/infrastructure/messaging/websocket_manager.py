@@ -429,13 +429,24 @@ class WebSocketManager:
         if message_type == MessageType.SUBSCRIBE.value:
             channel = data.get("channel")
             if channel:
+                # M5: validate channel before subscribing.
+                err = self._check_channel_auth(connection, channel)
+                if err:
+                    await self._send(
+                        connection,
+                        {"type": MessageType.ERROR.value, "error": err},
+                    )
+                    return
                 await self.subscribe(connection_id, channel)
             return
 
         if message_type == MessageType.UNSUBSCRIBE.value:
             channel = data.get("channel")
             if channel:
-                await self.unsubscribe(connection_id, channel)
+                # M5: only allow unsubscribing from channels the agent
+                # is actually subscribed to (avoids resource confusion).
+                if channel in connection.subscriptions:
+                    await self.unsubscribe(connection_id, channel)
             return
 
         # Call registered handlers
@@ -456,6 +467,47 @@ class WebSocketManager:
                         "error": safe_external_error(e),
                     },
                 )
+
+    # M5 — channel subscription authorization.
+    #
+    # Channel naming convention:
+    #   agent:<agent_id>   — per-agent notification channel; only the
+    #                        owning agent may subscribe.
+    #   session:<id>       — bilateral session channels; any participant may
+    #                        subscribe (membership validated at session layer).
+    #   broadcast:<topic>  — public broadcast channels; anyone may subscribe.
+    #   system:<slug>      — RESERVED for internal server-side use; no client
+    #                        should ever need to subscribe directly.
+    #
+    # Any channel that does not match a known prefix is also blocked to
+    # prevent typo-drift from silently creating orphan subscriptions.
+    _MAX_CHANNEL_NAME_LEN: int = 256
+    _ALLOWED_PREFIXES: tuple[str, ...] = ("session:", "broadcast:")
+
+    def _check_channel_auth(self, connection: Connection, channel: str) -> str | None:
+        """Return an error reason string if the subscription is denied, else None.
+
+        Rules (M5):
+        * ``system:*`` — always denied (server-internal namespace).
+        * ``agent:*``   — only allowed when the suffix matches the
+                          connection's own ``user_id``.
+        * ``session:*`` / ``broadcast:*`` — allowed (public / session layer).
+        * Any other prefix — denied (allowlist, not denylist).
+        * Name length > _MAX_CHANNEL_NAME_LEN — denied (DoS guard).
+        """
+        if len(channel) > self._MAX_CHANNEL_NAME_LEN:
+            return "channel_name_too_long"
+        if channel.startswith("system:"):
+            return "channel_subscription_denied"
+        if channel.startswith("agent:"):
+            owner_id = channel[len("agent:"):]
+            if connection.user_id != owner_id:
+                return "channel_subscription_denied"
+            return None
+        for prefix in self._ALLOWED_PREFIXES:
+            if channel.startswith(prefix):
+                return None
+        return "channel_subscription_denied"
 
     def register_handler(
         self,
