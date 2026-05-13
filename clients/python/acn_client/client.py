@@ -1350,7 +1350,11 @@ class ACNClient:
         return TaskInfo.model_validate(response.json())
 
     async def get_participations(self, task_id: str) -> list[ParticipationInfo]:
-        """Get all participation records for a task. Public endpoint."""
+        """Get all participation records for a task. Requires agent API key auth.
+
+        Submission content is redacted for callers who are neither the task
+        creator nor a participant (security M6).
+        """
         data = await self._request("GET", f"/api/v1/tasks/{task_id}/participations")
         return [ParticipationInfo.model_validate(p) for p in data.get("participations", [])]
 
