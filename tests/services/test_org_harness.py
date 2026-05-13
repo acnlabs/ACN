@@ -629,7 +629,7 @@ class TestParticipationRejectedWebhook:
     platform webhook and per-subnet harness, with participation-level fields."""
 
     async def test_delivers_participation_fields_to_harness(self, task_service):
-        from acn.core.entities.task import Participation, ParticipationStatus
+        from acn.core.entities.task import ParticipationStatus
 
         webhook = AsyncMock()
         task_service.webhook = webhook
@@ -659,7 +659,7 @@ class TestParticipationRejectedWebhook:
         assert webhook.send_to.await_args.kwargs["event"] == WebhookEventType.PARTICIPATION_REJECTED
 
     async def test_no_webhook_service_is_noop(self, task_service):
-        from acn.core.entities.task import Participation, ParticipationStatus
+        from acn.core.entities.task import ParticipationStatus
 
         task_service.webhook = None
         p = _make_participation(status=ParticipationStatus.REJECTED)
