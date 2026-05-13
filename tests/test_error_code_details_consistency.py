@@ -93,6 +93,12 @@ UNION_SCHEMA_CODES: dict[str, str] = {
     # Cross-module catalog from sprint #2b — value of ``details``
     # depends on which validator raised. ``acn-error-schema.md`` §2
     # cross-module catalog table publishes the union shape per code.
+    "AGENT_NOT_FOUND": (
+        "communication routes that look up a *target* agent intentionally "
+        "omit agent_id from details {} to prevent agent-ID enumeration "
+        "(security M9); all other routes echo {agent_id} for the "
+        "sender/owner whose ID the caller already possesses"
+    ),
     "OWNERSHIP_MISMATCH": (
         "registry uses {requested_owner, token_owner} for owner-token "
         "mismatch; subnets/tasks use {agent_id?, subnet_id?, task_id?, "
