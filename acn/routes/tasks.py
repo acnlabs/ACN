@@ -16,8 +16,8 @@ from ..auth.middleware import verify_token
 from ..config import get_settings
 from ..core.entities import TaskStatus
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
-from ..core.validators import check_dict_size_64k
 from ..core.exceptions import AgentNotFoundException
+from ..core.validators import check_dict_size_64k
 from ..services import TaskNotFoundException, TaskService
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
@@ -615,8 +615,8 @@ async def get_agent_task_history(
         agent_svc = get_agent_service()
         try:
             target_agent = await agent_svc.get_agent(agent_id)
-        except AgentNotFoundException:
-            raise ACNHTTPError(ErrorCode.RESOURCE_NOT_FOUND, 404, message="Agent not found")
+        except AgentNotFoundException as exc:
+            raise ACNHTTPError(ErrorCode.RESOURCE_NOT_FOUND, 404, message="Agent not found") from exc
         if target_agent.owner != caller_id:
             raise ACNHTTPError(
                 ErrorCode.MISSING_PERMISSION,
