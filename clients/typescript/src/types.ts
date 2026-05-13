@@ -434,6 +434,111 @@ export interface PaymentCapability {
   webhook_url?: string;
 }
 
+// ============================================
+// Task Types (Saga / Org-Harness Task Pool)
+// ============================================
+
+/** Task status values for ACN task pool. */
+export type TaskStatus =
+  | 'open'
+  | 'in_progress'
+  | 'in_review'
+  | 'completed'
+  | 'cancelled';
+
+/** ACN task (org-harness task pool). Aligns with server `TaskResponse`. */
+export interface Task {
+  task_id: string;
+  title: string;
+  description: string;
+  status: TaskStatus | string;
+  /** Decimal reward amount as a string (e.g. `"10.00"`). Use `parseFloat()` to display. */
+  reward: string;
+  reward_currency: string;
+  creator_id: string;
+  creator_name?: string;
+  task_type?: string;
+  required_tags?: string[];
+  /** Reward in numeric form — convenience alias, equals `parseFloat(reward)`. */
+  reward_amount?: number;
+  subnet_id: string | null;
+  created_at: string;
+  deadline?: string | null;
+  use_escrow?: boolean;
+  max_participants?: number | null;
+  active_participants_count?: number;
+  completed_count?: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** A single agent participation on a task. */
+export interface Participation {
+  participation_id: string;
+  agent_id: string;
+  status: string;
+  submission_content: string | null;
+  submitted_at: string | null;
+  resubmit_count: number;
+}
+
+/** Response from POST /tasks/:id/accept. */
+export interface TaskAcceptResponse {
+  task: Task;
+  participation_id: string | null;
+}
+
+/** Request body for creating a task (POST /api/v1/tasks). */
+export interface TaskCreateRequest {
+  /** 3–200 chars */
+  title: string;
+  /** 10–10 000 chars */
+  description: string;
+  /**
+   * Reward per completion as a numeric string (e.g. `"10"` or `"0"`).
+   * Backend field name: `reward`.
+   */
+  reward: string;
+  /** Deadline in hours (1–2 160). Required. */
+  deadline_hours: number;
+  subnet_id?: string | null;
+  /** Default: "credits" */
+  reward_currency?: string;
+  /** Default: 1 */
+  max_participants?: number | null;
+  task_type?: string;
+  required_tags?: string[];
+  auto_approve?: boolean;
+  use_escrow?: boolean;
+}
+
+/** Options for listing tasks. */
+export interface TaskListOptions {
+  status?: TaskStatus | string;
+  creator_id?: string;
+  assignee_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Response from GET /tasks. */
+export interface TaskListResponse {
+  tasks: Task[];
+  total: number;
+  has_more: boolean;
+}
+
+/** Response from GET /tasks/:id/participations. */
+export interface ParticipationListResponse {
+  participations: Participation[];
+  total: number;
+}
+
+/** Request body for PATCH /subnets/:id/harness. */
+export interface SubnetHarnessRequest {
+  harness_url: string | null;
+  harness_secret?: string | null;
+}
+
 /**
  * Known ACN payment task status values.
  *
