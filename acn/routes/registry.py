@@ -65,6 +65,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     # exposing it as a public name would force a shim layer that adds
     # zero value.
     _wallet_rate_limit_key,
+    evict_agent_from_cache,
     limiter,
     verify_owner_or_internal,
 )
@@ -1934,6 +1935,7 @@ async def admin_bulk_delete_agents(
                         agent_id=a.agent_id,
                         error=str(cleanup_exc),
                     )
+            evict_agent_from_cache(a.agent_id)  # M3: immediate cache invalidation
             deleted.append(a.agent_id)
             logger.info("admin_bulk_delete", agent_id=a.agent_id, name=a.name)
             if audit is not None:
@@ -2001,6 +2003,7 @@ async def unregister_agent(
         success = await agent_service.unregister_agent(agent_id, token_owner)
 
         if success:
+            evict_agent_from_cache(agent_id)  # M3: immediate cache invalidation
             logger.info("agent_unregistered", agent_id=agent_id)
             return {"status": "unregistered", "agent_id": agent_id}
         else:

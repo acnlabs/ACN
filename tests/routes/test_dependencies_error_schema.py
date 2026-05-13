@@ -94,6 +94,9 @@ from fastapi.testclient import TestClient
 from acn.api import app
 from acn.routes.dependencies import (
     _api_key_cache,
+    _api_key_cache_by_agent,
+    _cache_agent,
+    evict_agent_from_cache,
     get_agent_service,
     get_message_service,
     get_payment_tasks,
@@ -108,9 +111,11 @@ VALID_INTERNAL_TOKEN = "test-internal-token-min-32-chars-padding"
 def _reset_state():
     limiter.enabled = False
     _api_key_cache.clear()
+    _api_key_cache_by_agent.clear()
     yield
     limiter.enabled = True
     _api_key_cache.clear()
+    _api_key_cache_by_agent.clear()
     app.dependency_overrides.clear()
 
 
@@ -393,3 +398,56 @@ class TestInvalidRequestSystemNamespaceFlatShape:
         }
         assert r.headers.get("X-Request-ID") == body["request_id"]
         stub_message.send_message.assert_not_called()
+
+
+# ============================================================================
+# M3: evict_agent_from_cache — immediate revocation (security)
+# ============================================================================
+
+
+class TestEvictAgentFromCache:
+    """``evict_agent_from_cache`` must atomically remove both the primary
+    ``_api_key_cache`` entry AND the reverse index entry so that a revoked
+    agent's credentials cannot be replayed for up to the remaining TTL.
+    """
+
+    def test_evict_removes_primary_and_reverse_index(self):
+        _cache_agent("raw-key-abc", "agent-123", "Alice", wallet_address=None)
+        assert "agent-123" in _api_key_cache_by_agent
+        assert len(_api_key_cache) == 1
+
+        evict_agent_from_cache("agent-123")
+
+        assert "agent-123" not in _api_key_cache_by_agent
+        assert len(_api_key_cache) == 0
+
+    def test_evict_unknown_agent_is_noop(self):
+        evict_agent_from_cache("nonexistent-agent")
+        assert len(_api_key_cache) == 0
+        assert len(_api_key_cache_by_agent) == 0
+
+    def test_evict_only_targets_named_agent(self):
+        _cache_agent("key-a", "agent-a", "AgentA")
+        _cache_agent("key-b", "agent-b", "AgentB")
+        assert len(_api_key_cache) == 2
+
+        evict_agent_from_cache("agent-a")
+
+        assert "agent-a" not in _api_key_cache_by_agent
+        assert "agent-b" in _api_key_cache_by_agent
+        assert len(_api_key_cache) == 1
+
+    def test_cache_agent_updates_reverse_index(self):
+        _cache_agent("key-1", "agent-x", "X")
+        assert _api_key_cache_by_agent.get("agent-x") is not None
+
+    def test_key_rotation_removes_old_entry(self):
+        """Re-caching the same agent_id with a new key must drop the old entry."""
+        _cache_agent("old-key", "agent-rotate", "Rot")
+        assert len(_api_key_cache) == 1
+
+        _cache_agent("new-key", "agent-rotate", "Rot")
+
+        # Only the new entry should survive
+        assert len(_api_key_cache) == 1
+        assert _api_key_cache_by_agent.get("agent-rotate") is not None

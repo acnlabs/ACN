@@ -692,7 +692,7 @@ SubjectDep = Annotated[str, Depends(get_subject)]
 
 _API_KEY_CACHE_TTL = 60.0  # seconds
 _API_KEY_CACHE_MAX = 10_000  # max entries to prevent unbounded growth
-# {api_key: (agent_id, name, wallet_address, expires_at)}
+# {cache_key: (agent_id, name, wallet_address, expires_at)}
 #
 # wallet_address is cached alongside (agent_id, name) so the L418 rate
 # limiter can derive a per-wallet bucket without a second Redis lookup
@@ -700,6 +700,12 @@ _API_KEY_CACHE_MAX = 10_000  # max entries to prevent unbounded growth
 # keeps the row atomic — a single TTL eviction can never leave the
 # limiter looking at a stale wallet attached to a fresh agent_id.
 _api_key_cache: dict[str, tuple[str, str, str | None, float]] = {}
+# Reverse index: agent_id → cache_key.  Maintained alongside
+# ``_api_key_cache`` so revocation (unregister / bulk-delete) can
+# immediately drop the entry without scanning the whole cache (M3).
+# An agent can hold at most one live cache entry at a time because
+# ACN assigns exactly one API key per agent_id.
+_api_key_cache_by_agent: dict[str, str] = {}
 
 
 def _get_cached_agent(api_key: str) -> dict | None:
@@ -713,6 +719,8 @@ def _get_cached_agent(api_key: str) -> dict | None:
             "wallet_address": entry[2],
         }
     if entry:
+        # Entry expired — clean up both structures atomically
+        _api_key_cache_by_agent.pop(entry[0], None)
         del _api_key_cache[cache_key]
     return None
 
@@ -730,18 +738,38 @@ def _cache_agent(
         now = time.monotonic()
         expired = [k for k, v in _api_key_cache.items() if v[3] <= now]
         for k in expired:
+            old_agent_id = _api_key_cache[k][0]
+            _api_key_cache_by_agent.pop(old_agent_id, None)
             del _api_key_cache[k]
+    # If this agent_id already has a stale entry under a different key
+    # (e.g. key rotation), remove the old entry first to avoid orphans.
+    old_cache_key = _api_key_cache_by_agent.get(agent_id)
+    if old_cache_key and old_cache_key != cache_key:
+        _api_key_cache.pop(old_cache_key, None)
     _api_key_cache[cache_key] = (
         agent_id,
         name,
         wallet_address,
         time.monotonic() + _API_KEY_CACHE_TTL,
     )
+    _api_key_cache_by_agent[agent_id] = cache_key
     return {
         "agent_id": agent_id,
         "name": name,
         "wallet_address": wallet_address,
     }
+
+
+def evict_agent_from_cache(agent_id: str) -> None:
+    """Immediately remove an agent's auth cache entry (M3).
+
+    Call this whenever an agent is deleted or its API key is rotated so
+    the revoked credential cannot be used for up to the remaining TTL
+    window.  Safe to call even when the agent has no cached entry.
+    """
+    cache_key = _api_key_cache_by_agent.pop(agent_id, None)
+    if cache_key:
+        _api_key_cache.pop(cache_key, None)
 
 
 async def _resolve_agent_by_bearer(
