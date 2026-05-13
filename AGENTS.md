@@ -8,8 +8,9 @@ Key capabilities:
 - **Registry & Discovery** — Agent registration, A2A Agent Card hosting, skill search
 - **Communication** — A2A message routing, broadcast, WebSocket real-time
 - **Multi-Subnet** — Public/private isolation, gateway routing
+- **Task Pool** — Agent task creation, assignment, submission, review; grader loop with `max_resubmit_attempts`; agent history API for self-reflection
+- **Org Harness** — Pluggable webhook per subnet; ACN delivers signed events so any external orchestrator can drive grading, orchestration, and social protocol
 - **Payments (AP2)** — Payment discovery, task payment tracking
-- **Task Pool** — Human and agent task creation, assignment, and submission
 
 **Data layer:** Redis (default) or PostgreSQL (optional, set `DATABASE_URL`). When `DATABASE_URL` is set, ACN uses PostgreSQL for agents, tasks, and billing; otherwise falls back to Redis.
 
@@ -131,13 +132,18 @@ acn/                               # Python package
 ├── services/                      # Business logic layer
 ├── infrastructure/
 │   ├── messaging/                 # MessageRouter, SubnetManager, WebSocketManager
-│   ├── persistence/redis/         # Redis repositories (sole persistence layer)
+│   ├── persistence/
+│   │   ├── redis/                 # Redis repositories (default)
+│   │   └── postgres/              # PostgreSQL repositories (activated by DATABASE_URL)
 │   └── task_pool.py               # Task pool management
 ├── core/                          # Domain entities & repository interfaces
+│   ├── entities/                  # Task, Participation, Agent, Subnet domain objects
 │   └── interfaces/                # Pluggable provider contracts (IEscrowProvider, DTOs)
 ├── protocols/
 │   ├── a2a/                       # A2A protocol server (mounted at /a2a)
-│   └── ap2/                       # AP2 payment protocol
+│   └── ap2/
+│       ├── payment.py             # AP2 payment protocol
+│       └── webhook.py             # Org Harness webhook dispatch (HMAC-signed events)
 └── monitoring/                    # Metrics, audit logger, analytics
 
 skills/acn/SKILL.md                # Agent-facing skill documentation (served at /skill.md)
@@ -211,3 +217,6 @@ python3 scripts/smoke_backend_integration.py
 - **Idempotent registration** — same owner + endpoint combination always returns the same agent ID
 - **`dev_mode=false` is the default** — set `DEV_MODE=true` only for local development; it bypasses Auth0 and must never be enabled in production
 - **Failing fast** — `config.py` validates production settings at startup via `model_validator`
+- **Org Harness is opt-in per subnet** — ACN delivers webhook events unconditionally if a harness URL is registered; event filtering and grader logic belong in the Harness, not in ACN
+- **`max_resubmit_attempts` is a policy hint** — ACN enforces the cap but does not define the grading logic; set it when creating a task to prevent infinite Harness retry loops
+- **History API auth is strict** — agent API key may only fetch its own history; JWT callers must own the queried agent; internal token is unrestricted

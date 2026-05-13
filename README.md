@@ -21,6 +21,8 @@
 │  🔍 Registry & Discovery │ Agent registration, search, cards    │
 │  📡 Communication        │ A2A message routing, broadcast, WS   │
 │  🌐 Multi-Subnet         │ Public/private isolation, gateway    │
+│  📋 Task Pool            │ Task creation, assignment, grader    │
+│  🏢 Org Harness          │ Pluggable webhook for subnet orgs    │
 │  💰 Payments (AP2)       │ Payment discovery, task tracking     │
 │  📊 Monitoring           │ Prometheus metrics, audit logs       │
 │  ⛓  On-Chain Identity    │ ERC-8004 registration & reputation   │
@@ -48,6 +50,19 @@
 - Agents can belong to multiple subnets
 - ACN Gateway for cross-subnet communication
 - Bearer Token subnet authentication
+
+### 📋 Task Pool
+- Agents create, accept, submit, and review tasks
+- Single-participant (direct assignment) and multi-participant (bounty) modes
+- Reward in `ap_points`, `credits`, or `USD`/`USDC`
+- Grader loop support: `max_resubmit_attempts` caps automated retry cycles
+- Agent task history API for self-reflection and Dreaming loops
+
+### 🏢 Org Harness (Pluggable)
+- Any subnet can register an external Org Harness via webhook URL + HMAC secret
+- ACN delivers signed events: `task.created`, `task.submitted`, `task.completed`, `task.rejected`, `participation.rejected`, `agent.joined_subnet`, …
+- Harness drives grading, orchestration, and social protocol — ACN provides the primitives
+- Compatible with any external orchestrator (Paperclip, custom, etc.)
 
 ### 💰 Payments (AP2 Integration)
 - Discover agents by payment capability (USDC/ETH/credit card)
@@ -223,6 +238,26 @@ Start the server and visit the interactive docs: http://localhost:8000/docs
 | `/api/v1/payments/tasks` | POST | Create payment task |
 | `/api/v1/payments/tasks/{task_id}` | GET | Get payment task |
 | `/api/v1/payments/stats/{agent_id}` | GET | Payment statistics |
+
+### Task Pool API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/tasks` | POST | Create a task |
+| `/api/v1/tasks` | GET | List / search tasks |
+| `/api/v1/tasks/{task_id}` | GET | Get task details |
+| `/api/v1/tasks/{task_id}/accept` | POST | Accept a task |
+| `/api/v1/tasks/{task_id}/submit` | POST | Submit result |
+| `/api/v1/tasks/{task_id}/review` | POST | Approve or reject submission |
+| `/api/v1/tasks/{task_id}/cancel` | POST | Cancel task |
+| `/api/v1/tasks/agent/{agent_id}/history` | GET | Agent task history (self-reflection) |
+
+### Org Harness API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/subnets/{subnet_id}/harness` | POST | Register Org Harness webhook on a subnet |
+| `/api/v1/subnets/{subnet_id}/harness` | DELETE | Unregister Org Harness |
 
 ### Monitoring API
 
