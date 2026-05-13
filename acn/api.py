@@ -127,6 +127,19 @@ settings = get_settings()
 logger = structlog.get_logger()
 
 
+def _redact_db_url(url: str) -> str:
+    """Return database URL with password replaced by *** for safe logging."""
+    try:
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(url)
+        if parsed.password:
+            safe_netloc = parsed.netloc.replace(f":{parsed.password}@", ":***@")
+            return urlunparse(parsed._replace(netloc=safe_netloc))
+    except Exception:
+        pass
+    return url[:8] + "..."
+
+
 # Module-level regex for the SQL ``cap`` constant inside the
 # ``enforce_agent_allowlist_capacity`` function body. Compiled once
 # so the lifespan check is cheap; the function definition is a
@@ -261,7 +274,7 @@ async def lifespan(app: FastAPI):
     # surface 503 on the reputation write routes.
     _reputation_repository: PostgresReputationRepository | None = None
     if settings.database_url:
-        logger.info("persistence_postgres", database_url=settings.database_url[:30] + "...")
+        logger.info("persistence_postgres", database_url=_redact_db_url(settings.database_url))
         _pg_engine = get_engine(settings.database_url)
         _pg_session = get_session_factory(_pg_engine)
         agent_repository = PostgresAgentRepository(_pg_session, registry_instance.redis)
@@ -1117,7 +1130,9 @@ async def _request_validation_error_handler(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    # credentials (cookies/auth headers) must not be sent to wildcard origins;
+    # browsers reject such responses and it is a security misconfiguration.
+    allow_credentials="*" not in settings.cors_origins,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Internal-Token"],
     allow_private_network=False,

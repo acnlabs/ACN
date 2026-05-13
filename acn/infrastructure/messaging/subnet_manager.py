@@ -36,6 +36,7 @@ Usage:
 
 import asyncio
 import logging
+import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -367,7 +368,7 @@ class SubnetManager:
             if scheme.type == "http" and scheme.scheme == "bearer":
                 # Validate bearer token
                 token = credentials.get("token") or credentials.get("bearer")
-                if token and token == subnet.generated_token:
+                if token and secrets.compare_digest(token, subnet.generated_token):
                     return True
 
             elif scheme.type == "apiKey":

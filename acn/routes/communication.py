@@ -483,7 +483,7 @@ async def manifest_send(
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
             404,
-            details={"agent_id": body.target_agent},
+            details={},
         ) from e
     policy = getattr(recipient, "communication_policy", None) or {"mode": "open"}
     mode = policy.get("mode", "open")
@@ -593,7 +593,7 @@ async def manifest_send(
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
             404,
-            details={"agent_id": body.target_agent},
+            details={},
         ) from e
     except PolicyRejected as e:
         raise ACNHTTPError(
@@ -779,7 +779,7 @@ async def send_message(
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
             404,
-            details={"agent_id": body.target_agent},
+            details={},
         ) from e
 
     except PolicyRejected as e:
@@ -1301,7 +1301,7 @@ async def internal_send_message(
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
             404,
-            details={"agent_id": body.target_agent},
+            details={},
         ) from e
 
     except PolicyRejected as e:

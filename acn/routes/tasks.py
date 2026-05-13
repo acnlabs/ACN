@@ -1116,17 +1116,32 @@ async def list_participations(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     task_service: TaskServiceDep = None,
+    payload: dict = Depends(require_task_write_auth()),
 ):
-    """List participations for a task (public)"""
+    """List participations for a task.
+
+    Requires authentication (agent API key, JWT, or internal token).
+    Submission content is only visible to the task creator or the participant themselves.
+    """
+    caller_id: str = payload.get("agent_id") or payload.get("sub") or ""
     try:
+        task = await task_service.get_task(task_id)
         participations = await task_service.get_task_participations(
             task_id=task_id,
             status=status,
             limit=limit,
             offset=offset,
         )
+        is_creator = caller_id == task.creator_id
+
+        def _maybe_redact(p: ParticipationResponse) -> ParticipationResponse:
+            # Reveal submission only to creator or the participant themselves
+            if is_creator or p.agent_id == caller_id:
+                return p
+            return p.model_copy(update={"submission": None, "submission_artifacts": []})
+
         return ParticipationListResponse(
-            participations=[_participation_to_response(p) for p in participations],
+            participations=[_maybe_redact(_participation_to_response(p)) for p in participations],
             total=len(participations),
         )
     except TaskNotFoundException:

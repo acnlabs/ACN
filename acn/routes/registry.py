@@ -1005,7 +1005,7 @@ async def _join_agent_impl(
             status=agent.status.value,
             claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
             verification_code=claim_token,
-            claim_url=f"{frontend_url}/claim/{agent.agent_id}?token={claim_token}",
+            claim_url=f"{frontend_url}/claim/{agent.agent_id}/{claim_token}",
             referral_url=f"{base_url}/api/v1/agents/join?ref={agent.agent_id}",
             tasks_endpoint=f"{base_url}/api/v1/tasks",
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
