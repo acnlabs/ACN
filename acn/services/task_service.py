@@ -531,12 +531,38 @@ class TaskService:
         )
 
         # Activate escrow pool on first join (LOCKED -> ACTIVE)
+        #
+        # M10 — compensating rollback on escrow failure:
+        #   ``task_pool.join_task`` above already committed the Participation
+        #   row.  If escrow activation then fails the two subsystems diverge:
+        #   the task shows 1 participant but the escrow is still LOCKED.
+        #
+        #   We compensate by cancelling the participation so both subsystems
+        #   return to their pre-join state.  If the cancellation itself fails
+        #   (double-failure), we log at ERROR for ops alerting and still
+        #   propagate the original exception so the caller gets a clean 500
+        #   rather than silently succeeding with inconsistent data.
+        #
+        #   Note: only ``accept_v2`` is a state-changing escrow call;
+        #   ``get_by_task`` is read-only and its failure still falls through
+        #   to the outer branch (no escrow activation attempted, no
+        #   inconsistency created).
         if self.escrow and task.reward_currency.lower() in PLATFORM_CURRENCIES:
             try:
                 escrow_info = await self.escrow.get_by_task(task.task_id)
-                if escrow_info.success and escrow_info.escrow_id:
-                    if escrow_info.status == "locked":
-                        # First participant: activate the pool
+            except Exception as e:
+                # Read-only probe failed — treat as "no escrow found", continue.
+                logger.warning(
+                    "escrow_probe_failed_on_join",
+                    task_id=task.task_id,
+                    error=str(e),
+                )
+                escrow_info = None  # type: ignore[assignment]
+
+            if escrow_info is not None and escrow_info.success and escrow_info.escrow_id:
+                if escrow_info.status == "locked":
+                    # First participant: activate the pool — state-changing call.
+                    try:
                         await self.escrow.accept_v2(
                             escrow_id=escrow_info.escrow_id,
                             assignee_id=agent_id,
@@ -547,8 +573,33 @@ class TaskService:
                             task_id=task.task_id,
                             escrow_id=escrow_info.escrow_id,
                         )
-            except Exception as e:
-                logger.warning("escrow_pool_activate_failed", task_id=task.task_id, error=str(e))
+                    except Exception as escrow_exc:
+                        # M10 compensation path: undo the join so we don't
+                        # leave a participation with no matching escrow state.
+                        logger.error(
+                            "escrow_pool_activate_failed_compensating",
+                            task_id=task.task_id,
+                            participation_id=pid,
+                            error=str(escrow_exc),
+                        )
+                        try:
+                            await self.task_pool.cancel_participation(pid, task.task_id)
+                            logger.info(
+                                "join_rolled_back_after_escrow_failure",
+                                task_id=task.task_id,
+                                participation_id=pid,
+                            )
+                        except Exception as cancel_exc:
+                            # Double failure — participation persists despite
+                            # escrow being stuck; ops must reconcile manually.
+                            logger.error(
+                                "join_rollback_failed_manual_reconciliation_required",
+                                task_id=task.task_id,
+                                participation_id=pid,
+                                escrow_error=str(escrow_exc),
+                                cancel_error=str(cancel_exc),
+                            )
+                        raise escrow_exc
 
         if self.activity:
             await self.activity.record_task_accepted(
