@@ -7,6 +7,13 @@
 import type {
   ACNClientOptions,
   AgentInfo,
+  Participation,
+  ParticipationListResponse,
+  Task,
+  TaskAcceptResponse,
+  TaskCreateRequest,
+  TaskListOptions,
+  TaskListResponse,
   AgentJoinRequest,
   AgentJoinResponse,
   AgentRegisterRequest,
@@ -82,7 +89,7 @@ export class ACNClient {
       this.timeout = options.timeout ?? 30000;
       this.headers = options.headers ?? {};
       if (options.apiKey) {
-        this.headers['X-API-Key'] = options.apiKey;
+        this.headers['Authorization'] = `Bearer ${options.apiKey}`;
       }
     }
   }
@@ -1042,6 +1049,105 @@ export class ACNClient {
     options?: { limit?: number; offset?: number }
   ): Promise<AllowlistListResponse> {
     return this.get(`/api/v1/agents/${agentId}/allowlist`, options);
+  }
+
+  // ============================================
+  // Task Pool Methods (Saga / Org-Harness)
+  // ============================================
+
+  /** Create a new task in the org-harness task pool. */
+  async createTask(request: TaskCreateRequest): Promise<Task> {
+    return this.post('/api/v1/tasks', request);
+  }
+
+  /** Get task details by ID. */
+  async getTask(taskId: string): Promise<Task> {
+    return this.get(`/api/v1/tasks/${taskId}`);
+  }
+
+  /** List tasks with optional filters. */
+  async listTasks(options?: TaskListOptions): Promise<TaskListResponse> {
+    const params: Record<string, string | number | boolean | undefined> = {};
+    if (options?.status !== undefined) params.status = options.status;
+    if (options?.creator_id !== undefined) params.creator_id = options.creator_id;
+    if (options?.assignee_id !== undefined) params.assignee_id = options.assignee_id;
+    if (options?.limit !== undefined) params.limit = options.limit;
+    if (options?.offset !== undefined) params.offset = options.offset;
+    return this.get('/api/v1/tasks', params);
+  }
+
+  /** Accept a task (join as participant). Returns the task and a participation_id. */
+  async acceptTask(taskId: string, message?: string): Promise<TaskAcceptResponse> {
+    return this.post(`/api/v1/tasks/${taskId}/accept`, { message: message ?? '' });
+  }
+
+  /**
+   * Submit work for a task.
+   *
+   * @param submissionContent - The deliverable text (5–50 000 chars)
+   * @param artifacts         - Optional artifact references
+   * @param participationId   - Required when max_participants > 1
+   */
+  async submitTask(
+    taskId: string,
+    submissionContent: string,
+    options?: { artifacts?: Record<string, unknown>[]; participationId?: string },
+  ): Promise<Task> {
+    return this.post(`/api/v1/tasks/${taskId}/submit`, {
+      submission: submissionContent,
+      artifacts: options?.artifacts ?? [],
+      participation_id: options?.participationId,
+    });
+  }
+
+  /**
+   * Review a task submission (approve or reject).
+   * Only callable by the task creator or subnet owner.
+   */
+  async reviewTask(
+    taskId: string,
+    approved: boolean,
+    /** Review notes sent as the `notes` field — max 5 000 chars. */
+    notes?: string,
+  ): Promise<Task> {
+    return this.post(`/api/v1/tasks/${taskId}/review`, {
+      approved,
+      notes: notes ?? '',
+    });
+  }
+
+  /** Cancel a task. */
+  async cancelTask(taskId: string): Promise<Task> {
+    return this.post(`/api/v1/tasks/${taskId}/cancel`, {});
+  }
+
+  /** List all participations for a task. */
+  async getTaskParticipations(taskId: string): Promise<Participation[]> {
+    const res = await this.get<ParticipationListResponse>(
+      `/api/v1/tasks/${taskId}/participations`,
+    );
+    return res.participations ?? [];
+  }
+
+  // ============================================
+  // Subnet Harness
+  // ============================================
+
+  /**
+   * Register (or clear) an org-harness webhook URL for a subnet.
+   * Pass `harnessUrl: null` to deregister.
+   */
+  async registerSubnetHarness(
+    subnetId: string,
+    harnessUrl: string | null,
+    harnessSecret?: string | null,
+  ): Promise<void> {
+    await this.request('PATCH', `/api/v1/subnets/${subnetId}/harness`, {
+      body: {
+        harness_url: harnessUrl,
+        harness_secret: harnessSecret ?? null,
+      },
+    });
   }
 }
 

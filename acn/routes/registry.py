@@ -956,8 +956,18 @@ async def _join_agent_impl(
     background_tasks: BackgroundTasks,
     ref: str | None,
     agent_service,
+    *,
+    default_metadata: dict | None = None,
 ) -> AgentJoinResponse:
-    """Shared implementation for join_agent and join_agent_internal."""
+    """Shared implementation for join_agent and join_agent_internal.
+
+    ``default_metadata`` is merged into the agent's ``metadata`` JSONB on
+    creation. Used by the internal entry point to stamp
+    ``visibility="test"`` on CI/automation registrations so they do not
+    pollute the public ``visibility=real`` agent list. Public registrations
+    pass ``None`` and keep the legacy "no visibility tag → treated as real"
+    behaviour for backwards compatibility.
+    """
     try:
         referrer_id = body.referrer_id or ref
 
@@ -978,6 +988,7 @@ async def _join_agent_impl(
             endpoint=endpoint,
             a2a_endpoint=endpoint,
             referrer_id=referrer_id,
+            metadata=dict(default_metadata) if default_metadata else None,
             agent_card=agent_card,
             wallet_addresses=wallet_addresses,
             accepts_payment=body.accepts_payment,
@@ -1046,7 +1057,16 @@ async def join_agent_internal(
         agent_svc = _get_svc()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Service unavailable: {e}") from e
-    return await _join_agent_impl(body, background_tasks, ref, agent_svc)
+    # Internal callers are CI / smoke tests / operator scripts. Stamp
+    # ``visibility=test`` so these registrations are excluded from the
+    # default public agent list and never surface on /world.
+    return await _join_agent_impl(
+        body,
+        background_tasks,
+        ref,
+        agent_svc,
+        default_metadata={"visibility": "test"},
+    )
 
 
 @router.post("/join", response_model=AgentJoinResponse)

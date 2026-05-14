@@ -7,15 +7,27 @@ Checks:
 2) Backend health endpoint
 3) ACN task creation flow
 4) ACN payment task creation flow
+
+When ``ACN_INTERNAL_TOKEN`` is set in the environment, the script:
+  - Registers fixtures via ``/agents/join/internal`` (so the server stamps
+    ``metadata.visibility="test"`` and they are excluded from public agent
+    lists / agentplanet.org/world).
+  - Tears down created fixtures in a ``finally`` block via the internal
+    bulk-delete endpoint to avoid accumulating stale rows in production.
+
+Without the token, the script falls back to the public ``/agents/join``
+path and skips teardown (legacy behaviour). Operators should configure the
+GitHub Actions secret ``ACN_INTERNAL_TOKEN`` to get the hygienic path.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -25,6 +37,8 @@ class SmokeConfig:
     acn_base_url: str
     backend_base_url: str
     timeout: int
+    internal_token: str | None = None
+    created_agent_ids: list[str] = field(default_factory=list)
 
 
 def _url(base: str, path: str) -> str:
@@ -44,8 +58,21 @@ def _post_json(url: str, data: dict, timeout: int, headers: dict | None = None) 
 
 
 def _join_agent(cfg: SmokeConfig, name: str, skills: list[str]) -> tuple[str, str]:
+    """Register a fixture agent.
+
+    If ``cfg.internal_token`` is set, uses the internal endpoint so the
+    server stamps ``visibility=test``; otherwise falls back to the public
+    endpoint for backwards compatibility.
+    """
+    if cfg.internal_token:
+        path = "/api/v1/agents/join/internal"
+        headers = {"X-Internal-Token": cfg.internal_token}
+    else:
+        path = "/api/v1/agents/join"
+        headers = None
+
     code, body = _post_json(
-        _url(cfg.acn_base_url, "/api/v1/agents/join"),
+        _url(cfg.acn_base_url, path),
         {
             "name": name,
             "description": "smoke-test agent",
@@ -53,10 +80,40 @@ def _join_agent(cfg: SmokeConfig, name: str, skills: list[str]) -> tuple[str, st
             "endpoint": f"{cfg.acn_base_url}/smoke-placeholder",
         },
         cfg.timeout,
+        headers=headers,
     )
     if code != 200:
         raise RuntimeError(f"join_agent failed ({code}): {body}")
-    return body["agent_id"], body["api_key"]
+
+    agent_id = body["agent_id"]
+    cfg.created_agent_ids.append(agent_id)
+    return agent_id, body["api_key"]
+
+
+def _teardown_fixtures(cfg: SmokeConfig) -> dict:
+    """Best-effort delete of every agent created during this run.
+
+    Uses the admin bulk-delete endpoint with an explicit ``agent_ids``
+    list (X-Internal-Token gated). Never raises — teardown failure must
+    not mask the smoke result.
+    """
+    if not cfg.internal_token or not cfg.created_agent_ids:
+        return {"skipped": True, "reason": "no token or nothing to delete"}
+
+    try:
+        resp = requests.delete(
+            _url(cfg.acn_base_url, "/api/v1/agents"),
+            headers={"X-Internal-Token": cfg.internal_token},
+            params={
+                "agent_ids": ",".join(cfg.created_agent_ids),
+                "dry_run": "false",
+            },
+            timeout=cfg.timeout,
+        )
+        body = resp.json() if resp.text else {}
+        return {"status_code": resp.status_code, "body": body, "ids": cfg.created_agent_ids}
+    except Exception as exc:  # best-effort; never raise from teardown
+        return {"error": str(exc), "ids": cfg.created_agent_ids}
 
 
 def run_smoke(cfg: SmokeConfig) -> dict:
@@ -159,17 +216,33 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout seconds")
     args = parser.parse_args()
 
+    internal_token = os.environ.get("ACN_INTERNAL_TOKEN") or None
+    if not internal_token:
+        print(
+            "WARN: ACN_INTERNAL_TOKEN not set — falling back to public /agents/join "
+            "and skipping teardown. Created agents will leak into agent lists. "
+            "Configure the secret to get clean smoke runs.",
+            file=sys.stderr,
+        )
+
     cfg = SmokeConfig(
         acn_base_url=args.acn_base_url,
         backend_base_url=args.backend_base_url,
         timeout=args.timeout,
+        internal_token=internal_token,
     )
 
+    result: dict
     try:
         result = run_smoke(cfg)
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=True, indent=2))
-        return 1
+        result = {"ok": False, "error": str(exc)}
+    finally:
+        teardown_result = _teardown_fixtures(cfg)
+        if teardown_result:
+            # Attach to result for visibility in CI logs
+            if isinstance(result, dict):
+                result.setdefault("teardown", teardown_result)
 
     print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0 if result.get("ok") else 1

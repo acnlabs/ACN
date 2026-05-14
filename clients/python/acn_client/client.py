@@ -231,18 +231,24 @@ class ACNClient:
         Args:
             base_url: ACN server URL
             timeout: Request timeout in seconds
-            api_key: Optional API key (X-API-Key header)
-            bearer_token: Optional JWT Bearer token (Authorization: Bearer <token>).
-                Required for Task endpoints in production (Auth0 JWT).
-                In dev mode, Task endpoints work without a token.
+            api_key: Optional agent API key (sent as ``Authorization: Bearer <key>``).
+                Use this for all per-agent operations (tasks, messaging, payments).
+                The ACN server's ``verify_agent_api_key`` dependency exclusively
+                reads the ``Authorization: Bearer`` header — ``X-API-Key`` is not
+                recognised.
+            bearer_token: Optional Auth0 JWT Bearer token
+                (``Authorization: Bearer <token>``).  Required for platform-level
+                operations that need ``acn:write`` / ``acn:admin`` scope.
+                Takes precedence over ``api_key`` when both are supplied.
         """
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
         headers: dict[str, str] = {}
         if api_key:
-            headers["X-API-Key"] = api_key
+            headers["Authorization"] = f"Bearer {api_key}"
         if bearer_token:
+            # bearer_token wins over api_key when both are supplied
             headers["Authorization"] = f"Bearer {bearer_token}"
 
         self._client = httpx.AsyncClient(

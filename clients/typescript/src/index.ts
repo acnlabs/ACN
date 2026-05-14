@@ -110,6 +110,19 @@ export type {
 // Value exports (constants)
 export { KNOWN_PAYMENT_TASK_STATUSES } from './types';
 
+// Task pool types
+export type {
+  Task,
+  TaskStatus,
+  TaskAcceptResponse,
+  TaskCreateRequest,
+  TaskListOptions,
+  TaskListResponse,
+  Participation,
+  ParticipationListResponse,
+  SubnetHarnessRequest,
+} from './types';
+
 
 
 
