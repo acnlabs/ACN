@@ -70,6 +70,13 @@ class SubnetService:
             security_config=security_config or {},
             metadata=metadata or {},
         )
+        # The owner is implicitly a member: every ACL that keys off
+        # `subnet.member_agent_ids` (private GET /tasks/{id}, accept_task,
+        # is_subnet_member, ...) otherwise 403s the owner from acting on the
+        # subnet they just created. Mirror this in the entity at construction
+        # time so harness bootstrap (create_subnet → register_harness →
+        # create_task) works without a follow-up join_subnet hack.
+        subnet.add_member(owner)
 
         logger.info("create_subnet", subnet_id=subnet_id, name=name, owner=owner)
         await self.repository.save(subnet)
