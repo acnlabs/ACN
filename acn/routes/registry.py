@@ -381,6 +381,26 @@ class AgentReleaseResponse(BaseModel):
     message: str
 
 
+class AgentRotateKeyResponse(BaseModel):
+    """Response after rotating an agent's API key (H1).
+
+    The new plaintext ``api_key`` is returned exactly once — the server
+    stores only its SHA-256 hash. Callers MUST persist it before the
+    response is discarded, otherwise the agent will need another
+    rotation by its owner to recover.
+    """
+
+    success: bool
+    agent_id: str
+    api_key: str = Field(
+        ...,
+        description=(
+            "New plaintext API key. Shown exactly once; server stores only its hash."
+        ),
+    )
+    message: str
+
+
 class AgentMeResponse(BaseModel):
     """Response for /me endpoint - agent's own information"""
 
@@ -2275,6 +2295,123 @@ async def release_agent(
             403,
             details={"agent_id": agent_id, "reason": str(e)},
         ) from e
+
+
+@router.post("/{agent_id}/rotate-key", response_model=AgentRotateKeyResponse)
+@limiter.limit("10/hour")
+async def rotate_agent_api_key(
+    request: Request,
+    agent_id: AgentIdPath,
+    agent_service: AgentServiceDep = None,
+):
+    """Rotate an agent's API key (H1 — pre-launch audit).
+
+    Returns a fresh ``acn_*`` plaintext key exactly once and immediately
+    invalidates the previous one. Stored server-side as SHA-256 hash.
+
+    Authorization (any one of):
+      * The agent itself, via ``Bearer acn_<its current key>``.
+      * The owner, via Auth0 JWT with ``acn:write`` permission whose
+        ``sub`` matches ``agent.owner``.
+      * Trusted backend, via ``X-Internal-Token`` header.
+
+    The two-track design lets agents rotate their own credentials
+    autonomously (the common case: scheduled rotation, suspected leak)
+    while still letting the platform owner force-rotate a compromised
+    key when the agent itself can no longer authenticate.
+
+    Side effects:
+      * Old key returns 401 on the next request (auth cache evicted).
+      * No reputation / on-chain identity change — the agent_id is
+        preserved, so ERC-8004 binding and subnet membership survive.
+    """
+    # Resolve actor via the same double-track auth we use for task writes,
+    # then enforce per-agent ownership semantics below. Importing lazily
+    # keeps registry.py free of a static dependency on routes/tasks.
+    from .tasks import require_task_write_auth
+
+    auth_dep = require_task_write_auth()
+    payload = await auth_dep(
+        request=request,
+        credentials=await _bearer_scheme_for_rotate(request),
+        x_internal_token=request.headers.get("x-internal-token"),
+        agent_service=agent_service,
+    )
+
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    actor_type: str = payload.get("type", "")
+    actor_sub: str = payload.get("sub", "")
+
+    # Agent self: must be rotating ITS OWN key — anything else is a
+    # privilege-escalation attempt where one agent tries to rotate
+    # another agent's credential.
+    if actor_type == "agent":
+        if actor_sub != agent_id:
+            raise ACNHTTPError(
+                ErrorCode.MISSING_PERMISSION,
+                403,
+                details={"reason": "agent_can_only_rotate_own_key"},
+            )
+    # JWT path: must be the agent's owner.  Unclaimed agents (owner is
+    # None) cannot be rotated via JWT — the platform never knows who
+    # the rightful operator is until claim_agent runs.
+    elif actor_type == "jwt":
+        if not agent.owner or agent.owner != actor_sub:
+            raise ACNHTTPError(
+                ErrorCode.OWNERSHIP_MISMATCH,
+                403,
+                details={"agent_id": agent_id, "reason": "not_agent_owner"},
+            )
+    # ``internal``/``dev``: pass — trusted backend or dev environment.
+
+    new_key = await agent_service.rotate_api_key(agent_id)
+
+    # Immediately invalidate any cached auth row pointing at the old
+    # key (M3). Without this the rotated key wins on lookup but the
+    # OLD key can still authenticate for up to ``_API_KEY_CACHE_TTL``
+    # (60s) seconds — exactly the gap a leak-and-rotate flow tries to
+    # close.
+    evict_agent_from_cache(agent_id)
+
+    logger.info(
+        "agent_api_key_rotated",
+        agent_id=agent_id,
+        actor_type=actor_type,
+        actor_sub=actor_sub,
+    )
+
+    return AgentRotateKeyResponse(
+        success=True,
+        agent_id=agent_id,
+        api_key=new_key,
+        message="API key rotated. Previous key is now invalid — store the new key securely.",
+    )
+
+
+async def _bearer_scheme_for_rotate(request: Request):
+    """Extract Bearer credentials manually for the rotate-key endpoint.
+
+    We can't use the regular ``Depends(HTTPBearer(...))`` plumbing here
+    because we're invoking ``require_task_write_auth`` programmatically
+    rather than as a FastAPI dependency tree. This mirrors what the
+    HTTPBearer scheme would have parsed from the Authorization header,
+    returning ``None`` on absence so dev mode and internal-token paths
+    still work.
+    """
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    auth = request.headers.get("authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        return None
+    return HTTPAuthorizationCredentials(scheme="Bearer", credentials=auth.split(None, 1)[1])
 
 
 # ============================================================================

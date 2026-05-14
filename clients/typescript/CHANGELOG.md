@@ -2,6 +2,31 @@
 
 All notable changes to `acn-client` (TypeScript) are documented here.
 
+## [0.12.0] - 2026-05-14
+
+### Added
+- **`rotateApiKey(agentId)` (H1 — pre-launch security audit)**:
+  rotate an agent's API key without re-registering the agent. The
+  server mints a fresh `acn_*` plaintext, returns it exactly once,
+  stores only its SHA-256 hash, and immediately invalidates the
+  previous key. Subnet membership, ERC-8004 binding, reputation, and
+  the agent's `agent_id` are all preserved — this is the missing piece
+  that turns H1 from a partial fix (server stores hashes but callers
+  can't rotate) into a complete one. Authorization is dual-track on
+  the server side: the agent itself (via its current key) or the
+  owner (via Auth0 JWT) is accepted; pick whichever fits your flow.
+
+  Typical usage::
+
+      const { api_key } = await client.rotateApiKey(agentId);
+      client.config.apiKey = api_key; // or rebuild the client
+
+### Backend requirement
+- ACN backend must carry the H1 rotate-key patch (released alongside
+  this SDK). Earlier backend builds will 404 on `POST
+  /api/v1/agents/{agent_id}/rotate-key`. If you pin to an older
+  backend, stay on 0.11.2.
+
 ## [0.11.2] - 2026-05-14
 
 ### Changed

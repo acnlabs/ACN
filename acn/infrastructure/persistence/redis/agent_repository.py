@@ -116,6 +116,15 @@ class RedisAgentRepository(IAgentRepository):
             api_key_index = f"acn:agents:by_api_key:{agent.api_key}"
             await self.redis.set(api_key_index, agent.agent_id)
 
+        # Clean up the previous API-key index if the key changed (H1
+        # rotation). Without this the stale index entry would keep
+        # pointing at this agent_id, and the rotated-away key would
+        # still authenticate via find_by_api_key — exactly the leak
+        # the rotation was meant to plug.
+        if existing and existing.api_key and existing.api_key != agent.api_key:
+            stale_api_key_index = f"acn:agents:by_api_key:{existing.api_key}"
+            await self.redis.delete(stale_api_key_index)
+
         # 3. Owner index
         if agent.owner:
             await self.redis.sadd(f"acn:agents:by_owner:{agent.owner}", agent.agent_id)
@@ -279,13 +288,6 @@ class RedisAgentRepository(IAgentRepository):
     async def find_by_api_key(self, key_hash: str) -> Agent | None:
         """Find agent by SHA-256 hash of their API key."""
         agent_id = await self.redis.get(f"acn:agents:by_api_key:{key_hash}")
-        if not agent_id:
-            return None
-        return await self.find_by_id(agent_id)
-
-    async def find_by_api_key_legacy(self, raw_key: str) -> Agent | None:
-        """Find agent by plaintext API key (pre-H1 migration fallback)."""
-        agent_id = await self.redis.get(f"acn:agents:by_api_key:{raw_key}")
         if not agent_id:
             return None
         return await self.find_by_id(agent_id)

@@ -1,5 +1,5 @@
 /**
- * Smoke test for v0.11.0 SDK against a running ACN backend.
+ * Smoke test for v0.12.0 SDK against a running ACN backend.
  *
  * Covers every contract that the 6-round audit touched:
  *  1. Auth header (Authorization: Bearer) — must succeed on a protected route
@@ -16,6 +16,8 @@
  * 12. joinSubnet  — POST /api/v1/agents/{id}/subnets/{subnet_id} (0.11.2 canonical)
  * 13. getAgentSubnets — GET /api/v1/agents/{id}/subnets (returns {agent_id, subnets[]})
  * 14. leaveSubnet — DELETE /api/v1/agents/{id}/subnets/{subnet_id}
+ * 15. rotateApiKey (H1) — new key works; old key returns 401; participant
+ *     identity (agent_id) survives the rotation (subnet membership intact).
  *
  * Usage:
  *   ACN_URL=http://127.0.0.1:9000 npx tsx scripts/smoke.ts
@@ -161,8 +163,59 @@ async function main() {
     throw new Error(`getAgentSubnets still has ${subnet.subnet_id} after leave`);
   }
 
+  // ── 15. rotateApiKey (H1) — agent self-rotation; old key invalidates ───
+  //   Uses the joiner agent because it's already in a clean post-leave
+  //   state and won't perturb any in-flight task we exercised earlier.
+  //   We re-join the subnet on the joiner so we can prove that rotation
+  //   does NOT lose subnet membership (the whole point of H1 vs a
+  //   re-register: agent_id and bindings must survive).
+  log("rotateApiKey — re-join subnet first so we can prove identity survives");
+  await joinerClient.joinSubnet(joiner.agent_id, subnet.subnet_id);
+
+  log("rotateApiKey (H1) — agent self-rotation");
+  const rotated = await joinerClient.rotateApiKey(joiner.agent_id);
+  log("rotated.api_key (first 12 chars)", rotated.api_key.slice(0, 12) + "…");
+  if (!rotated.api_key.startsWith("acn_")) {
+    throw new Error(`rotateApiKey returned non-acn_* key: ${rotated.api_key.slice(0, 16)}…`);
+  }
+  if (rotated.api_key === joiner.api_key) {
+    throw new Error("rotateApiKey echoed the OLD key back — server didn't actually rotate");
+  }
+
+  // New client built from the rotated key must work.
+  const rotatedClient = new ACNClient({ baseUrl: ACN_URL, apiKey: rotated.api_key });
+  const meAfter = await rotatedClient.getMyAgent();
+  if (meAfter.agent_id !== joiner.agent_id) {
+    throw new Error(
+      `agent identity changed after rotation: ${joiner.agent_id} → ${meAfter.agent_id}`,
+    );
+  }
+
+  // Subnet membership must be preserved across the rotation — that's
+  // the H1 win over "delete + re-register".
+  const subsAfterRotate = await rotatedClient.getAgentSubnets(joiner.agent_id);
+  if (!subsAfterRotate.subnets.includes(subnet.subnet_id)) {
+    throw new Error(
+      `subnet membership lost after rotateApiKey: ${JSON.stringify(subsAfterRotate)}`,
+    );
+  }
+
+  // Old key must now return 401. We bypass the SDK's exception path so
+  // we can assert on the exact HTTP status — the SDK throws on non-2xx
+  // and any 4xx code would satisfy a try/catch, masking a silent
+  // accept-old-key regression.
+  log("rotateApiKey — verifying OLD key now 401s");
+  const oldKeyResp = await fetch(`${ACN_URL}/api/v1/agents/me`, {
+    headers: { Authorization: `Bearer ${joiner.api_key}` },
+  });
+  if (oldKeyResp.status !== 401) {
+    throw new Error(
+      `OLD key still accepted after rotation — expected 401, got ${oldKeyResp.status}`,
+    );
+  }
+
   // ── Final sanity ────────────────────────────────────────────────────
-  log("DONE — all 14 contract checks passed");
+  log("DONE — all 15 contract checks passed");
 }
 
 main().catch((err) => {

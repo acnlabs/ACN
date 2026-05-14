@@ -253,15 +253,6 @@ class PostgresAgentRepository(IAgentRepository):
             row = result.scalar_one_or_none()
             return self._model_to_agent(row) if row else None
 
-    async def find_by_api_key_legacy(self, raw_key: str) -> Agent | None:
-        """Find agent by plaintext API key (pre-H1 migration fallback)."""
-        async with self._session_factory() as session:
-            result = await session.execute(
-                select(AgentModel).where(AgentModel.api_key == raw_key)
-            )
-            row = result.scalar_one_or_none()
-            return self._model_to_agent(row) if row else None
-
     async def find_unclaimed(self, limit: int = 100) -> list[Agent]:
         async with self._session_factory() as session:
             result = await session.execute(
