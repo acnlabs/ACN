@@ -438,12 +438,16 @@ export interface PaymentCapability {
 // Task Types (Saga / Org-Harness Task Pool)
 // ============================================
 
-/** Task status values for ACN task pool. */
+/**
+ * Task status values for ACN task pool — mirrors backend `TaskStatus` enum
+ * (`acn.core.entities.task.TaskStatus`).
+ */
 export type TaskStatus =
   | 'open'
   | 'in_progress'
-  | 'in_review'
+  | 'submitted'
   | 'completed'
+  | 'rejected'
   | 'cancelled';
 
 /** ACN task (org-harness task pool). Aligns with server `TaskResponse`. */
