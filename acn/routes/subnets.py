@@ -14,9 +14,13 @@ from pydantic import BaseModel, Field
 from ..auth.middleware import require_internal_or_permission, verify_token
 from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
-from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
+from ..core.exceptions import SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
-from ..protocols.ap2 import WebhookEventType
+from ._subnet_membership import (
+    do_get_agent_subnets,
+    do_join_subnet,
+    do_leave_subnet,
+)
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     AgentIdPath,
@@ -264,7 +268,35 @@ async def get_subnet_agents(
         raise HTTPException(status_code=500, detail="Failed to retrieve subnet agents") from e
 
 
-@router.post("/{agent_id}/subnets/{subnet_id}")
+# ---------------------------------------------------------------------------
+# Legacy agent-side membership endpoints.
+#
+# These three endpoints are *deprecated*: the canonical paths now live under
+# `/api/v1/agents/{agent_id}/subnets/…` (see `routes/agent_subnets.py`). The
+# old paths sit on the `subnets` router for accidental historical reasons —
+# the `{agent_id}` segment is awkwardly nested under `/api/v1/subnets/…`,
+# which produces the surprising shape `…/subnets/{agent_id}/subnets/{id}`.
+#
+# The handlers stay here to keep all existing callers working byte-for-byte,
+# but every request is logged at warn level and OpenAPI marks them
+# `deprecated`. Once telemetry shows zero traffic for ≥ one full release
+# cycle, this entire block can be deleted.
+#
+# Behaviour is implemented once in `_subnet_membership.py`; both the legacy
+# and canonical routes call the same helpers, so they cannot drift.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{agent_id}/subnets/{subnet_id}",
+    deprecated=True,
+    summary="[Deprecated] Agent joins a subnet",
+    description=(
+        "**Deprecated.** Use `POST /api/v1/agents/{agent_id}/subnets/{subnet_id}` "
+        "instead. This path will be removed after telemetry shows zero traffic "
+        "for one full release cycle. Behaviour is identical."
+    ),
+)
 async def join_subnet(
     agent_id: AgentIdPath,
     subnet_id: SubnetIdPath,
@@ -273,79 +305,32 @@ async def join_subnet(
     agent_service: AgentServiceDep = None,
     webhook_service: WebhookServiceDep = None,
 ):
-    """Agent joins a subnet (requires Agent API Key)
-
-    The authenticated agent must match the path `agent_id`.
-    Clean Architecture: Route → Service → Repository
-    """
-    if agent_info["agent_id"] != agent_id:
-        raise ACNHTTPError(
-            ErrorCode.API_KEY_AGENT_MISMATCH,
-            403,
-            details={
-                "path_agent": agent_id,
-                "key_agent": agent_info["agent_id"],
-            },
-        )
-
-    # Verify subnet exists (and capture entity for harness-webhook delivery)
-    try:
-        subnet = await subnet_service.get_subnet(subnet_id)
-    except SubnetNotFoundException as e:
-        raise ACNHTTPError(
-            ErrorCode.SUBNET_NOT_FOUND,
-            404,
-            details={"subnet_id": subnet_id},
-        ) from e
-
-    # Verify agent exists and join subnet
-    try:
-        await agent_service.join_subnet(agent_id, subnet_id)
-
-        # Also update subnet members
-        await subnet_service.add_member(subnet_id, agent_id)
-
-        logger.info("agent_joined_subnet", agent_id=agent_id, subnet_id=subnet_id)
-
-        # Notify the subnet's Org Harness (if registered)
-        if subnet.harness_url and webhook_service is not None:
-            try:
-                await webhook_service.send_to(
-                    url=subnet.harness_url,
-                    secret=subnet.harness_secret,
-                    event=WebhookEventType.AGENT_JOINED_SUBNET,
-                    task_id=subnet_id,  # no task; use subnet_id for trace correlation
-                    data={
-                        "subnet_id": subnet_id,
-                        "agent_id": agent_id,
-                    },
-                )
-            except Exception as e:  # noqa: BLE001 - never break join on webhook failure
-                logger.warning(
-                    "subnet_harness_webhook_failed",
-                    subnet_id=subnet_id,
-                    agent_id=agent_id,
-                    webhook_event="agent.joined_subnet",
-                    error=str(e),
-                )
-
-        return {"status": "joined", "agent_id": agent_id, "subnet_id": subnet_id}
-    except AgentNotFoundException as e:
-        raise ACNHTTPError(
-            ErrorCode.AGENT_NOT_FOUND,
-            404,
-            details={"agent_id": agent_id},
-        ) from e
-    except ACNHTTPError:
-        raise
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("join_subnet_failed", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to join subnet") from e
+    """[Deprecated] Use POST /api/v1/agents/{agent_id}/subnets/{subnet_id}."""
+    logger.warning(
+        "deprecated_route_called",
+        path="/api/v1/subnets/{agent_id}/subnets/{subnet_id}",
+        canonical="/api/v1/agents/{agent_id}/subnets/{subnet_id}",
+        agent_id=agent_id,
+    )
+    return await do_join_subnet(
+        agent_id=agent_id,
+        subnet_id=subnet_id,
+        agent_info=agent_info,
+        subnet_service=subnet_service,
+        agent_service=agent_service,
+        webhook_service=webhook_service,
+    )
 
 
-@router.delete("/{agent_id}/subnets/{subnet_id}")
+@router.delete(
+    "/{agent_id}/subnets/{subnet_id}",
+    deprecated=True,
+    summary="[Deprecated] Agent leaves a subnet",
+    description=(
+        "**Deprecated.** Use `DELETE /api/v1/agents/{agent_id}/subnets/{subnet_id}` "
+        "instead. Behaviour is identical."
+    ),
+)
 async def leave_subnet(
     agent_id: AgentIdPath,
     subnet_id: SubnetIdPath,
@@ -354,76 +339,21 @@ async def leave_subnet(
     agent_service: AgentServiceDep = None,
     webhook_service: WebhookServiceDep = None,
 ):
-    """Agent leaves a subnet (requires Agent API Key)
-
-    The authenticated agent must match the path `agent_id`.
-    Clean Architecture: Route → Service → Repository
-    """
-    if agent_info["agent_id"] != agent_id:
-        raise ACNHTTPError(
-            ErrorCode.API_KEY_AGENT_MISMATCH,
-            403,
-            details={
-                "path_agent": agent_id,
-                "key_agent": agent_info["agent_id"],
-            },
-        )
-
-    # Capture subnet up-front so we still know the harness_url even if the
-    # subnet later gets unmodified (it doesn't, but keeps symmetry with join).
-    try:
-        subnet = await subnet_service.get_subnet(subnet_id)
-    except SubnetNotFoundException:
-        subnet = None  # let downstream raise the canonical error
-
-    try:
-        await agent_service.leave_subnet(agent_id, subnet_id)
-        await subnet_service.remove_member(subnet_id, agent_id)
-
-        logger.info("agent_left_subnet", agent_id=agent_id, subnet_id=subnet_id)
-
-        # Notify the subnet's Org Harness (if registered)
-        if subnet and subnet.harness_url and webhook_service is not None:
-            try:
-                await webhook_service.send_to(
-                    url=subnet.harness_url,
-                    secret=subnet.harness_secret,
-                    event=WebhookEventType.AGENT_LEFT_SUBNET,
-                    task_id=subnet_id,
-                    data={
-                        "subnet_id": subnet_id,
-                        "agent_id": agent_id,
-                    },
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    "subnet_harness_webhook_failed",
-                    subnet_id=subnet_id,
-                    agent_id=agent_id,
-                    webhook_event="agent.left_subnet",
-                    error=str(e),
-                )
-
-        return {"status": "left", "agent_id": agent_id, "subnet_id": subnet_id}
-    except AgentNotFoundException as e:
-        raise ACNHTTPError(
-            ErrorCode.AGENT_NOT_FOUND,
-            404,
-            details={"agent_id": agent_id},
-        ) from e
-    except SubnetNotFoundException as e:
-        raise ACNHTTPError(
-            ErrorCode.SUBNET_NOT_FOUND,
-            404,
-            details={"subnet_id": subnet_id},
-        ) from e
-    except ACNHTTPError:
-        raise
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("leave_subnet_failed", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to leave subnet") from e
+    """[Deprecated] Use DELETE /api/v1/agents/{agent_id}/subnets/{subnet_id}."""
+    logger.warning(
+        "deprecated_route_called",
+        path="/api/v1/subnets/{agent_id}/subnets/{subnet_id}",
+        canonical="/api/v1/agents/{agent_id}/subnets/{subnet_id}",
+        agent_id=agent_id,
+    )
+    return await do_leave_subnet(
+        agent_id=agent_id,
+        subnet_id=subnet_id,
+        agent_info=agent_info,
+        subnet_service=subnet_service,
+        agent_service=agent_service,
+        webhook_service=webhook_service,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -493,35 +423,32 @@ async def update_subnet_harness(
     }
 
 
-@router.get("/{agent_id}/subnets")
+@router.get(
+    "/{agent_id}/subnets",
+    deprecated=True,
+    summary="[Deprecated] Get subnets an agent belongs to",
+    description=(
+        "**Deprecated.** Use `GET /api/v1/agents/{agent_id}/subnets` instead. "
+        "Behaviour is identical."
+    ),
+)
 async def get_agent_subnets(
     agent_id: AgentIdPath,
     agent_info: AgentApiKeyDep,
     agent_service: AgentServiceDep = None,
 ):
-    """Get subnets an agent belongs to (requires Agent API Key)
-
-    An agent may only query its own subnet membership.
-    Clean Architecture: Route → AgentService → Repository
-    """
-    if agent_info["agent_id"] != agent_id:
-        raise ACNHTTPError(
-            ErrorCode.API_KEY_AGENT_MISMATCH,
-            403,
-            details={
-                "path_agent": agent_id,
-                "key_agent": agent_info["agent_id"],
-            },
-        )
-    try:
-        agent = await agent_service.get_agent(agent_id)
-        return {"agent_id": agent_id, "subnets": agent.subnet_ids}
-    except AgentNotFoundException as e:
-        raise ACNHTTPError(
-            ErrorCode.AGENT_NOT_FOUND,
-            404,
-            details={"agent_id": agent_id},
-        ) from e
+    """[Deprecated] Use GET /api/v1/agents/{agent_id}/subnets."""
+    logger.warning(
+        "deprecated_route_called",
+        path="/api/v1/subnets/{agent_id}/subnets",
+        canonical="/api/v1/agents/{agent_id}/subnets",
+        agent_id=agent_id,
+    )
+    return await do_get_agent_subnets(
+        agent_id=agent_id,
+        agent_info=agent_info,
+        agent_service=agent_service,
+    )
 
 
 @router.delete("/{subnet_id}")

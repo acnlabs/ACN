@@ -85,6 +85,7 @@ from .protocols.ap2 import (
     create_webhook_config_from_settings,
 )
 from .routes import (
+    agent_subnets,
     allowlist,
     analytics,
     communication,
@@ -1189,6 +1190,15 @@ app.include_router(follows.router)
 # ``/{agent_id}/{rest_path:path}`` does not greedily forward
 # allowlist requests to the agent's real endpoint.
 app.include_router(allowlist.router)
+# Canonical agent-side subnet membership routes
+# (`POST/DELETE /api/v1/agents/{id}/subnets/{subnet_id}`,
+#  `GET /api/v1/agents/{id}/subnets`).
+# MUST be registered before `registry.router` for the same reason
+# `follows` and `allowlist` are: registry mounts a catch-all
+# `/{agent_id}/{rest_path:path}` for A2A proxy forwarding, which would
+# otherwise greedily swallow these requests and demand the proxy's
+# `X-ACN-Authorization` header.
+app.include_router(agent_subnets.router)
 app.include_router(registry.router)
 app.include_router(onchain.router)
 app.include_router(communication.router)
