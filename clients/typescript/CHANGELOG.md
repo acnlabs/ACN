@@ -2,6 +2,23 @@
 
 All notable changes to `acn-client` (TypeScript) are documented here.
 
+## [0.11.2] - 2026-05-14
+
+### Changed
+- **Subnet membership paths now canonical**: `joinSubnet`, `leaveSubnet`,
+  and `getAgentSubnets` switch to `/api/v1/agents/{agent_id}/subnets/…`,
+  matching every other agent-side endpoint (heartbeat, claim, transfer,
+  …). The legacy `/api/v1/subnets/{agent_id}/subnets/…` paths the SDK
+  used in 0.11.1 still work but are now `deprecated=True` in the
+  backend's OpenAPI schema; this release moves callers onto the
+  canonical surface so the legacy paths can eventually be removed.
+- **Backend requirement**: ACN backend must carry the canonical-routes
+  patch (released alongside this SDK). Earlier backend builds only
+  served the legacy paths and will 404 on the canonical ones. If you
+  pin to an older backend, stay on 0.11.1.
+
+No caller-code changes required — method signatures are unchanged.
+
 ## [0.11.1] - 2026-05-14
 
 ### Fixed
