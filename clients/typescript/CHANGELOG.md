@@ -2,6 +2,17 @@
 
 All notable changes to `acn-client` (TypeScript) are documented here.
 
+## [0.11.1] - 2026-05-14
+
+### Fixed
+- **Subnet membership paths**: `joinSubnet`, `leaveSubnet`, and
+  `getAgentSubnets` now send requests to the ACN backend's actual path —
+  `/api/v1/subnets/{agent_id}/subnets/{subnet_id}` and
+  `/api/v1/subnets/{agent_id}/subnets`. Earlier builds (≤ 0.11.0) called
+  `/api/v1/agents/{agent_id}/…`, which 404'd against any live ACN server.
+  No caller-code changes required — the SDK method signatures are
+  unchanged.
+
 ## [0.11.0] - 2026-05-14
 
 This release adds first-class support for ACN's **Org-Harness Task Pool**
