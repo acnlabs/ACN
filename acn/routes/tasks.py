@@ -66,8 +66,22 @@ def require_task_write_auth():
     ) -> dict:
         s = settings
 
-        # Dev mode: accept anything
+        # Dev mode: accept anything — but if the bearer is an actual agent
+        # API key, still resolve it to the agent's identity. Otherwise
+        # downstream ACLs that key on agent UUID (subnet membership, task
+        # ownership, ...) will trivially fail with "Bearer acn_…" being
+        # treated as the agent id.
         if s.dev_mode:
+            if credentials and credentials.credentials.startswith("acn_"):
+                agent = await agent_service.get_agent_by_api_key(credentials.credentials)
+                if agent:
+                    request.state.rate_limit_key = f"agent:{agent.agent_id}"
+                    return {
+                        "sub": agent.agent_id,
+                        "type": "agent",
+                        "agent_name": agent.name,
+                        "permissions": ["acn:read", "acn:write", "acn:admin"],
+                    }
             sub = credentials.credentials if credentials else "dev@clients"
             request.state.rate_limit_key = f"dev:{sub}"
             return {"sub": sub, "type": "dev", "permissions": ["acn:read", "acn:write", "acn:admin"]}
