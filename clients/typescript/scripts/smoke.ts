@@ -13,6 +13,9 @@
  *  9. submitTask  — sends `submission` (not `submissionContent`)
  * 10. reviewTask  — sends `notes` (not `feedback`)
  * 11. TaskStatus  — assert backend emits one of the documented values
+ * 12. joinSubnet  — POST /api/v1/agents/{id}/subnets/{subnet_id} (0.11.2 canonical)
+ * 13. getAgentSubnets — GET /api/v1/agents/{id}/subnets (returns {agent_id, subnets[]})
+ * 14. leaveSubnet — DELETE /api/v1/agents/{id}/subnets/{subnet_id}
  *
  * Usage:
  *   ACN_URL=http://127.0.0.1:9000 npx tsx scripts/smoke.ts
@@ -125,8 +128,41 @@ async function main() {
   log("reviewed.status (should be 'completed')", reviewed.status);
   if (reviewed.status !== "completed") throw new Error(`expected 'completed', got ${reviewed.status}`);
 
-  // ── 11. Final sanity ────────────────────────────────────────────────────
-  log("DONE — all 11 contract checks passed");
+  // ── 12-14. Canonical subnet membership paths (0.11.2). Uses a *third*
+  //   agent so we don't touch creator/solver state from steps above. ──────
+  log("register joiner agent for subnet-membership checks");
+  const joiner = await anon.joinACN({
+    name: `smoke-joiner-${STAMP}`,
+    description: "v0.11.2 SDK smoke joiner (auto-generated, safe to delete)",
+    a2a_endpoint: "http://127.0.0.1:0/jsonrpc",
+    tags: ["smoke", "joiner"],
+  });
+  const joinerClient = new ACNClient({ baseUrl: ACN_URL, apiKey: joiner.api_key });
+
+  log("joinSubnet (canonical /api/v1/agents/{id}/subnets/{subnet_id})");
+  const joinResp = await joinerClient.joinSubnet(joiner.agent_id, subnet.subnet_id);
+  if ((joinResp as { status?: string }).status !== "joined") {
+    throw new Error(`expected joinSubnet status='joined', got ${JSON.stringify(joinResp)}`);
+  }
+
+  log("getAgentSubnets (canonical /api/v1/agents/{id}/subnets)");
+  const subs = await joinerClient.getAgentSubnets(joiner.agent_id);
+  if (!subs.subnets.includes(subnet.subnet_id)) {
+    throw new Error(`getAgentSubnets did not list ${subnet.subnet_id}: ${JSON.stringify(subs)}`);
+  }
+
+  log("leaveSubnet (canonical DELETE /api/v1/agents/{id}/subnets/{subnet_id})");
+  const leaveResp = await joinerClient.leaveSubnet(joiner.agent_id, subnet.subnet_id);
+  if ((leaveResp as { status?: string }).status !== "left") {
+    throw new Error(`expected leaveSubnet status='left', got ${JSON.stringify(leaveResp)}`);
+  }
+  const subsAfter = await joinerClient.getAgentSubnets(joiner.agent_id);
+  if (subsAfter.subnets.includes(subnet.subnet_id)) {
+    throw new Error(`getAgentSubnets still has ${subnet.subnet_id} after leave`);
+  }
+
+  // ── Final sanity ────────────────────────────────────────────────────
+  log("DONE — all 14 contract checks passed");
 }
 
 main().catch((err) => {
