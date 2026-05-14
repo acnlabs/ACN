@@ -244,6 +244,22 @@ export class ACNClient {
     return this.post('/api/v1/agents/join', request);
   }
 
+  /**
+   * Resolve the authenticated agent (i.e. the one whose API key the client
+   * carries). Returns the full agent record. Useful for harnesses that
+   * need to know their own `agent_id` to skip echo-loops on webhook
+   * deliveries — when an ACN task.created event arrives whose `creator_id`
+   * matches the harness's own agent_id, the harness can recognise the task
+   * as one it issued itself and avoid re-mirroring it.
+   */
+  async getMyAgent(): Promise<{
+    agent_id: string;
+    name: string;
+    [key: string]: unknown;
+  }> {
+    return this.get('/api/v1/agents/me');
+  }
+
   /** Get agent by ID */
   async getAgent(agentId: string): Promise<AgentInfo> {
     return this.get(`/api/v1/agents/${agentId}`);

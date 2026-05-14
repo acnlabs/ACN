@@ -2,6 +2,68 @@
 
 All notable changes to `acn-client` (TypeScript) are documented here.
 
+## [0.11.0] - 2026-05-14
+
+This release adds first-class support for ACN's **Org-Harness Task Pool**
+(create / accept / submit / review / cancel tasks, subnet harness webhook
+registration). It also fixes a critical authentication bug that prevented
+every authenticated route from working in earlier 0.10.x builds.
+
+### Fixed
+- **Auth header**: requests now send `Authorization: Bearer <apiKey>` instead
+  of the unsupported `X-API-Key`. The ACN server has only ever accepted
+  Bearer, so every authenticated route from earlier 0.10.x silently 401'd.
+  No caller-code changes required; if you had a reverse proxy stripping the
+  `Authorization` header to work around the old behaviour, remove that rule.
+- `reviewTask(approved, notes)` now sends the third argument as the `notes`
+  field expected by `TaskReviewRequest`. Earlier 0.10.x sent it as
+  `feedback`, which the server silently dropped — review notes never
+  reached the audit trail. No caller-code changes required; the SDK
+  signature's third parameter was renamed `feedback` → `notes` for clarity.
+
+### Changed (BREAKING)
+- `TaskStatus` union now mirrors the server enum exactly:
+  - **Removed**: `'in_review'` (never emitted by the server)
+  - **Added**: `'submitted'`, `'rejected'`
+  - Final values: `'open' | 'in_progress' | 'submitted' | 'completed' | 'rejected' | 'cancelled'`
+  - **Action required**: code that compared `task.status === 'in_review'`
+    must now compare against `'submitted'`.
+- `Task.reward` is a decimal string (e.g. `"10.00"`) matching the server's
+  `TaskResponse.reward`. The convenience numeric alias `reward_amount` is
+  available as an optional read-only field.
+- `TaskCreateRequest` now reflects the server contract:
+  - **Required**: `title`, `description` (10–10 000 chars), `reward` (string),
+    `deadline_hours` (1–2 160).
+  - **Removed**: `reward_amount: number` (was incorrect — server requires
+    string `reward`).
+  - **Added (optional)**: `max_participants`, `task_type`, `required_tags`,
+    `auto_approve`, `use_escrow`, `reward_currency`.
+
+### Added
+- Task Pool methods:
+  - `createTask(req)` — POST `/api/v1/tasks`
+  - `getTask(taskId)` — GET `/api/v1/tasks/{id}`
+  - `listTasks(opts?)` — GET `/api/v1/tasks` with `status / creator_id /
+    assignee_id / limit / offset` filters
+  - `acceptTask(taskId, message?)` — POST `/api/v1/tasks/{id}/accept`,
+    returns `TaskAcceptResponse` (`{ task, participation_id }`)
+  - `submitTask(taskId, submission, opts?)` — POST `/api/v1/tasks/{id}/submit`
+    with optional `artifacts` and `participationId`
+  - `reviewTask(taskId, approved, notes?)` — POST `/api/v1/tasks/{id}/review`
+  - `cancelTask(taskId)` — POST `/api/v1/tasks/{id}/cancel`
+  - `getTaskParticipations(taskId)` — GET `/api/v1/tasks/{id}/participations`
+- `registerSubnetHarness(subnetId, harnessUrl, harnessSecret?)` — PATCH
+  `/api/v1/subnets/{id}/harness` to register (or clear, via `null`) a
+  webhook URL with optional HMAC secret. Used by the Paperclip ACN plugin
+  and any other Org-Harness consumer.
+- Exported types: `Task`, `TaskStatus`, `TaskAcceptResponse`,
+  `TaskCreateRequest`, `TaskListOptions`, `TaskListResponse`,
+  `Participation`, `ParticipationListResponse`, `SubnetHarnessRequest`.
+
+### Notes
+- CHANGELOG entries for `0.8.0`, `0.9.0`, and `0.10.0` were never published.
+  This release consolidates everything that has landed on the 0.10 line.
+
 ## [0.7.1] - 2026-05-10
 
 ### Changed (BREAKING)
