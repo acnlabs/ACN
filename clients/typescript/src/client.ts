@@ -325,34 +325,29 @@ export class ACNClient {
   // ──────────────────────────────────────────────────────────────────────
   //  Subnet membership (agent-side)
   //
-  //  The ACN backend hangs these three endpoints off the `subnets` router
-  //  rather than the `agents` router — i.e. the live paths are
+  //  Canonical paths under `/api/v1/agents/{agent_id}/…`, matching every
+  //  other agent-side operation (heartbeat / claim / transfer / wallets / …).
   //
-  //      POST   /api/v1/subnets/{agent_id}/subnets/{subnet_id}
-  //      DELETE /api/v1/subnets/{agent_id}/subnets/{subnet_id}
-  //      GET    /api/v1/subnets/{agent_id}/subnets
-  //
-  //  This is asymmetric with the surrounding "agent-side" routes (heartbeat,
-  //  claim, transfer, ...) which are all rooted at `/api/v1/agents/{id}/…`.
-  //  We mirror the backend's actual contract verbatim here so the SDK works
-  //  out of the box; once the backend ships canonical
-  //  `/api/v1/agents/{id}/subnets/…` aliases we can flip these without a
-  //  caller-visible signature change.
+  //  Before 0.11.2 the SDK called `/api/v1/subnets/{agent_id}/subnets/{id}`
+  //  because that was the only shape the backend served. Backend release
+  //  carrying the canonical-routes patch (ACN PR #42) now serves both
+  //  shapes — the legacy one is marked `deprecated=True` in OpenAPI and
+  //  scheduled for removal. Requires ACN backend ≥ post-PR-#42.
   // ──────────────────────────────────────────────────────────────────────
 
   /** Join agent to subnet */
   async joinSubnet(agentId: string, subnetId: string): Promise<{ success: boolean }> {
-    return this.post(`/api/v1/subnets/${agentId}/subnets/${subnetId}`);
+    return this.post(`/api/v1/agents/${agentId}/subnets/${subnetId}`);
   }
 
   /** Remove agent from subnet */
   async leaveSubnet(agentId: string, subnetId: string): Promise<{ success: boolean }> {
-    return this.delete(`/api/v1/subnets/${agentId}/subnets/${subnetId}`);
+    return this.delete(`/api/v1/agents/${agentId}/subnets/${subnetId}`);
   }
 
   /** Get agent's subnets */
   async getAgentSubnets(agentId: string): Promise<{ subnets: string[] }> {
-    return this.get(`/api/v1/subnets/${agentId}/subnets`);
+    return this.get(`/api/v1/agents/${agentId}/subnets`);
   }
 
   // ============================================
