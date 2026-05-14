@@ -458,6 +458,13 @@ class TaskService:
             )
 
         logger.info("task_accepted", task_id=task_id, agent_id=agent_id)
+
+        # Symmetry with the multi-participant path (_join_task line 630): emit
+        # TASK_ACCEPTED webhook so Org Harnesses (e.g. paperclip-acn-plugin)
+        # can mirror state. Without this, single-participant tasks silently
+        # skip the accept notification and downstream harnesses are stuck
+        # showing "open".
+        await self._notify_webhook(WebhookEventType.TASK_ACCEPTED, task)
         return task, None
 
     async def invite_agent(

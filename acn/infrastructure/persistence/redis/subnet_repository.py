@@ -48,6 +48,10 @@ class RedisSubnetRepository(ISubnetRepository):
             subnet_dict["harness_secret"] = ""
         if subnet_dict.get("description") is None:
             subnet_dict["description"] = ""
+        # redis-py refuses raw bool values for HSET — round-trip via the
+        # "True"/"False" string form that `_dict_to_subnet` already parses
+        # (see `is_private` parser).
+        subnet_dict["is_private"] = str(bool(subnet_dict.get("is_private", False)))
 
         # Save to Redis hash
         await self.redis.hset(subnet_key, mapping=subnet_dict)  # type: ignore[arg-type]
