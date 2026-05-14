@@ -84,6 +84,31 @@ def _get_settings():
     return get_settings()
 
 
+async def _resolve_agent_id_from_api_key(token: str | None) -> str | None:
+    """Best-effort: turn an ``acn_*`` API key into its owning agent's UUID.
+
+    Used by the ``dev_mode`` short-circuits below so that downstream ACLs
+    (which compare against agent UUIDs — subnet membership, task ownership,
+    ...) keep working when callers authenticate with a raw API key instead
+    of a JWT. Without this resolver, ``sub`` ends up being the literal
+    ``acn_…`` string and every UUID-keyed permission check 403s.
+
+    Lazy-imports the agent service to avoid a routes -> auth circular
+    import (see file header for the same constraint on ``_peer_ip``).
+    Returns ``None`` on any failure — the caller falls back to the
+    pre-existing dev_mode behaviour (raw token as ``sub``).
+    """
+    if not token or not token.startswith("acn_"):
+        return None
+    try:
+        from ..routes.dependencies import get_agent_service
+
+        agent = await get_agent_service().get_agent_by_api_key(token)
+        return agent.agent_id if agent else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _load_jwks_from_env() -> dict | None:
     """Load JWKS from AUTH0_JWKS environment variable if present.
 
@@ -304,11 +329,20 @@ async def verify_token(
 
     if settings.dev_mode:
         # In dev mode: accept any credential (API keys, stub tokens, etc.)
-        # as a convenience shortcut — no Auth0 verification.
-        sub = "dev@clients"
-        if credentials is not None:
-            # Use the token value as subject so agents remain distinguishable
-            sub = credentials.credentials
+        # as a convenience shortcut — no Auth0 verification. If the bearer
+        # is an actual ``acn_*`` agent API key, resolve it to that agent's
+        # UUID so downstream ACLs (subnet membership, task ownership, ...)
+        # keep working; otherwise fall back to the raw token string.
+        resolved = await _resolve_agent_id_from_api_key(
+            credentials.credentials if credentials is not None else None
+        )
+        if resolved is not None:
+            return {
+                "sub": resolved,
+                "type": "agent",
+                "permissions": ["acn:read", "acn:write", "acn:admin"],
+            }
+        sub = credentials.credentials if credentials is not None else "dev@clients"
         return {"sub": sub, "permissions": ["acn:read", "acn:write", "acn:admin"]}
 
     if credentials is None:
@@ -375,11 +409,20 @@ def require_internal_or_permission(permission: str):
     ) -> dict:
         settings = _get_settings()
 
-        # Dev mode: accept anything
+        # Dev mode: accept anything — but resolve ``acn_*`` API keys to the
+        # owning agent's UUID so UUID-keyed ACLs still work (see
+        # ``_resolve_agent_id_from_api_key`` for the why).
         if settings.dev_mode:
-            sub = "dev@clients"
-            if credentials is not None:
-                sub = credentials.credentials
+            resolved = await _resolve_agent_id_from_api_key(
+                credentials.credentials if credentials is not None else None
+            )
+            if resolved is not None:
+                return {
+                    "sub": resolved,
+                    "type": "agent",
+                    "permissions": ["acn:read", "acn:write", "acn:admin"],
+                }
+            sub = credentials.credentials if credentials is not None else "dev@clients"
             return {"sub": sub, "permissions": ["acn:read", "acn:write", "acn:admin"]}
 
         # Internal token: trusted backend service call. Use constant-time
@@ -426,7 +469,11 @@ async def get_subject(
     if settings.dev_mode:
         if credentials is None:
             return "dev@clients"
-        return credentials.credentials
+        # Resolve ``acn_*`` API keys to the owning agent's UUID so callers
+        # that key off ``get_subject`` (e.g. ownership checks) line up with
+        # the agent identity rather than the raw token value.
+        resolved = await _resolve_agent_id_from_api_key(credentials.credentials)
+        return resolved if resolved is not None else credentials.credentials
 
     payload = await verify_token(request, credentials)
     return payload.get("sub", "unknown")
