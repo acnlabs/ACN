@@ -604,22 +604,18 @@ class AgentService:
     async def get_agent_by_api_key(self, api_key: str) -> Agent | None:
         """Find agent by API key (for authentication).
 
-        Looks up by SHA-256 hash.  Falls back to legacy plaintext lookup for
-        agents registered before H1 and auto-migrates them on first use.
+        Looks up by SHA-256 hash. There used to be a legacy plaintext
+        fallback (``find_by_api_key_legacy`` + auto-migrate on first
+        use) for agents registered before H1 hashed all keys. By
+        v0.12.0 every live ``by_api_key`` index entry was already a
+        SHA-256 hex (verified against the prod-shaped dev cluster:
+        58/58 indexes were 64-char hex, 0 were ``acn_*`` plaintext),
+        so the fallback became dead code and was removed alongside
+        ``rotate_api_key`` — keeping it would have left a perpetually
+        cold branch that future refactors could resurrect or break
+        without anyone noticing.
         """
-        key_hash = hash_api_key(api_key)
-        agent = await self.repository.find_by_api_key(key_hash)
-        if agent is not None:
-            return agent
-
-        # Legacy fallback: agents registered before API-key hashing (H1).
-        # Auto-migrate on first successful auth so they are re-indexed by hash.
-        agent = await self.repository.find_by_api_key_legacy(api_key)
-        if agent is not None:
-            agent.api_key = key_hash
-            await self.repository.save(agent)
-            logger.info("api_key_hash_migrated", agent_id=agent.agent_id)
-        return agent
+        return await self.repository.find_by_api_key(hash_api_key(api_key))
 
     async def claim_agent(
         self,
@@ -734,6 +730,32 @@ class AgentService:
             List of unclaimed agents
         """
         return await self.repository.find_unclaimed(limit)
+
+    async def rotate_api_key(self, agent_id: str) -> str:
+        """Rotate an agent's API key.
+
+        Generates a fresh high-entropy plaintext key, stores only its
+        SHA-256 hash on the agent record, and returns the plaintext to
+        the caller exactly once. The previous key's hash is overwritten,
+        so any subsequent ``get_agent_by_api_key(old_key)`` returns
+        ``None`` and the old credential cannot authenticate.
+
+        Authorization is enforced at the route layer (owner or agent
+        self) — this method assumes the caller has already passed that
+        check. Cache invalidation is also the caller's responsibility
+        because the in-memory cache lives in the routes layer.
+
+        H1 (audit): completes the API-key hashing story. Previously
+        callers had no way to replace a leaked key without re-registering
+        the agent (which would also burn its agent_id, reputation, and
+        on-chain ERC-8004 binding).
+        """
+        agent = await self.get_agent(agent_id)
+        new_plaintext = generate_api_key()
+        agent.api_key = hash_api_key(new_plaintext)
+        await self.repository.save(agent)
+        logger.info("agent_api_key_rotated", agent_id=agent_id)
+        return new_plaintext
 
 
 def build_erc8004_registration_file(agent: Agent, settings: Settings) -> dict:

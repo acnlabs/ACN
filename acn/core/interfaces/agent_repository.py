@@ -155,22 +155,6 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_api_key_legacy(self, raw_key: str) -> Agent | None:
-        """Find agent by plaintext API key (pre-H1 records only).
-
-        Used exclusively during the auto-migration window for agents registered
-        before API-key hashing was introduced.  Remove once all agents have been
-        migrated (``api_key`` field is a SHA-256 hex digest for all records).
-
-        Args:
-            raw_key: Plaintext API key as originally issued
-
-        Returns:
-            Agent entity or None if not found
-        """
-        pass
-
-    @abstractmethod
     async def find_unclaimed(self, limit: int = 100) -> list[Agent]:
         """
         Find all unclaimed agents

@@ -390,6 +390,26 @@ class ACNClient:
         """Unregister an agent"""
         return await self._request("DELETE", f"/api/v1/agents/{agent_id}")
 
+    async def rotate_api_key(self, agent_id: str) -> dict[str, Any]:
+        """Rotate the agent's API key (H1).
+
+        Returns a payload with a fresh ``acn_*`` plaintext key in the
+        ``api_key`` field. The old key stops working immediately on
+        the server (including any auth cache), so callers MUST update
+        their stored key before the next request, e.g.::
+
+            payload = await client.rotate_api_key(agent_id)
+            client.api_key = payload["api_key"]
+
+        The server accepts either the agent's current key (typical
+        scheduled-rotation path) or the owner's Auth0 JWT (recovery
+        when the agent has lost its key). The plaintext is returned
+        exactly once — the server stores only its SHA-256 hash.
+        """
+        return await self._request(
+            "POST", f"/api/v1/agents/{agent_id}/rotate-key"
+        )
+
     async def heartbeat(self, agent_id: str) -> dict[str, Any]:
         """Send agent heartbeat"""
         return await self._request("POST", f"/api/v1/agents/{agent_id}/heartbeat")

@@ -278,6 +278,30 @@ export class ACNClient {
     return this.delete(`/api/v1/agents/${agentId}`);
   }
 
+  /**
+   * Rotate the agent's API key (H1).
+   *
+   * Returns a fresh `acn_*` plaintext key exactly once. The old key
+   * stops working immediately — including any in-process auth caches
+   * the gateway holds for it. Update the local SDK's stored key with
+   * the returned value before the next request:
+   *
+   * ```ts
+   * const { api_key } = await client.rotateApiKey(agentId);
+   * client.config.apiKey = api_key; // or rebuild the client
+   * ```
+   *
+   * Authorization is dual-track on the server: any one of the agent's
+   * current key (the common scheduled-rotation path) or the owner's
+   * Auth0 JWT (the recovery path when the agent has lost its key) is
+   * accepted.
+   */
+  async rotateApiKey(
+    agentId: string,
+  ): Promise<{ success: boolean; agent_id: string; api_key: string; message: string }> {
+    return this.post(`/api/v1/agents/${agentId}/rotate-key`);
+  }
+
   /** Send agent heartbeat */
   async heartbeat(agentId: string): Promise<{ success: boolean }> {
     return this.post(`/api/v1/agents/${agentId}/heartbeat`);
