@@ -1,0 +1,189 @@
+"""Route-level tests for ADR-0001: subnet creator must be a member.
+
+ACN stores subnet membership as a bidirectional pair:
+- ``subnet.member_agent_ids`` (subnet store)
+- ``agent.subnet_ids`` (agent store)
+
+Both must be written for the membership to be visible to every consumer.
+``SubnetService.create_subnet`` only writes the subnet side via
+``subnet.add_member(owner)``; the route handler ``POST /api/v1/subnets``
+must mirror this with an ``agent_service.join_subnet(owner, subnet_id)``
+call so the agent side is also written.
+
+Without this, freshly created subnets show ``member_count=0`` in any
+consumer that derives the count from ``agent.subnet_ids`` — the common
+path. Pre-fix, ``agentplanet/frontend::buildSubnetHalos`` displays a
+long tail of "ghost subnets" with member_count 0.
+
+Tracking: ``docs/adr/0001-subnet-creator-must-be-member.md``.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from acn.api import app
+from acn.routes.dependencies import (
+    get_agent_service,
+    get_subnet_service,
+)
+
+
+@pytest.fixture
+def stub_agent_service():
+    """``owner-key`` resolves to ``agent-target``."""
+    svc = AsyncMock()
+
+    target = MagicMock()
+    target.agent_id = "agent-target"
+    target.name = "Target"
+    target.subnet_ids = []
+
+    async def _by_api_key(key: str):
+        return {"owner-key": target}.get(key)
+
+    svc.get_agent_by_api_key = AsyncMock(side_effect=_by_api_key)
+    svc.get_agent = AsyncMock(return_value=target)
+    svc.join_subnet = AsyncMock(return_value=None)
+    return svc
+
+
+def _make_subnet_mock(subnet_id: str = "subnet-new-abc123", owner: str = "agent-target"):
+    sn = MagicMock()
+    sn.subnet_id = subnet_id
+    sn.owner = owner
+    sn.is_private = False
+    sn.harness_url = None
+    sn.harness_secret = None
+    sn.member_agent_ids = {owner}
+    return sn
+
+
+@pytest.fixture
+def stub_subnet_service():
+    svc = AsyncMock()
+
+    async def _create_subnet(**kwargs):
+        # The real service writes subnet.add_member(owner) internally.
+        # Reflect that on the returned mock so tests asserting on the
+        # subnet side see what production sees.
+        return _make_subnet_mock(
+            subnet_id=kwargs["subnet_id"],
+            owner=kwargs["owner"],
+        )
+
+    svc.create_subnet = AsyncMock(side_effect=_create_subnet)
+    svc.delete_subnet = AsyncMock(return_value=True)
+    return svc
+
+
+# Pin an explicit subnet_id in test request bodies so we can assert on it
+# without depending on the route's _generate_subnet_id() randomness.
+_EXPLICIT_SUBNET_ID = "subnet-explicit-test-001"
+
+
+def _wire(agent_svc, subnet_svc) -> None:
+    app.dependency_overrides[get_agent_service] = lambda: agent_svc
+    app.dependency_overrides[get_subnet_service] = lambda: subnet_svc
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/subnets — ADR-0001 contract
+# ---------------------------------------------------------------------------
+
+
+class TestCreateSubnetMembership:
+    """The bug this ADR fixes: agent-side membership write was missing."""
+
+    def test_create_subnet_writes_agent_side_membership(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """The regression test: this is the assertion that would have
+        caught the original ghost-subnet bug.
+
+        After creating a subnet, ``agent_service.join_subnet`` must have
+        been called with (owner, new_subnet_id). Without this call, the
+        owner's ``agent.subnet_ids`` never receives the new subnet, and
+        every consumer that derives ``member_count`` from agent records
+        sees 0.
+        """
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/v1/subnets",
+                headers={"Authorization": "Bearer owner-key"},
+                json={"name": "Demo Subnet", "subnet_id": _EXPLICIT_SUBNET_ID},
+            )
+
+        assert r.status_code == 200, r.text
+        # The subnet-side write happens inside SubnetService.create_subnet
+        stub_subnet_service.create_subnet.assert_awaited_once()
+        # The agent-side write must mirror it (this is what was missing)
+        stub_agent_service.join_subnet.assert_awaited_once_with(
+            "agent-target", _EXPLICIT_SUBNET_ID
+        )
+
+    def test_create_subnet_response_unchanged_when_join_succeeds(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """API contract: response shape and status remain identical."""
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/v1/subnets",
+                headers={"Authorization": "Bearer owner-key"},
+                json={"name": "Demo Subnet", "subnet_id": _EXPLICIT_SUBNET_ID},
+            )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "created"
+        assert body["subnet_id"] == _EXPLICIT_SUBNET_ID
+        assert body["is_public"] is True
+
+    def test_create_subnet_rolls_back_when_agent_join_fails(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        """If the agent-side write fails, the half-created subnet must be
+        rolled back so callers don't see a phantom record.
+
+        Without rollback, a write-asymmetric subnet would leak into the
+        same ghost-subnet class the ADR is closing.
+        """
+        stub_agent_service.join_subnet.side_effect = RuntimeError(
+            "agent store unavailable"
+        )
+
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/v1/subnets",
+                headers={"Authorization": "Bearer owner-key"},
+                json={"name": "Demo Subnet", "subnet_id": _EXPLICIT_SUBNET_ID},
+            )
+
+        assert r.status_code == 500
+        # Subnet creation was attempted
+        stub_subnet_service.create_subnet.assert_awaited_once()
+        # Then rolled back
+        stub_subnet_service.delete_subnet.assert_awaited_once_with(
+            _EXPLICIT_SUBNET_ID, "agent-target"
+        )
+
+    def test_create_subnet_unauthenticated_does_not_mutate(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        _wire(stub_agent_service, stub_subnet_service)
+
+        with TestClient(app) as client:
+            r = client.post("/api/v1/subnets", json={"name": "x"})
+
+        assert 400 <= r.status_code < 500
+        stub_subnet_service.create_subnet.assert_not_awaited()
+        stub_agent_service.join_subnet.assert_not_awaited()

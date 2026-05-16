@@ -77,10 +77,20 @@ async def create_subnet(
     body: SubnetCreateRequest,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
+    agent_service: AgentServiceDep = None,
 ):
     """Create a new subnet (requires Agent API Key — agent becomes the owner).
 
     Clean Architecture: Route → SubnetService → Repository
+
+    Membership invariant (ADR-0001): ACN stores subnet membership as a
+    bidirectional pair (``subnet.member_agent_ids`` + ``agent.subnet_ids``).
+    ``SubnetService.create_subnet`` only writes the subnet side. The
+    agent-side write is mirrored here via ``agent_service.join_subnet``,
+    matching ``do_join_subnet`` in ``_subnet_membership.py``. Without
+    this, freshly created subnets show ``member_count=0`` in any consumer
+    that derives the count from ``agent.subnet_ids`` (the common path,
+    e.g. ``agentplanet/frontend::buildSubnetHalos``).
     """
     owner = agent_info["agent_id"]
 
@@ -98,6 +108,34 @@ async def create_subnet(
             security_config=security_cfg,
             metadata={},
         )
+
+        # Mirror the subnet-side owner add into the agent store. Wrapped in
+        # try/except so we can roll back the half-created subnet if the
+        # agent-side write fails (preserves the "create is atomic" contract
+        # callers expect).
+        try:
+            await agent_service.join_subnet(owner, subnet.subnet_id)
+        except Exception as join_error:  # noqa: BLE001 - rollback path
+            logger.error(
+                "subnet_owner_join_failed_rolling_back",
+                subnet_id=subnet.subnet_id,
+                owner=owner,
+                error=str(join_error),
+                exc_info=True,
+            )
+            try:
+                await subnet_service.delete_subnet(subnet.subnet_id, owner)
+            except Exception as rollback_error:  # noqa: BLE001
+                logger.error(
+                    "subnet_creation_rollback_failed",
+                    subnet_id=subnet.subnet_id,
+                    error=str(rollback_error),
+                    exc_info=True,
+                )
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create subnet",
+            ) from join_error
 
         # Generate gateway URLs
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
