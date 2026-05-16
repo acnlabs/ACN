@@ -8,10 +8,14 @@ for clients (and our own ops scripts) to tell whether a subnet was
 genuinely owner-less or whether the API was just hiding it.
 
 This file pins the contract: every subnet returned by the public GET
-endpoints carries a non-empty ``owner`` string. ``backend@internal`` is
-the canonical placeholder for system-owned subnets (default Public
-Network, per-user workspaces); user-created subnets carry the creator's
-``agent_id``.
+endpoints carries a non-empty ``owner`` string. User-created subnets
+carry the creator's ``agent_id``. The literal ``backend@internal``
+appears as a *transitional* owner on a small number of legacy mirror
+subnets created via the internal-token auth path; acnlabs/ACN#48
+(ADR-0002 candidate) is phasing it out in favour of dedicated
+service-account agents. The
+fixtures here exercise both shapes so the contract — `owner` is
+present and non-empty regardless of which shape — stays pinned.
 """
 
 from __future__ import annotations

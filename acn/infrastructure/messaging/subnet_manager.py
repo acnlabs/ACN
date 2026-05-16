@@ -262,6 +262,14 @@ class SubnetManager:
         """
         Create a new subnet with A2A-style security
 
+        NOTE: This in-memory path is not the production subnet creation
+        path (production goes through ``routes/subnets.py`` →
+        ``SubnetService``). The ``owner`` kwarg defaults to
+        ``backend@internal`` for backward compatibility with this method's
+        old signature, but new callers should pass an explicit registered
+        agent_id; ``backend@internal`` is being phased out as a valid
+        owner value (tracked in acnlabs/ACN#48, ADR-0002).
+
         Args:
             subnet_id: Unique subnet identifier
             name: Human-readable subnet name
@@ -1061,9 +1069,13 @@ class SubnetManager:
                             }
 
                         # Backfill owner for legacy Redis records persisted
-                        # before SubnetInfo modelled the field. ACN treats
-                        # missing owners as system-owned (consistent with the
-                        # default Public Network).
+                        # before SubnetInfo modelled the field. The
+                        # ``backend@internal`` placeholder is transitional —
+                        # tracked in acnlabs/ACN#48 (ADR-0002); the long-term
+                        # shape is for every subnet to be owned by a
+                        # registered agent (including service-account agents).
+                        # This setdefault exists only to keep legacy Redis
+                        # records loadable while that migration is pending.
                         subnet_data.setdefault("owner", "backend@internal")
 
                         self._subnets[subnet_id] = Subnet(

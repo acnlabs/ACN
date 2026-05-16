@@ -350,9 +350,15 @@ class SubnetInfo(BaseModel):
     owner: str = Field(
         ...,
         description=(
-            "Owner agent_id. Use ``backend@internal`` for system-owned "
-            "subnets (e.g. the default Public Network and per-user "
-            "workspace subnets created by ACN itself)."
+            "Owner agent_id. Must reference a registered ACN agent. "
+            "The legacy placeholder ``backend@internal`` (a service "
+            "principal, not an agent) is currently held by the default "
+            "Public Network and a small number of pre-existing workspace "
+            "mirror subnets created via the internal-token auth path. "
+            "It is being phased out — new code paths MUST NOT introduce "
+            "additional non-agent owners; service callers should "
+            "register a service-account agent and own subnets through "
+            "that agent's api key. Tracked in acnlabs/ACN#48 (ADR-0002)."
         ),
     )
     description: str | None = Field(None, description="Subnet description")

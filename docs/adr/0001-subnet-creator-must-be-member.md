@@ -166,6 +166,16 @@ unclaimed `ling-team-manager`). All 11 satisfied
 `owner_lists_subnet=false` — i.e. they are exactly the dual-store
 asymmetry this ADR describes, not orphans.
 
+Note: the survey also surfaced 7 `ws-*` workspace mirror subnets
+owned by the literal string ``backend@internal``, which is a service
+principal placeholder rather than a registered agent. Those are not
+ghosts in this ADR's sense (they were never expected to satisfy
+`owner_lists_subnet=true` — there is no `backend@internal` row in the
+`agents` table to list them). They are in scope for a separate
+follow-up (acnlabs/ACN#48, ADR-0002 candidate) that pins the contract
+that subnet `owner` must always reference a registered agent and
+migrates these mirrors to dedicated service-account agents.
+
 Disposition was a one-shot SQL transaction against the prod DB rather
 than a script, since the fix shipped before another such window is
 expected to recur:
