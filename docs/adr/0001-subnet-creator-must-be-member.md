@@ -1,6 +1,7 @@
 # ADR-0001: Subnet creator must be a member
 
-- **Status**: Proposed
+- **Status**: Accepted (implemented in `4a5f28b`, prod cleanup completed
+  2026-05-16)
 - **Date**: 2026-05-16
 - **Decision drivers**: data hygiene, dual-store consistency, product semantics
 
@@ -140,18 +141,53 @@ Implementation guidance:
 
 ### Migration
 
-- One-shot backfill (script in `acn/scripts/`):
-  - For every subnet, walk `subnet.member_agent_ids` and ensure each
-    listed agent has the subnet in `agent.subnet_ids`. This catches
-    pre-fix subnets whose owner-side write was missing.
-  - Symmetrically, for every agent walk `agent.subnet_ids` and ensure
-    each listed subnet has the agent in `subnet.member_agent_ids`
-    (cheap insurance against any other historical asymmetry).
-  - Subnets whose `owner` no longer resolves to an existing agent
-    (e.g. the agent was deleted) are flipped to
-    `metadata.visibility=hidden` rather than hard-deleted, matching
-    ACN's existing convention.
-- Backfill is idempotent and safe to re-run.
+The fix in `4a5f28b` only prevents new ghost subnets. Pre-fix records on
+production still exhibited `owner_lists_subnet=false` for every subnet
+created before the fix. We considered, then rejected, an admin override
+endpoint to mass-backfill: it would let any holder of `acn:admin` mutate
+arbitrary agents' `subnet_ids`, which violates the agent-autonomy
+property the rest of the API enforces (every other dual-store write goes
+through the agent's own auth path).
+
+What we actually did
+~~~~~~~~~~~~~~~~~~~~
+
+A blocking detour first: the prod survey for backfill candidates relied
+on `GET /api/v1/subnets` exposing `owner`, which it didn't —
+`SubnetInfo` was missing the field and Pydantic was silently dropping
+it. Without that the survey misclassified every subnet as orphan. Fixed
+in `9eb971a` (`fix(api/subnets): expose owner field in SubnetInfo
+responses`) so subsequent SQL/HTTP surveys agree.
+
+With owner visible, the survey on `acn-production` returned **11
+ghost subnets**: 10 `demo-subnet-1778…` (each owned by a distinct
+unclaimed `DemoCoordinator` agent) and 1 `ling-meizu21pro` (owned by
+unclaimed `ling-team-manager`). All 11 satisfied
+`owner_lists_subnet=false` — i.e. they are exactly the dual-store
+asymmetry this ADR describes, not orphans.
+
+Disposition was a one-shot SQL transaction against the prod DB rather
+than a script, since the fix shipped before another such window is
+expected to recur:
+
+1. `DELETE` the 10 `demo-subnet-1778…` rows. Pure demo data; the
+   owning agents are unclaimed and inert. No client referenced them
+   (verified: zero rows in `agents` had any of the 11 ids in
+   `subnet_ids`).
+2. `BACKFILL` `ling-meizu21pro`'s dual-store: append `ling-meizu21pro`
+   to `agents.subnet_ids` for owner `9b17a749-…`, and write
+   `member_agent_ids = ["9b17a749-…"]` on the subnet. Post-state has
+   both `owner_lists_subnet=true` and `subnet_has_member=true`.
+
+Verification queries before `COMMIT`: zero `demo-subnet-17785%`
+remaining; ling-meizu21pro dual-store healthy; `count(*)` on `subnets`
+went from 18 → 8 (11 ghosts collapsed to 1 healthy survivor).
+
+Going forward the route handler fix prevents new ghosts, so no
+recurring backfill script is needed. If a future audit ever finds
+new dual-store asymmetry (e.g. from a bug we don't yet know about),
+the same SQL transaction shape — `DELETE` for demo/inert, two
+`UPDATE`s for backfill — is the reference recipe.
 
 ### Documentation
 
