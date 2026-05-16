@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 const CONFIG_DIR = join(homedir(), '.acn');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
-const DEFAULT_BASE_URL = 'https://acn-production.up.railway.app';
+const DEFAULT_BASE_URL = 'https://api.acnlabs.dev';
 
 export interface AcnConfig {
   api_key?: string;

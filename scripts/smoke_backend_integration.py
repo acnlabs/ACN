@@ -205,7 +205,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Smoke test ACN + Backend main flows")
     parser.add_argument(
         "--acn-base-url",
-        default="https://acn-production.up.railway.app",
+        default="https://api.acnlabs.dev",
         help="ACN base URL",
     )
     parser.add_argument(

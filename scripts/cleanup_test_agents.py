@@ -4,10 +4,10 @@ One-shot script to delete test/smoke agents from production ACN.
 
 Usage:
     # Preview (dry run, default)
-    python scripts/cleanup_test_agents.py --acn-url https://acn-production.up.railway.app
+    python scripts/cleanup_test_agents.py --acn-url https://api.acnlabs.dev
 
     # Actually delete
-    python scripts/cleanup_test_agents.py --acn-url https://acn-production.up.railway.app --execute
+    python scripts/cleanup_test_agents.py --acn-url https://api.acnlabs.dev --execute
 
 Requires INTERNAL_API_TOKEN env var (same value as ACN's INTERNAL_API_TOKEN on Railway).
 """

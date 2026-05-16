@@ -17,7 +17,7 @@ This page is the production runbook for ACN and Agentplanet-backend integration.
 
 | Variable | Example | Notes |
 |---|---|---|
-| `ACN_URL` | `https://acn-production.up.railway.app` | ACN base URL used by backend |
+| `ACN_URL` | `https://api.acnlabs.dev` | ACN base URL used by backend |
 | `ACN_WEBHOOK_SECRET` | `***` | HMAC verification secret (must match ACN `WEBHOOK_SECRET`) |
 | `INTERNAL_API_TOKEN` | `***` | Service-to-service token (must match ACN) |
 
@@ -176,7 +176,7 @@ psql $DATABASE_URL -c "
   LIMIT 10;"
 
 # Reconciler delta — should be 0
-curl -s https://acn-production.up.railway.app/metrics \
+curl -s https://api.acnlabs.dev/metrics \
   | grep acn_settlement_reconcile_delta
 ```
 

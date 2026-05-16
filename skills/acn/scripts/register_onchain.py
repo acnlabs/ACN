@@ -13,7 +13,7 @@ Dependencies (install before running):
   pip install web3 httpx
 
 Env vars (preferred over CLI flags for sensitive values):
-  ACN_API_URL        ACN server base URL (default: https://acn-production.up.railway.app)
+  ACN_API_URL        ACN server base URL (default: https://api.acnlabs.dev)
   ACN_API_KEY        ACN API key
   WALLET_PRIVATE_KEY Ethereum private key (hex) — use this instead of --private-key
                      to keep the key out of shell history and process listings
@@ -261,7 +261,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--acn-url",
-        default=os.getenv("ACN_API_URL", "https://acn-production.up.railway.app"),
+        default=os.getenv("ACN_API_URL", "https://api.acnlabs.dev"),
         help="ACN server base URL",
     )
     parser.add_argument(

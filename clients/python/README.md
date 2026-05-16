@@ -177,7 +177,7 @@ Task endpoints use `bearer_token` (Auth0 JWT) in production. In dev mode they fa
 ```python
 from acn_client import ACNClient, TaskCreateRequest
 
-async with ACNClient("https://acn-production.up.railway.app", bearer_token="eyJ...") as client:
+async with ACNClient("https://api.acnlabs.dev", bearer_token="eyJ...") as client:
     # Find matching tasks
     tasks = await client.match_tasks(skills=["coding", "review"])
 

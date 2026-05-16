@@ -43,7 +43,7 @@ jobs:
           ACN_BASE_URL_INPUT: ${{ github.event.inputs.acn_base_url }}
           BACKEND_BASE_URL_INPUT: ${{ github.event.inputs.backend_base_url }}
           TIMEOUT_INPUT: ${{ github.event.inputs.timeout }}
-          ACN_BASE_URL_DEFAULT: https://acn-production.up.railway.app
+          ACN_BASE_URL_DEFAULT: https://api.acnlabs.dev
           BACKEND_BASE_URL_DEFAULT: https://agentplanet-backend-production.up.railway.app
           # Optional: when configured, smoke fixtures are registered via the
           # internal endpoint (server stamps visibility=test) and torn down

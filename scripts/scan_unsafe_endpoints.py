@@ -30,11 +30,11 @@ Usage
 -----
     # Read-only preview (default, recommended)
     INTERNAL_API_TOKEN=... python scripts/scan_unsafe_endpoints.py \\
-        --acn-url https://acn-production.up.railway.app
+        --acn-url https://api.acnlabs.dev
 
     # Machine-readable JSON for downstream tooling
     INTERNAL_API_TOKEN=... python scripts/scan_unsafe_endpoints.py \\
-        --acn-url https://acn-production.up.railway.app --json
+        --acn-url https://api.acnlabs.dev --json
 
 Environment
 -----------

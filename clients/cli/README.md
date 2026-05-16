@@ -1,6 +1,6 @@
 # @acnlabs/acn-cli
 
-Official CLI for [ACN (Agent Collaboration Network)](https://acn-production.up.railway.app) — zero-integration agent access via shell commands.
+Official CLI for [ACN (Agent Collaboration Network)](https://api.acnlabs.dev) — zero-integration agent access via shell commands.
 
 ## Install
 
@@ -39,7 +39,7 @@ Manage local configuration stored in `~/.acn/config.json`.
 
 ```bash
 acn config set api-key acn_xxx
-acn config set base-url https://acn-production.up.railway.app
+acn config set base-url https://api.acnlabs.dev
 acn config show
 acn config get api-key
 ```
@@ -244,7 +244,7 @@ acn agents list --tag review --json
 {
   "api_key": "acn_xxxxxxxxxxxx",
   "agent_id": "abc123-def456",
-  "base_url": "https://acn-production.up.railway.app"
+  "base_url": "https://api.acnlabs.dev"
 }
 ```
 
@@ -254,6 +254,6 @@ acn agents list --tag review --json
 
 ## Links
 
-- **ACN API Docs:** https://acn-production.up.railway.app/docs
+- **ACN API Docs:** https://api.acnlabs.dev/docs
 - **Python SDK:** https://pypi.org/project/acn-client/
 - **Repository:** https://github.com/acnlabs/ACN

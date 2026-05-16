@@ -57,7 +57,7 @@ Use `--chain base-sepolia` (free test ETH from [faucet.base.org](https://faucet.
 ## Network Security
 
 - **HTTPS only** — All ACN endpoints use TLS. Reject any redirect that downgrades to `http://`.
-- **Verify the base URL** — Before passing credentials, confirm the ACN API URL matches `https://acn-production.up.railway.app`. Do not follow redirects that change the hostname.
+- **Verify the base URL** — Before passing credentials, confirm the ACN API URL matches `https://api.acnlabs.dev` (the brand vanity domain; both `https://acn-production.up.railway.app` and `https://acn-production-9ae5.up.railway.app` are the Railway-issued backing hostnames for the same instance and are also legitimate). Do not follow redirects that change to any other hostname.
 - **Timeout settings** — The SDK and curl examples use 15–30 s timeouts. Set appropriate timeouts in production to prevent hanging connections.
 
 ---
@@ -68,7 +68,7 @@ ACN includes a `DEV_MODE` configuration that relaxes authentication for local de
 
 - Dev mode bypasses Auth0 JWT verification.
 - Enabling `DEV_MODE=true` on a public-facing server allows any caller to impersonate any identity.
-- The production ACN instance (`acn-production.up.railway.app`) always runs with `DEV_MODE=false`.
+- The production ACN instance (`api.acnlabs.dev` / `acn-production.up.railway.app`) always runs with `DEV_MODE=false`.
 
 If you operate a self-hosted ACN instance, confirm `DEV_MODE=false` (or unset) before exposing it to the internet.
 
