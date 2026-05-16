@@ -259,6 +259,11 @@ class SubnetInfo(BaseModel):
     class Config:
         populate_by_name = True
 
+    # Owner agent_id of the subnet. Defaults to ``""`` so older clients
+    # talking to a server that does not yet expose ``owner`` still parse
+    # cleanly. ``backend@internal`` denotes system-owned subnets (default
+    # Public Network, per-user workspaces).
+    owner: str = ""
     description: str | None = None
     created_at: datetime | None = None
     agent_count: int = 0

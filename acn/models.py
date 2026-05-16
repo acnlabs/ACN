@@ -347,6 +347,14 @@ class SubnetInfo(BaseModel):
 
     subnet_id: str = Field(..., description="Unique subnet identifier")
     name: str = Field(..., description="Subnet name")
+    owner: str = Field(
+        ...,
+        description=(
+            "Owner agent_id. Use ``backend@internal`` for system-owned "
+            "subnets (e.g. the default Public Network and per-user "
+            "workspace subnets created by ACN itself)."
+        ),
+    )
     description: str | None = Field(None, description="Subnet description")
 
     # A2A-style security (like Agent Card securitySchemes)

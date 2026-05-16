@@ -206,6 +206,7 @@ class SubnetManager:
             info=SubnetInfo(
                 subnet_id=self.DEFAULT_SUBNET,
                 name="Public Network",
+                owner="backend@internal",
                 description="Default subnet for public agents",
             )
         )
@@ -256,6 +257,7 @@ class SubnetManager:
         security_schemes: dict | None = None,
         default_security: list[str] | None = None,
         metadata: dict | None = None,
+        owner: str = "backend@internal",
     ) -> tuple[SubnetInfo, str | None]:
         """
         Create a new subnet with A2A-style security
@@ -300,6 +302,7 @@ class SubnetManager:
         info = SubnetInfo(
             subnet_id=subnet_id,
             name=name,
+            owner=owner,
             description=description,
             security_schemes=parsed_schemes,
             default_security=default_security,
@@ -1056,6 +1059,12 @@ class SubnetManager:
                                 name: SecurityScheme(**scheme)
                                 for name, scheme in security_schemes.items()
                             }
+
+                        # Backfill owner for legacy Redis records persisted
+                        # before SubnetInfo modelled the field. ACN treats
+                        # missing owners as system-owned (consistent with the
+                        # default Public Network).
+                        subnet_data.setdefault("owner", "backend@internal")
 
                         self._subnets[subnet_id] = Subnet(
                             info=SubnetInfo(**subnet_data),
