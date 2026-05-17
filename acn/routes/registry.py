@@ -1031,13 +1031,24 @@ async def _join_agent_impl(
             background_tasks.add_task(_increment_referral_count, referrer_id=referrer_id, agent_service=agent_service)
 
         claim_token = agent.verification_code or ""
+        # Token is base64-url alphabet (``secrets.token_urlsafe``) so it
+        # never embeds reserved characters, but go through ``quote`` anyway
+        # — defensive against any future change to the token alphabet, and
+        # documents the intent that this value lands in a URL query string.
+        # The route shape MUST match the frontend page
+        # (``agentplanet/frontend/src/app/claim/[id]/page.tsx`` reads
+        # ``searchParams.get("token")``). The earlier path-segment shape
+        # ``/claim/{id}/{token}`` only ever rendered the Next.js 404 page
+        # because the dynamic route has a single ``[id]`` segment.
+        from urllib.parse import quote
+        claim_url = f"{frontend_url}/claim/{agent.agent_id}?token={quote(claim_token, safe='')}"
         return AgentJoinResponse(
             agent_id=agent.agent_id,
             api_key=api_key,
             status=agent.status.value,
             claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
             verification_code=claim_token,
-            claim_url=f"{frontend_url}/claim/{agent.agent_id}/{claim_token}",
+            claim_url=claim_url,
             referral_url=f"{base_url}/api/v1/agents/join?ref={agent.agent_id}",
             tasks_endpoint=f"{base_url}/api/v1/tasks",
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
