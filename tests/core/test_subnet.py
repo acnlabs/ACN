@@ -191,6 +191,33 @@ class TestReservedSubnetNestingGuard:
         assert subnet.parent_subnet_id is None
         assert subnet.lifecycle == "persistent"
 
+    def test_reserved_subnet_cannot_be_task_scoped(self):
+        # Reserved subnets are platform-owned with implicit "always-on"
+        # semantics — a task_scoped lifecycle would let an arbitrary
+        # task termination dissolve a platform subnet, breaking every
+        # caller that assumes `public` is durable. Reject at
+        # construction so we never persist the misshapen row.
+        with pytest.raises(
+            ValueError, match="Reserved subnet 'public' cannot be task_scoped"
+        ):
+            Subnet(
+                subnet_id="public",
+                name="Public",
+                owner="system",
+                lifecycle="task_scoped",
+                linked_task_id="task-evil",
+            )
+        with pytest.raises(
+            ValueError, match="Reserved subnet 'system' cannot be task_scoped"
+        ):
+            Subnet(
+                subnet_id="system",
+                name="System",
+                owner="system",
+                lifecycle="task_scoped",
+                linked_task_id="task-evil",
+            )
+
 
 class TestSingleLayerCapNotEnforcedAtEntity:
     """ADR-0003 §A invariant 1 — single-layer cap — is intentionally

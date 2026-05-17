@@ -55,11 +55,18 @@ class Subnet:
             if self.owner != "system":
                 raise ValueError(f"Subnet '{self.subnet_id}' is reserved for system use")
             # Reserved subnets can never participate in nesting — neither
-            # as child (would let attackers slot platform-owned IDs into a
-            # hierarchy) nor with a non-default lifecycle.
+            # as a child (would let attackers slot platform-owned IDs into
+            # a hierarchy) nor with a task-bound lifecycle (would let a
+            # task termination auto-dissolve a platform-level subnet,
+            # breaking the implicit "always-on" guarantee that callers
+            # depend on for `public`).
             if self.parent_subnet_id is not None:
                 raise ValueError(
                     f"Reserved subnet '{self.subnet_id}' cannot have a parent_subnet_id"
+                )
+            if self.lifecycle == "task_scoped":
+                raise ValueError(
+                    f"Reserved subnet '{self.subnet_id}' cannot be task_scoped"
                 )
 
         # ADR-0003 entity-layer invariants.
