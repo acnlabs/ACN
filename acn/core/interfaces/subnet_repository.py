@@ -105,13 +105,17 @@ class ISubnetRepository(ABC):
 
         Both backends:
 
-        - Return ``True`` when all listed children and the parent were
-          deleted.
-        - Return ``False`` only when the parent itself was already gone
-          (idempotent — pre-existing children, if any, are still removed).
+        - Return ``True`` when the parent row was actually removed AND
+          every listed child id was processed (a child id that no
+          longer exists is treated as already-deleted, not a failure —
+          matches the idempotent semantics of plain ``delete()``).
+        - Return ``False`` only when the parent itself was already gone.
+          Listed children are still attempted; on PG they share the
+          same transaction as the parent DELETE.
         - Raise on partial failure (PG: SQLAlchemy bubbles its error
           through the rolled-back ``session.begin()`` block; Redis:
-          ``RuntimeError`` after the breadcrumb is logged).
+          ``RuntimeError`` after the breadcrumb is logged, BEFORE the
+          parent DELETE is attempted).
 
         Args:
             parent_id: Top-level subnet identifier to delete last.

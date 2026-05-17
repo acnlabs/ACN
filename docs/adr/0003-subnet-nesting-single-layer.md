@@ -264,8 +264,11 @@ Implementation guidance:
 3. **Repository** (`acn/core/interfaces/subnet_repository.py` +
    Redis + Postgres impls)
    - New methods
-     `find_by_parent(parent_subnet_id: str) -> list[Subnet]` and
-     `find_by_linked_task(task_id: str) -> list[Subnet]`.
+     `find_by_parent(parent_subnet_id: str) -> list[Subnet]`,
+     `find_by_linked_task(task_id: str) -> list[Subnet]`, and
+     `delete_with_children(parent_subnet_id: str, child_subnet_ids: list[str]) -> bool`
+     (cascade seam; PG runs single transaction, Redis runs sequential
+     with breadcrumb — see §A.4).
    - Redis: maintain two secondary indexes (key names mirror the
      repository method names so call sites stay grep-able) —
      `acn:subnets:children:{parent_id}` (SET, member = child
