@@ -408,8 +408,12 @@ implementation so reviewers don't have to re-litigate them per PR.
    or via the future reconciler.
 7. **Reserved subnets stay reserved.** `public` and `system` can
    neither be parents (rejected with `parent_is_reserved`) nor
-   children (their `parent_subnet_id` must be `None`; the existing
-   `__post_init__` reserved-ID check is extended to cover this).
+   children (their `parent_subnet_id` must be `None`), and they
+   cannot carry a `task_scoped` lifecycle — a task termination
+   would otherwise auto-dissolve a platform-level subnet that
+   callers depend on as always-on. The existing
+   `__post_init__` reserved-ID check is extended to cover all three
+   prohibitions in Phase 1.
 
 ## Consequences
 
