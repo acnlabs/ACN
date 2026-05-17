@@ -5,6 +5,7 @@ Clean Architecture implementation: Route → Service → Repository
 
 import re
 import secrets
+from typing import Literal
 
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException, Request, Security
@@ -16,6 +17,7 @@ from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
+from ..services.subnet_service import SubnetNestingError
 from ._subnet_membership import (
     do_get_agent_subnets,
     do_join_subnet,
@@ -42,8 +44,35 @@ logger = structlog.get_logger()
 settings = get_settings()
 
 
+def _coerce_optional_str(value: object) -> str | None:
+    """Return ``value`` if it's a ``str``, else ``None``.
+
+    Boundary-layer coercion: lets ``_subnet_entity_to_info`` accept
+    both real ``Subnet`` entities (where the field types are guaranteed)
+    and legacy ``MagicMock``-based stub subnets used by older route
+    tests (where any auto-generated attribute returns a new
+    ``MagicMock`` rather than ``None``). The real entity dataclass
+    defaults to ``None`` so this coercion is a no-op in production.
+    """
+    return value if isinstance(value, str) else None
+
+
+def _coerce_lifecycle(value: object) -> Literal["persistent", "task_scoped"]:
+    """Same intent as ``_coerce_optional_str`` for the lifecycle
+    Literal. Defaults to ``"persistent"`` on any unexpected value."""
+    if value == "task_scoped":
+        return "task_scoped"
+    return "persistent"
+
+
 def _subnet_entity_to_info(subnet) -> SubnetInfo:
-    """Convert Subnet entity to SubnetInfo model"""
+    """Convert Subnet entity to SubnetInfo model.
+
+    ADR-0003 surfaces ``parent_subnet_id`` / ``lifecycle`` /
+    ``linked_task_id`` so consumers can render hierarchy / lifecycle
+    UI hints. ``harness_secret`` stays write-only — never exposed
+    through this conversion.
+    """
     return SubnetInfo(
         subnet_id=subnet.subnet_id,
         name=subnet.name,
@@ -55,7 +84,39 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
         metadata=subnet.metadata,
         harness_url=subnet.harness_url,
         harness_registered=subnet.harness_url is not None,
+        parent_subnet_id=_coerce_optional_str(
+            getattr(subnet, "parent_subnet_id", None)
+        ),
+        lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
+        linked_task_id=_coerce_optional_str(
+            getattr(subnet, "linked_task_id", None)
+        ),
     )
+
+
+def _nesting_error_to_acn(
+    exc: SubnetNestingError,
+    extra_details: dict | None = None,
+) -> ACNHTTPError:
+    """Map a service-layer ``SubnetNestingError`` to the wire-format
+    ``INVALID_REQUEST`` ACN error with the stable ``details.reason``
+    string the route contract tests pin.
+
+    Membership-subset rejection (``not_parent_member``) is the one
+    case we surface as ``NOT_SUBNET_MEMBER`` instead — it's a
+    membership rather than a request-shape problem. Routes that
+    might raise it should call this helper with that variant set.
+    """
+    from ..services.subnet_service import REASON_NOT_PARENT_MEMBER
+
+    details = {"reason": exc.reason}
+    if extra_details:
+        details.update(extra_details)
+    if exc.reason == REASON_NOT_PARENT_MEMBER:
+        return ACNHTTPError(
+            ErrorCode.NOT_SUBNET_MEMBER, 403, details=details
+        )
+    return ACNHTTPError(ErrorCode.INVALID_REQUEST, 400, details=details)
 
 
 def _generate_subnet_id(name: str) -> str:
@@ -107,6 +168,12 @@ async def create_subnet(
             is_private=body.is_private,
             security_config=security_cfg,
             metadata={},
+            # ADR-0003 nesting fields — service-layer validates the
+            # five invariant variants and raises ``SubnetNestingError``
+            # with a stable ``reason`` string.
+            parent_subnet_id=body.parent_subnet_id,
+            lifecycle=body.lifecycle,
+            linked_task_id=body.linked_task_id,
         )
 
         # Mirror the subnet-side owner add into the agent store. Wrapped in
@@ -151,6 +218,11 @@ async def create_subnet(
             gateway_ws_url=gateway_ws_url,
             gateway_a2a_url=gateway_a2a_url,
         )
+    except SubnetNestingError as e:
+        # ADR-0003 invariant rejection — surface with the stable
+        # ``details.reason`` token clients (route contract tests,
+        # CLI / SDK error parsers) pin against.
+        raise _nesting_error_to_acn(e) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
@@ -176,17 +248,39 @@ async def create_subnet(
 async def list_subnets(
     request: Request,
     owner: str = None,
+    parent: str | None = None,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
 ):
-    """List all subnets
+    """List all subnets.
 
-    Clean Architecture: Route → SubnetService → Repository
-    When ?owner= is provided, authentication is required and the caller must
-    be the owner (or hold acn:admin permission).
+    Clean Architecture: Route → SubnetService → Repository.
+
+    Filters:
+    - ``?owner=`` filters by ownership. Requires authentication; the
+      caller must be that owner (or hold ``acn:admin``).
+    - ``?parent=`` filters to immediate children of the given parent
+      subnet (ADR-0003). Visibility is **aligned with the rest of
+      this endpoint** — anonymous callers see only public children,
+      and authenticated callers additionally see private children
+      they own or are members of. Returns an empty list when the
+      parent is unknown or has no visible children — cross-tenant
+      probes get the same shape as legitimate empty results
+      (no existence leak).
     """
     try:
-        if owner:
+        if parent is not None:
+            # ``?parent=`` filter takes precedence and gates on the
+            # same identity primitive used by ``list_children``.
+            requester_id: str | None = None
+            if credentials:
+                payload = await verify_token(request, credentials)
+                requester_id = payload.get("sub") or None
+            subnets = await subnet_service.list_children(
+                parent_subnet_id=parent,
+                requester_id=requester_id,
+            )
+        elif owner:
             # Require auth when filtering by owner to prevent private subnet enumeration
             if not credentials:
                 raise ACNHTTPError(
@@ -241,6 +335,118 @@ async def get_subnet(
             404,
             details={"subnet_id": subnet_id},
         ) from e
+
+
+@router.get("/{subnet_id}/children")
+async def get_subnet_children(
+    subnet_id: SubnetIdPath,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
+    subnet_service: SubnetServiceDep = None,
+):
+    """List immediate children of a subnet (ADR-0003).
+
+    Visibility matches ``GET /api/v1/subnets?parent=<id>``: anonymous
+    callers see only public children; authenticated callers
+    additionally see private children they own or are members of.
+
+    Returns ``SUBNET_NOT_FOUND`` if the parent itself does not exist.
+    Cross-tenant probes against an existing-but-not-visible parent
+    surface ``SUBNET_NOT_FOUND`` only when the parent itself is
+    missing — visible parents with zero authorised children return
+    ``{"count": 0, "subnets": []}`` (no enumeration of who-has-children
+    that the caller isn't entitled to see).
+    """
+    try:
+        # Verify the parent itself exists so callers don't silently
+        # paper over typos. Service ACL still filters the result set.
+        await subnet_service.get_subnet(subnet_id)
+    except SubnetNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
+
+    try:
+        requester_id: str | None = None
+        if credentials:
+            payload = await verify_token(request, credentials)
+            requester_id = payload.get("sub") or None
+        children = await subnet_service.list_children(
+            parent_subnet_id=subnet_id,
+            requester_id=requester_id,
+        )
+        subnet_infos = [_subnet_entity_to_info(s) for s in children]
+        return {"count": len(subnet_infos), "subnets": subnet_infos}
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "get_subnet_children_failed",
+            subnet_id=subnet_id,
+            error=str(e),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to list subnet children"
+        ) from e
+
+
+@router.post("/{subnet_id}/promote")
+@limiter.limit("10/minute")
+async def promote_subnet(
+    request: Request,
+    subnet_id: SubnetIdPath,
+    agent_info: AgentApiKeyDep,
+    subnet_service: SubnetServiceDep = None,
+):
+    """Promote a ``task_scoped`` subnet to ``persistent`` (ADR-0003).
+
+    Owner-only. Idempotent — promoting an already-persistent subnet
+    returns its current state without modification. Side effects on
+    a task-scoped → persistent flip:
+
+    - ``lifecycle`` ← ``"persistent"``
+    - ``linked_task_id`` ← ``None`` (subnet outlives its origin task)
+
+    Per ADR-0003 semantic decision #4 the owner is *not* required
+    to currently be a member of the parent subnet; promote is a
+    pure field flip gated only by owner ACL.
+    """
+    owner = agent_info["agent_id"]
+    try:
+        subnet = await subnet_service.promote_to_persistent(
+            subnet_id=subnet_id,
+            owner=owner,
+        )
+        return _subnet_entity_to_info(subnet)
+    except SubnetNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        ) from e
+    except PermissionError as e:
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"subnet_id": subnet_id, "reason": str(e)},
+        ) from e
+    except ACNHTTPError:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "promote_subnet_failed",
+            subnet_id=subnet_id,
+            error=str(e),
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Failed to promote subnet") from e
 
 
 @router.get("/{subnet_id}/agents")
@@ -571,6 +777,13 @@ async def admin_add_subnet_member(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
             details={"subnet_id": subnet_id},
+        ) from e
+    except SubnetNestingError as e:
+        # ADR-0003 child-subnet membership-subset rejection
+        # propagated even through the internal admin path — keeps
+        # the invariant uniformly enforced regardless of caller.
+        raise _nesting_error_to_acn(
+            e, extra_details={"subnet_id": subnet_id, "agent_id": agent_id}
         ) from e
     except ACNHTTPError:
         raise

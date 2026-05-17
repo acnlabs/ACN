@@ -296,7 +296,15 @@ async def lifespan(app: FastAPI):
         agent_repository,
         auth0_client=auth0_credential_client,
     )
-    subnet_service_instance = SubnetService(subnet_repository)
+    # ADR-0003: SubnetService now takes an optional task_repository
+    # used by ``create_subnet`` to validate ``linked_task_id`` on
+    # ``task_scoped`` child subnets (``linked_task_not_found``
+    # rejection path). Always supplied in production composition;
+    # legacy test fixtures may instantiate without it.
+    subnet_service_instance = SubnetService(
+        subnet_repository,
+        task_repository=task_repository,
+    )
 
     # Phase 1 communication_policy gateway: a single PolicyCheckService
     # instance is shared by both the HTTP-side MessageRouter and the

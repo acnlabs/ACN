@@ -435,10 +435,46 @@ class ACNClient:
             json=request.model_dump(exclude_none=True),
         )
 
-    async def list_subnets(self) -> list[SubnetInfo]:
-        """List all subnets"""
-        data = await self._request("GET", "/api/v1/subnets")
+    async def list_subnets(
+        self, parent_subnet_id: str | None = None
+    ) -> list[SubnetInfo]:
+        """List subnets.
+
+        Args:
+            parent_subnet_id: When set, filter to immediate children
+                of the given parent (ADR-0003). The server applies
+                the same ACL as the unfiltered list — private
+                children not visible to this client are silently
+                omitted.
+        """
+        params: dict[str, str] | None = None
+        if parent_subnet_id is not None:
+            params = {"parent": parent_subnet_id}
+        data = await self._request("GET", "/api/v1/subnets", params=params)
         return [SubnetInfo.model_validate(s) for s in data.get("subnets", [])]
+
+    async def list_children(self, parent_subnet_id: str) -> list[SubnetInfo]:
+        """List immediate children of a subnet (ADR-0003).
+
+        Convenience wrapper over the dedicated
+        ``GET /api/v1/subnets/{id}/children`` endpoint, which
+        returns ``SUBNET_NOT_FOUND`` when the parent itself is
+        missing. Visibility matches :meth:`list_subnets` —
+        non-visible private children are omitted.
+        """
+        data = await self._request(
+            "GET", f"/api/v1/subnets/{parent_subnet_id}/children"
+        )
+        return [SubnetInfo.model_validate(s) for s in data.get("subnets", [])]
+
+    async def promote_subnet(self, subnet_id: str) -> SubnetInfo:
+        """Promote a ``task_scoped`` subnet to ``persistent`` (ADR-0003).
+
+        Owner-only. Idempotent — promoting an already-persistent
+        subnet returns its current state unchanged.
+        """
+        data = await self._request("POST", f"/api/v1/subnets/{subnet_id}/promote")
+        return SubnetInfo.model_validate(data)
 
     async def get_subnet(self, subnet_id: str) -> SubnetInfo:
         """Get subnet by ID"""

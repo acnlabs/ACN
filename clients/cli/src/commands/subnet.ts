@@ -13,6 +13,11 @@ interface SubnetInfo {
   harness_registered?: boolean;
   created_at?: string;
   metadata?: Record<string, unknown>;
+  // ADR-0003 nesting fields (optional + back-compat default
+  // tolerant — older servers may omit them).
+  parent_subnet_id?: string | null;
+  lifecycle?: 'persistent' | 'task_scoped';
+  linked_task_id?: string | null;
 }
 
 interface SubnetListResponse {
@@ -48,6 +53,13 @@ function formatSubnet(s: SubnetInfo, index?: number): string {
   if (s.owner) lines.push(`  Owner : ${s.owner}`);
   if (s.description) lines.push(`  Desc  : ${s.description}`);
   if (s.created_at) lines.push(`  Since : ${s.created_at}`);
+  if (s.parent_subnet_id) {
+    lines.push(`  Parent: ${s.parent_subnet_id}`);
+  }
+  if (s.lifecycle && s.lifecycle !== 'persistent') {
+    const task = s.linked_task_id ? ` (task=${s.linked_task_id})` : '';
+    lines.push(`  Lifecycle: ${s.lifecycle}${task}`);
+  }
   if (s.harness_registered) {
     lines.push(`  Harness: ${s.harness_url ?? '(registered)'}`);
   } else {
@@ -61,11 +73,33 @@ export function subnetCommand(): Command {
 
   cmd
     .command('list')
-    .description('List subnets. Without --all shows only subnets you have joined.')
+    .description(
+      'List subnets. Without --all/--parent shows only subnets you have joined.'
+    )
     .option('--all', 'Show all public subnets on ACN (not just your own)')
-    .option('-i, --agent-id <id>', 'Agent ID (defaults to config, ignored with --all)')
-    .action(async (opts: { all?: boolean; agentId?: string }) => {
+    .option(
+      '--parent <id>',
+      'Show only immediate children of the given parent subnet (ADR-0003)'
+    )
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config, ignored with --all/--parent)')
+    .action(async (opts: { all?: boolean; parent?: string; agentId?: string }) => {
       try {
+        if (opts.parent) {
+          const res = await acnGet<SubnetListResponse>(
+            `/subnets?parent=${encodeURIComponent(opts.parent)}`
+          );
+          const subnets = res.subnets ?? [];
+          if (subnets.length === 0) {
+            output(res, `No visible children of subnet ${opts.parent}.`);
+            return;
+          }
+          output(
+            res,
+            `${subnets.length} child subnet(s) of ${opts.parent}:\n\n` +
+              subnets.map((s, i) => formatSubnet(s, i)).join('\n\n')
+          );
+          return;
+        }
         if (opts.all) {
           const res = await acnGet<SubnetListResponse>('/subnets');
           const subnets = res.subnets ?? [];
@@ -161,17 +195,53 @@ export function subnetCommand(): Command {
     .option('--id <subnet_id>', 'Custom subnet ID (1-64 chars). Omit to let ACN auto-generate.')
     .option('-d, --description <text>', 'Subnet description (up to 500 chars)')
     .option('--private', 'Mark this subnet as private', false)
+    .option(
+      '--parent <id>',
+      'Parent subnet ID for a child/squad subnet (ADR-0003). Single-layer cap.'
+    )
+    .option(
+      '--lifecycle <mode>',
+      'Lifecycle mode: persistent (default) or task_scoped',
+      'persistent'
+    )
+    .option(
+      '--task <id>',
+      'Linked task ID. Required with --lifecycle task_scoped.'
+    )
     .action(
       async (opts: {
         name: string;
         id?: string;
         description?: string;
         private?: boolean;
+        parent?: string;
+        lifecycle?: string;
+        task?: string;
       }) => {
         const config = loadConfig();
         if (!config.api_key) {
           console.error('No API key found. Run `acn join` first.');
           process.exit(1);
+        }
+        const lifecycle = opts.lifecycle ?? 'persistent';
+        if (lifecycle !== 'persistent' && lifecycle !== 'task_scoped') {
+          console.error(
+            `Invalid --lifecycle '${lifecycle}'. Must be 'persistent' or 'task_scoped'.`
+          );
+          process.exit(2);
+        }
+        // Client-side pre-check matching ADR-0003 entity invariant —
+        // saves a round-trip + gives a nicer error than the server's
+        // ``task_scoped_requires_linked_task`` response.
+        if (lifecycle === 'task_scoped' && !opts.task) {
+          console.error('--lifecycle task_scoped requires --task <id>.');
+          process.exit(2);
+        }
+        if (lifecycle === 'persistent' && opts.task) {
+          console.error(
+            '--task is only valid with --lifecycle task_scoped (current: persistent).'
+          );
+          process.exit(2);
         }
         const body: Record<string, unknown> = {
           name: opts.name,
@@ -179,6 +249,9 @@ export function subnetCommand(): Command {
         };
         if (opts.id) body.subnet_id = opts.id;
         if (opts.description) body.description = opts.description;
+        if (opts.parent) body.parent_subnet_id = opts.parent;
+        body.lifecycle = lifecycle;
+        if (opts.task) body.linked_task_id = opts.task;
         try {
           const res = await acnPost<SubnetCreateResponse>('/subnets', body);
           const lines = [
@@ -187,12 +260,40 @@ export function subnetCommand(): Command {
             `  Gateway A2A: ${res.gateway_a2a_url}`,
             `  Gateway WS : ${res.gateway_ws_url}`,
           ];
+          if (opts.parent) lines.push(`  Parent     : ${opts.parent}`);
+          if (lifecycle !== 'persistent') {
+            lines.push(`  Lifecycle  : ${lifecycle}${opts.task ? ` (task=${opts.task})` : ''}`);
+          }
           output(res, lines.join('\n'));
         } catch (err) {
           handleError(err);
         }
       }
     );
+
+  cmd
+    .command('promote <subnet_id>')
+    .description(
+      'Promote a task_scoped subnet to persistent (ADR-0003). Owner-only; idempotent.'
+    )
+    .action(async (subnetId: string) => {
+      const config = loadConfig();
+      if (!config.api_key) {
+        console.error('No API key found. Run `acn join` first.');
+        process.exit(1);
+      }
+      try {
+        const res = await acnPost<SubnetInfo>(`/subnets/${subnetId}/promote`);
+        const lifecycle = res.lifecycle ?? 'persistent';
+        output(
+          res,
+          `Subnet ${res.subnet_id} lifecycle=${lifecycle}` +
+            (res.linked_task_id ? ` (still linked to task ${res.linked_task_id})` : '')
+        );
+      } catch (err) {
+        handleError(err);
+      }
+    });
 
   cmd
     .command('delete <subnet_id>')

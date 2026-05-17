@@ -6,6 +6,7 @@ Pydantic models for ACN service
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
 from a2a.compat.v0_3.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
 from a2a.compat.v0_3.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
@@ -385,6 +386,24 @@ class SubnetInfo(BaseModel):
         False, description="Whether an Org Harness is registered for this subnet"
     )
 
+    # ADR-0003 nesting fields. ``parent_subnet_id`` is immutable
+    # after creation (no PATCH route exposes it). ``lifecycle`` is
+    # surfaced so consumers can render "auto-dissolving" UX hints
+    # and so prospective joiners can avoid task_scoped squads
+    # they'd rather not be auto-removed from.
+    parent_subnet_id: str | None = Field(
+        None,
+        description="Parent subnet ID for a child subnet (ADR-0003). None for top-level subnets.",
+    )
+    lifecycle: Literal["persistent", "task_scoped"] = Field(
+        "persistent",
+        description="Subnet lifecycle. 'task_scoped' subnets auto-dissolve when their linked task terminates.",
+    )
+    linked_task_id: str | None = Field(
+        None,
+        description="Linked task ID when lifecycle='task_scoped'. None otherwise.",
+    )
+
 
 class SubnetCreateRequest(BaseModel):
     """
@@ -438,6 +457,34 @@ class SubnetCreateRequest(BaseModel):
         None, max_length=10, description="Required security schemes. None = use first available"
     )
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
+
+    # ADR-0003 nesting params — all optional, defaults preserve
+    # legacy "flat top-level persistent subnet" semantics.
+    parent_subnet_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description=(
+            "Parent subnet ID for nested subnets (ADR-0003). Single-layer cap: "
+            "the parent itself must be top-level. Immutable after creation."
+        ),
+    )
+    lifecycle: Literal["persistent", "task_scoped"] = Field(
+        "persistent",
+        description=(
+            "Subnet lifecycle. 'task_scoped' subnets auto-dissolve when the "
+            "linked task reaches a terminal state. Defaults to 'persistent'."
+        ),
+    )
+    linked_task_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=128,
+        description=(
+            "Task ID to bind a 'task_scoped' subnet to. Required when "
+            "lifecycle='task_scoped'."
+        ),
+    )
 
     @model_validator(mode="after")
     def reject_unsupported_security_types(self) -> "SubnetCreateRequest":
