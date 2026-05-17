@@ -249,3 +249,12 @@ the same SQL transaction shape — `DELETE` for demo/inert, two
 - `agentplanet/frontend/src/app/world/_components/SubnetCanvas.tsx` —
   Networks graph view (acceptance: no `member_count=0` nodes appear
   in this view post-A + backfill).
+
+## Related work
+
+- **Issue #56 / PR #60** — symmetric fix on the **delete** side.
+  This ADR closed the create-side dual-store gap; #56 closes the
+  delete-side one (`delete_subnet` now also clears the
+  `agent.subnet_ids` back-reference for every member before
+  removing the subnet record, amplified in importance by the
+  ADR-0003 cascade delete path).
