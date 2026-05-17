@@ -91,8 +91,13 @@ Invariants enforced by `SubnetService`:
    creation time and refer to an existing task. When that task
    reaches a terminal state (`COMPLETED` / `REJECTED` / `CANCELLED`),
    the squad subnet is automatically dissolved.
-4. **Parent cascade.** Deleting a parent subnet cascade-deletes
-   all child subnets in the same transaction.
+4. **Parent cascade.** Deleting a parent subnet cascade-deletes all
+   child subnets. On Postgres the parent + children DELETEs run in a
+   single transaction (any failure rolls back the whole batch). On
+   Redis the cascade is sequential best-effort with a structured
+   `delete_with_children_partial` audit-log breadcrumb on partial
+   failure; the parent is preserved when any child delete fails so
+   ops can retry from a recoverable state.
 5. **Reserved subnets cannot be children.** `public` and `system`
    may not be used as `parent_subnet_id` (they are platform-owned
    and have implicit "all agents" semantics that would make
@@ -244,11 +249,17 @@ Implementation guidance:
      verify any current relationship between owner and parent** —
      promote is a pure field-flip authorised by owner-only ACL, not
      by parent membership (consistent with semantic decision #4).
-   - `delete_subnet` of a parent triggers a `find_children` →
-     batch `delete` cascade in the same repository transaction
-     where the underlying store supports it (PG: explicit
-     transaction; Redis: sequential `delete` calls with a clear
-     audit-log breadcrumb).
+   - `delete_subnet` of a parent triggers a `find_by_parent` →
+     `delete_with_children(parent_id, child_ids)` cascade. The
+     repository-level seam carries the backend-specific atomicity
+     guarantee: **PG runs all DELETEs inside a single
+     `session.begin()` transaction** (any failure rolls back the
+     whole batch, including the parent); **Redis runs the deletes
+     sequentially**, emitting a `delete_with_children_partial`
+     warning breadcrumb and raising `RuntimeError` *before*
+     touching the parent if any child delete returns `False`. Both
+     backends raise on partial failure so callers cannot
+     accidentally treat a half-done cascade as success.
 
 3. **Repository** (`acn/core/interfaces/subnet_repository.py` +
    Redis + Postgres impls)

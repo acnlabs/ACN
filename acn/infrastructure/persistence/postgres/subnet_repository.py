@@ -125,6 +125,35 @@ class PostgresSubnetRepository(ISubnetRepository):
             await session.commit()
             return result.rowcount > 0
 
+    async def delete_with_children(
+        self, parent_id: str, child_ids: list[str]
+    ) -> bool:
+        """Delete parent + children atomically in one PG transaction.
+
+        Children are deleted before the parent so observers that scan
+        rows mid-transaction (in another session that doesn't see this
+        uncommitted state — there shouldn't be one, but defence in
+        depth) never observe a deleted parent with surviving children.
+
+        ``async with session.begin()`` is the SQLAlchemy idiom for
+        "transaction with auto rollback on exception": the context
+        manager calls ``commit()`` on a clean exit and ``rollback()`` on
+        any in-block raise, then re-raises. That means a failing child
+        DELETE leaves nothing committed — exactly what ADR-0003 §A.4
+        promises for the PG branch.
+        """
+        async with self._session_factory() as session, session.begin():
+            for child_id in child_ids:
+                await session.execute(
+                    delete(SubnetModel).where(
+                        SubnetModel.subnet_id == child_id
+                    )
+                )
+            result = await session.execute(
+                delete(SubnetModel).where(SubnetModel.subnet_id == parent_id)
+            )
+            return result.rowcount > 0
+
     async def exists(self, subnet_id: str) -> bool:
         async with self._session_factory() as session:
             result = await session.execute(
