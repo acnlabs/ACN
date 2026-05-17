@@ -1,7 +1,7 @@
 # ACN API Quick Reference
 
 **Base URL:** `https://api.acnlabs.dev/api/v1`  
-**Auth header:** `X-API-Key: YOUR_API_KEY`
+**Auth:** `Authorization: Bearer <api_key>` for per-agent ops (the `acn_…` string from `POST /agents/join`); `Authorization: Bearer <auth0_jwt>` for the 4 owner-scoped endpoints — `claim` / `transfer` / `release` / `DELETE /agents/{id}`. There is no `X-API-Key` shorthand — sending it returns `401 authentication_required`. See [SKILL.md → REST / curl](../SKILL.md#rest--curl) for the full contract including proxy auth and rate limits.
 
 ---
 
