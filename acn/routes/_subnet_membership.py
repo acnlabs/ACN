@@ -30,6 +30,21 @@ from ..services.subnet_service import (
 logger = structlog.get_logger()
 
 
+def _subnet_parent_id(subnet: object) -> str | None:
+    """Extract ``Subnet.parent_subnet_id`` defensively.
+
+    ADR-0003 Phase 3 — the field is added to the join/leave webhook
+    payload's ``data`` block. Legacy ``MagicMock``-based test stubs
+    don't set the attribute and return a fresh ``MagicMock`` for any
+    auto-attribute access; the ``isinstance(str)`` guard makes those
+    paths return ``None`` (matching a top-level subnet's payload
+    shape) instead of leaking a non-JSON-serialisable mock into
+    webhook bodies.
+    """
+    raw = getattr(subnet, "parent_subnet_id", None)
+    return raw if isinstance(raw, str) else None
+
+
 def _require_self(agent_info: dict, path_agent_id: str) -> None:
     """Reject if the API key's agent_id doesn't match the path `agent_id`.
 
@@ -82,14 +97,11 @@ async def do_join_subnet(
     # the agent (the dreaded half-joined state). We keep the
     # service-layer check as defence-in-depth for the admin path.
     #
-    # ``getattr`` + ``isinstance`` guard lets legacy MagicMock-based
-    # stubs (which don't set ``parent_subnet_id`` and return a
-    # ``MagicMock`` auto-attribute for it) skip this branch — the
-    # real ``Subnet`` entity always populates it with ``str | None``.
-    parent_subnet_id_raw = getattr(subnet, "parent_subnet_id", None)
-    parent_subnet_id = (
-        parent_subnet_id_raw if isinstance(parent_subnet_id_raw, str) else None
-    )
+    # ``_subnet_parent_id`` extracts the parent reference defensively
+    # (legacy MagicMock stubs don't populate the attribute) and
+    # returns ``None`` for top-level subnets — matching the
+    # webhook payload contract introduced in Phase 3.
+    parent_subnet_id = _subnet_parent_id(subnet)
     if parent_subnet_id is not None:
         parent = None
         try:
@@ -149,6 +161,12 @@ async def do_join_subnet(
                     data={
                         "subnet_id": subnet_id,
                         "agent_id": agent_id,
+                        # ADR-0003 Phase 3 — Org Harnesses that want
+                        # parent-includes-children fan-out read this
+                        # field to discover the parent. Top-level
+                        # subnets emit ``None``; harnesses that
+                        # ignore the field continue to work.
+                        "parent_subnet_id": parent_subnet_id,
                     },
                 )
             except Exception as e:  # noqa: BLE001 - never break join on webhook failure
@@ -211,6 +229,10 @@ async def do_leave_subnet(
                     data={
                         "subnet_id": subnet_id,
                         "agent_id": agent_id,
+                        # ADR-0003 Phase 3 — see do_join_subnet for
+                        # the contract; symmetric on leave so
+                        # harnesses get hierarchy on both edges.
+                        "parent_subnet_id": _subnet_parent_id(subnet),
                     },
                 )
             except Exception as e:  # noqa: BLE001

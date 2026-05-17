@@ -9,6 +9,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import structlog
 
 from ..core.entities import Participation, ParticipationStatus, Task, TaskStatus
+from ..core.exceptions import SubnetNotFoundException
 from ..core.interfaces import (
     IAgentRepository,
     IEscrowProvider,
@@ -22,6 +23,7 @@ from ..infrastructure.task_pool import TaskPool
 from ..protocols.ap2 import PaymentTaskManager, WebhookEventType, WebhookService
 from ..protocols.ap2.core import PLATFORM_CURRENCIES
 from .activity_service import ActivityService
+from .subnet_service import SubnetService
 
 logger = structlog.get_logger()
 
@@ -76,6 +78,7 @@ class TaskService:
         escrow_client: IEscrowProvider | None = None,
         agent_repository: IAgentRepository | None = None,
         subnet_repository: ISubnetRepository | None = None,
+        subnet_service: SubnetService | None = None,
         # Settlement saga v0.1 — keyword-only, all three OPTIONAL so
         # Redis-only / in-memory deployments and legacy test fixtures
         # constructed without saga wiring keep working unchanged. The
@@ -100,6 +103,13 @@ class TaskService:
             escrow_client: Labs escrow client for budget management (optional)
             agent_repository: Agent repository for looking up agent owners (optional)
             subnet_repository: Subnet repository for visibility/access control (optional)
+            subnet_service: Subnet service used by the ADR-0003 Phase 3
+                ``task_scoped`` cascade hook (``complete_task`` /
+                ``reject_task`` / ``cancel_task`` dissolve subnets
+                whose ``linked_task_id == task_id``). Optional — when
+                ``None`` the cascade is silently skipped so legacy
+                test fixtures keep working. Production wiring in
+                ``api.py`` always supplies one.
             settlement_outbox: Outbox repository for the settlement saga
                 (v0.1). When None, ``complete_task`` uses its legacy
                 non-atomic path — see docstring there.
@@ -119,6 +129,7 @@ class TaskService:
         self.escrow = escrow_client
         self.agent_repository = agent_repository
         self.subnet_repository = subnet_repository
+        self.subnet_service = subnet_service
         # Saga wiring — see attribute docstrings on each, and the
         # decision matrix on ``_saga_enabled`` below.
         self.settlement_outbox = settlement_outbox
@@ -1544,6 +1555,11 @@ class TaskService:
             assignee_id=task.assignee_id,
         )
 
+        # ADR-0003 Phase 3 — dissolve any task_scoped child subnets
+        # linked to this task. Runs after the full settlement Saga
+        # so a cascade failure cannot roll back the completion.
+        await self._dissolve_task_scoped_subnets(task_id)
+
         return task
 
     async def reject_task(
@@ -1606,6 +1622,12 @@ class TaskService:
         )
 
         await self._notify_webhook(WebhookEventType.TASK_REJECTED, task)
+
+        # ADR-0003 Phase 3 — dissolve any task_scoped child subnets
+        # linked to this task. Runs after the webhook so a cascade
+        # failure cannot roll back the rejection.
+        await self._dissolve_task_scoped_subnets(task_id)
+
         return task
 
     async def cancel_task(self, task_id: str, canceller_id: str) -> Task:
@@ -1710,6 +1732,12 @@ class TaskService:
             )
 
         logger.info("task_cancelled", task_id=task_id, canceller_id=canceller_id)
+
+        # ADR-0003 Phase 3 — dissolve any task_scoped child subnets
+        # linked to this task. Runs after escrow refund / webhook /
+        # activity so a cascade failure cannot roll back the
+        # cancellation.
+        await self._dissolve_task_scoped_subnets(task_id)
 
         return task
 
@@ -1871,6 +1899,88 @@ class TaskService:
         if not subnet:
             return False
         return agent_id in (subnet.member_agent_ids or set())
+
+    async def _dissolve_task_scoped_subnets(self, task_id: str) -> None:
+        """ADR-0003 Phase 3 — best-effort cascade dissolve of any
+        ``task_scoped`` subnets bound to ``task_id``.
+
+        Runs at the very tail of ``complete_task`` / ``reject_task`` /
+        ``cancel_task``, after the full settlement Saga is durable
+        (CAS save, escrow release / refund, activity record,
+        platform + Org-Harness webhooks). Placing it last is
+        intentional — by the time we reach this method the task
+        transition is already final and any failure here must NOT
+        roll the transition back.
+
+        Failure modes:
+
+        * ``subnet_repository`` or ``subnet_service`` is missing
+          (legacy test fixtures) → silent no-op; production wiring
+          in ``api.py`` always supplies both.
+        * ``find_by_linked_task`` raises → log ``warning`` and
+          return; nothing more to do.
+        * ``delete_subnet`` raises ``SubnetNotFoundException`` →
+          ``debug`` (concurrent dissolve already won; treated as a
+          successful no-op per ADR §"Idempotency on concurrent
+          dissolution").
+        * Any other ``delete_subnet`` failure → ``warning`` and
+          continue with the next match. Orphan subnets left behind
+          this way behave as regular ``persistent`` subnets per ADR
+          Decision #6 — ops cleanup via manual ``delete_subnet`` or
+          a future reconciler.
+
+        Cascade is keyed on ``Subnet.lifecycle == "task_scoped"``
+        AFTER the repository lookup, NOT in the repository query
+        itself, because ``find_by_linked_task`` returns every subnet
+        carrying the linked task ID regardless of lifecycle. A
+        ``persistent`` subnet that was promoted out of
+        ``task_scoped`` after the task started keeps its
+        ``linked_task_id == None`` (set by
+        ``SubnetService.promote_to_persistent``), so this filter is
+        belt-and-braces — it only kicks in if someone hand-edits a
+        persistent subnet's ``linked_task_id`` outside the service
+        layer.
+        """
+        if self.subnet_repository is None or self.subnet_service is None:
+            return
+
+        try:
+            candidates = await self.subnet_repository.find_by_linked_task(task_id)
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+            logger.warning(
+                "task_scoped_cascade_lookup_failed",
+                task_id=task_id,
+                error=str(exc),
+            )
+            return
+
+        for subnet in candidates:
+            if subnet.lifecycle != "task_scoped":
+                continue
+            try:
+                await self.subnet_service.delete_subnet(
+                    subnet.subnet_id, owner="system"
+                )
+                logger.info(
+                    "task_scoped_subnet_dissolved",
+                    task_id=task_id,
+                    subnet_id=subnet.subnet_id,
+                )
+            except SubnetNotFoundException:
+                # Concurrent dissolve already won — treat as success
+                # per ADR §"Idempotency on concurrent dissolution".
+                logger.debug(
+                    "task_scoped_cascade_subnet_already_gone",
+                    task_id=task_id,
+                    subnet_id=subnet.subnet_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                logger.warning(
+                    "task_scoped_cascade_failed",
+                    task_id=task_id,
+                    subnet_id=subnet.subnet_id,
+                    error=str(exc),
+                )
 
     async def _notify_webhook(self, event: WebhookEventType, task: Task) -> None:
         """Send webhook notification.

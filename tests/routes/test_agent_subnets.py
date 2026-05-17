@@ -155,7 +155,15 @@ class TestCanonicalJoin:
         assert kw["url"] == "https://h.example/hook"
         assert kw["secret"] == "hs"
         assert kw["event"] == WebhookEventType.AGENT_JOINED_SUBNET
-        assert kw["data"] == {"subnet_id": "subnet-1", "agent_id": "agent-target"}
+        # ADR-0003 Phase 3 added ``parent_subnet_id`` to the payload.
+        # ``_default_subnet`` is a MagicMock stub, so the helper's
+        # ``isinstance(str)`` guard returns ``None`` — matching the
+        # contract for a top-level subnet.
+        assert kw["data"] == {
+            "subnet_id": "subnet-1",
+            "agent_id": "agent-target",
+            "parent_subnet_id": None,
+        }
 
     def test_join_returns_403_when_path_agent_differs_from_api_key(
         self, stub_agent_service, stub_subnet_service, stub_webhook_service

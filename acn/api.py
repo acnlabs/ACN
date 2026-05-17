@@ -521,6 +521,9 @@ async def lifespan(app: FastAPI):
         escrow_client=escrow_client_instance,
         agent_repository=agent_repository,
         subnet_repository=subnet_repository,
+        # ADR-0003 Phase 3 — task-state cascade dissolves task_scoped
+        # subnets when the linked task hits a terminal state.
+        subnet_service=subnet_service_instance,
         # Settlement saga v0.1 — both are None in Redis-only mode,
         # which forces ``complete_task`` onto its legacy non-atomic
         # path (existing pre-v0.1 behavior). In PG mode the saga
