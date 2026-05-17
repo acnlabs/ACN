@@ -30,6 +30,9 @@ class PostgresSubnetRepository(ISubnetRepository):
             metadata=meta,
             harness_url=row.harness_url,
             harness_secret=row.harness_secret,
+            parent_subnet_id=row.parent_subnet_id,
+            lifecycle=row.lifecycle,
+            linked_task_id=row.linked_task_id,
         )
 
     def _subnet_to_model(self, subnet: Subnet) -> SubnetModel:
@@ -48,6 +51,9 @@ class PostgresSubnetRepository(ISubnetRepository):
             subnet_metadata=subnet.metadata or None,
             harness_url=subnet.harness_url,
             harness_secret=subnet.harness_secret,
+            parent_subnet_id=subnet.parent_subnet_id,
+            lifecycle=subnet.lifecycle,
+            linked_task_id=subnet.linked_task_id,
             created_at=created,
         )
 
@@ -60,6 +66,11 @@ class PostgresSubnetRepository(ISubnetRepository):
         async with self._session_factory() as session:
             existing = await session.get(SubnetModel, subnet.subnet_id)
             if existing:
+                # Nesting fields are included in the UPDATE so promote
+                # paths (Phase 2) and any future mutation can fall
+                # through correctly. ``parent_subnet_id`` is immutable
+                # per ADR-0003 §5 — included here only for defence in
+                # depth (service layer rejects mismatched updates).
                 await session.execute(
                     update(SubnetModel)
                     .where(SubnetModel.subnet_id == subnet.subnet_id)
@@ -73,6 +84,9 @@ class PostgresSubnetRepository(ISubnetRepository):
                         subnet_metadata=model.subnet_metadata,
                         harness_url=model.harness_url,
                         harness_secret=model.harness_secret,
+                        parent_subnet_id=model.parent_subnet_id,
+                        lifecycle=model.lifecycle,
+                        linked_task_id=model.linked_task_id,
                     )
                 )
             else:
@@ -125,6 +139,40 @@ class PostgresSubnetRepository(ISubnetRepository):
             result = await session.execute(
                 select(SubnetModel).where(
                     SubnetModel.member_agent_ids.contains([agent_id])
+                )
+            )
+            return [self._model_to_subnet(r) for r in result.scalars().all()]
+
+    # ------------------------------------------------------------------
+    # Nesting lookups (ADR-0003)
+    # ------------------------------------------------------------------
+
+    async def find_by_parent(self, parent_subnet_id: str) -> list[Subnet]:
+        """Return all child subnets nested under a given parent.
+
+        Hits the ``subnets_parent_idx`` partial index for an O(k)
+        lookup (k = number of children). Returns the empty list when
+        no children exist or the parent itself is unknown.
+        """
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(SubnetModel).where(
+                    SubnetModel.parent_subnet_id == parent_subnet_id
+                )
+            )
+            return [self._model_to_subnet(r) for r in result.scalars().all()]
+
+    async def find_by_linked_task(self, task_id: str) -> list[Subnet]:
+        """Return all subnets bound to a given task via ``linked_task_id``.
+
+        Hits the ``subnets_linked_task_idx`` partial index. Consumers
+        filter by ``lifecycle`` themselves if they only want
+        ``task_scoped`` rows (Phase 3 cascade hook does this).
+        """
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(SubnetModel).where(
+                    SubnetModel.linked_task_id == task_id
                 )
             )
             return [self._model_to_subnet(r) for r in result.scalars().all()]

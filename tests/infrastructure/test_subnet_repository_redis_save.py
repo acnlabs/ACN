@@ -27,9 +27,15 @@ def _make_redis_mock() -> AsyncMock:
     """Build a redis-py async client mock that:
     - records calls to ``hset``;
     - exposes an awaitable ``pipeline()`` async context manager that
-      itself records ``sadd`` / ``execute`` calls.
+      itself records ``sadd`` / ``srem`` / ``execute`` calls.
+
+    ``hgetall`` is wired to default to ``{}`` so ``save()`` 's
+    "read old row first" lookup (ADR-0003 incremental index
+    maintenance) cleanly returns "no existing subnet" without
+    needing every test to override it.
     """
     redis = AsyncMock()
+    redis.hgetall.return_value = {}
 
     class _PipeProxy:
         def __init__(self) -> None:
@@ -43,6 +49,9 @@ def _make_redis_mock() -> AsyncMock:
 
         def sadd(self, *args, **kwargs):
             self.calls.append(("sadd", args, kwargs))
+
+        def srem(self, *args, **kwargs):
+            self.calls.append(("srem", args, kwargs))
 
         async def execute(self):
             self.calls.append(("execute", (), {}))

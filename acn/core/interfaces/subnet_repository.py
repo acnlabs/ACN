@@ -96,3 +96,52 @@ class ISubnetRepository(ABC):
             True if subnet exists
         """
         pass
+
+    # ------------------------------------------------------------------
+    # Nesting (ADR-0003)
+    # ------------------------------------------------------------------
+    # Shipped in Phase 1 so the persistence layer carries the indexes
+    # and lookup methods atomically with the schema change. Service /
+    # route consumers land in Phase 2 (parent lookup) and Phase 3
+    # (task-state cascade). Implementations must keep these methods
+    # consistent with ``save`` / ``delete`` — both maintain the
+    # underlying secondary index in the same transaction / pipeline.
+
+    @abstractmethod
+    async def find_by_parent(self, parent_subnet_id: str) -> list[Subnet]:
+        """
+        Find all child subnets nested under a given parent.
+
+        Returns the empty list when no children exist or the parent
+        itself is unknown — callers that need to distinguish "no
+        children" from "parent missing" should ``find_by_id`` the
+        parent separately.
+
+        Args:
+            parent_subnet_id: Parent subnet identifier
+
+        Returns:
+            List of subnets whose ``parent_subnet_id`` equals the
+            argument.
+        """
+        pass
+
+    @abstractmethod
+    async def find_by_linked_task(self, task_id: str) -> list[Subnet]:
+        """
+        Find all subnets bound to a given task via ``linked_task_id``.
+
+        Used by the task-state-machine cascade hook (Phase 3) to
+        dissolve ``task_scoped`` children when the linked task reaches
+        a terminal state. Includes both ``task_scoped`` and (defensively)
+        any ``persistent`` rows that still carry the field — callers
+        should filter by ``lifecycle`` themselves when that matters.
+
+        Args:
+            task_id: Task identifier
+
+        Returns:
+            List of subnets whose ``linked_task_id`` equals the
+            argument.
+        """
+        pass
