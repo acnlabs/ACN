@@ -340,7 +340,14 @@ class SubnetService:
         Raises:
             SubnetNotFoundException: If subnet not found
             PermissionError: If owner doesn't match
-            RuntimeError: On Redis partial-failure cascade
+            RuntimeError: Redis cascade path raised this after the
+                ``delete_with_children_partial`` breadcrumb when a
+                child delete returned ``False`` (parent preserved).
+            sqlalchemy.exc.SQLAlchemyError: PG cascade path bubbles
+                any DB error out of ``session.begin()`` after the
+                whole transaction is rolled back — parent + every
+                child preserved. Caller treats both backend-specific
+                exception types as "cascade aborted, retry-safe".
         """
         subnet = await self.get_subnet(subnet_id)
 
