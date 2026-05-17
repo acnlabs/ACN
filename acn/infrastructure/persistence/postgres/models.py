@@ -187,8 +187,36 @@ class SubnetModel(Base):
     subnet_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     harness_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     harness_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Nesting fields (ADR-0003). Both ``default`` (Python / ORM path)
+    # and ``server_default`` (DDL path) are set on ``lifecycle`` so a
+    # fresh INSERT through the ORM matches a backfilled row inserted
+    # via Alembic — avoids the "ORM default ≠ DB default" drift trap.
+    parent_subnet_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    lifecycle: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="persistent",
+        server_default="persistent",
+    )
+    linked_task_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        # Partial indexes for nesting lookups (ADR-0003). ``WHERE ...
+        # IS NOT NULL`` keeps the index small — top-level subnets
+        # without a parent / linked task don't contribute rows.
+        Index(
+            "subnets_parent_idx",
+            "parent_subnet_id",
+            postgresql_where=text("parent_subnet_id IS NOT NULL"),
+        ),
+        Index(
+            "subnets_linked_task_idx",
+            "linked_task_id",
+            postgresql_where=text("linked_task_id IS NOT NULL"),
+        ),
     )
 
 
