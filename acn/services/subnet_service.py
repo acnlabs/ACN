@@ -10,7 +10,7 @@ import structlog  # type: ignore[import-untyped]
 
 from ..core.entities import Subnet
 from ..core.exceptions import SubnetNotFoundException
-from ..core.interfaces import ISubnetRepository
+from ..core.interfaces import IAgentRepository, ISubnetRepository
 from ..core.interfaces.task_repository import ITaskRepository
 
 logger = structlog.get_logger()
@@ -57,12 +57,20 @@ class SubnetService:
     it — the ``linked_task_not_found`` path falls back to "skip
     task existence check" when the repository is missing, which
     keeps non-nesting code paths green.
+
+    Optionally accepts an :class:`IAgentRepository` so
+    ``delete_subnet`` can clear ``agent.subnet_ids`` back-references
+    on every member before tearing down the subnet record (issue
+    #56). Production wiring supplies one; legacy fixtures that omit
+    it get the pre-#56 behaviour (stale agent-side dust survives
+    the delete) — best-effort and backward-compatible.
     """
 
     def __init__(
         self,
         subnet_repository: ISubnetRepository,
         task_repository: ITaskRepository | None = None,
+        agent_repository: IAgentRepository | None = None,
     ):
         """
         Initialize Subnet Service
@@ -73,9 +81,15 @@ class SubnetService:
                 by the ``linked_task_not_found`` validation path in
                 ``create_subnet``. Omit for legacy fixtures that
                 don't exercise nesting.
+            agent_repository: Optional agent repository — used by
+                ``delete_subnet`` to remove the deleted subnet's id
+                from each member's ``agent.subnet_ids`` set. Omit
+                for legacy fixtures; production must supply one to
+                avoid agent-side stale dust (issue #56).
         """
         self.repository = subnet_repository
         self.task_repository = task_repository
+        self.agent_repository = agent_repository
 
     async def create_subnet(
         self,
@@ -367,9 +381,26 @@ class SubnetService:
         # to recurse. The repository's ``delete_with_children`` owns
         # the atomicity guarantee — service no longer loops over
         # individual ``delete()`` calls (issue #54).
+        #
+        # Issue #56: before removing any subnet record, clear the
+        # ``subnet_id`` back-reference from each member's
+        # ``agent.subnet_ids`` set. Doing this **before** the delete
+        # means a partial-failure cascade leaves agents pointing at
+        # subnets that still exist (recoverable) rather than at
+        # subnets that have already been deleted (orphan dust).
         if subnet.parent_subnet_id is None:
             children = await self.repository.find_by_parent(subnet_id)
             if children:
+                # Clear back-references for every child first, then
+                # the parent. Order mirrors the cascade delete order
+                # the repository will execute next.
+                for child in children:
+                    await self._clear_agent_back_references(
+                        child.subnet_id, child.member_agent_ids
+                    )
+                await self._clear_agent_back_references(
+                    subnet_id, subnet.member_agent_ids
+                )
                 child_ids = [c.subnet_id for c in children]
                 logger.info(
                     "delete_subnet_cascade",
@@ -381,8 +412,80 @@ class SubnetService:
                     subnet_id, child_ids
                 )
 
+        # No-cascade path: child subnet direct-delete OR top-level
+        # subnet with zero children. Either way, clean up this one
+        # subnet's back-references then drop the record.
+        await self._clear_agent_back_references(
+            subnet_id, subnet.member_agent_ids
+        )
         logger.info("delete_subnet", subnet_id=subnet_id)
         return await self.repository.delete(subnet_id)
+
+    async def _clear_agent_back_references(
+        self,
+        subnet_id: str,
+        member_agent_ids: set[str],
+    ) -> None:
+        """Remove ``subnet_id`` from each member's
+        ``agent.subnet_ids`` set (issue #56).
+
+        Best-effort with a structured summary log: per-agent failure
+        is logged at ``warning`` level and **does not** abort the
+        caller (the subnet delete still proceeds). This matches the
+        existing weak-atomicity profile of the dual-store membership
+        invariant (ADR-0001) — agent-side dust is "harmless" but
+        amplifies under cascade, so we clean it on a best-effort
+        basis instead of layering a distributed transaction.
+
+        Silent no-op when:
+
+        - ``agent_repository`` was not wired (legacy test fixtures)
+        - ``member_agent_ids`` is empty (orphan or just-created subnet)
+        - An individual agent no longer exists (already deleted)
+        - The agent doesn't carry ``subnet_id`` in its ``subnet_ids``
+          (already cleaned by an earlier explicit ``leave_subnet``)
+
+        Args:
+            subnet_id: Subnet being deleted; this id will be removed
+                from every visited agent's ``subnet_ids``.
+            member_agent_ids: Snapshot of the subnet's members at
+                the moment of delete. May contain ids whose agents
+                no longer exist — they're skipped.
+        """
+        if self.agent_repository is None or not member_agent_ids:
+            return
+
+        cleaned = 0
+        failed = 0
+        for agent_id in member_agent_ids:
+            try:
+                agent = await self.agent_repository.find_by_id(agent_id)
+                if agent is None:
+                    continue
+                if subnet_id not in agent.subnet_ids:
+                    continue
+                agent.remove_from_subnet(subnet_id)
+                await self.agent_repository.save(agent)
+                cleaned += 1
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                # Per-agent failure must not abort the cascade. Log
+                # enough context that ops can re-run a manual
+                # ``leave_subnet`` for the affected pair.
+                logger.warning(
+                    "subnet_back_reference_cleanup_failed",
+                    subnet_id=subnet_id,
+                    agent_id=agent_id,
+                    error=str(exc),
+                )
+                failed += 1
+
+        logger.info(
+            "subnet_back_reference_cleanup",
+            subnet_id=subnet_id,
+            member_count=len(member_agent_ids),
+            cleaned=cleaned,
+            failed=failed,
+        )
 
     async def add_member(self, subnet_id: str, agent_id: str) -> Subnet:
         """

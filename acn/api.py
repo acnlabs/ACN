@@ -301,9 +301,15 @@ async def lifespan(app: FastAPI):
     # ``task_scoped`` child subnets (``linked_task_not_found``
     # rejection path). Always supplied in production composition;
     # legacy test fixtures may instantiate without it.
+    # ``agent_repository`` is wired so ``SubnetService.delete_subnet``
+    # can clear ``agent.subnet_ids`` back-references on every member
+    # before the subnet record is removed (issue #56). Without this
+    # wiring, agent-side dust accumulates and gets amplified by every
+    # parent-delete cascade.
     subnet_service_instance = SubnetService(
         subnet_repository,
         task_repository=task_repository,
+        agent_repository=agent_repository,
     )
 
     # Phase 1 communication_policy gateway: a single PolicyCheckService
