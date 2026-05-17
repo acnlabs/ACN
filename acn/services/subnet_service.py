@@ -3,6 +3,7 @@
 Business logic for subnet management.
 """
 
+import dataclasses
 from typing import Literal
 
 import structlog  # type: ignore[import-untyped]
@@ -559,12 +560,21 @@ class SubnetService:
             )
             return subnet
 
-        subnet.lifecycle = "persistent"
-        subnet.linked_task_id = None
-        await self.repository.save(subnet)
+        # Build the promoted entity via ``dataclasses.replace`` so the
+        # final state is re-validated by ``Subnet.__post_init__``
+        # (catches any future invariant additions automatically).
+        # Direct attribute assignment would silently bypass
+        # ``__post_init__`` and only persist a half-valid state if a
+        # bug ever set the fields out of order.
+        promoted = dataclasses.replace(
+            subnet,
+            lifecycle="persistent",
+            linked_task_id=None,
+        )
+        await self.repository.save(promoted)
         logger.info(
             "subnet_promoted_to_persistent",
             subnet_id=subnet_id,
             owner=owner,
         )
-        return subnet
+        return promoted

@@ -59,9 +59,25 @@ def _coerce_optional_str(value: object) -> str | None:
 
 def _coerce_lifecycle(value: object) -> Literal["persistent", "task_scoped"]:
     """Same intent as ``_coerce_optional_str`` for the lifecycle
-    Literal. Defaults to ``"persistent"`` on any unexpected value."""
+    Literal. Defaults to ``"persistent"`` on any unexpected value.
+
+    A real ``Subnet`` entity always carries one of the two valid
+    strings (entity-layer ``__post_init__`` enforces it), so the
+    only "unexpected" path in practice is a legacy ``MagicMock``
+    stub returning a non-string auto-attribute. We silently degrade
+    those, but emit a warning for unexpected real-string values
+    so a future invalid persisted value surfaces in logs instead
+    of disappearing silently.
+    """
     if value == "task_scoped":
         return "task_scoped"
+    if value == "persistent":
+        return "persistent"
+    if isinstance(value, str):
+        logger.warning(
+            "subnet_info_unexpected_lifecycle",
+            lifecycle_value=value,
+        )
     return "persistent"
 
 
