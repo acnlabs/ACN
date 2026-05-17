@@ -31,6 +31,13 @@ TEST_PREFIXES = [
     "best-effort-test",
     "e2e-agent-",
     "prod-agent-",
+    # Naming convention for ad-hoc end-to-end probes that exercise prod
+    # via the public `/agents/join` endpoint (see AGENTS.md "Probing
+    # production"). The internal `/agents/join/internal` flow already
+    # stamps `visibility=test` and self-filters out of public listings,
+    # but probes that slip in via the public route get caught here as
+    # the safety net.
+    "probe-",
 ]
 
 
