@@ -56,6 +56,7 @@ from ..persistence.redis.registry import AgentRegistry
 # the submodule directly avoids triggering ``services/__init__.py``
 # during this module's import (services -> infrastructure -> services).
 if TYPE_CHECKING:
+    from ...services.agent_service import AgentService
     from ...services.allowlist_service import AllowlistService
     from ...services.policy_service import PolicyCheckService
     from .manifest_dispatcher import ManifestDispatcher
@@ -149,6 +150,7 @@ class SubnetManager:
         policy_service: "PolicyCheckService | None" = None,
         manifest_dispatcher: "ManifestDispatcher | None" = None,
         allowlist_service: "AllowlistService | None" = None,
+        agent_service: "AgentService | None" = None,
     ):
         """
         Initialize Subnet Manager
@@ -184,6 +186,16 @@ class SubnetManager:
                 policy_service's "missing callback → divert to
                 manifest" safety branch — same shape as
                 ``MessageRouter`` for symmetry.
+            agent_service: Implicit-heartbeat hook. When provided, every
+                inbound WebSocket HEARTBEAT frame fires
+                ``AgentService.touch_alive(agent_id)`` as a detached
+                ``asyncio.create_task`` so the agent's Redis ``alive``
+                TTL renews without blocking the WS read loop. Symmetric
+                to the HTTP-side implicit heartbeat scheduled by
+                ``acn.routes.dependencies._schedule_alive_renewal``.
+                ``None`` keeps legacy fixtures green — the existing
+                ``connection.last_heartbeat`` in-memory bookkeeping
+                continues, only the Redis renewal is skipped.
         """
         self.registry = registry
         self.redis = redis_client
@@ -193,6 +205,14 @@ class SubnetManager:
         self.policy_service = policy_service
         self.manifest_dispatcher = manifest_dispatcher
         self.allowlist_service = allowlist_service
+        self._agent_service = agent_service
+        # Hold strong refs to fire-and-forget alive-renewal tasks so the
+        # asyncio GC cannot collect them mid-await (Python 3.11+ keeps a
+        # weakref only; without this set a busy WS could see its renewal
+        # task vanish before set_alive resolves). Discarded on done so the
+        # set never grows unbounded — same pattern used elsewhere in the
+        # gateway for unawaited futures.
+        self._alive_renewal_tasks: set[asyncio.Task[None]] = set()
 
         # Subnets: {subnet_id: Subnet}
         self._subnets: dict[str, Subnet] = {}
@@ -632,6 +652,18 @@ class SubnetManager:
 
             if msg_type == GatewayMessageType.HEARTBEAT:
                 connection.last_heartbeat = datetime.now(UTC)
+                # Implicit heartbeat (WS side). Mirrors the HTTP-side
+                # ``_schedule_alive_renewal`` hook: a WS HEARTBEAT frame is
+                # proof of life, so renew the Redis ``acn:agents:{id}:alive``
+                # TTL without blocking the read loop. Detached on purpose —
+                # ``touch_alive`` already swallows its own errors, so a slow
+                # Redis cannot stall heartbeat ACK round-trips.
+                if self._agent_service is not None:
+                    task = asyncio.create_task(
+                        self._agent_service.touch_alive(connection.agent_id)
+                    )
+                    self._alive_renewal_tasks.add(task)
+                    task.add_done_callback(self._alive_renewal_tasks.discard)
                 await connection.websocket.send_json(
                     {
                         "type": GatewayMessageType.HEARTBEAT_ACK,

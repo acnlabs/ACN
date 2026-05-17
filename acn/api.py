@@ -431,6 +431,12 @@ async def lifespan(app: FastAPI):
         policy_service=policy_service_instance,
         manifest_dispatcher=manifest_dispatcher_instance,
         allowlist_service=allowlist_service_instance,
+        # Implicit heartbeat: every inbound WS HEARTBEAT frame fires
+        # AgentService.touch_alive(agent_id) as a detached task, so a
+        # WS-connected agent that sends nothing but heartbeats still
+        # keeps Redis ``alive`` TTL refreshed — symmetric with the
+        # HTTP-side hook in routes/dependencies.py.
+        agent_service=agent_service_instance,
     )
 
     # Initialize payment services
