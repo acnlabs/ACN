@@ -18,7 +18,6 @@ from .models import AgentModel
 logger = structlog.get_logger()
 
 _ALIVE_KEY = "acn:agents:{agent_id}:alive"
-_ALIVE_TTL = 90  # seconds
 
 
 def _tz(dt: datetime | None) -> datetime | None:
@@ -266,7 +265,7 @@ class PostgresAgentRepository(IAgentRepository):
     # Heartbeat (Redis TTL — unchanged from Redis implementation)
     # =========================================================================
 
-    async def set_alive(self, agent_id: str, ttl: int = _ALIVE_TTL) -> None:
+    async def set_alive(self, agent_id: str, ttl: int) -> None:
         key = _ALIVE_KEY.format(agent_id=agent_id)
         await self._redis.set(key, "1", ex=ttl)
 
