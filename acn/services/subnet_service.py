@@ -316,12 +316,19 @@ class SubnetService:
         Phase 3's task-state cascade hook in ``task_service``).
 
         Cascade order: children are deleted first, then the parent.
-        On Postgres this is a sequential best-effort —
-        ``ISubnetRepository`` is single-statement per call; there is
-        no shared transaction seam exposed yet, so a partial
-        failure leaves orphan children but **does NOT remove the
-        parent** (parent deletion only fires after all child
-        deletions succeed). Redis behaves identically.
+        The repository's ``delete_with_children`` carries the
+        backend-specific atomicity guarantee (ADR-0003 §A.4) —
+
+        - **Postgres**: single transaction; any failure rolls back
+          everything, leaving the original parent + all children in
+          place. Caller observes a raised exception.
+        - **Redis**: sequential best-effort; on partial failure the
+          repository logs a breadcrumb and raises ``RuntimeError``
+          *before* touching the parent. Children deleted prior to the
+          failure stay deleted (Redis has no cross-call MULTI/EXEC).
+
+        Both backends raise on partial failure, so callers cannot
+        accidentally treat a partially-completed cascade as success.
 
         Args:
             subnet_id: Subnet identifier
@@ -333,6 +340,7 @@ class SubnetService:
         Raises:
             SubnetNotFoundException: If subnet not found
             PermissionError: If owner doesn't match
+            RuntimeError: On Redis partial-failure cascade
         """
         subnet = await self.get_subnet(subnet_id)
 
@@ -347,38 +355,24 @@ class SubnetService:
         if subnet_id in ["public", "system"]:
             raise PermissionError(f"Cannot delete system subnet: {subnet_id}")
 
-        # Cascade to children first. Single-layer cap guarantees
-        # ``find_by_parent`` doesn't itself need to recurse.
+        # Cascade to children when this is a top-level subnet. Single-
+        # layer cap guarantees ``find_by_parent`` doesn't itself need
+        # to recurse. The repository's ``delete_with_children`` owns
+        # the atomicity guarantee — service no longer loops over
+        # individual ``delete()`` calls (issue #54).
         if subnet.parent_subnet_id is None:
             children = await self.repository.find_by_parent(subnet_id)
-            for child in children:
+            if children:
+                child_ids = [c.subnet_id for c in children]
                 logger.info(
-                    "delete_subnet_cascade_child",
+                    "delete_subnet_cascade",
                     parent_subnet_id=subnet_id,
-                    child_subnet_id=child.subnet_id,
+                    child_subnet_ids=child_ids,
+                    child_count=len(child_ids),
                 )
-                # Use ``"system"`` so the cascade isn't blocked by
-                # mismatched per-child owners (squad subnets can be
-                # owned by different agents inside the same parent).
-                deleted = await self.repository.delete(child.subnet_id)
-                if not deleted:
-                    # Audit-log breadcrumb so ops can spot partial
-                    # cascade and re-run manually. We refuse to
-                    # delete the parent in this state — orphan
-                    # children pointing at a missing parent are
-                    # worse than orphan children pointing at a
-                    # still-present parent (the latter can be
-                    # cleaned up by retrying the parent delete).
-                    logger.warning(
-                        "delete_subnet_cascade_partial",
-                        parent_subnet_id=subnet_id,
-                        child_subnet_id=child.subnet_id,
-                        reason="repository_delete_returned_false",
-                    )
-                    raise RuntimeError(
-                        f"Cascade delete failed for child {child.subnet_id}; "
-                        f"refusing to delete parent {subnet_id}"
-                    )
+                return await self.repository.delete_with_children(
+                    subnet_id, child_ids
+                )
 
         logger.info("delete_subnet", subnet_id=subnet_id)
         return await self.repository.delete(subnet_id)

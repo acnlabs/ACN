@@ -170,6 +170,44 @@ class RedisSubnetRepository(ISubnetRepository):
 
         return True
 
+    async def delete_with_children(
+        self, parent_id: str, child_ids: list[str]
+    ) -> bool:
+        """Sequential cascade delete with audit-log breadcrumb on
+        partial failure (ADR-0003 §A.4 Redis branch).
+
+        Redis has no cross-method MULTI/EXEC primitive that spans
+        multiple ``delete()`` calls (each call already runs its own
+        small pipeline for secondary-index cleanup). So the contract
+        here is best-effort with a clear failure signal:
+
+        - Each child is deleted in order. If any child delete returns
+          ``False`` (e.g. concurrent dissolution by another caller),
+          we log ``delete_with_children_partial`` and raise
+          ``RuntimeError`` BEFORE touching the parent — leaving the
+          parent in place gives ops a recoverable state (re-run the
+          cascade once the offending child is reconciled).
+        - On a fully successful child sweep, the parent delete is
+          attempted last. Its return value propagates (False = parent
+          already gone, but children were still cleaned).
+        """
+        for child_id in child_ids:
+            deleted = await self.delete(child_id)
+            if not deleted:
+                logger.warning(
+                    "delete_with_children_partial",
+                    extra={
+                        "parent_subnet_id": parent_id,
+                        "child_subnet_id": child_id,
+                        "reason": "child_delete_returned_false",
+                    },
+                )
+                raise RuntimeError(
+                    f"Cascade delete failed for child {child_id}; "
+                    f"refusing to delete parent {parent_id}"
+                )
+        return await self.delete(parent_id)
+
     async def exists(self, subnet_id: str) -> bool:
         """Check if subnet exists"""
         return await self.redis.exists(f"acn:subnets:info:{subnet_id}") > 0

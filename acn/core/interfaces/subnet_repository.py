@@ -85,6 +85,46 @@ class ISubnetRepository(ABC):
         pass
 
     @abstractmethod
+    async def delete_with_children(
+        self, parent_id: str, child_ids: list[str]
+    ) -> bool:
+        """
+        Atomic-where-supported parent + children delete (ADR-0003 §A.4).
+
+        Backend contract:
+
+        - **Postgres**: single transaction. All child DELETEs and the parent
+          DELETE run inside ``async with session.begin()``. Any DB error
+          rolls back the whole batch — caller observes "nothing was
+          deleted" instead of "some children orphaned".
+        - **Redis**: sequential ``delete()`` calls (no MULTI/EXEC across
+          Python method boundaries). On partial failure the implementation
+          emits a ``delete_with_children_partial`` warning breadcrumb and
+          raises ``RuntimeError`` BEFORE attempting the parent delete —
+          the parent is preserved so an operator can retry the cascade.
+
+        Both backends:
+
+        - Return ``True`` when all listed children and the parent were
+          deleted.
+        - Return ``False`` only when the parent itself was already gone
+          (idempotent — pre-existing children, if any, are still removed).
+        - Raise on partial failure (PG: SQLAlchemy bubbles its error
+          through the rolled-back ``session.begin()`` block; Redis:
+          ``RuntimeError`` after the breadcrumb is logged).
+
+        Args:
+            parent_id: Top-level subnet identifier to delete last.
+            child_ids: Child subnet identifiers to delete first. May be
+                empty — in that case behaves identically to
+                ``delete(parent_id)``.
+
+        Returns:
+            True on full cascade success, False when parent did not exist.
+        """
+        pass
+
+    @abstractmethod
     async def exists(self, subnet_id: str) -> bool:
         """
         Check if subnet exists
