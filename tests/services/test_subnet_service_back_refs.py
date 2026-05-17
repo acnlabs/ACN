@@ -366,6 +366,71 @@ class TestCleanupBestEffort:
         assert mock_agent_repository.save.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_cleanup_completes_even_when_cascade_raises(
+        self,
+        mock_subnet_repository: ISubnetRepository,
+        mock_agent_repository: IAgentRepository,
+    ):
+        """When the repository cascade raises (e.g. Redis breadcrumb
+        path returns failure or PG transaction aborts), the back-ref
+        cleanup already ran to completion BEFORE the cascade was
+        invoked. This pins the documented ordering rationale: agents
+        end up pointing at subnets that still exist (recoverable)
+        rather than at already-deleted subnets (the dust this PR
+        fixes). The cascade exception then propagates to the caller
+        as expected."""
+        parent = _make_subnet("team", owner="alice", members={"alice", "bob"})
+        children = [
+            _make_subnet(
+                "squad-1",
+                owner="alice",
+                parent_subnet_id="team",
+                members={"alice"},
+            ),
+        ]
+        agents = {
+            "alice": _make_agent("alice", ["team", "squad-1"]),
+            "bob": _make_agent("bob", ["team"]),
+        }
+        mock_subnet_repository.find_by_id.return_value = parent
+        mock_subnet_repository.find_by_parent.return_value = children
+        # Cascade fails after cleanup has already done its job —
+        # simulates either the Redis breadcrumb path or a PG
+        # transaction abort.
+        mock_subnet_repository.delete_with_children.side_effect = RuntimeError(
+            "simulated cascade failure"
+        )
+        mock_agent_repository.find_by_id.side_effect = (
+            lambda aid: agents.get(aid)
+        )
+
+        service = SubnetService(
+            mock_subnet_repository,
+            agent_repository=mock_agent_repository,
+        )
+
+        with pytest.raises(RuntimeError, match="simulated cascade failure"):
+            await service.delete_subnet("team", owner="alice")
+
+        # Cleanup ran fully before the cascade raised — 3 distinct
+        # agents (squad-1: alice; parent: alice, bob) saw save()
+        # with the relevant subnet ids stripped. Alice may be saved
+        # twice (once per subnet she belonged to) which is the
+        # cleanup's natural shape; assert on the SET of agents
+        # touched rather than exact call count.
+        saved_agent_ids = {
+            call.args[0].agent_id
+            for call in mock_agent_repository.save.await_args_list
+        }
+        assert saved_agent_ids == {"alice", "bob"}
+        # And every save carried the right shape — no agent still
+        # carries any of the about-to-be-deleted subnet ids.
+        for call in mock_agent_repository.save.await_args_list:
+            saved = call.args[0]
+            assert "team" not in saved.subnet_ids
+            assert "squad-1" not in saved.subnet_ids
+
+    @pytest.mark.asyncio
     async def test_find_by_id_failure_also_treated_as_warning(
         self,
         mock_subnet_repository: ISubnetRepository,
