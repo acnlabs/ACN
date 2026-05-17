@@ -278,13 +278,27 @@ class SubnetInfo(BaseModel):
     harness_url: str | None = None
     harness_registered: bool = False
 
+    # ADR-0003 nesting fields — optional + defaulted so older
+    # servers that don't yet emit them still parse cleanly.
+    parent_subnet_id: str | None = None
+    lifecycle: str = "persistent"
+    linked_task_id: str | None = None
+
 
 class SubnetCreateRequest(BaseModel):
-    """Subnet creation request"""
+    """Subnet creation request.
+
+    ADR-0003 nesting params (``parent_subnet_id`` / ``lifecycle`` /
+    ``linked_task_id``) are optional; defaults preserve the legacy
+    "flat top-level persistent subnet" shape.
+    """
 
     name: str
     description: str | None = None
     metadata: dict[str, Any] | None = None
+    parent_subnet_id: str | None = None
+    lifecycle: str = "persistent"
+    linked_task_id: str | None = None
 
 
 # ============================================

@@ -22,6 +22,10 @@ from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from ..protocols.ap2 import WebhookEventType
 from ..protocols.ap2.webhook import WebhookService
 from ..services import AgentService, SubnetService
+from ..services.subnet_service import (
+    REASON_NOT_PARENT_MEMBER,
+    SubnetNestingError,
+)
 
 logger = structlog.get_logger()
 
@@ -70,9 +74,68 @@ async def do_join_subnet(
             details={"subnet_id": subnet_id},
         ) from e
 
+    # ADR-0003 child-subnet pre-check. ``SubnetService.add_member``
+    # would reject the same way, but doing it *before* the
+    # agent-side ``join_subnet`` write keeps state consistent — a
+    # mid-flight rejection otherwise leaves ``agent.subnet_ids``
+    # containing a subnet whose ``member_agent_ids`` doesn't include
+    # the agent (the dreaded half-joined state). We keep the
+    # service-layer check as defence-in-depth for the admin path.
+    #
+    # ``getattr`` + ``isinstance`` guard lets legacy MagicMock-based
+    # stubs (which don't set ``parent_subnet_id`` and return a
+    # ``MagicMock`` auto-attribute for it) skip this branch — the
+    # real ``Subnet`` entity always populates it with ``str | None``.
+    parent_subnet_id_raw = getattr(subnet, "parent_subnet_id", None)
+    parent_subnet_id = (
+        parent_subnet_id_raw if isinstance(parent_subnet_id_raw, str) else None
+    )
+    if parent_subnet_id is not None:
+        parent = None
+        try:
+            parent = await subnet_service.get_subnet(parent_subnet_id)
+        except SubnetNotFoundException:
+            pass
+        if parent is None or agent_id not in parent.member_agent_ids:
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                details={
+                    "reason": REASON_NOT_PARENT_MEMBER,
+                    "subnet_id": subnet_id,
+                    "agent_id": agent_id,
+                    "parent_subnet_id": parent_subnet_id,
+                },
+            )
+
     try:
         await agent_service.join_subnet(agent_id, subnet_id)
-        await subnet_service.add_member(subnet_id, agent_id)
+        try:
+            await subnet_service.add_member(subnet_id, agent_id)
+        except SubnetNestingError as nest_err:
+            # Race window between the pre-check above and the
+            # service-layer write (parent membership changed
+            # concurrently). Roll back the agent-side write so we
+            # don't leave a half-joined state, then surface the
+            # 403 with the same canonical reason as the pre-check.
+            try:
+                await agent_service.leave_subnet(agent_id, subnet_id)
+            except Exception as rollback_err:  # noqa: BLE001
+                logger.warning(
+                    "join_subnet_rollback_failed",
+                    agent_id=agent_id,
+                    subnet_id=subnet_id,
+                    error=str(rollback_err),
+                )
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                details={
+                    "reason": nest_err.reason,
+                    "subnet_id": subnet_id,
+                    "agent_id": agent_id,
+                },
+            ) from nest_err
 
         logger.info("agent_joined_subnet", agent_id=agent_id, subnet_id=subnet_id)
 
