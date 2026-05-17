@@ -7,7 +7,7 @@ import secrets
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from fastapi import Request as _Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -24,6 +24,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     InternalTokenDep,
     ParticipationIdPath,
     TaskIdPath,
+    _schedule_alive_renewal,
     get_agent_service,
     limiter,
 )
@@ -60,6 +61,7 @@ def require_task_write_auth():
 
     async def checker(
         request: Request,
+        background_tasks: BackgroundTasks,
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
         x_internal_token: str | None = Header(default=None),
         agent_service: AgentService = Depends(get_agent_service),
@@ -118,6 +120,9 @@ def require_task_write_auth():
                     details={"reason": "invalid_agent_api_key"},
                 )
             request.state.rate_limit_key = f"agent:{agent.agent_id}"
+            # Implicit heartbeat: task-write traffic counts as agent activity,
+            # same as direct /agents routes and proxy traffic.
+            _schedule_alive_renewal(background_tasks, agent_service, agent.agent_id)
             return {
                 "sub": agent.agent_id,
                 "type": "agent",

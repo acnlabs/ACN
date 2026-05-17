@@ -139,6 +139,43 @@ class TestAgentService:
         mock_agent_repository.save.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_touch_alive_renews_redis_ttl_only(self, mock_agent_repository):
+        """``touch_alive`` is the implicit-heartbeat fast path.
+
+        Contract: it refreshes only the Redis ``alive`` key
+        (``repository.set_alive`` with ``ALIVE_RENEW_TTL``) and does
+        NOT load the Agent row or call ``repository.save`` — the
+        whole point of this method is that it stays cheap enough to
+        run on *every* authenticated request without a DB round-trip.
+        """
+        from acn.services.agent_service import ALIVE_RENEW_TTL
+
+        service = AgentService(mock_agent_repository)
+
+        await service.touch_alive("test-agent-123")
+
+        mock_agent_repository.set_alive.assert_called_once_with(
+            "test-agent-123", ALIVE_RENEW_TTL
+        )
+        mock_agent_repository.find_by_id.assert_not_called()
+        mock_agent_repository.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_touch_alive_swallows_repository_errors(self, mock_agent_repository):
+        """``touch_alive`` runs as a fire-and-forget BackgroundTask after
+        the response is sent — a Redis blip must NEVER propagate into the
+        already-completed user-facing request that scheduled it.
+        """
+        mock_agent_repository.set_alive.side_effect = RuntimeError("redis down")
+
+        service = AgentService(mock_agent_repository)
+
+        # Must not raise.
+        await service.touch_alive("test-agent-123")
+
+        mock_agent_repository.set_alive.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_join_subnet(self, mock_agent_repository, sample_agent):
         """Test agent joining a subnet"""
         # Setup mock

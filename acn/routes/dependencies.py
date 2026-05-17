@@ -8,7 +8,7 @@ import secrets
 import time
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Path, Request
+from fastapi import BackgroundTasks, Depends, Header, HTTPException, Path, Request
 from slowapi import Limiter  # type: ignore[import-untyped]
 from slowapi.util import get_remote_address  # type: ignore[import-untyped]
 
@@ -810,15 +810,43 @@ async def _resolve_agent_by_bearer(
     )
 
 
+def _schedule_alive_renewal(
+    background_tasks: BackgroundTasks | None,
+    agent_service: AgentService,
+    agent_id: str,
+) -> None:
+    """Implicit heartbeat: schedule an alive-TTL renewal after the response.
+
+    Called from every agent-API-key auth dependency so any authenticated
+    request implicitly keeps the agent ``status="online"`` — no separate
+    ``POST /heartbeat`` cron required for an agent that is producing
+    business traffic.
+
+    ``background_tasks`` is the FastAPI-injected ``BackgroundTasks`` instance
+    (kept as a defensive ``None`` only so unit-test callers that construct
+    the dependency directly without a ``BackgroundTasks`` can opt out). The
+    renewal itself swallows all errors inside ``AgentService.touch_alive``
+    so this is strictly fire-and-forget — it never affects the user-facing
+    request that scheduled it.
+    """
+    if background_tasks is None:
+        return
+    background_tasks.add_task(agent_service.touch_alive, agent_id)
+
+
 async def verify_agent_api_key(
     request: Request,
+    background_tasks: BackgroundTasks,
     authorization: str = Header(..., alias="Authorization", description="Bearer <API_KEY>"),
     agent_service: AgentService = Depends(get_agent_service),
 ) -> dict:
     """Verify an agent's API key and return {agent_id, name}.
 
     Side effect: writes ``request.state.agent_id`` so the rate limiter can
-    bucket per-agent (see ``_rate_limit_key``).
+    bucket per-agent (see ``_rate_limit_key``), and schedules an implicit
+    alive-TTL renewal so any authenticated request keeps the agent online
+    without requiring a separate explicit ``/heartbeat`` cron (see
+    ``_schedule_alive_renewal``).
 
     Results are cached in-memory for 60 s (max 10 000 entries) to reduce Redis lookups.
     """
@@ -837,6 +865,7 @@ async def verify_agent_api_key(
     # ``_wallet_rate_limit_key`` key_func so the secondary
     # per-wallet bucket can be derived without a second auth lookup.
     request.state.wallet_address = agent_info.get("wallet_address")
+    _schedule_alive_renewal(background_tasks, agent_service, agent_info["agent_id"])
     return agent_info
 
 
@@ -845,6 +874,7 @@ AgentApiKeyDep = Annotated[dict, Depends(verify_agent_api_key)]
 
 async def verify_proxy_caller(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_acn_authorization: str = Header(
         ...,
         alias="X-ACN-Authorization",
@@ -889,6 +919,10 @@ async def verify_proxy_caller(
     # proxy traffic (un-gated) and re-acquire the same multi-account
     # leverage L418 is designed to prevent.
     request.state.wallet_address = agent_info.get("wallet_address")
+    # Implicit heartbeat: proxy traffic counts as "business activity" for
+    # the calling agent, same as direct routes. The downstream (callee) agent
+    # gets its own renewal when it handles its own requests.
+    _schedule_alive_renewal(background_tasks, agent_service, agent_info["agent_id"])
     return agent_info
 
 
@@ -951,6 +985,7 @@ InternalTokenDep = Annotated[None, Depends(verify_internal_token)]
 async def verify_owner_or_internal(
     request: Request,
     agent_id: AgentIdPath,
+    background_tasks: BackgroundTasks,
     authorization: str | None = Header(None, alias="Authorization"),
     x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
     agent_service: AgentService = Depends(get_agent_service),
@@ -1017,6 +1052,10 @@ async def verify_owner_or_internal(
         )
     request.state.agent_id = agent_info["agent_id"]
     request.state.rate_limit_key = f"agent:{agent_info['agent_id']}"
+    # Implicit heartbeat (owner-via-API-key branch only). Internal-token
+    # callers above are platform infra, not an agent producing traffic, so
+    # they intentionally do not extend any agent's alive TTL.
+    _schedule_alive_renewal(background_tasks, agent_service, agent_info["agent_id"])
     return {"caller_kind": "agent", "agent_id": agent_info["agent_id"]}
 
 

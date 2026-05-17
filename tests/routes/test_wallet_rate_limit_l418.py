@@ -34,6 +34,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.routing import APIRoute
 
 from acn.api import app
@@ -155,6 +156,7 @@ class TestAuthPropagatesWalletAddress:
         )
         await verify_agent_api_key(
             request=request,
+            background_tasks=BackgroundTasks(),
             authorization="Bearer test-api-key",
             agent_service=agent_service,
         )
@@ -174,6 +176,7 @@ class TestAuthPropagatesWalletAddress:
         )
         await verify_agent_api_key(
             request=request,
+            background_tasks=BackgroundTasks(),
             authorization="Bearer test-api-key",
             agent_service=agent_service,
         )
@@ -194,6 +197,7 @@ class TestAuthPropagatesWalletAddress:
         )
         await verify_proxy_caller(
             request=request,
+            background_tasks=BackgroundTasks(),
             x_acn_authorization="Bearer proxy-api-key",
             agent_service=agent_service,
         )
@@ -218,6 +222,7 @@ class TestAuthPropagatesWalletAddress:
         with pytest.raises(ACNHTTPError) as exc:
             await verify_agent_api_key(
                 request=request,
+                background_tasks=BackgroundTasks(),
                 authorization="Bearer bogus",
                 agent_service=agent_service,
             )

@@ -436,6 +436,32 @@ class AgentService:
         await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)
         return agent
 
+    async def touch_alive(self, agent_id: str) -> None:
+        """Renew the agent's alive TTL without loading the Agent row.
+
+        Called as a fire-and-forget background task whenever an authenticated
+        agent request reaches ACN (any HTTP route via the agent-API-key
+        dependencies, or a WebSocket HEARTBEAT frame). It refreshes only the
+        Redis ``acn:agents:{id}:alive`` key so that an agent producing
+        business traffic does not need a separate explicit ``/heartbeat`` cron
+        to avoid being marked offline.
+
+        Exceptions are swallowed: this is background work and must never
+        affect the user-facing request that scheduled it. The DB ``status``
+        field continues to be reconciled by ``_heartbeat_watchdog`` on its
+        normal cadence (every 30 min), so a transient Redis blip just means
+        the agent goes through the normal offline path one cycle later — no
+        worse than today.
+        """
+        try:
+            await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)
+        except Exception as e:  # noqa: BLE001 — best-effort background renewal
+            logger.warning(
+                "touch_alive_failed",
+                agent_id=agent_id,
+                error=str(e),
+            )
+
     async def get_agents_by_owner(self, owner: str) -> list[Agent]:
         """
         Get all agents owned by a user

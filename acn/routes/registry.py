@@ -2313,6 +2313,7 @@ async def release_agent(
 async def rotate_agent_api_key(
     request: Request,
     agent_id: AgentIdPath,
+    background_tasks: BackgroundTasks,
     agent_service: AgentServiceDep = None,
 ):
     """Rotate an agent's API key (H1 — pre-launch audit).
@@ -2344,6 +2345,7 @@ async def rotate_agent_api_key(
     auth_dep = require_task_write_auth()
     payload = await auth_dep(
         request=request,
+        background_tasks=background_tasks,
         credentials=await _bearer_scheme_for_rotate(request),
         x_internal_token=request.headers.get("x-internal-token"),
         agent_service=agent_service,

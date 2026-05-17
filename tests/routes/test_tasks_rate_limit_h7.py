@@ -31,6 +31,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.routing import APIRoute
 
 from acn.api import app
@@ -172,6 +173,7 @@ class TestRateLimitKeyAssignment:
             checker = require_task_write_auth()
             payload = await checker(
                 request=req,
+                background_tasks=BackgroundTasks(),
                 credentials=creds,
                 x_internal_token=None,
                 agent_service=MagicMock(),
@@ -192,6 +194,7 @@ class TestRateLimitKeyAssignment:
             checker = require_task_write_auth()
             payload = await checker(
                 request=req,
+                background_tasks=BackgroundTasks(),
                 credentials=None,
                 x_internal_token="secret-internal-token-min-32-chars",
                 agent_service=stub_agent_service,
@@ -217,6 +220,7 @@ class TestRateLimitKeyAssignment:
             checker = require_task_write_auth()
             await checker(
                 request=req,
+                background_tasks=BackgroundTasks(),
                 credentials=None,
                 x_internal_token="secret-internal-token-min-32-chars",
                 agent_service=stub_agent_service,
@@ -241,6 +245,7 @@ class TestRateLimitKeyAssignment:
             checker = require_task_write_auth()
             payload = await checker(
                 request=req,
+                background_tasks=BackgroundTasks(),
                 credentials=creds,
                 x_internal_token=None,
                 agent_service=stub_agent_service,
@@ -268,6 +273,7 @@ class TestRateLimitKeyAssignment:
             checker = require_task_write_auth()
             payload = await checker(
                 request=req,
+                background_tasks=BackgroundTasks(),
                 credentials=creds,
                 x_internal_token=None,
                 agent_service=stub_agent_service,
@@ -306,6 +312,7 @@ class TestRateLimitKeyAssignment:
             with pytest.raises(ACNHTTPError) as exc:
                 await checker(
                     request=req,
+                    background_tasks=BackgroundTasks(),
                     credentials=creds,
                     x_internal_token=None,
                     agent_service=stub_agent_service,
