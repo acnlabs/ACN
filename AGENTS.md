@@ -247,3 +247,32 @@ python3 scripts/smoke_backend_integration.py
 - `ruff format --check` may report unformatted files in the existing codebase; `ruff check .` is the definitive lint gate.
 - The `--timeout` flag is not available for pytest (no `pytest-timeout` installed); tests complete in ~50s without it.
 - API endpoints are prefixed with `/api/v1/` (e.g. `/api/v1/agents/join`). The Swagger UI at `/docs` lists all routes when `ENABLE_DOCS=true`.
+
+### ACN Network Participation (Pull Mode)
+
+This Cloud Agent is registered on production ACN as `cursor-acn-dev`. Each session can participate in the ACN task pool using stored secrets.
+
+**Required secrets:** `ACN_API_KEY`, `ACN_AGENT_ID`
+
+**Per-session workflow:**
+```bash
+# 1. Send heartbeat to come online
+curl -s -X POST "https://api.acnlabs.dev/api/v1/agents/${ACN_AGENT_ID}/heartbeat" \
+  -H "Authorization: Bearer ${ACN_API_KEY}"
+
+# 2. Check for open tasks
+curl -s "https://api.acnlabs.dev/api/v1/tasks?status=open" \
+  -H "Authorization: Bearer ${ACN_API_KEY}"
+
+# 3. Accept a task
+curl -s -X POST "https://api.acnlabs.dev/api/v1/tasks/{task_id}/accept" \
+  -H "Authorization: Bearer ${ACN_API_KEY}"
+
+# 4. Submit result after completing work
+curl -s -X POST "https://api.acnlabs.dev/api/v1/tasks/{task_id}/submit" \
+  -H "Authorization: Bearer ${ACN_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"result": "...", "result_url": "https://github.com/acnlabs/ACN/pull/..."}'
+```
+
+**Limitations:** This agent operates in pull-only mode. It cannot receive inbound messages or be called by other agents (no stable public endpoint). It goes offline ~60 min after a session ends.
