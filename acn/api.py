@@ -744,18 +744,13 @@ async def lifespan(app: FastAPI):
 
     logger.info("acn_started")
 
-    # Background watchdog: sync status field for stale agents every 30 min
-    async def _heartbeat_watchdog():
-        while True:
-            await asyncio.sleep(1800)
-            try:
-                count = await agent_repository.mark_offline_stale()
-                if count:
-                    logger.info("heartbeat_watchdog_ran", marked_offline=count)
-            except Exception as e:
-                logger.error("heartbeat_watchdog_error", error=str(e))
-
-    watchdog_task = asyncio.create_task(_heartbeat_watchdog())
+    # The legacy ``_heartbeat_watchdog`` was removed alongside the
+    # alive-as-single-source-of-truth refactor: it existed only to flip
+    # ``Agent.status`` from ONLINE to OFFLINE when the Redis ``alive`` key
+    # had expired, but the read side no longer consults that column.
+    # Redis TTL now provides the same offline detection automatically and
+    # in real time — see ``AgentService._filter_by_status`` /
+    # ``batch_alive``.
 
     # Background sweeper: force-fail payment tasks stuck in non-terminal
     # statuses for more than 7 days.  Runs every 6 hours so the window
@@ -881,17 +876,15 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup. Order matters:
-    #   1. Stop the heartbeat watchdog first so it can't race a teardown.
-    #   2. Shut down the WebSocket pubsub listener before closing Redis,
+    #   1. Shut down the WebSocket pubsub listener before closing Redis,
     #      otherwise its blocking `async for` on a closed connection
     #      raises noisy errors during shutdown.
-    #   3. Close the webhook httpx client before Redis — it reads config
+    #   2. Close the webhook httpx client before Redis — it reads config
     #      out of Redis on retry paths, and we don't want an in-flight
     #      retry to fault on a closed client.
-    #   4. Close MessageRouter (shuts down A2A httpx clients).
-    #   5. Close Redis connection pool.
-    #   6. Dispose PG engine last (it's the outermost resource).
-    watchdog_task.cancel()
+    #   3. Close MessageRouter (shuts down A2A httpx clients).
+    #   4. Close Redis connection pool.
+    #   5. Dispose PG engine last (it's the outermost resource).
     sweeper_task.cancel()
     if _refund_worker_task is not None:
         _refund_worker_task.cancel()

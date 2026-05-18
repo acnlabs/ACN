@@ -198,13 +198,3 @@ class IAgentRepository(ABC):
         """
         pass
 
-    @abstractmethod
-    async def mark_offline_stale(self) -> int:
-        """
-        Mark agents whose alive key has expired as offline in Redis.
-        Used by the background watchdog task.
-
-        Returns:
-            Number of agents marked offline
-        """
-        pass

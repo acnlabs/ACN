@@ -507,11 +507,11 @@ class AgentService:
         to avoid being marked offline.
 
         Exceptions are swallowed: this is background work and must never
-        affect the user-facing request that scheduled it. The DB ``status``
-        field continues to be reconciled by ``_heartbeat_watchdog`` on its
-        normal cadence (every 30 min), so a transient Redis blip just means
-        the agent goes through the normal offline path one cycle later — no
-        worse than today.
+        affect the user-facing request that scheduled it. A transient Redis
+        blip means the alive key is missing for one TTL window and the agent
+        appears offline until the next refresh succeeds — which is the same
+        behaviour the read side already shows for any agent that genuinely
+        stopped heart-beating, so no special handling is required.
         """
         try:
             await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)
