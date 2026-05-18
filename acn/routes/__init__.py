@@ -25,6 +25,7 @@ __all__ = [
     "follows",
     "communication",
     "gateway_connect",
+    "manifest",
     "sessions",
     "subnets",
     "monitoring",
