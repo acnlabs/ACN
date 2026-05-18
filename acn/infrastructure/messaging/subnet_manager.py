@@ -286,9 +286,11 @@ class SubnetManager:
         path (production goes through ``routes/subnets.py`` →
         ``SubnetService``). The ``owner`` kwarg defaults to
         ``backend@internal`` for backward compatibility with this method's
-        old signature, but new callers should pass an explicit registered
-        agent_id; ``backend@internal`` is being phased out as a valid
-        owner value (tracked in acnlabs/ACN#48, ADR-0002).
+        old signature; new callers should pass an explicit registered
+        agent_id. Per ADR-0002 the server rejects ``backend@internal``
+        on new creates — this default is preserved only for the local
+        in-memory registry used by the WebSocket gateway client, which
+        does not go through ``SubnetService``. Tracked in acnlabs/ACN#48.
 
         Args:
             subnet_id: Unique subnet identifier
@@ -1101,11 +1103,11 @@ class SubnetManager:
                             }
 
                         # Backfill owner for legacy Redis records persisted
-                        # before SubnetInfo modelled the field. The
-                        # ``backend@internal`` placeholder is transitional —
-                        # tracked in acnlabs/ACN#48 (ADR-0002); the long-term
-                        # shape is for every subnet to be owned by a
-                        # registered agent (including service-account agents).
+                        # before SubnetInfo modelled the field. Per ADR-0002
+                        # the server rejects ``backend@internal`` on new
+                        # creates; legacy rows use it as a temporary fallback
+                        # until ``agentplanet/backend`` completes its
+                        # service-account-agent migration (acnlabs/ACN#48).
                         # This setdefault exists only to keep legacy Redis
                         # records loadable while that migration is pending.
                         subnet_data.setdefault("owner", "backend@internal")

@@ -140,6 +140,17 @@ class SubnetService:
             ValueError: If subnet already exists
             SubnetNestingError: On any of the five invariant rejections
         """
+        # ADR-0002: reject the internal-service placeholder as owner.
+        # Defence-in-depth — the route layer already enforces AgentApiKeyDep
+        # so this guard should never fire in production; it catches internal
+        # callers or future code changes that bypass the route layer.
+        if owner == "backend@internal":
+            raise ValueError(
+                "ADR-0002: 'backend@internal' is not a valid subnet owner; "
+                "register a service-account agent and create subnets through "
+                "that agent's api key."
+            )
+
         # Check if subnet already exists
         if await self.repository.exists(subnet_id):
             raise ValueError(f"Subnet {subnet_id} already exists")
