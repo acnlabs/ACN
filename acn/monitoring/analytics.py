@@ -128,13 +128,24 @@ class Analytics:
         """
         agents = await self._agent_repo.find_all()  # type: ignore[union-attr]
 
-        by_status: dict[str, int] = {}
+        # ``by_status`` is derived from the Redis alive set (single source
+        # of truth for online-ness), not the legacy ``Agent.status`` DB
+        # column. A single ``filter_alive`` call resolves the entire
+        # listing in one Redis round-trip — see ``AgentService.batch_alive``
+        # for the wrapper used by route-layer serialization.
+        alive_ids: set[str] = (
+            await self._agent_repo.filter_alive([a.agent_id for a in agents])  # type: ignore[union-attr]
+            if agents
+            else set()
+        )
+
+        by_status: dict[str, int] = {"online": 0, "offline": 0}
         by_subnet: dict[str, int] = {}
         by_tag: dict[str, int] = {}
 
         for agent in agents:
-            status = str(agent.status.value) if hasattr(agent.status, "value") else str(agent.status)
-            by_status[status] = by_status.get(status, 0) + 1
+            status = "online" if agent.agent_id in alive_ids else "offline"
+            by_status[status] += 1
 
             for sid in (agent.subnet_ids or ["public"]):
                 by_subnet[sid] = by_subnet.get(sid, 0) + 1

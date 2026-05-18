@@ -220,23 +220,18 @@ class TestRegistrationFileCorruptTokenId:
         )
 
     def test_numeric_token_id_includes_registrations(self):
+        # ``is_online`` is now passed explicitly by the caller
+        # (``AgentService.is_alive``); the legacy ``Agent.status`` column
+        # is no longer consulted by ``build_erc8004_registration_file``.
         agent = _stub_agent(token_id="42")
-        agent.status = MagicMock()
-        agent.status.value = "ONLINE"
-        # Patch the AgentStatus equality check used inside the function:
-        # the function does ``agent.status == AgentStatus.ONLINE``. Bypass
-        # by giving status a dunder eq that returns True; or simpler, mock
-        # the full call surface by importing the real enum.
-        from acn.core.entities import AgentStatus
 
-        agent.status = AgentStatus.ONLINE
-
-        out = build_erc8004_registration_file(agent, self._settings())
+        out = build_erc8004_registration_file(agent, self._settings(), is_online=True)
         assert "registrations" in out
         assert out["registrations"][0]["agentId"] == 42
         assert out["registrations"][0]["agentRegistry"] == (
             "eip155:8453:0xidentity"
         )
+        assert out["active"] is True
 
     @pytest.mark.parametrize(
         "corrupt_value",
@@ -248,12 +243,9 @@ class TestRegistrationFileCorruptTokenId:
         ],
     )
     def test_corrupt_token_id_omits_registrations_field(self, corrupt_value):
-        from acn.core.entities import AgentStatus
-
         agent = _stub_agent(token_id=corrupt_value)
-        agent.status = AgentStatus.ONLINE
 
-        out = build_erc8004_registration_file(agent, self._settings())
+        out = build_erc8004_registration_file(agent, self._settings(), is_online=True)
         assert "registrations" not in out, (
             "Corrupt token id should be silently omitted from registration "
             "file rather than crashing or producing a malformed entry."

@@ -10,7 +10,7 @@ from uuid import uuid4
 import structlog  # type: ignore[import-untyped]
 
 from ..config import Settings
-from ..core.entities import Agent, AgentStatus, ClaimStatus
+from ..core.entities import Agent, ClaimStatus
 from ..core.exceptions import AgentNotFoundException
 from ..core.interfaces import IAgentRepository
 from ..protocols.ap2.core import (
@@ -837,11 +837,21 @@ class AgentService:
         return new_plaintext
 
 
-def build_erc8004_registration_file(agent: Agent, settings: Settings) -> dict:
+def build_erc8004_registration_file(
+    agent: Agent,
+    settings: Settings,
+    *,
+    is_online: bool,
+) -> dict:
     """Build an ERC-8004 compliant agent registration file for the given agent.
 
     This JSON is served at /{agent_id}/.well-known/agent-registration.json
     and used as the on-chain agentURI when the agent registers on ERC-8004.
+
+    ``is_online`` is **required** and feeds the ``active`` field — it must
+    come from ``AgentService.is_alive`` (the single source of truth for
+    online-ness). The legacy ``Agent.status`` column is no longer
+    consulted; that column is a leftover that Phase 2 will drop.
 
     Spec: https://eips.ethereum.org/EIPS/eip-8004#registration-v1
     """
@@ -861,7 +871,7 @@ def build_erc8004_registration_file(agent: Agent, settings: Settings) -> dict:
             }
         ],
         "x402Support": agent.accepts_payment,
-        "active": agent.status == AgentStatus.ONLINE,
+        "active": is_online,
     }
 
     # Top-level agentWallet field per ERC-8004 spec (plain Ethereum address)
