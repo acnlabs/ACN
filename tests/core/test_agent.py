@@ -56,20 +56,12 @@ class TestAgentEntity:
         )
         assert agent_no_owner.owner is None
 
-    def test_is_online(self):
-        """Test is_online check"""
-        agent = Agent(
-            agent_id="agent-123",
-            owner="user-456",
-            name="Test Agent",
-            endpoint="https://agent.example.com",
-            status=AgentStatus.ONLINE,
-        )
-
-        assert agent.is_online() is True
-
-        agent.status = AgentStatus.OFFLINE
-        assert agent.is_online() is False
+    # ``Agent.is_online()`` deliberately removed — see the comment in
+    # ``acn/core/entities/agent.py``. "Online" is no longer an entity
+    # property; it is derived at read time from the Redis alive TTL via
+    # ``AgentService.is_alive``. The corresponding service-layer
+    # regressions live in
+    # ``tests/services/test_agent_service_alive_single_source.py``.
 
     def test_has_skill(self):
         """Test skill checking"""

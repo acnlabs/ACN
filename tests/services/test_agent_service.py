@@ -33,10 +33,12 @@ class TestAgentService:
         assert agent.name == "Test Agent"
         assert agent.endpoint == "https://agent.example.com"
         assert agent.tags == ["task-planning"]
+        # ``status == ONLINE`` is the entity *default*; "online" is now
+        # asserted via ``set_alive`` (single source of truth) below.
         assert agent.status == AgentStatus.ONLINE
 
-        # Verify repository called
         mock_agent_repository.save.assert_called_once()
+        mock_agent_repository.set_alive.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_register_existing_agent_updates(self, mock_agent_repository, sample_agent):
@@ -57,10 +59,13 @@ class TestAgentService:
         assert agent.agent_id == sample_agent.agent_id  # Same ID
         assert agent.name == "Updated Name"  # Updated
         assert agent.tags == ["new-skill"]  # Updated
-        assert agent.status == AgentStatus.ONLINE
+        # ``status`` field is unchanged by re-register since ``mark_online()``
+        # is no longer called — online-ness now lives in the alive key
+        # written by the ``set_alive`` call asserted below.
+        assert agent.status == AgentStatus.ONLINE  # from the fixture default
 
-        # Verify repository save called
         mock_agent_repository.save.assert_called_once()
+        mock_agent_repository.set_alive.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_get_agent_success(self, mock_agent_repository, sample_agent):
@@ -136,9 +141,12 @@ class TestAgentService:
         agent = await service.update_heartbeat(sample_agent.agent_id)
 
         assert agent.last_heartbeat is not None
-        assert agent.status == AgentStatus.ONLINE
+        # ``status`` is untouched by the service — alive is the source of
+        # truth, asserted via ``set_alive`` below.
+        assert agent.status == AgentStatus.ONLINE  # fixture default
 
         mock_agent_repository.save.assert_called_once()
+        mock_agent_repository.set_alive.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_touch_alive_renews_redis_ttl_only(self, mock_agent_repository):
