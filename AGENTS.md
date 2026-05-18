@@ -182,6 +182,15 @@ Railway healthcheck uses `/health`. Use `/ready` for monitoring/alerting.
 
 ---
 
+## Vendoring alongside a parent repo
+
+If ACN lives as a nested `acn/` tree inside another workspace **without** a
+`.gitmodules` entry, it is not a git submodule — refresh with
+`git -C acn fetch && git -C acn pull origin main` (or `checkout` the branch
+your team tracks).
+
+---
+
 ## Deployment (Railway)
 
 - Builder: Dockerfile

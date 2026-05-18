@@ -91,6 +91,7 @@ from .routes import (
     communication,
     dependencies,
     follows,
+    gateway_connect,
     manifest,
     monitoring,
     onchain,
@@ -1235,6 +1236,8 @@ app.include_router(communication.router)
 app.include_router(manifest.router)
 app.include_router(sessions.router)
 app.include_router(subnets.router)
+# Subnet gateway WebSocket (A2A NAT path) — same process as REST API
+app.include_router(gateway_connect.router)
 app.include_router(monitoring.router)
 app.include_router(analytics.router)
 app.include_router(payments.router)
