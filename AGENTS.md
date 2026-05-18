@@ -225,3 +225,25 @@ python3 scripts/smoke_backend_integration.py
 - **History API auth is strict** — agent API key may only fetch its own history; JWT callers must own the queried agent; internal token is unrestricted
 - **External URLs must be stable custom domains** — `GATEWAY_BASE_URL` and `FRONTEND_BASE_URL` are embedded in agent-card `url` fields, claim links, referral URLs, and every public callback hint. Never set them to PaaS-issued temporary hostnames (`*.up.railway.app`, `*.fly.dev`, `*.vercel.app`) — those rotate when you migrate hosting providers and kill every cached agent card and claim link in flight. Set them to your custom domain (e.g. `https://api.acnlabs.dev`) and put a 301 on the PaaS hostname so direct hits funnel through the canonical host. `GATEWAY_BASE_URL` is the API host; `FRONTEND_BASE_URL` is the Labs frontend host (the one serving `/claim/[id]`) — don't swap them, and don't point either at the marketing site
 - **Probing production must not pollute the `real` agent list** — any end-to-end verification that joins a prod agent must (a) use `POST /agents/join/internal` with `X-Internal-Token` so the server stamps `metadata.visibility="test"` and the row is filtered out of public listings, (b) name the agent with the `probe-` prefix so `scripts/cleanup_test_agents.py` can sweep it as a safety net, and (c) self-clean before exiting (`DELETE /agents/{id}` with `X-Internal-Token`). The public `POST /agents/join` defaults to `visibility=real` for back-compat — using it from a script ships your probe into `/agents` and onto `agentplanet.org/world`
+
+---
+
+## Cursor Cloud specific instructions
+
+### Services overview
+
+| Service | How to start | Notes |
+|---------|-------------|-------|
+| Redis | `sudo docker run -d --name acn-redis -p 6379:6379 redis:7-alpine redis-server --appendonly yes` | Required for all operations. Must be running before tests or dev server. |
+| ACN dev server | `uv run uvicorn acn.api:app --host 0.0.0.0 --port 8000 --reload` | Requires `.env` with `DEV_MODE=true`. |
+
+### Gotchas
+
+- The `docker-compose.yml` Redis service does **not** expose port 6379 to the host (it's internal to the Docker network). For local dev, run Redis directly with `-p 6379:6379` or add a `ports` mapping.
+- The `docker-compose.yml` requires `GF_SECURITY_ADMIN_PASSWORD` to be set even when only starting the `redis` service (Compose interpolates all services). Either export it or run Redis standalone as shown above.
+- `INTERNAL_API_TOKEN` must be ≥32 characters or the app will refuse to start.
+- `ESCROW_ENABLED=false` is needed for local dev unless you have a running Agent Planet Backend.
+- Tests use a real Redis instance (not mocked). Ensure Redis is running on `localhost:6379` before `pytest`.
+- `ruff format --check` may report unformatted files in the existing codebase; `ruff check .` is the definitive lint gate.
+- The `--timeout` flag is not available for pytest (no `pytest-timeout` installed); tests complete in ~50s without it.
+- API endpoints are prefixed with `/api/v1/` (e.g. `/api/v1/agents/join`). The Swagger UI at `/docs` lists all routes when `ENABLE_DOCS=true`.
