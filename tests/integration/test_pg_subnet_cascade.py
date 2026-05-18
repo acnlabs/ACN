@@ -217,6 +217,17 @@ async def test_delete_with_children_rollback_on_mid_cascade_failure(
             assert self._inner is not None
             return self._inner.begin()
 
+        def __getattr__(self, name: str) -> Any:
+            # Compound ``async with factory() as session, session.begin()`` binds
+            # ``session`` to *this* object (``__aenter__`` returns ``self``), so
+            # repository code must reach the real ``AsyncSession`` attributes
+            # (notably ``execute``) via delegation.
+            if self._inner is None:
+                raise AttributeError(
+                    f"{type(self).__name__!r} object has no attribute {name!r}"
+                )
+            return getattr(self._inner, name)
+
     # Must be synchronous: ``async_sessionmaker()`` returns an ``AsyncSession``,
     # not a coroutine. ``AsyncMock()`` makes ``factory()`` async and yields a
     # coroutine — ``async with`` then raises "coroutine does not support ..."
