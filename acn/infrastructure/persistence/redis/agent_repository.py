@@ -205,18 +205,21 @@ class RedisAgentRepository(IAgentRepository):
                 agents.append(agent)
         return agents
 
-    async def find_by_tags(self, tags: list[str], status: str = "online") -> list[Agent]:
-        """Find agents by tags. status='all' returns agents with tags regardless of status."""
-        all_agents = await self.find_all()
+    async def find_by_tags(self, tags: list[str], status: str = "all") -> list[Agent]:
+        """Find agents with ALL of *tags*.
 
-        matching_agents = []
-        for agent in all_agents:
-            if not agent.has_all_tags(tags):
-                continue
-            if status != "all" and agent.status.value != status:
-                continue
-            matching_agents.append(agent)
-        return matching_agents
+        The ``status`` parameter is kept for ABI compatibility but is
+        intentionally ignored: "online" is now defined as
+        "Redis alive key present" and is applied uniformly at the service
+        layer (``AgentService._filter_by_status``). Pre-filtering here
+        based on the legacy DB column would drop agents that are alive
+        in Redis but stale in DB — the exact drift this refactor
+        eliminates. See ``AgentService.search_agents`` for the read-time
+        contract.
+        """
+        del status  # see docstring — deliberately unused
+        all_agents = await self.find_all()
+        return [a for a in all_agents if a.has_all_tags(tags)]
 
     async def find_by_owner(self, owner: str) -> list[Agent]:
         """Find all agents owned by a user"""
