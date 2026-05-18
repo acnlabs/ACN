@@ -146,3 +146,38 @@ async def test_is_alive_and_batch_alive_wrap_filter_alive(
     assert await service.is_alive("y") is False
     assert await service.batch_alive(["x", "y"]) == {"x"}
     assert await service.batch_alive([]) == set()
+
+
+@pytest.mark.asyncio
+async def test_search_online_immediately_drops_agent_when_alive_expires(
+    mock_agent_repository,
+) -> None:
+    """Alive TTL expiry must reflect in the next listing — no watchdog delay.
+
+    Before this refactor the 30-min ``_heartbeat_watchdog`` was the only
+    code path that propagated "alive disappeared" into a value the read
+    side observed (``Agent.status = OFFLINE``). After the refactor the
+    read side queries Redis directly, so an alive key vanishing on tick
+    N+1 must remove the agent from the next ``status='online'`` listing
+    immediately — proving the watchdog is genuinely unnecessary.
+    """
+    agent = _offline_db_agent("agent-blip")
+    mock_agent_repository.find_by_tags.return_value = [agent]
+    mock_agent_repository.filter_alive.side_effect = [
+        # 1st call: alive
+        {agent.agent_id},
+        # 2nd call: alive key has just expired (TTL hit or Redis blip)
+        set(),
+    ]
+
+    service = AgentService(mock_agent_repository)
+
+    first = await service.search_agents(tags=["coding"], status="online")
+    second = await service.search_agents(tags=["coding"], status="online")
+
+    assert [a.agent_id for a in first] == [agent.agent_id]
+    assert second == [], (
+        "An alive key expiring between two calls must make the agent "
+        "fall out of 'online' results on the very next call — no watchdog "
+        "lag, since the read side consults Redis directly."
+    )
