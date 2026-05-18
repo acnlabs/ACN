@@ -157,10 +157,11 @@ class AgentModel(Base):
         Index("ix_agents_api_key", "api_key", unique=True),
         Index("ix_agents_tags", "skills", postgresql_using="gin"),  # DB column: "skills" (backward compat)
         Index("ix_agents_wallet_addresses", "wallet_addresses", postgresql_using="gin"),
-        # Supports mark_offline_stale keyset pagination over ONLINE agents.
-        # Partial index keeps it tiny (only live agents) and lets the
-        # `WHERE status='online' ORDER BY agent_id LIMIT N` scan be an
-        # index-only range seek.
+        # Retained for one release cycle from the alive-as-single-source
+        # refactor that removed ``mark_offline_stale``. The index no
+        # longer has a reader (online-ness is now computed from the
+        # Redis ``alive`` TTL); Phase 2 drops both the index and the
+        # ``status`` column in a single migration.
         Index(
             "ix_agents_status_online_agent_id",
             "agent_id",

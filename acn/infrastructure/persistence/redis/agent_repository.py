@@ -271,8 +271,8 @@ class RedisAgentRepository(IAgentRepository):
             )
 
         # Clear the alive signal immediately rather than waiting for the
-        # 90s TTL to expire, so filter_alive()/mark_offline_stale() never
-        # resurrects a deleted agent in the meantime.
+        # TTL to expire, so ``filter_alive()`` cannot resurrect a deleted
+        # agent's online status in the meantime.
         await self.redis.delete(f"acn:agents:{agent_id}:alive")
 
         # Remove offline inbox so deleted agents don't occupy Redis memory
@@ -325,22 +325,10 @@ class RedisAgentRepository(IAgentRepository):
         results = await pipe.execute()
         return {aid for aid, alive in zip(agent_ids, results, strict=True) if alive}
 
-    async def mark_offline_stale(self) -> int:
-        """Mark agents whose alive key has expired as offline. Returns count."""
-        count = 0
-        async for key in self.redis.scan_iter("acn:agents:*"):
-            # Skip index/alive/subnet keys — only process main agent hashes
-            if (":by_" in key or ":subnets:" in key
-                    or key.endswith(":unclaimed") or key.endswith(":alive")):
-                continue
-            agent_id = key.removeprefix("acn:agents:")
-            current_status = await self.redis.hget(key, "status")
-            if current_status == "online":
-                alive = await self.redis.exists(f"acn:agents:{agent_id}:alive")
-                if not alive:
-                    await self.redis.hset(key, "status", "offline")
-                    count += 1
-        return count
+    # ``mark_offline_stale`` deliberately removed — see
+    # ``PostgresAgentRepository`` for the rationale. Redis ``alive`` TTL
+    # is the single source of truth for online-ness; column reconciliation
+    # is no longer needed.
 
     def _dict_to_agent(self, agent_dict: dict) -> Agent:
         """Convert Redis dict to Agent entity"""
