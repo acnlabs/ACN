@@ -105,7 +105,9 @@ class TestAgentService:
         assert len(agents) == 1
         assert agents[0].agent_id == sample_agent.agent_id
 
-        mock_agent_repository.find_by_tags.assert_called_once_with(["task-planning"], "online")
+        mock_agent_repository.find_by_tags.assert_called_once_with(
+            ["task-planning"], status="all"
+        )
 
     @pytest.mark.asyncio
     async def test_search_agents_by_subnet(self, mock_agent_repository, sample_agent):

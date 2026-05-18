@@ -340,7 +340,7 @@ class AgentService:
         subnet_id: str | None = None,
     ) -> list[Agent]:
         """
-        Search for agents
+        Search for agents.
 
         Args:
             tags: Required tags (filters agents that have ALL tags)
@@ -349,36 +349,89 @@ class AgentService:
 
         Returns:
             List of matching agents
+
+        Online semantics: "online" is defined as
+        "Redis alive key present" — see ``_filter_by_status``. The
+        legacy DB column ``agent.status`` is no longer consulted on
+        the read path; this is the fix for the dual-source drift that
+        used to make an agent stay invisible in listings after its
+        ``alive`` TTL was refreshed by implicit-heartbeat but before
+        an explicit ``POST /heartbeat`` re-stamped ``status='online'``
+        in the database.
         """
-        status_all = status == "all"
-
         if subnet_id:
-            agents = await self.repository.find_by_subnet(subnet_id)
+            candidates = await self.repository.find_by_subnet(subnet_id)
             if tags:
-                agents = [a for a in agents if a.has_all_tags(tags)]
-            if not status_all and status:
-                agents = [a for a in agents if a.status.value == status]
-            if status == "online":
-                alive_ids = await self.repository.filter_alive([a.agent_id for a in agents])
-                agents = [a for a in agents if a.agent_id in alive_ids]
-            return agents
+                candidates = [a for a in candidates if a.has_all_tags(tags)]
+        elif tags:
+            # Pass ``status="all"`` so the repository does NOT pre-filter by
+            # the now-legacy DB column. The single source of truth for
+            # online-ness is the Redis alive key, applied uniformly by
+            # ``_filter_by_status`` below — pre-filtering at the repo would
+            # remove agents that ``_filter_by_status`` would otherwise
+            # include (the same dual-source drift as the dropped status
+            # filters in this method).
+            candidates = await self.repository.find_by_tags(tags, status="all")
+        else:
+            candidates = await self.repository.find_all()
 
-        if tags:
-            candidates = await self.repository.find_by_tags(tags, status)
-            if status == "online":
-                alive_ids = await self.repository.filter_alive([a.agent_id for a in candidates])
-                return [a for a in candidates if a.agent_id in alive_ids]
+        return await self._filter_by_status(candidates, status)
+
+    async def _filter_by_status(
+        self,
+        candidates: list[Agent],
+        status: str,
+    ) -> list[Agent]:
+        """Single source of truth: keep candidates whose alive key matches *status*.
+
+        - ``"online"`` → ``agent_id`` is in the alive set
+        - ``"offline"`` → ``agent_id`` is NOT in the alive set
+        - ``"all"`` / falsy → no filter
+        - anything else → no-op (route-layer validation owns rejection)
+
+        Reads only Redis (via ``filter_alive``); the DB column
+        ``agent.status`` is intentionally never consulted here. That column
+        is a legacy field that Phase 2 will drop along with its partial
+        index and the now-defunct heartbeat watchdog.
+        """
+        if not status or status == "all":
             return candidates
-
-        # Return all agents; optionally filter by status
-        all_agents = await self.repository.find_all()
-        if status_all:
-            return all_agents
-        candidates = [a for a in all_agents if a.status.value == status]
+        if not candidates:
+            return []
+        alive_ids = await self.repository.filter_alive(
+            [a.agent_id for a in candidates]
+        )
         if status == "online":
-            alive_ids = await self.repository.filter_alive([a.agent_id for a in candidates])
             return [a for a in candidates if a.agent_id in alive_ids]
+        if status == "offline":
+            return [a for a in candidates if a.agent_id not in alive_ids]
         return candidates
+
+    async def is_alive(self, agent_id: str) -> bool:
+        """Whether *agent_id* currently holds an unexpired alive key.
+
+        Single-source-of-truth check for "online". Prefer this over reading
+        ``Agent.status`` for any read-time gate (listing serialization,
+        delivery routing, broadcast eligibility, …) so the value never
+        drifts from the Redis TTL behind it.
+
+        For batch contexts (loops over many agents), use
+        :py:meth:`batch_alive` to collapse to a single Redis round-trip.
+        """
+        alive_ids = await self.repository.filter_alive([agent_id])
+        return agent_id in alive_ids
+
+    async def batch_alive(self, agent_ids: list[str]) -> set[str]:
+        """Batched ``is_alive`` for listing/serialization paths.
+
+        Returns the subset of *agent_ids* whose alive key is currently
+        present. Use this once per request alongside a listing query
+        instead of looping over :py:meth:`is_alive` (which would issue one
+        Redis EXISTS per agent).
+        """
+        if not agent_ids:
+            return set()
+        return await self.repository.filter_alive(agent_ids)
 
     async def unregister_agent(self, agent_id: str, owner: str) -> bool:
         """
