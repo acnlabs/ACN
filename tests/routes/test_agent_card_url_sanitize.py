@@ -134,7 +134,7 @@ def test_public_agent_info_rewrites_card_url_and_omits_raw_card():
         },
     )
 
-    info = _agent_entity_to_info(agent, strip_sensitive=True)
+    info = _agent_entity_to_info(agent, is_online=True, strip_sensitive=True)
 
     assert info.endpoint == _proxy_url("agent-target")
     assert info.a2a_endpoint == _proxy_url("agent-target")

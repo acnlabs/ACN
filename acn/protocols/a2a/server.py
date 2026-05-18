@@ -566,7 +566,14 @@ class ACNAgentExecutor(AgentExecutor):
         status = params.get("status", "online")
 
         try:
-            # Search agents
+            # NOTE: ``self.registry`` is the legacy ``AgentRegistry``
+            # (``infrastructure/persistence/redis/registry.py``), a
+            # separate data plane from ``AgentService`` / the
+            # ``IAgentRepository`` family this PR touches. It is not
+            # written to by ``AgentService.touch_alive``, so the
+            # dual-source drift the rest of this refactor eliminates
+            # does not apply here — ``status`` is internally consistent
+            # within this registry.
             agents = await self.registry.search_agents(
                 tags=tags,
                 status=status,

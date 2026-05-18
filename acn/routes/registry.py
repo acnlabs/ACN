@@ -476,11 +476,10 @@ async def dev_register_agent(
             social_card_url=request.social_card_url,
         )
 
-        # Return response
         return AgentRegisterResponse(
             agent_id=agent.agent_id,
             name=agent.name,
-            status=agent.status.value,
+            status="online" if await agent_service.is_alive(agent.agent_id) else "offline",
             registered_at=agent.registered_at,
             message=f"DEV MODE: Agent registered successfully (owner: {request.owner})",
         )
@@ -500,13 +499,26 @@ async def dev_register_agent(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
+def _agent_entity_to_info(
+    agent,
+    *,
+    is_online: bool,
+    strip_sensitive: bool = False,
+) -> AgentInfo:
     """Convert Agent entity to AgentInfo model.
 
-    When strip_sensitive=True (e.g. public list/detail):
-    - verification_code is omitted from metadata
+    The ``is_online`` argument is **required** and must come from the
+    single source of truth (``AgentService.is_alive`` /
+    ``batch_alive``) — the legacy ``Agent.status`` column is no longer
+    consulted on read paths so callers MUST resolve alive-ness
+    explicitly. Use :py:func:`_agent_entity_to_info_with_alive` /
+    :py:func:`_agent_entities_to_infos` to do the lookup automatically.
+
+    When ``strip_sensitive=True`` (e.g. public list/detail):
+    - ``verification_code`` is omitted from metadata
     - raw endpoint is replaced with the ACN-unified communication address
-      so callers are always routed through ACN instead of contacting agents directly.
+      so callers are always routed through ACN instead of contacting agents
+      directly.
     """
     metadata = {
         **agent.metadata,
@@ -537,7 +549,7 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
         a2a_endpoint=exposed_endpoint,
         agent_card_url=exposed_agent_card_url,
         tags=agent.tags,
-        status=agent.status.value,
+        status="online" if is_online else "offline",
         subnet_ids=agent.subnet_ids,
         agent_card=exposed_agent_card,
         metadata=metadata,
@@ -549,6 +561,44 @@ def _agent_entity_to_info(agent, *, strip_sensitive: bool = False) -> AgentInfo:
         payment_methods=agent.payment_methods,
         social_card_url=agent.social_card_url,
     )
+
+
+async def _agent_entity_to_info_with_alive(
+    agent,
+    *,
+    agent_service,
+    strip_sensitive: bool = False,
+) -> AgentInfo:
+    """Async wrapper that resolves ``is_online`` from Redis alive (single shot)."""
+    is_online = await agent_service.is_alive(agent.agent_id)
+    return _agent_entity_to_info(
+        agent, is_online=is_online, strip_sensitive=strip_sensitive
+    )
+
+
+async def _agent_entities_to_infos(
+    agents: list,
+    *,
+    agent_service,
+    strip_sensitive: bool = False,
+) -> list[AgentInfo]:
+    """Async batch variant — one Redis round-trip for the whole list.
+
+    Use this in every listing path. Looping over the single-shot helper
+    would issue one Redis EXISTS per agent, which we already worked
+    hard to avoid for ``filter_alive`` callers.
+    """
+    if not agents:
+        return []
+    alive_ids = await agent_service.batch_alive([a.agent_id for a in agents])
+    return [
+        _agent_entity_to_info(
+            a,
+            is_online=a.agent_id in alive_ids,
+            strip_sensitive=strip_sensitive,
+        )
+        for a in agents
+    ]
 
 
 @router.post("/register", response_model=AgentRegisterResponse)
@@ -679,7 +729,7 @@ async def get_my_agent(
         name=agent.name,
         description=agent.description,
         tags=agent.tags or [],
-        status=agent.status.value,
+        status="online" if await agent_service.is_alive(agent.agent_id) else "offline",
         claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
         owner=agent.owner,
         registered_at=agent.registered_at.isoformat() if agent.registered_at else None,
@@ -702,7 +752,9 @@ async def list_unclaimed_agents(
     Restricted to ACN operators to prevent enumeration attacks.
     """
     agents = await agent_service.get_unclaimed_agents(limit=limit)
-    agent_infos = [_agent_entity_to_info(a) for a in agents]
+    agent_infos = await _agent_entities_to_infos(
+        agents, agent_service=agent_service
+    )
 
     return AgentSearchResponse(
         agents=agent_infos,
@@ -722,7 +774,9 @@ async def get_agent(request: Request, agent_id: AgentIdPath, agent_service: Agen
     """
     try:
         agent = await agent_service.get_agent(agent_id)
-        info = _agent_entity_to_info(agent, strip_sensitive=True)
+        info = await _agent_entity_to_info_with_alive(
+            agent, agent_service=agent_service, strip_sensitive=True
+        )
         try:
             from . import dependencies as _deps
 
@@ -1045,7 +1099,7 @@ async def _join_agent_impl(
         return AgentJoinResponse(
             agent_id=agent.agent_id,
             api_key=api_key,
-            status=agent.status.value,
+            status="online" if await agent_service.is_alive(agent.agent_id) else "offline",
             claim_status=agent.claim_status.value if agent.claim_status else "unclaimed",
             verification_code=claim_token,
             claim_url=claim_url,
@@ -1259,8 +1313,9 @@ async def search_agents(
     if name:
         agents = [a for a in agents if name.lower() in a.name.lower()]
 
-    # Convert to AgentInfo (public list: do not expose verification_code)
-    agent_infos = [_agent_entity_to_info(a, strip_sensitive=True) for a in agents]
+    agent_infos = await _agent_entities_to_infos(
+        agents, agent_service=agent_service, strip_sensitive=True
+    )
 
     return AgentSearchResponse(
         agents=agent_infos,
@@ -1410,7 +1465,8 @@ async def get_agent_registration_file(
 
     try:
         agent = await agent_service.get_agent(agent_id)
-        return build_erc8004_registration_file(agent, cfg)
+        is_online = await agent_service.is_alive(agent_id)
+        return build_erc8004_registration_file(agent, cfg, is_online=is_online)
     except AgentNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,

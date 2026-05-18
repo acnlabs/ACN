@@ -513,10 +513,11 @@ async def get_subnet_agents(
     try:
         agents = await agent_service.search_agents(subnet_id=subnet_id)
 
-        # Convert to AgentInfo
-        from .registry import _agent_entity_to_info
+        from .registry import _agent_entities_to_infos
 
-        agent_infos = [_agent_entity_to_info(a, strip_sensitive=True) for a in agents]
+        agent_infos = await _agent_entities_to_infos(
+            agents, agent_service=agent_service, strip_sensitive=True
+        )
 
         return {"subnet_id": subnet_id, "agents": agent_infos, "count": len(agent_infos)}
     except ACNHTTPError:

@@ -135,10 +135,13 @@ async def _resolve_agents_with_counts(
     counts = await follow_service.get_counts_batch(
         [a.agent_id for a in resolved]
     )
+    alive_ids = await agent_service.batch_alive([a.agent_id for a in resolved])
 
     out = []
     for a in resolved:
-        info = _agent_entity_to_info(a, strip_sensitive=True)
+        info = _agent_entity_to_info(
+            a, is_online=a.agent_id in alive_ids, strip_sensitive=True
+        )
         following, followers = counts.get(a.agent_id, (0, 0))
         info.follows_count = following
         info.followers_count = followers
