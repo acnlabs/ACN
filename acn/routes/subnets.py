@@ -190,6 +190,12 @@ async def create_subnet(
             parent_subnet_id=body.parent_subnet_id,
             lifecycle=body.lifecycle,
             linked_task_id=body.linked_task_id,
+            # ADR-0004 admission policy. ``None`` (the default) lets
+            # the service infer from ``is_private``; explicit values
+            # go straight through and the
+            # ``visibility_policy_conflict`` rejection surfaces via
+            # ``SubnetNestingError`` → ``_nesting_error_to_acn``.
+            join_policy=body.join_policy,
         )
 
         # Mirror the subnet-side owner add into the agent store. Wrapped in
@@ -233,6 +239,10 @@ async def create_subnet(
             is_public=not subnet.is_private,
             gateway_ws_url=gateway_ws_url,
             gateway_a2a_url=gateway_a2a_url,
+            # Echo back the effective policy so callers that omitted
+            # ``join_policy`` in the request can see what the service
+            # inferred (ADR-0004).
+            join_policy=subnet.join_policy,
         )
     except SubnetNestingError as e:
         # ADR-0003 invariant rejection — surface with the stable

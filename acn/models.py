@@ -485,6 +485,24 @@ class SubnetCreateRequest(BaseModel):
         ),
     )
 
+    # ADR-0004 admission policy. Optional — omit to let the service
+    # infer it from ``is_private`` (private → ``approval``, public →
+    # ``open``). Explicitly pass ``"approval"`` to create a public
+    # subnet that still gates joins through owner review (curated
+    # community board). The combination ``is_private=True`` +
+    # ``join_policy="open"`` is rejected with 400
+    # ``visibility_policy_conflict``.
+    join_policy: Literal["open", "approval"] | None = Field(
+        None,
+        description=(
+            "Subnet admission policy. 'open' = any registered agent may "
+            "join; 'approval' = owner-side decision required (Phase 2 "
+            "wires request / invitation / allowlist on top of this "
+            "field). When omitted, the service infers: private → "
+            "'approval', public → 'open'."
+        ),
+    )
+
     @model_validator(mode="after")
     def reject_unsupported_security_types(self) -> "SubnetCreateRequest":
         if not self.security_schemes:
@@ -512,6 +530,18 @@ class SubnetCreateResponse(BaseModel):
     security_schemes: dict | None = Field(None, description="Configured security schemes")
     gateway_ws_url: str = Field(..., description="WebSocket URL for agents to connect")
     gateway_a2a_url: str = Field(..., description="A2A endpoint URL pattern")
+    # ADR-0004 effective admission policy. Always populated (server
+    # echoes back what it stored — useful for clients that omitted
+    # ``join_policy`` in the request and want to know what the service
+    # inferred from ``is_private``).
+    join_policy: Literal["open", "approval"] = Field(
+        ...,
+        description=(
+            "Effective subnet admission policy as persisted ('open' or "
+            "'approval'). Mirrors the request field after the server-"
+            "side inference rule has run."
+        ),
+    )
 
     # Only returned for bearer/apiKey auth (not for OAuth)
     generated_token: str | None = Field(

@@ -59,6 +59,11 @@ def _make_subnet_mock(subnet_id: str = "subnet-new-abc123", owner: str = "agent-
     sn.harness_url = None
     sn.harness_secret = None
     sn.member_agent_ids = {owner}
+    # ADR-0004: the route writes ``subnet.join_policy`` into
+    # ``SubnetCreateResponse.join_policy`` (Literal-typed). Without an
+    # explicit string here MagicMock auto-generates a child mock and
+    # Pydantic rejects it with ``literal_error`` → 400.
+    sn.join_policy = "open"
     return sn
 
 

@@ -6,6 +6,10 @@ Regression tests for the subnet lifecycle business logic.
 import pytest
 
 from acn.services import SubnetService
+from acn.services.subnet_service import (
+    REASON_VISIBILITY_POLICY_CONFLICT,
+    SubnetNestingError,
+)
 
 
 class TestSubnetServiceCreate:
@@ -109,3 +113,143 @@ class TestSubnetServiceADR0002:
         )
         assert subnet.owner == "svc-backend-prod-agent-uuid"
         mock_subnet_repository.save.assert_called_once()
+
+
+class TestSubnetServiceADR0004JoinPolicy:
+    """ADR-0004: ``SubnetService.create_subnet`` resolves ``join_policy``
+    so the entity invariant (``is_private=True`` ⇒
+    ``join_policy='approval'``) never trips through normal callers.
+
+    Two cohorts of callers exist:
+
+    1. **Legacy clients** — flip ``is_private=True`` without knowing
+       ``join_policy`` exists. The service infers ``'approval'`` for
+       them; their create succeeds with the post-ADR-0004 admission
+       semantic in place. Without this inference, every existing
+       ``POST /api/v1/subnets`` body with ``"is_private": true`` would
+       500 on the entity-layer invariant.
+    2. **Forward-aware clients** — pass ``join_policy`` explicitly.
+       The service trusts the explicit value but raises a structured
+       ``SubnetNestingError(visibility_policy_conflict)`` if the
+       caller knowingly sends the rejected combination, instead of
+       letting the entity's bare ``ValueError`` bubble up as a
+       free-form message.
+    """
+
+    @pytest.mark.asyncio
+    async def test_omitted_join_policy_on_public_subnet_defaults_to_open(
+        self, mock_subnet_repository
+    ):
+        mock_subnet_repository.exists.return_value = False
+        service = SubnetService(mock_subnet_repository)
+
+        subnet = await service.create_subnet(
+            subnet_id="subnet-pub-default",
+            name="Public Default",
+            owner="agent-1",
+            is_private=False,
+        )
+        assert subnet.is_private is False
+        assert subnet.join_policy == "open"
+
+    @pytest.mark.asyncio
+    async def test_omitted_join_policy_on_private_subnet_auto_upgrades_to_approval(
+        self, mock_subnet_repository
+    ):
+        """**Critical backward-compat path.** Existing
+        ``POST /api/v1/subnets`` callers send ``"is_private": true``
+        without ``join_policy`` (the field didn't exist before this
+        change). The service must auto-infer ``'approval'`` so the
+        entity invariant accepts the row — otherwise every legacy
+        caller breaks the day this lands."""
+        mock_subnet_repository.exists.return_value = False
+        service = SubnetService(mock_subnet_repository)
+
+        subnet = await service.create_subnet(
+            subnet_id="subnet-priv-default",
+            name="Private Default",
+            owner="agent-1",
+            is_private=True,
+        )
+        assert subnet.is_private is True
+        assert subnet.join_policy == "approval"
+
+    @pytest.mark.asyncio
+    async def test_explicit_approval_on_public_subnet_accepted(
+        self, mock_subnet_repository
+    ):
+        """Public + approval (curated community board) is one of the
+        three combinations ADR-0004 explicitly permits."""
+        mock_subnet_repository.exists.return_value = False
+        service = SubnetService(mock_subnet_repository)
+
+        subnet = await service.create_subnet(
+            subnet_id="subnet-pub-approval",
+            name="Public Approval",
+            owner="agent-1",
+            is_private=False,
+            join_policy="approval",
+        )
+        assert subnet.is_private is False
+        assert subnet.join_policy == "approval"
+
+    @pytest.mark.asyncio
+    async def test_explicit_open_on_private_subnet_rejected_with_stable_reason(
+        self, mock_subnet_repository
+    ):
+        """The ``visibility_policy_conflict`` rejection surfaces as a
+        ``SubnetNestingError`` with the stable reason token — clients
+        / CLI / SDK parsers pin against ``details.reason`` and must
+        not have to scrape a free-form message."""
+        mock_subnet_repository.exists.return_value = False
+        service = SubnetService(mock_subnet_repository)
+
+        with pytest.raises(SubnetNestingError) as exc_info:
+            await service.create_subnet(
+                subnet_id="subnet-priv-open",
+                name="Private Open",
+                owner="agent-1",
+                is_private=True,
+                join_policy="open",
+            )
+        assert exc_info.value.reason == REASON_VISIBILITY_POLICY_CONFLICT
+        # No subnet should have been persisted on the rejection path.
+        mock_subnet_repository.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_approval_on_private_subnet_accepted(
+        self, mock_subnet_repository
+    ):
+        mock_subnet_repository.exists.return_value = False
+        service = SubnetService(mock_subnet_repository)
+
+        subnet = await service.create_subnet(
+            subnet_id="subnet-priv-approval",
+            name="Private Approval",
+            owner="agent-1",
+            is_private=True,
+            join_policy="approval",
+        )
+        assert subnet.is_private is True
+        assert subnet.join_policy == "approval"
+
+    @pytest.mark.asyncio
+    async def test_explicit_open_on_public_subnet_accepted(
+        self, mock_subnet_repository
+    ):
+        """Sanity: explicit ``open`` on a public subnet behaves
+        identically to the default. Pinned to catch a regression
+        where the "explicit" branch accidentally short-circuits the
+        accept path for public+open."""
+        mock_subnet_repository.exists.return_value = False
+        service = SubnetService(mock_subnet_repository)
+
+        subnet = await service.create_subnet(
+            subnet_id="subnet-pub-open-explicit",
+            name="Public Open Explicit",
+            owner="agent-1",
+            is_private=False,
+            join_policy="open",
+        )
+        assert subnet.is_private is False
+        assert subnet.join_policy == "open"
