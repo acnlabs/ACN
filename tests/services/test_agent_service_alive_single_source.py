@@ -27,19 +27,26 @@ from __future__ import annotations
 
 import pytest
 
-from acn.core.entities import Agent, AgentStatus
+from acn.core.entities import Agent
 from acn.services import AgentService
 
 
 def _offline_db_agent(agent_id: str = "agent-drifted") -> Agent:
-    """An agent whose DB column says offline (e.g. swept by old watchdog)."""
+    """An agent that exists in the repository.
+
+    Before Phase 2, this fixture also pinned ``status=AgentStatus.OFFLINE``
+    on the entity to prove the old watchdog-stamped column was *not*
+    consulted by the read side. The column is now gone entirely, so the
+    contradictory DB state no longer needs to be set up — but the test
+    intent (alive key is the only signal that flips ``status="online"``
+    in responses) remains valuable, hence the tests are kept.
+    """
     return Agent(
         agent_id=agent_id,
         owner="user-x",
         name="Drifted Agent",
         endpoint="https://drifted.example.com",
         tags=["coding"],
-        status=AgentStatus.OFFLINE,
     )
 
 
@@ -65,14 +72,13 @@ async def test_search_online_includes_db_offline_but_alive_in_redis(
 async def test_search_online_excludes_alive_missing_even_if_db_online(
     mock_agent_repository,
 ) -> None:
-    """Symmetric: DB.status=ONLINE without an alive key must NOT show up."""
+    """An agent without an alive key must NOT show up under ``status='online'``."""
     stale_online = Agent(
         agent_id="agent-stale",
         owner="user-y",
         name="Stale Online",
         endpoint="https://stale.example.com",
         tags=["coding"],
-        status=AgentStatus.ONLINE,
     )
     mock_agent_repository.find_by_tags.return_value = [stale_online]
     mock_agent_repository.filter_alive.return_value = set()  # no alive
@@ -81,8 +87,8 @@ async def test_search_online_excludes_alive_missing_even_if_db_online(
     agents = await service.search_agents(tags=["coding"], status="online")
 
     assert agents == [], (
-        "DB.status=ONLINE alone must not imply online; the alive key is "
-        "the single source of truth."
+        "Missing alive key must not appear under status='online' — the alive "
+        "key is the single source of truth."
     )
 
 
@@ -97,7 +103,6 @@ async def test_search_offline_is_complement_of_alive(
         name="Alive",
         endpoint="https://alive.example.com",
         tags=["coding"],
-        status=AgentStatus.ONLINE,
     )
     dead_agent = Agent(
         agent_id="agent-dead",
@@ -105,7 +110,6 @@ async def test_search_offline_is_complement_of_alive(
         name="Dead",
         endpoint="https://dead.example.com",
         tags=["coding"],
-        status=AgentStatus.ONLINE,  # deliberately ONLINE in DB to prove it is not consulted
     )
     mock_agent_repository.find_by_tags.return_value = [alive_agent, dead_agent]
     mock_agent_repository.filter_alive.return_value = {alive_agent.agent_id}

@@ -5,7 +5,6 @@ Tests business logic with mocked repositories.
 
 import pytest
 
-from acn.core.entities import AgentStatus
 from acn.core.exceptions import AgentNotFoundException
 from acn.services import AgentService
 
@@ -33,9 +32,8 @@ class TestAgentService:
         assert agent.name == "Test Agent"
         assert agent.endpoint == "https://agent.example.com"
         assert agent.tags == ["task-planning"]
-        # ``status == ONLINE`` is the entity *default*; "online" is now
-        # asserted via ``set_alive`` (single source of truth) below.
-        assert agent.status == AgentStatus.ONLINE
+        # "Online" is asserted via ``set_alive`` (the single source of truth).
+        # The entity no longer carries a ``status`` field.
 
         mock_agent_repository.save.assert_called_once()
         mock_agent_repository.set_alive.assert_called_once()
@@ -59,10 +57,7 @@ class TestAgentService:
         assert agent.agent_id == sample_agent.agent_id  # Same ID
         assert agent.name == "Updated Name"  # Updated
         assert agent.tags == ["new-skill"]  # Updated
-        # ``status`` field is unchanged by re-register since ``mark_online()``
-        # is no longer called — online-ness now lives in the alive key
-        # written by the ``set_alive`` call asserted below.
-        assert agent.status == AgentStatus.ONLINE  # from the fixture default
+        # Online-ness is now solely in the alive key written by ``set_alive``.
 
         mock_agent_repository.save.assert_called_once()
         mock_agent_repository.set_alive.assert_called_once()
@@ -141,9 +136,7 @@ class TestAgentService:
         agent = await service.update_heartbeat(sample_agent.agent_id)
 
         assert agent.last_heartbeat is not None
-        # ``status`` is untouched by the service — alive is the source of
-        # truth, asserted via ``set_alive`` below.
-        assert agent.status == AgentStatus.ONLINE  # fixture default
+        # Online-ness lives in the Redis alive key; asserted via ``set_alive``.
 
         mock_agent_repository.save.assert_called_once()
         mock_agent_repository.set_alive.assert_called_once()

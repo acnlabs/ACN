@@ -7,7 +7,7 @@ from datetime import datetime
 
 import pytest
 
-from acn.core.entities import Agent, AgentStatus
+from acn.core.entities import Agent
 
 
 class TestAgentEntity:
@@ -26,7 +26,6 @@ class TestAgentEntity:
         assert agent.owner == "user-456"
         assert agent.name == "Test Agent"
         assert agent.endpoint == "https://agent.example.com"
-        assert agent.status == AgentStatus.ONLINE
         assert agent.subnet_ids == ["public"]
 
     def test_agent_validation_empty_id(self):
@@ -127,22 +126,12 @@ class TestAgentEntity:
         assert agent.last_heartbeat is not None
         assert isinstance(agent.last_heartbeat, datetime)
 
-    def test_mark_offline_online(self):
-        """Test status transitions"""
-        agent = Agent(
-            agent_id="agent-123",
-            owner="user-456",
-            name="Test Agent",
-            endpoint="https://agent.example.com",
-        )
-
-        assert agent.status == AgentStatus.ONLINE
-
-        agent.mark_offline()
-        assert agent.status == AgentStatus.OFFLINE
-
-        agent.mark_online()
-        assert agent.status == AgentStatus.ONLINE
+    # ``test_mark_offline_online`` deliberately removed alongside the
+    # ``Agent.status`` field, ``Agent.mark_online()`` and
+    # ``Agent.mark_offline()`` — see the module-level comment in
+    # ``acn/core/entities/agent.py``. Online-ness is now a Redis-derived
+    # property exercised by
+    # ``tests/services/test_agent_service_alive_single_source.py``.
 
     def test_to_dict(self):
         """Test serialization to dict"""
@@ -164,13 +153,20 @@ class TestAgentEntity:
         assert data["subnet_ids"] == ["public"]
 
     def test_from_dict(self):
-        """Test deserialization from dict"""
+        """Test deserialization from dict.
+
+        The ``"status"`` key is deliberately included to pin the
+        ``from_dict`` legacy-tolerance contract: hashes written before
+        the alive-as-single-source phase 2 refactor still carry a
+        ``"status"`` string, and ``from_dict`` must silently discard
+        it instead of raising ``TypeError`` (see ``Agent.from_dict``).
+        """
         data = {
             "agent_id": "agent-123",
             "owner": "user-456",
             "name": "Test Agent",
             "endpoint": "https://agent.example.com",
-            "status": "online",
+            "status": "online",  # legacy field — must be ignored
             "tags": ["task-planning"],
             "subnet_ids": ["public"],
             "metadata": {},
@@ -185,7 +181,10 @@ class TestAgentEntity:
 
         assert agent.agent_id == "agent-123"
         assert agent.owner == "user-456"
-        assert agent.status == AgentStatus.ONLINE
+        assert not hasattr(agent, "status"), (
+            "``Agent.status`` is gone; ``from_dict`` must not silently "
+            "smuggle the legacy key back onto the entity."
+        )
         assert agent.tags == ["task-planning"]
 
     # ========================================================================

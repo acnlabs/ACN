@@ -7,13 +7,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-
-class AgentStatus(StrEnum):
-    """Agent operational status"""
-
-    ONLINE = "online"
-    OFFLINE = "offline"
-    BUSY = "busy"
+# ``AgentStatus`` deliberately removed from the entity layer.
+#
+# Online-ness is no longer modeled as a stored attribute of an
+# ``Agent`` — it is derived at read time from the Redis
+# ``acn:agents:{id}:alive`` TTL key via
+# ``AgentService.is_alive`` / ``batch_alive``. The earlier dual-source
+# drift (DB column vs Redis alive set) is gone for good.
+#
+# The API-layer enum ``acn.models.AgentStatus`` (online/offline/busy)
+# is unchanged and remains the public contract used by ``AgentInfo``
+# and the SDKs.
 
 
 class ClaimStatus(StrEnum):
@@ -48,7 +52,8 @@ class Agent:
     # mirrors endpoint; keeping the named field makes the semantics visible.
     a2a_endpoint: str | None = None
 
-    status: AgentStatus = AgentStatus.ONLINE
+    # ``status`` field deliberately removed in the alive-as-single-source
+    # phase 2 refactor. See the module-level comment for ``AgentStatus``.
     description: str | None = None
     tags: list[str] = field(default_factory=list)
     subnet_ids: list[str] = field(default_factory=lambda: ["public"])
@@ -200,13 +205,11 @@ class Agent:
         """Update last heartbeat timestamp"""
         self.last_heartbeat = datetime.now(UTC)
 
-    def mark_offline(self) -> None:
-        """Mark agent as offline"""
-        self.status = AgentStatus.OFFLINE
-
-    def mark_online(self) -> None:
-        """Mark agent as online"""
-        self.status = AgentStatus.ONLINE
+    # ``mark_offline()`` / ``mark_online()`` deliberately removed alongside
+    # the ``status`` field — see the module-level ``AgentStatus`` comment.
+    # Callers must let ``AgentService.set_alive`` /
+    # ``AgentService.touch_alive`` write the Redis alive key instead; that
+    # key is the single source of truth for online-ness.
 
     def has_tag(self, tag_id: str) -> bool:
         """Check if agent has a specific tag"""
@@ -282,7 +285,10 @@ class Agent:
             "owner": self.owner,
             "endpoint": self.endpoint,
             "a2a_endpoint": self.a2a_endpoint,
-            "status": self.status.value,
+            # ``status`` deliberately not emitted — the legacy DB column
+            # is being dropped this PR, and the API response field
+            # ``AgentInfo.status`` is computed from the Redis alive key
+            # by the route-layer serializers (``_agent_entity_to_info``).
             "description": self.description,
             "tags": self.tags,
             "subnet_ids": self.subnet_ids,
@@ -349,9 +355,13 @@ class Agent:
             data["owner_changed_at"] = datetime.fromisoformat(data["owner_changed_at"])
         if data.get("erc8004_registered_at") and isinstance(data["erc8004_registered_at"], str):
             data["erc8004_registered_at"] = datetime.fromisoformat(data["erc8004_registered_at"])
-        # Parse status enum
-        if isinstance(data.get("status"), str):
-            data["status"] = AgentStatus(data["status"])
+        # Drop the legacy ``status`` field if a caller hands us an old
+        # serialized dict (Redis hashes written before the alive-as-
+        # single-source phase 2 refactor still carry it). Silently
+        # ignoring the value is correct: the field no longer exists on
+        # the entity and ``cls(**data)`` would otherwise raise
+        # ``TypeError: unexpected keyword argument 'status'``.
+        data.pop("status", None)
         # Parse claim_status enum
         if isinstance(data.get("claim_status"), str):
             data["claim_status"] = ClaimStatus(data["claim_status"])

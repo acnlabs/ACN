@@ -9,7 +9,7 @@ from datetime import datetime
 
 import redis.asyncio as redis  # type: ignore[import-untyped]
 
-from ....core.entities import Agent, AgentStatus, ClaimStatus
+from ....core.entities import Agent, ClaimStatus
 from ....core.interfaces import IAgentRepository
 
 
@@ -341,7 +341,12 @@ class RedisAgentRepository(IAgentRepository):
             # endpoint is now optional
             "endpoint": agent_dict.get("endpoint"),
             "a2a_endpoint": agent_dict.get("a2a_endpoint") or agent_dict.get("endpoint"),
-            "status": AgentStatus(agent_dict["status"]),
+            # ``status`` field deliberately not parsed — legacy Redis
+            # hashes may still carry a stale ``status`` string left
+            # over from pre-Phase-2 writes, but the entity no longer
+            # has the attribute (see ``Agent`` / ``AgentStatus``
+            # comments) and online-ness is derived from the
+            # ``:alive`` TTL key at read time.
             "description": agent_dict.get("description"),
             # Read: support both new "tags" and legacy "skills" key
             "tags": json.loads(agent_dict.get("tags") or agent_dict.get("skills", "[]")),

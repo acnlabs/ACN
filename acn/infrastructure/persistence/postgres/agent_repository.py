@@ -11,7 +11,7 @@ from sqlalchemy import String, cast, delete, func, select, update
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ....core.entities.agent import Agent, AgentStatus, ClaimStatus
+from ....core.entities.agent import Agent, ClaimStatus
 from ....core.interfaces import IAgentRepository
 from .models import AgentModel
 
@@ -55,8 +55,9 @@ class PostgresAgentRepository(IAgentRepository):
             owner=row.owner,
             endpoint=row.endpoint,
             a2a_endpoint=meta.get("a2a_endpoint") or row.endpoint,
-            status=AgentStatus(row.status),
-            # Prefer dedicated SQL column; fall back to JSONB for rows saved before this fix
+            # ``status`` column deliberately not read — see entity-layer
+            # comment for ``AgentStatus``. The column itself is dropped
+            # in this PR's alembic migration.
             description=row.description or meta.get("description"),
             tags=list(row.tags or []),
             subnet_ids=list(row.subnet_ids or ["public"]),
@@ -104,7 +105,11 @@ class PostgresAgentRepository(IAgentRepository):
             name=agent.name,
             owner=agent.owner,
             endpoint=agent.endpoint,
-            status=agent.status.value,
+            # ``status`` deliberately not written — column is being
+            # dropped by this PR's migration. The model still defines
+            # the column with ``default="online"`` so rows inserted by
+            # a still-running OLD process during deploy don't violate
+            # the NOT NULL constraint before the migration runs.
             description=agent.description,
             tags=agent.tags or None,
             subnet_ids=agent.subnet_ids or None,
@@ -144,7 +149,6 @@ class PostgresAgentRepository(IAgentRepository):
                         name=model.name,
                         owner=model.owner,
                         endpoint=model.endpoint,
-                        status=model.status,
                         description=model.description,
                         tags=model.tags,
                         subnet_ids=model.subnet_ids,

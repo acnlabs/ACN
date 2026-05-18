@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from acn.core.entities import Agent, AgentStatus
+from acn.core.entities import Agent
 from acn.routes.registry import (
     _agent_entities_to_infos,
     _agent_entity_to_info,
@@ -31,19 +31,26 @@ from acn.routes.registry import (
 
 
 def _drifted_agent(agent_id: str = "agent-drifted") -> Agent:
-    """An agent whose DB.status is OFFLINE (e.g. stale watchdog sweep)."""
+    """An agent fixture used by the alive-as-single-source regressions.
+
+    The original Phase 1 version of this fixture also pinned
+    ``status=AgentStatus.OFFLINE`` to prove the serializer ignored the
+    legacy DB column. The column is gone in Phase 2, so the
+    contradictory state no longer needs to be constructed — the
+    serializer contract (``is_online`` arg is the *only* signal) is
+    still what we want pinned.
+    """
     return Agent(
         agent_id=agent_id,
         owner="user-x",
         name="Drifted Agent",
         endpoint="https://drifted.example.com",
         tags=["coding"],
-        status=AgentStatus.OFFLINE,
     )
 
 
 def test_agent_entity_to_info_sync_helper_uses_is_online_arg() -> None:
-    """Sync helper takes ``is_online`` verbatim and ignores ``Agent.status``."""
+    """Sync helper takes ``is_online`` verbatim — it has no other input."""
     drifted = _drifted_agent()
 
     info_online = _agent_entity_to_info(drifted, is_online=True)

@@ -27,7 +27,7 @@ os.environ.setdefault("HOST", "127.0.0.1")
 import pytest
 import redis.asyncio as redis
 
-from acn.core.entities import Agent, AgentStatus, Subnet
+from acn.core.entities import Agent, Subnet
 from acn.core.interfaces import IAgentRepository, IFollowRepository, ISubnetRepository
 
 
@@ -81,7 +81,6 @@ def sample_agent() -> Agent:
         description="A test agent",
         tags=["task-planning", "code-generation"],
         subnet_ids=["public"],
-        status=AgentStatus.ONLINE,
         metadata={"version": "1.0.0"},
         registered_at=datetime(2024, 1, 1, 12, 0, 0),
     )

@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, call
 
 import pytest
 
-from acn.core.entities.agent import Agent, AgentStatus
+from acn.core.entities.agent import Agent
 from acn.infrastructure.persistence.redis.agent_repository import (
     RedisAgentRepository,
 )
@@ -29,7 +29,6 @@ def _make_agent(**overrides) -> Agent:
         "endpoint": "https://bot.example.com",
         "tags": [],
         "subnet_ids": ["public"],
-        "status": AgentStatus.ONLINE,
         "registered_at": datetime(2026, 1, 1),
     }
     defaults.update(overrides)

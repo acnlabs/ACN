@@ -25,7 +25,7 @@ import pytest
 from fastapi.security import HTTPAuthorizationCredentials
 
 from acn.auth import middleware as mw
-from acn.core.entities import Agent, AgentStatus
+from acn.core.entities import Agent
 
 
 def _make_agent(agent_id: str = "agent-uuid-abc") -> Agent:
@@ -38,7 +38,6 @@ def _make_agent(agent_id: str = "agent-uuid-abc") -> Agent:
         description="x",
         tags=[],
         subnet_ids=[],
-        status=AgentStatus.ONLINE,
         metadata={},
     )
 
