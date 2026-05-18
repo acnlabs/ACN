@@ -204,9 +204,11 @@ class SubnetModel(Base):
     # backfills converging on the same default. The Alembic migration
     # (``f0a1b2c3d4e5_add_subnet_join_policy_field``) flips existing
     # ``is_private=true`` rows from this ``'open'`` default to
-    # ``'approval'`` in the same DDL event.
+    # ``'approval'`` in the same DDL event. ``length=16`` mirrors the
+    # ADR data-model table and blocks free-form strings if a future
+    # caller bypasses the entity-layer ``Literal`` check.
     join_policy: Mapped[str] = mapped_column(
-        String,
+        String(16),
         nullable=False,
         default="open",
         server_default="open",

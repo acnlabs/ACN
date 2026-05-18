@@ -143,7 +143,19 @@ class Subnet:
         return not self.is_private
 
     def requires_authentication(self) -> bool:
-        """Check if subnet requires authentication"""
+        """Check if subnet requires authentication.
+
+        DEPRECATED (ADR-0004). Historically used to gate the join
+        path on ``is_private + security_config``, but ADR-0004
+        decoupled join admission from discoverability: the canonical
+        signal is now ``self.join_policy``, and the join path no
+        longer consults this helper. Left in place to avoid breaking
+        existing callers (manifest service, harness-bound metadata
+        readers) that read ``is_private`` for non-admission reasons;
+        a follow-up cleanup PR will either repurpose ``security_config``
+        or drop the helper entirely (ADR-0004 §"Out of scope" item).
+        New code MUST gate on ``subnet.join_policy`` instead.
+        """
         return self.is_private and bool(self.security_config)
 
     def to_dict(self, include_secret: bool = False) -> dict:

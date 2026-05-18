@@ -15,13 +15,27 @@ service layer is wired to read ``join_policy`` on the join path.
 
 Schema change
 -------------
-``join_policy VARCHAR NOT NULL DEFAULT 'open'``. Default keeps every
-existing row eligible for fast-path inserts under the legacy "open"
+``join_policy VARCHAR(16) NOT NULL DEFAULT 'open'``. The length cap
+matches the ADR's data-model table and prevents the column from
+silently absorbing free-form strings if a future caller bypasses
+the entity-layer ``Literal`` check. Default keeps every existing
+row eligible for fast-path inserts under the legacy "open"
 semantics; the immediately-following backfill flips ``is_private =
 true`` rows to ``'approval'`` so the post-migration database
 satisfies the entity-layer invariant
 (``is_private = true`` ⇒ ``join_policy = 'approval'``) for every
 single row before any new code path can read it.
+
+PostgreSQL version requirement
+------------------------------
+**Requires PostgreSQL ≥11.** On PG 11+ the ``ALTER TABLE ... ADD
+COLUMN ... NOT NULL DEFAULT 'open'`` is a metadata-only "fast
+default" operation (Tom Lane's PG-11 feature) that completes in
+O(1) regardless of table size. On PG ≤10 the same statement
+rewrites the entire ``subnets`` table while holding ACCESS
+EXCLUSIVE on it, locking writes for minutes on production-sized
+tables. Verify ``SHOW server_version`` before invoking
+``alembic upgrade head``; reject the upgrade if version < 11.
 
 Backfill in the same revision
 -----------------------------
@@ -80,7 +94,7 @@ def upgrade() -> None:
         "subnets",
         sa.Column(
             "join_policy",
-            sa.String(),
+            sa.String(length=16),
             nullable=False,
             server_default="open",
         ),

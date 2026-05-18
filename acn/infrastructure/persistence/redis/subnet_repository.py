@@ -284,6 +284,34 @@ class RedisSubnetRepository(ISubnetRepository):
             )
             return default
 
+    @staticmethod
+    def _normalize_redis_dict(raw: dict) -> dict[str, str]:
+        """Coerce a Redis HASH dict to ``dict[str, str]`` regardless of
+        the client's ``decode_responses`` setting.
+
+        Production composition (``registry.py``) sets
+        ``decode_responses=True`` so ``hgetall`` already returns
+        ``dict[str, str]``; this normalisation is then a no-op. But
+        external callers (the backfill script, ad-hoc scripts, future
+        repo-level reuse) sometimes construct a client without that
+        flag — ``hgetall`` then returns ``dict[bytes, bytes]`` and
+        every ``subnet_dict.get("is_private")`` silently misses,
+        defaulting ``is_private`` to ``False`` and corrupting the
+        ``join_policy`` legacy auto-upgrade rule below.
+
+        Normalising here is defence in depth: the repo's parsing
+        logic stays self-contained instead of depending on the
+        client's configuration being pinned correctly forever.
+        """
+        if not raw:
+            return {}
+        out: dict[str, str] = {}
+        for k, v in raw.items():
+            key = k.decode() if isinstance(k, bytes) else str(k)
+            val = v.decode() if isinstance(v, bytes) else v
+            out[key] = val
+        return out
+
     def _dict_to_subnet(self, subnet_dict: dict) -> Subnet:
         """Convert Redis dict to Subnet entity.
 
@@ -293,7 +321,13 @@ class RedisSubnetRepository(ISubnetRepository):
         predate ADR-0003 don't carry the nesting keys at all; the
         ``.get("parent_subnet_id") or None`` pattern handles both
         "missing key" and "empty string" identically.
+
+        Input is normalised through :meth:`_normalize_redis_dict`
+        first so byte-keyed dicts (``decode_responses=False`` client)
+        and string-keyed dicts behave identically — protects every
+        ``subnet_dict.get("...")`` call below from silently missing.
         """
+        subnet_dict = self._normalize_redis_dict(subnet_dict)
         description = subnet_dict.get("description") or None
         harness_url = subnet_dict.get("harness_url") or None
         harness_secret = subnet_dict.get("harness_secret") or None

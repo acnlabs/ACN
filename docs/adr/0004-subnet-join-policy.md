@@ -410,9 +410,18 @@ class Subnet:
             )
 ```
 
-`to_dict` includes `join_policy`; `from_dict` defaults to `"open"`
-on missing key (legacy row tolerance, same pattern as ADR-0003's
-nesting fields).
+`to_dict` includes `join_policy`. `from_dict` applies the same
+two-case legacy tolerance rule the migration uses (see §Migration
+and §"Field model" above): on a row that predates ADR-0004 (no
+`join_policy` key), `from_dict` auto-upgrades missing
+`join_policy` to `"approval"` when `is_private=True` and falls
+through to the entity default `"open"` otherwise. This keeps every
+Redis read self-consistent during the migration window — a legacy
+private subnet reconstructs as `(is_private=True,
+join_policy="approval")`, which satisfies the
+`__post_init__` invariant, rather than `(is_private=True,
+join_policy="open")`, which would refuse to reconstruct and break
+every read of a legacy private subnet.
 
 ### `SubnetJoinRequest` schema (three-in-one table)
 
@@ -1031,10 +1040,14 @@ and shapes.
 
 ### Alembic
 
-A single migration ships three changes atomically:
+Phase 1 (this rollout) ships the column + backfill only:
 
 1. `ALTER TABLE subnets ADD COLUMN join_policy VARCHAR(16) NOT NULL DEFAULT 'open'`.
 2. `UPDATE subnets SET join_policy='approval' WHERE is_private=true`.
+
+Phase 2 (separate Alembic revision, ships with the state machine)
+adds the supporting tables:
+
 3. `CREATE TABLE subnet_join_requests` with columns matching the
    data model section, plus
    `CREATE UNIQUE INDEX subnet_join_requests_pending_unique
@@ -1046,14 +1059,22 @@ A single migration ships three changes atomically:
 No `subnet_invitations` table is created. Invitations live in
 `subnet_join_requests` with `kind='invitation'`.
 
+**Postgres ≥11 required.** The Phase 1 `ALTER ADD COLUMN ... NOT
+NULL DEFAULT` is an O(1) metadata-only operation on PG ≥11 (Tom
+Lane's "fast default" feature); on PG ≤10 the same statement
+rewrites the entire `subnets` table while holding ACCESS EXCLUSIVE
+on it, which can lock production for minutes on large tables.
+Verify `SHOW server_version` before running `alembic upgrade head`.
+
 ### Redis backfill
 
 `scripts/backfill_subnet_join_policy.py` walks every
 `acn:subnets:*` HASH and writes `join_policy=approval` for any row
 with `is_private=true`. Idempotent and re-runnable: a sentinel
-field (`backfill_v=0004`) on each touched row lets re-runs short-
-circuit. New per-request and per-allowlist keys do not need
-backfill (an empty set is the desired initial state).
+HASH field (literal field name `backfill_v0004`, value `done`) on
+each touched row lets re-runs short-circuit. New per-request and
+per-allowlist keys do not need backfill (an empty set is the
+desired initial state).
 
 ### Deploy sequence (Postgres + Redis)
 
