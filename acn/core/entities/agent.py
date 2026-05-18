@@ -170,9 +170,14 @@ class Agent:
         """Get primary subnet (for backward compatibility)"""
         return self.subnet_ids[0] if self.subnet_ids else "public"
 
-    def is_online(self) -> bool:
-        """Check if agent is online"""
-        return self.status == AgentStatus.ONLINE
+    # ``is_online()`` deliberately removed.
+    #
+    # "Online" is no longer a property of the entity — it is a function
+    # over the Redis ``alive`` TTL key, exposed by
+    # ``AgentService.is_alive`` / ``batch_alive``. Reading
+    # ``Agent.status`` to answer this question reintroduces the
+    # dual-source drift the alive-as-single-source refactor eliminates.
+    # Callers should ``await agent_service.is_alive(agent.agent_id)``.
 
     def is_in_subnet(self, subnet_id: str) -> bool:
         """Check if agent belongs to a subnet"""

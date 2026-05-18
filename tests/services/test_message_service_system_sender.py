@@ -29,14 +29,18 @@ def _make_msg() -> Message:
 def _make_svc(*, recipient_online: bool = False) -> tuple:
     """Return (svc, repo, router) with a pre-wired healthy recipient."""
     recipient = MagicMock()
-    recipient.is_online = MagicMock(return_value=recipient_online)
-    recipient.status = MagicMock(value="online" if recipient_online else "offline")
 
     async def find_by_id(aid: str):
         return recipient if aid == "recv-uuid" else None
 
     repo = MagicMock()
     repo.find_by_id = AsyncMock(side_effect=find_by_id)
+    # Online-ness is now derived from the Redis ``alive`` key, queried
+    # via ``IAgentRepository.filter_alive`` — the legacy ``Agent.status``
+    # column is no longer consulted.
+    repo.filter_alive = AsyncMock(
+        return_value={"recv-uuid"} if recipient_online else set()
+    )
 
     router_mock = MagicMock()
     router_mock.route = AsyncMock(return_value={"message_id": "m1", "status": "queued"})
@@ -80,14 +84,13 @@ async def test_regular_sender_still_requires_registry_row():
     from acn.core.exceptions import AgentNotFoundException
 
     recipient = MagicMock()
-    recipient.is_online = MagicMock(return_value=True)
-    recipient.status = MagicMock(value="online")
 
     async def find_by_id(aid: str):
         return recipient if aid == "recv-uuid" else None  # sender "user-1" → None
 
     repo = MagicMock()
     repo.find_by_id = AsyncMock(side_effect=find_by_id)
+    repo.filter_alive = AsyncMock(return_value={"recv-uuid"})
     router_mock = MagicMock()
     router_mock.route = AsyncMock(return_value={})
     svc = MessageService(router_mock, repo)

@@ -77,13 +77,18 @@ class MessageService:
         if not recipient:
             raise AgentNotFoundException(f"Recipient agent {to_agent_id} not found")
 
-        # Verify recipient is online
-        if not recipient.is_online():
+        # Verify recipient is online. The single source of truth is the
+        # Redis alive key (see ``AgentService.is_alive``). Calling
+        # ``filter_alive`` directly here avoids constructing a service
+        # instance just to ask one question, and keeps ``MessageService``'s
+        # constructor stable.
+        alive_ids = await self.agent_repository.filter_alive([to_agent_id])
+        if to_agent_id not in alive_ids:
             logger.warning(
                 "message_to_offline_agent",
                 from_agent=from_agent_id,
                 to_agent=to_agent_id,
-                status=recipient.status.value,
+                status="offline",
             )
 
         # Route message.

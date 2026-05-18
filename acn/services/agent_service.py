@@ -168,8 +168,12 @@ class AgentService:
             if social_card_url is not None:
                 existing_agent.social_card_url = social_card_url
 
+            # ``mark_online()`` deliberately omitted: ``set_alive`` below is
+            # the single source of truth for online-ness (see ``touch_alive``
+            # / ``search_agents`` for the read side). Writing to the legacy
+            # DB column ``Agent.status`` on every register would re-introduce
+            # the dual-source drift this refactor eliminates.
             existing_agent.update_heartbeat()
-            existing_agent.mark_online()
 
             await self.repository.save(existing_agent)
             await self.repository.set_alive(existing_agent.agent_id, ALIVE_RENEW_TTL)
@@ -483,8 +487,11 @@ class AgentService:
             Updated agent entity
         """
         agent = await self.get_agent(agent_id)
+        # ``mark_online()`` deliberately omitted — see ``register_agent`` and
+        # ``touch_alive``: the alive key set below is the single source of
+        # truth, and writing to the legacy ``Agent.status`` column would
+        # re-introduce the dual-source drift this refactor removed.
         agent.update_heartbeat()
-        agent.mark_online()
         await self.repository.save(agent)
         await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)
         return agent
