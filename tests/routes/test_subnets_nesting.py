@@ -33,7 +33,7 @@ from acn.services.subnet_service import (
     REASON_PARENT_IS_RESERVED,
     REASON_PARENT_NOT_FOUND,
     REASON_TASK_SCOPED_REQUIRES_LINKED_TASK,
-    SubnetNestingError,
+    SubnetInvariantError,
 )
 
 # ---------------------------------------------------------------------------
@@ -118,13 +118,13 @@ def test_create_subnet_invariant_rejection(reason, stub_agent_service):
     """One test per ``details.reason`` string the service raises.
 
     Each variant is exercised by stubbing ``create_subnet`` to raise
-    ``SubnetNestingError(reason)`` and asserting the route maps it to
+    ``SubnetInvariantError(reason)`` and asserting the route maps it to
     ``ACNHTTPError(INVALID_REQUEST, 400, details={"reason": <token>})``.
     """
     expected_status, expected_code = _REASON_ERROR_CODE_MAP[reason]
     subnet_svc = AsyncMock()
     subnet_svc.create_subnet = AsyncMock(
-        side_effect=SubnetNestingError(reason, f"test reason: {reason}")
+        side_effect=SubnetInvariantError(reason, f"test reason: {reason}")
     )
     _wire(stub_agent_service, subnet_svc)
 
@@ -390,7 +390,7 @@ class TestAdminAddSubnetMemberNesting:
     ):
         """The membership-subset invariant fires through the admin
         path too. Surfaced as ``NOT_SUBNET_MEMBER`` (403), not
-        ``INVALID_REQUEST`` — see ``_nesting_error_to_acn``.
+        ``INVALID_REQUEST`` — see ``_invariant_error_to_acn``.
         """
         # Disable internal-token / acn:admin gate so the test
         # exercises the body of the handler.
@@ -405,7 +405,7 @@ class TestAdminAddSubnetMemberNesting:
 
         subnet_svc = AsyncMock()
         subnet_svc.add_member = AsyncMock(
-            side_effect=SubnetNestingError(REASON_NOT_PARENT_MEMBER, "test")
+            side_effect=SubnetInvariantError(REASON_NOT_PARENT_MEMBER, "test")
         )
         _wire(stub_agent_service, subnet_svc)
 

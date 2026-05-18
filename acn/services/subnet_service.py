@@ -33,18 +33,20 @@ REASON_NOT_PARENT_MEMBER = "not_parent_member"
 REASON_VISIBILITY_POLICY_CONFLICT = "visibility_policy_conflict"
 
 
-class SubnetNestingError(ValueError):
+class SubnetInvariantError(ValueError):
     """Raised by ``SubnetService`` when a subnet construction-time
     invariant rejects a request. Carries a stable ``reason`` string
     (one of the ``REASON_*`` constants above) that the route layer
     surfaces as ``details.reason`` for client / CLI / SDK parsers.
 
-    The class name is a historical artefact of ADR-0003 (which only
-    raised nesting-related rejections through it). ADR-0004 extends
-    its use to the ``visibility_policy_conflict`` invariant; future
-    ADRs are expected to keep piling stable reasons onto the same
-    exception class rather than fork it, so the route layer can keep
-    a single ``_nesting_error_to_acn`` switch.
+    Previously named ``SubnetNestingError`` (ADR-0003 only raised
+    nesting-related rejections through it). ADR-0004 broadened its
+    scope to also carry ``visibility_policy_conflict``; future ADRs
+    are expected to keep piling stable reasons onto this same class
+    rather than fork it, so the route layer can keep a single
+    ``_invariant_error_to_acn`` switch. The legacy name is still
+    re-exported via the module ``__getattr__`` below with a
+    ``DeprecationWarning``.
 
     Kept as a ``ValueError`` subclass so legacy callers that catch
     ``ValueError`` (e.g. ``routes/subnets.py::create_subnet``) keep
@@ -54,6 +56,31 @@ class SubnetNestingError(ValueError):
     def __init__(self, reason: str, message: str | None = None) -> None:
         self.reason = reason
         super().__init__(message or reason)
+
+
+def __getattr__(name: str):
+    """Module-level ``__getattr__`` for the deprecated
+    ``SubnetNestingError`` alias (PEP 562).
+
+    Resolving ``acn.services.subnet_service.SubnetNestingError`` —
+    whether at import time (``from .subnet_service import
+    SubnetNestingError``) or as an attribute access — returns the
+    renamed :class:`SubnetInvariantError` and emits a
+    ``DeprecationWarning`` so out-of-tree consumers see a one-cycle
+    migration window before the alias is dropped.
+    """
+    if name == "SubnetNestingError":
+        import warnings
+
+        warnings.warn(
+            "SubnetNestingError is deprecated; use SubnetInvariantError "
+            "instead. The legacy alias will be removed in a future "
+            "release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return SubnetInvariantError
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class SubnetService:
@@ -148,7 +175,7 @@ class SubnetService:
           with ``is_private=True`` knowingly, the service rejects
           with ``visibility_policy_conflict`` rather than letting
           the entity's bare ``ValueError`` bubble up — the route
-          layer's ``_nesting_error_to_acn`` already maps it to
+          layer's ``_invariant_error_to_acn`` already maps it to
           ``INVALID_REQUEST 400 {"details": {"reason":
           "visibility_policy_conflict"}}``.
         - The other three combinations (``public+open``,
@@ -174,7 +201,7 @@ class SubnetService:
 
         Raises:
             ValueError: If subnet already exists
-            SubnetNestingError: On any of the five ADR-0003 invariant
+            SubnetInvariantError: On any of the five ADR-0003 invariant
                 rejections, or the ADR-0004
                 ``visibility_policy_conflict`` rejection.
         """
@@ -203,7 +230,7 @@ class SubnetService:
             # Surfaced with a stable reason so the route layer's
             # contract test can pin the exact error code without
             # depending on the (English) message text.
-            raise SubnetNestingError(
+            raise SubnetInvariantError(
                 REASON_TASK_SCOPED_REQUIRES_LINKED_TASK,
                 "lifecycle='task_scoped' requires linked_task_id",
             )
@@ -211,7 +238,7 @@ class SubnetService:
         if parent_subnet_id is not None:
             parent = await self.repository.find_by_id(parent_subnet_id)
             if parent is None:
-                raise SubnetNestingError(
+                raise SubnetInvariantError(
                     REASON_PARENT_NOT_FOUND,
                     f"Parent subnet '{parent_subnet_id}' does not exist",
                 )
@@ -220,13 +247,13 @@ class SubnetService:
             # ``system`` owner literal is the platform escape hatch
             # and any subnet under it is treated as platform-owned.
             if parent_subnet_id in {"public", "system"} or parent.owner == "system":
-                raise SubnetNestingError(
+                raise SubnetInvariantError(
                     REASON_PARENT_IS_RESERVED,
                     f"Parent subnet '{parent_subnet_id}' is reserved",
                 )
             # Single-layer cap — parent must itself be top-level.
             if parent.parent_subnet_id is not None:
-                raise SubnetNestingError(
+                raise SubnetInvariantError(
                     REASON_PARENT_IS_NESTED,
                     f"Parent subnet '{parent_subnet_id}' is itself nested; "
                     "single-layer cap enforced",
@@ -239,7 +266,7 @@ class SubnetService:
             # in ``api.py`` always supplies one.
             task_exists = await self.task_repository.exists(linked_task_id)
             if not task_exists:
-                raise SubnetNestingError(
+                raise SubnetInvariantError(
                     REASON_LINKED_TASK_NOT_FOUND,
                     f"Linked task '{linked_task_id}' does not exist",
                 )
@@ -252,10 +279,10 @@ class SubnetService:
         # automatically.
         #
         # When the caller explicitly passes the conflicting combination
-        # we raise a structured ``SubnetNestingError`` with a stable
+        # we raise a structured ``SubnetInvariantError`` with a stable
         # ``reason`` token rather than letting the entity's bare
         # ``ValueError`` bubble up through the route's generic catch —
-        # the route's existing ``_nesting_error_to_acn`` switch already
+        # the route's existing ``_invariant_error_to_acn`` switch already
         # maps unknown reasons to ``INVALID_REQUEST 400``, so this gives
         # clients a clean parseable token instead of a free-form message.
         if join_policy is None:
@@ -265,7 +292,7 @@ class SubnetService:
         else:
             effective_join_policy = join_policy
             if is_private and effective_join_policy == "open":
-                raise SubnetNestingError(
+                raise SubnetInvariantError(
                     REASON_VISIBILITY_POLICY_CONFLICT,
                     "is_private=True requires join_policy='approval' "
                     "(omit join_policy to let the service default it)",
@@ -582,7 +609,7 @@ class SubnetService:
             Updated subnet entity
 
         Raises:
-            SubnetNestingError: If subnet is a child and ``agent_id``
+            SubnetInvariantError: If subnet is a child and ``agent_id``
                 is not a member of the parent.
         """
         subnet = await self.get_subnet(subnet_id)
@@ -594,7 +621,7 @@ class SubnetService:
             # dangling child would silently bypass the subset
             # invariant. Ops should ``delete_subnet`` the orphan.
             if parent is None or agent_id not in parent.member_agent_ids:
-                raise SubnetNestingError(
+                raise SubnetInvariantError(
                     REASON_NOT_PARENT_MEMBER,
                     f"Agent '{agent_id}' is not a member of parent subnet "
                     f"'{subnet.parent_subnet_id}'",
