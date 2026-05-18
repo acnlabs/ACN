@@ -117,7 +117,12 @@ class AgentModel(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     owner: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     endpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), nullable=False, default="online")
+    # ``status`` column deliberately removed in the alive-as-single-source
+    # phase 2 refactor — see ``alembic/versions/f7b9c2d4e8a1_drop_agents_status_column.py``.
+    # Online-ness is derived from the Redis ``acn:agents:{id}:alive``
+    # TTL key at read time (``AgentService.is_alive`` /
+    # ``filter_alive``). The API-layer field ``AgentInfo.status``
+    # remains unchanged and is computed in the route serializers.
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[list[str] | None] = mapped_column("skills", ARRAY(String), nullable=True)  # DB column: "skills" (backward compat)
     subnet_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
@@ -157,16 +162,10 @@ class AgentModel(Base):
         Index("ix_agents_api_key", "api_key", unique=True),
         Index("ix_agents_tags", "skills", postgresql_using="gin"),  # DB column: "skills" (backward compat)
         Index("ix_agents_wallet_addresses", "wallet_addresses", postgresql_using="gin"),
-        # Retained for one release cycle from the alive-as-single-source
-        # refactor that removed ``mark_offline_stale``. The index no
-        # longer has a reader (online-ness is now computed from the
-        # Redis ``alive`` TTL); Phase 2 drops both the index and the
-        # ``status`` column in a single migration.
-        Index(
-            "ix_agents_status_online_agent_id",
-            "agent_id",
-            postgresql_where="status = 'online'",
-        ),
+        # ``ix_agents_status_online_agent_id`` deliberately removed
+        # alongside the ``status`` column itself — see the migration
+        # ``f7b9c2d4e8a1_drop_agents_status_column.py``. Its only
+        # reader (``mark_offline_stale``) is gone since Phase 1.
     )
 
 
