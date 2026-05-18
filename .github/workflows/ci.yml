@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Nightly run at 02:00 UTC — executes the real-PG integration suite
+    - cron: "0 2 * * *"
 
 jobs:
   # ===========================================
@@ -222,4 +225,61 @@ jobs:
           tags: acn:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ===========================================
+  # Integration — real-PG tests (opt-in)
+  # Triggered by:
+  #   • PR label "run-integration-tests"
+  #   • Nightly schedule on main (02:00 UTC)
+  # Skipped on normal PRs to keep CI fast.
+  # See docs/integration-testing.md for local usage.
+  # ===========================================
+  integration:
+    name: Integration (real-PG)
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'run-integration-tests'))
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: acn
+          POSTGRES_PASSWORD: acn
+          POSTGRES_DB: acn_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U acn"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: |
+          cd acn
+          uv sync --all-extras
+
+      - name: Run real-PG integration tests
+        env:
+          ACN_INTEGRATION_PG_URL: postgresql+asyncpg://acn:acn@localhost:5432/acn_test
+          INTERNAL_API_TOKEN: test-internal-token-must-be-at-least-32-characters-long
+          DEV_MODE: "true"
+          HOST: "127.0.0.1"
+        run: |
+          cd acn
+          uv run pytest -m integration -v --tb=short
 
