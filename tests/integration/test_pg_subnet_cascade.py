@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import select, text
@@ -217,8 +217,10 @@ async def test_delete_with_children_rollback_on_mid_cascade_failure(
             assert self._inner is not None
             return self._inner.begin()
 
-    patched_factory = AsyncMock()
-    patched_factory.return_value = _BombSession()
+    # Must be synchronous: ``async_sessionmaker()`` returns an ``AsyncSession``,
+    # not a coroutine. ``AsyncMock()`` makes ``factory()`` async and yields a
+    # coroutine — ``async with`` then raises "coroutine does not support ..."
+    patched_factory = Mock(side_effect=_BombSession)
 
     repo = PostgresSubnetRepository(session_factory=patched_factory)
 
