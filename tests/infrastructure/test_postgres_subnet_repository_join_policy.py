@@ -49,23 +49,23 @@ def _make_model(**overrides) -> SubnetModel:
     defaults don't fire until INSERT, so direct-instantiation paths
     have to pass every NOT NULL column explicitly — same idiom
     ``test_postgres_subnet_repository_nesting.py`` uses)."""
-    defaults: dict = dict(
-        subnet_id="subnet-x",
-        name="x",
-        owner="agent-owner",
-        description=None,
-        is_private=False,
-        security_config=None,
-        member_agent_ids=None,
-        subnet_metadata=None,
-        harness_url=None,
-        harness_secret=None,
-        parent_subnet_id=None,
-        lifecycle="persistent",
-        linked_task_id=None,
-        join_policy="open",
-        created_at=datetime.now(UTC),
-    )
+    defaults: dict = {
+        "subnet_id": "subnet-x",
+        "name": "x",
+        "owner": "agent-owner",
+        "description": None,
+        "is_private": False,
+        "security_config": None,
+        "member_agent_ids": None,
+        "subnet_metadata": None,
+        "harness_url": None,
+        "harness_secret": None,
+        "parent_subnet_id": None,
+        "lifecycle": "persistent",
+        "linked_task_id": None,
+        "join_policy": "open",
+        "created_at": datetime.now(UTC),
+    }
     defaults.update(overrides)
     return SubnetModel(**defaults)
 
