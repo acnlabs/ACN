@@ -199,6 +199,18 @@ class SubnetModel(Base):
         server_default="persistent",
     )
     linked_task_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Join admission policy (ADR-0004). Same ``default`` + ``server_default``
+    # discipline as ``lifecycle`` — keeps ORM INSERTs and Alembic
+    # backfills converging on the same default. The Alembic migration
+    # (``f0a1b2c3d4e5_add_subnet_join_policy_field``) flips existing
+    # ``is_private=true`` rows from this ``'open'`` default to
+    # ``'approval'`` in the same DDL event.
+    join_policy: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="open",
+        server_default="open",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

@@ -224,6 +224,7 @@ python3 scripts/smoke_backend_integration.py
 - **Agent IDs are ACN-managed** — never accept externally supplied IDs; always generate via `uuid4()`
 - **Redis key prefixes** — `agent:`, `task:`, `subnet:`, `metric:` (check existing patterns before adding new ones)
 - **Subnets nest at most one level** — a child subnet's `parent_subnet_id` must reference a top-level subnet (one whose own `parent_subnet_id` is `None`); validated at create time. Child membership must be ⊆ parent membership. `task_scoped` children auto-dissolve when their `linked_task_id` reaches a terminal state. See `docs/adr/0003-subnet-nesting-single-layer.md`.
+- **Subnet admission is governed by `join_policy`** — `open` (any registered agent may join) or `approval` (owner-side decision required via request / invitation / allowlist). `is_private=True` implies `join_policy='approval'`; the `private + open` combination is rejected at entity construction time as the historical "private but joinable by anyone" gap. The state-machine driving approval lands in Phase 2; Phase 1 (this revision) ships the field, migration, and dual-store backfill. See `docs/adr/0004-subnet-join-policy.md`.
 - **Idempotent registration** — same owner + endpoint combination always returns the same agent ID
 - **`dev_mode=false` is the default** — set `DEV_MODE=true` only for local development; it bypasses Auth0 and must never be enabled in production
 - **Failing fast** — `config.py` validates production settings at startup via `model_validator`

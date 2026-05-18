@@ -349,6 +349,10 @@ class TestListChildrenACL:
                 name="Private",
                 owner="alice",
                 is_private=True,
+                # ADR-0004: ``is_private=True`` requires
+                # ``join_policy='approval'``; the entity invariant
+                # rejects the legacy ``private + open`` combination.
+                join_policy="approval",
                 parent_subnet_id="parent-1",
                 member_agent_ids={"alice"},
             ),
@@ -370,6 +374,8 @@ class TestListChildrenACL:
                 name="Mine",
                 owner="alice",
                 is_private=True,
+                # ADR-0004 invariant: see "private-child" above.
+                join_policy="approval",
                 parent_subnet_id="parent-1",
                 member_agent_ids={"alice", "bob"},
             ),
@@ -378,6 +384,7 @@ class TestListChildrenACL:
                 name="Theirs",
                 owner="carol",
                 is_private=True,
+                join_policy="approval",
                 parent_subnet_id="parent-1",
                 member_agent_ids={"carol"},
             ),
