@@ -351,15 +351,14 @@ class SubnetInfo(BaseModel):
     owner: str = Field(
         ...,
         description=(
-            "Owner agent_id. Must reference a registered ACN agent. "
-            "The legacy placeholder ``backend@internal`` (a service "
-            "principal, not an agent) is currently held by the default "
-            "Public Network and a small number of pre-existing workspace "
-            "mirror subnets created via the internal-token auth path. "
-            "It is being phased out — new code paths MUST NOT introduce "
-            "additional non-agent owners; service callers should "
-            "register a service-account agent and own subnets through "
-            "that agent's api key. Tracked in acnlabs/ACN#48 (ADR-0002)."
+            "Owner agent_id. Must reference a registered ACN agent (ADR-0002). "
+            "New subnets are rejected if owner is 'backend@internal' or any "
+            "other non-agent placeholder. "
+            "A small number of pre-existing workspace-mirror subnets carry the "
+            "legacy placeholder 'backend@internal' — these are being migrated to "
+            "a service-account agent by agentplanet/backend (tracked in "
+            "acnlabs/ACN#48). Once migration completes this field is guaranteed "
+            "to resolve to a live agent record."
         ),
     )
     description: str | None = Field(None, description="Subnet description")

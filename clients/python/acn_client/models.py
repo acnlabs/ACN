@@ -261,12 +261,10 @@ class SubnetInfo(BaseModel):
 
     # Owner agent_id of the subnet. Defaults to ``""`` so older clients
     # talking to a server that does not yet expose ``owner`` still parse
-    # cleanly. The literal ``backend@internal`` is a transitional service
-    # principal placeholder used by a small number of legacy system
-    # subnets (default Public Network and pre-existing workspace
-    # mirrors); it is being phased out in favour of dedicated
-    # service-account agents owning those subnets through normal agent
-    # api keys. Tracked in acnlabs/ACN#48 (ADR-0002).
+    # cleanly. Per ADR-0002 the server rejects ``backend@internal`` on
+    # new creates; a small number of legacy workspace-mirror subnets
+    # still carry it until ``agentplanet/backend`` completes its
+    # service-account-agent migration (acnlabs/ACN#48).
     owner: str = ""
     description: str | None = None
     created_at: datetime | None = None

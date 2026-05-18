@@ -73,3 +73,39 @@ class TestSubnetServiceCreate:
                 owner="agent-owner-123",
             )
         mock_subnet_repository.save.assert_not_called()
+
+
+class TestSubnetServiceADR0002:
+    """ADR-0002: ``backend@internal`` is rejected as a subnet owner.
+
+    The service-layer guard runs before the existence check so the
+    rejection is unconditional — it fires regardless of whether a
+    subnet with the same id already exists.
+    """
+
+    @pytest.mark.asyncio
+    async def test_backend_internal_owner_is_rejected(self, mock_subnet_repository):
+        """``backend@internal`` raises ValueError immediately."""
+        service = SubnetService(mock_subnet_repository)
+        with pytest.raises(ValueError, match="ADR-0002"):
+            await service.create_subnet(
+                subnet_id="ws-mirror-001",
+                name="Workspace Mirror",
+                owner="backend@internal",
+            )
+        mock_subnet_repository.exists.assert_not_called()
+        mock_subnet_repository.save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_registered_agent_owner_is_accepted(self, mock_subnet_repository):
+        """A normal agent_id is not blocked by the ADR-0002 guard."""
+        mock_subnet_repository.exists.return_value = False
+
+        service = SubnetService(mock_subnet_repository)
+        subnet = await service.create_subnet(
+            subnet_id="ws-mirror-002",
+            name="Workspace Mirror",
+            owner="svc-backend-prod-agent-uuid",
+        )
+        assert subnet.owner == "svc-backend-prod-agent-uuid"
+        mock_subnet_repository.save.assert_called_once()
