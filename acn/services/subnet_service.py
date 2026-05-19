@@ -115,14 +115,19 @@ class SubnetService:
     can run its three-table cascade (``subnet_join_requests``,
     ``subnet_allowlist``, ``subnets``) inside one Postgres
     transaction (issue #75 / ADR-0004 §"Cascade deletion: Postgres").
-    When wired together with both
+    Slice 2.1.1 (this) wires the UoW machinery so the cascade is
+    genuinely atomic the moment both
     ``subnet_join_request_repository`` and
-    ``subnet_allowlist_repository`` (the Slice 2.1.1+ production
-    composition), the cascade is genuinely atomic — a failure on
-    any of the three DELETEs rolls all three back. When omitted
-    (Redis-only deployments, legacy fixtures), the cascade falls
-    back to the Slice-2.1 sequential-commit shape: each repo
-    commits independently. ADR-0004 explicitly accepts the Redis
+    ``subnet_allowlist_repository`` are also wired — currently the
+    cascade repos themselves stay unwired in production until
+    Slice 2.2 lands the route surface that creates rows. Until
+    then the UoW is opened around just the subnet DELETE itself
+    (the cascade sweeps short-circuit when their repos are
+    absent), exercising the atomicity machinery end-to-end before
+    real rows show up. When the UoW is omitted (Redis-only
+    deployments, legacy fixtures), the cascade falls back to the
+    Slice-2.1 sequential-commit shape: each repo commits
+    independently. ADR-0004 explicitly accepts the Redis
     asymmetry; the legacy fallback exists only so out-of-tree
     code that builds a bare ``SubnetService`` keeps working.
     """

@@ -317,11 +317,12 @@ async def lifespan(app: FastAPI):
     # ``subnet_allowlist_repository`` themselves are deliberately
     # NOT wired here yet — Slice 2.2 will land them together with
     # the route handlers that actually create rows. Until then the
-    # cascade body short-circuits over those repos (Slice 2.1
-    # behaviour preserved) and the UoW transaction simply commits
-    # the subnet DELETE on its own — a no-op fast-path that costs
-    # nothing and lets the atomicity machinery be exercised end-to-end
-    # by the test suite before Slice 2.2 hooks up production rows.
+    # join-policy cascade sweeps short-circuit over those absent
+    # repos (Slice 2.1 behaviour preserved); the subnet DELETE
+    # still runs inside the UoW transaction, which is a one-statement
+    # batch but exercises the IUnitOfWork wiring path end-to-end so
+    # Slice 2.2 can plug cascade repos in without re-touching this
+    # composition.
     subnet_service_instance = SubnetService(
         subnet_repository,
         task_repository=task_repository,
