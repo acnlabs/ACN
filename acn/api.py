@@ -109,6 +109,7 @@ from .routes import (
     payments,
     registry,
     sessions,
+    subnet_admission,
     subnets,
     tasks,
     websocket,
@@ -657,6 +658,7 @@ async def lifespan(app: FastAPI):
         session_service=session_service_instance,
         reputation_service=reputation_service_instance,
         reputation_query_service=reputation_query_service_instance,
+        join_flow_service=join_flow_service_instance,
     )
 
     # Phase 1 wiring guard
@@ -1272,6 +1274,11 @@ app.include_router(follows.router)
 # ``/{agent_id}/{rest_path:path}`` does not greedily forward
 # allowlist requests to the agent's real endpoint.
 app.include_router(allowlist.router)
+# ADR-0004 Slice 2.3 — admission endpoints (allowlist / join_request /
+# invitation). Included BEFORE ``registry.router`` so the catch-all
+# ``/{agent_id}/{rest_path:path}`` proxy doesn't swallow
+# ``GET /api/v1/agents/{agent_id}/subnet-invitations``.
+app.include_router(subnet_admission.router)
 # Canonical agent-side subnet membership routes
 # (`POST/DELETE /api/v1/agents/{id}/subnets/{subnet_id}`,
 #  `GET /api/v1/agents/{id}/subnets`).

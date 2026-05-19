@@ -101,6 +101,39 @@ class ErrorCode(StrEnum):
     # cross-module group below.
     SUBNET_NOT_FOUND = "subnet_not_found"
 
+    # ===== Subnet admission (ADR-0004 Slice 2.3) =====
+    # All twelve codes are emitted by the join-flow / allowlist /
+    # invitation / join_request endpoints introduced in Slice 2.3. The
+    # split into per-row-kind codes (JOIN_REQUEST_* vs INVITATION_*) is
+    # deliberate: ADR-0004 §"URL alias routing rules" routes
+    # ``/join-requests/{id}`` and ``/invitations/{id}`` against the
+    # same ``subnet_join_requests`` table but uses path-namespace 404s
+    # to avoid leaking the existence of a row in the other namespace
+    # (calling the join_request approve verb against an invitation id
+    # MUST 404 with ``JOIN_REQUEST_NOT_FOUND`` regardless of whether
+    # an invitation with that id happens to exist). Sharing one
+    # ``ROW_NOT_FOUND`` code would let SDK clients infer the leakage.
+    # See ADR §"HTTP status code conventions" for the status mapping.
+    SUBNET_NOT_OWNER = "subnet_not_owner"
+    NOT_INVITEE = "not_invitee"
+    ALREADY_MEMBER = "already_member"
+    ALREADY_ON_ALLOWLIST = "already_on_allowlist"
+    JOIN_REQUEST_NOT_FOUND = "join_request_not_found"
+    JOIN_REQUEST_PENDING = "join_request_pending"
+    JOIN_REQUEST_ALREADY_DECIDED = "join_request_already_decided"
+    INVITATION_NOT_FOUND = "invitation_not_found"
+    INVITATION_PENDING = "invitation_pending"
+    INVITATION_ALREADY_DECIDED = "invitation_already_decided"
+    INVALID_KIND_FILTER = "invalid_kind_filter"
+    # ``visibility_policy_conflict`` (``is_private=true`` +
+    # ``join_policy='open'``) stays surfaced under the generic
+    # ``INVALID_REQUEST`` ErrorCode with ``details.reason=
+    # "visibility_policy_conflict"`` — established by Slice 2.0/2.1
+    # and pinned in test_subnets_join_policy.py. Adding a dedicated
+    # slug here would silently break SDK clients that already
+    # branch on the ``invalid_request`` code; treat it as a
+    # ``details.reason`` discriminator instead.
+
     # ===== Tasks routes (sprint rows #4 + #4-followup) =====
     # ``TASK_NOT_FOUND`` is the only tasks-specific code; the remaining
     # 26 4xx sites (auth / permission / validation / private-subnet
@@ -449,6 +482,41 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.RESOURCE_CONFLICT: (
         "The request conflicts with the current state of the resource."
+    ),
+    # ===== ADR-0004 Slice 2.3 — subnet admission =====
+    ErrorCode.SUBNET_NOT_OWNER: (
+        "The authenticated agent is not the owner of this subnet."
+    ),
+    ErrorCode.NOT_INVITEE: (
+        "The authenticated agent is not the invitee of this invitation."
+    ),
+    ErrorCode.ALREADY_MEMBER: (
+        "The agent is already a member of this subnet."
+    ),
+    ErrorCode.ALREADY_ON_ALLOWLIST: (
+        "The agent is already on this subnet's allowlist."
+    ),
+    ErrorCode.JOIN_REQUEST_NOT_FOUND: (
+        "The requested join request could not be found."
+    ),
+    ErrorCode.JOIN_REQUEST_PENDING: (
+        "A pending join request for this (subnet, agent) pair already exists."
+    ),
+    ErrorCode.JOIN_REQUEST_ALREADY_DECIDED: (
+        "This join request has already been decided and cannot be modified."
+    ),
+    ErrorCode.INVITATION_NOT_FOUND: (
+        "The requested invitation could not be found."
+    ),
+    ErrorCode.INVITATION_PENDING: (
+        "A pending invitation for this (subnet, agent) pair already exists."
+    ),
+    ErrorCode.INVITATION_ALREADY_DECIDED: (
+        "This invitation has already been decided and cannot be modified."
+    ),
+    ErrorCode.INVALID_KIND_FILTER: (
+        "The supplied kind filter is not valid for this endpoint. "
+        "Invitations are queryable through the /invitations endpoint only."
     ),
 }
 

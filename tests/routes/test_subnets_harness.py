@@ -24,9 +24,11 @@ from acn.core.exceptions import SubnetNotFoundException
 from acn.protocols.ap2.webhook import WebhookEventType
 from acn.routes.dependencies import (
     get_agent_service,
+    get_join_flow_service,
     get_subnet_service,
     get_webhook_service,
 )
+from acn.services._join_flow_result import JoinFlowJoinedOpenResult
 from tests.routes.conftest import _assert_flat_shape
 
 # ---------------------------------------------------------------------------
@@ -98,6 +100,31 @@ def stub_webhook_service():
     svc.send_to = AsyncMock(return_value=True)
     svc.send_event = AsyncMock(return_value=True)
     return svc
+
+
+@pytest.fixture(autouse=True)
+def stub_join_flow_service(stub_subnet_service):
+    """JoinFlowService stub forwarding open-branch to stub_subnet_service.
+
+    Auto-applied so the harness webhook tests (which exercise the
+    join path under the new ADR-0004 Slice 2.3 dispatcher) pick up
+    a stubbed JoinFlowService instead of the real lifespan-wired
+    instance. See ``tests/routes/test_agent_subnets.py`` for the
+    same pattern + extended rationale.
+    """
+    svc = AsyncMock()
+
+    async def _join_subnet(subnet_id: str, agent_id: str):
+        await stub_subnet_service.get_subnet(subnet_id)
+        await stub_subnet_service.add_member(subnet_id, agent_id)
+        return JoinFlowJoinedOpenResult(subnet_id=subnet_id, agent_id=agent_id)
+
+    svc.join_subnet = AsyncMock(side_effect=_join_subnet)
+    app.dependency_overrides[get_join_flow_service] = lambda: svc
+    try:
+        yield svc
+    finally:
+        app.dependency_overrides.pop(get_join_flow_service, None)
 
 
 def _wire(agent_svc, subnet_svc, webhook_svc=None) -> None:
