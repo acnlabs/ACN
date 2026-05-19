@@ -89,6 +89,36 @@ class TestAgentService:
             await service.get_agent("non-existent-id")
 
     @pytest.mark.asyncio
+    async def test_find_agent_returns_entity_when_present(
+        self, mock_agent_repository, sample_agent
+    ):
+        """``find_agent`` returns the entity verbatim when the repository hit."""
+        mock_agent_repository.find_by_id.return_value = sample_agent
+
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.find_agent(sample_agent.agent_id)
+
+        assert agent is sample_agent
+        mock_agent_repository.find_by_id.assert_called_once_with(sample_agent.agent_id)
+
+    @pytest.mark.asyncio
+    async def test_find_agent_returns_none_when_absent(self, mock_agent_repository):
+        """``find_agent`` returns ``None`` instead of raising on a miss.
+
+        Distinguishes the non-throwing variant from ``get_agent`` so callers
+        that treat absence as a normal branch (route → 404) do not need to
+        ``try/except AgentNotFoundException``.
+        """
+        mock_agent_repository.find_by_id.return_value = None
+
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.find_agent("non-existent-id")
+
+        assert agent is None
+
+    @pytest.mark.asyncio
     async def test_search_agents_by_skills(self, mock_agent_repository, sample_agent):
         """Test searching agents by skills"""
         # Setup mock

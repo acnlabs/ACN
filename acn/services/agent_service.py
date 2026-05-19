@@ -257,6 +257,21 @@ class AgentService:
             raise AgentNotFoundException(f"Agent {agent_id} not found")
         return agent
 
+    async def find_agent(self, agent_id: str) -> Agent | None:
+        """Get agent by ID, returning ``None`` when absent.
+
+        Sibling of :py:meth:`get_agent`. Use this in code paths that
+        treat "missing agent" as a normal control-flow branch rather
+        than an exceptional condition — typically routes that map
+        absence to a 404 response (``payments.py``, message routers,
+        gateway re-fetches). Keeps callers off the
+        ``try/except AgentNotFoundException`` ladder, which was
+        introduced when ``AgentService.get_agent`` replaced
+        ``AgentRegistry.get_agent`` (the latter returned ``None``
+        directly).
+        """
+        return await self.repository.find_by_id(agent_id)
+
     async def update_social_card_url(
         self,
         agent_id: str,
