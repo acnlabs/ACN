@@ -31,8 +31,16 @@ Safety
   still references.
 
 Revision ID: f7b9c2d4e8a1
-Revises: e1f2a3b4c5d6
+Revises: f0a1b2c3d4e5
 Create Date: 2026-05-18 22:50:00.000000
+
+Note: ``down_revision`` was rebased from ``e1f2a3b4c5d6`` to
+``f0a1b2c3d4e5`` when the upstream ``subnet_join_policy`` migration
+landed first and took that parent slot. The re-link is a no-op for
+this migration's DDL (the two touch unrelated tables —
+``agents`` vs ``subnets``) but mandatory: two siblings of the same
+parent fork the alembic graph and ``alembic upgrade head`` refuses
+to run.
 
 """
 
@@ -43,7 +51,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "f7b9c2d4e8a1"
-down_revision: str | None = "e1f2a3b4c5d6"
+down_revision: str | None = "f0a1b2c3d4e5"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

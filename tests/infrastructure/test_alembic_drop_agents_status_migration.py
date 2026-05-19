@@ -53,10 +53,12 @@ def migration_module():
 
 def test_revision_and_down_revision(migration_module):
     assert migration_module.revision == "f7b9c2d4e8a1"
-    assert migration_module.down_revision == "e1f2a3b4c5d6", (
+    assert migration_module.down_revision == "f0a1b2c3d4e5", (
         "must extend the current single head; a divergent parent makes "
         "``alembic upgrade head`` refuse to run (see SCALE_AUDIT.md note "
-        "on the previous fork incident)."
+        "on the previous fork incident). The previous parent of this "
+        "migration was ``e1f2a3b4c5d6`` until the upstream "
+        "``subnet_join_policy`` migration took that slot."
     )
 
 
