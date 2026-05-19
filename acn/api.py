@@ -136,6 +136,9 @@ from .services.join_flow_service import JoinFlowService
 from .services.reputation_query_service import ReputationQueryService
 from .services.reputation_service import ReputationService
 from .services.settlement_worker import SettlementWorker
+from .services.webhook_join_flow_event_publisher import (
+    WebhookJoinFlowEventPublisher,
+)
 
 # Settings
 settings = get_settings()
@@ -524,6 +527,31 @@ async def lifespan(app: FastAPI):
     # Initialize payment services
     webhook_config = create_webhook_config_from_settings(settings)
     webhook_service_instance = WebhookService(redis_client, webhook_config)
+
+    # ADR-0004 Slice 2.4 — swap the no-op join-flow publisher used by
+    # ``SubnetService`` + ``JoinFlowService`` for a real
+    # ``WebhookJoinFlowEventPublisher`` now that ``WebhookService``
+    # exists. We use post-construction injection (rather than
+    # threading ``webhook_service_instance`` up to the service
+    # constructors at L352/L375) for two reasons:
+    #
+    # 1. Constructor order — moving ``WebhookService`` up would force
+    #    ``redis_client`` + ``webhook_config`` setup ahead of every
+    #    repository and service that doesn't need them, bloating the
+    #    composition root's "build order" surface.
+    # 2. Cheap reversibility — Slice 2.4 rollback is a single-line
+    #    diff (delete this block), no need to undo signature changes
+    #    on the two services.
+    #
+    # Both services expose ``event_publisher`` / ``_event_publisher``
+    # as settable attributes; the no-op default they were constructed
+    # with becomes unreachable after this assignment.
+    _join_flow_webhook_publisher = WebhookJoinFlowEventPublisher(
+        webhook_service=webhook_service_instance,
+    )
+    subnet_service_instance.event_publisher = _join_flow_webhook_publisher
+    join_flow_service_instance._event_publisher = _join_flow_webhook_publisher
+
     payment_discovery_instance = PaymentDiscoveryService(redis_client)
     # Inject payment_discovery into AgentService so registration auto-syncs the index
     agent_service_instance.payment_discovery = payment_discovery_instance
