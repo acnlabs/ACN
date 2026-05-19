@@ -353,21 +353,76 @@ async def list_subnets(
 @router.get("/{subnet_id}")
 async def get_subnet(
     subnet_id: SubnetIdPath,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
 ):
-    """Get subnet details
+    """Get subnet details.
 
-    Clean Architecture: Route → SubnetService → Repository
+    Clean Architecture: Route → SubnetService → Repository.
+
+    Privacy contract (acnlabs/ACN#68)
+        ``is_private=True`` subnets hide their existence from callers
+        without rights. Anonymous callers, JWT callers for a non-owner /
+        non-member / non-``acn:admin`` agent — all receive
+        ``SUBNET_NOT_FOUND`` (404), the same status returned for a
+        truly missing subnet. This matches the list endpoint
+        (``GET /api/v1/subnets`` filters private subnets out entirely)
+        so an outsider cannot probe whether a private subnet exists by
+        status-code differential.
+
+        Owners, current members, and ``acn:admin`` callers see the
+        full ``SubnetInfo`` payload — including ``harness_url`` and
+        ``metadata`` which were the highest-sensitivity leaks in #68.
+
+    Why 404 here but 401/403 on ``GET /subnets/{id}/agents``
+        Sibling endpoint ``get_subnet_agents`` leaks existence by
+        design (it returns 401 with ``WWW-Authenticate`` for anon and
+        403 ``NOT_SUBNET_MEMBER`` for authed non-members). That makes
+        sense for the **members roster**, where the caller already
+        committed to "I'm trying to do something with this subnet" by
+        hitting the sub-resource. The detail endpoint is the primary
+        probe vector, so existence-hiding is the right trade here.
     """
     try:
         subnet = await subnet_service.get_subnet(subnet_id)
-        return _subnet_entity_to_info(subnet)
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
             details={"subnet_id": subnet_id},
         ) from e
+
+    if not getattr(subnet, "is_private", False):
+        return _subnet_entity_to_info(subnet)
+
+    # Private branch. We use a single ``_deny`` closure so every
+    # negative return is byte-identical to the genuine 404 above —
+    # any divergence (extra detail key, distinct message, distinct
+    # error_code) would re-introduce the existence-leak the issue
+    # asked us to plug.
+    def _deny() -> ACNHTTPError:
+        return ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            404,
+            details={"subnet_id": subnet_id},
+        )
+
+    if not credentials:
+        raise _deny()
+
+    payload = await verify_token(request, credentials)
+    requester = payload.get("sub", "")
+    permissions = payload.get("permissions", [])
+
+    is_owner = requester == subnet.owner
+    is_admin = "acn:admin" in permissions
+    is_member = requester in (getattr(subnet, "member_agent_ids", None) or set())
+
+    if not (is_owner or is_admin or is_member):
+        raise _deny()
+
+    return _subnet_entity_to_info(subnet)
 
 
 @router.get("/{subnet_id}/children")
