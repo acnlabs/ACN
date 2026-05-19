@@ -20,7 +20,7 @@ from acn.services.subnet_service import (
     REASON_PARENT_IS_RESERVED,
     REASON_PARENT_NOT_FOUND,
     REASON_TASK_SCOPED_REQUIRES_LINKED_TASK,
-    SubnetNestingError,
+    SubnetInvariantError,
     SubnetService,
 )
 
@@ -59,7 +59,7 @@ class TestCreateSubnetNestingInvariants:
         mock_subnet_repository.find_by_id.return_value = None
         service = SubnetService(mock_subnet_repository)
 
-        with pytest.raises(SubnetNestingError) as exc:
+        with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
                 subnet_id="child-1",
                 name="Squad",
@@ -84,7 +84,7 @@ class TestCreateSubnetNestingInvariants:
             subnet_id="public", owner="system"
         )
 
-        with pytest.raises(SubnetNestingError) as exc:
+        with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
                 subnet_id="child-1",
                 name="Squad",
@@ -106,7 +106,7 @@ class TestCreateSubnetNestingInvariants:
         )
         service = SubnetService(mock_subnet_repository)
 
-        with pytest.raises(SubnetNestingError) as exc:
+        with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
                 subnet_id="child-1",
                 name="Squad",
@@ -128,7 +128,7 @@ class TestCreateSubnetNestingInvariants:
         )
         service = SubnetService(mock_subnet_repository)
 
-        with pytest.raises(SubnetNestingError) as exc:
+        with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
                 subnet_id="grandchild",
                 name="Too deep",
@@ -144,7 +144,7 @@ class TestCreateSubnetNestingInvariants:
         mock_subnet_repository.exists.return_value = False
         service = SubnetService(mock_subnet_repository)
 
-        with pytest.raises(SubnetNestingError) as exc:
+        with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
                 subnet_id="task-squad",
                 name="Task Squad",
@@ -169,7 +169,7 @@ class TestCreateSubnetNestingInvariants:
             mock_subnet_repository, task_repository=mock_task_repository
         )
 
-        with pytest.raises(SubnetNestingError) as exc:
+        with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
                 subnet_id="task-squad",
                 name="Task Squad",
@@ -264,7 +264,7 @@ class TestAddMemberMembershipSubset:
         mock_subnet_repository.find_by_id.side_effect = [child, parent]
         service = SubnetService(mock_subnet_repository)
 
-        with pytest.raises(SubnetNestingError) as exc:
+        with pytest.raises(SubnetInvariantError) as exc:
             await service.add_member("child-1", "bob")
         assert exc.value.reason == REASON_NOT_PARENT_MEMBER
         mock_subnet_repository.save.assert_not_called()
@@ -306,7 +306,7 @@ class TestAddMemberMembershipSubset:
         mock_subnet_repository.find_by_id.side_effect = [child, None]
         service = SubnetService(mock_subnet_repository)
 
-        with pytest.raises(SubnetNestingError) as exc:
+        with pytest.raises(SubnetInvariantError) as exc:
             await service.add_member("child-1", "bob")
         assert exc.value.reason == REASON_NOT_PARENT_MEMBER
 

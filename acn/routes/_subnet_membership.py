@@ -24,7 +24,7 @@ from ..protocols.ap2.webhook import WebhookService
 from ..services import AgentService, SubnetService
 from ..services.subnet_service import (
     REASON_NOT_PARENT_MEMBER,
-    SubnetNestingError,
+    SubnetInvariantError,
 )
 
 logger = structlog.get_logger()
@@ -124,7 +124,7 @@ async def do_join_subnet(
         await agent_service.join_subnet(agent_id, subnet_id)
         try:
             await subnet_service.add_member(subnet_id, agent_id)
-        except SubnetNestingError as nest_err:
+        except SubnetInvariantError as nest_err:
             # Race window between the pre-check above and the
             # service-layer write (parent membership changed
             # concurrently). Roll back the agent-side write so we

@@ -947,7 +947,7 @@ verbatim. All three approval entry paths converge on
 `SubnetService.add_member` once `status` reaches `approved`. For a
 child subnet, `add_member` performs the existing parent-membership
 check before mutating state. If the check fails, the call raises
-`SubnetNestingError(reason="not_parent_member")`, the route layer
+`SubnetInvariantError(reason="not_parent_member")`, the route layer
 catches it, and the request row is updated to `rejected` with
 `decided_by="system"` and `note="not_parent_member"`. This makes
 "agent A approved into child subnet C but A is not in parent P" a
@@ -1176,7 +1176,7 @@ becomes a candidate for a follow-up ADR with its own scope.
 - `tests/services/test_subnet_service_join_policy_nesting.py`
   (new) — ADR-0003 cross-cut: approve / accept / allowlist-hit
   on a child subnet where the agent is not in the parent →
-  `add_member` raises `SubnetNestingError`, route layer flips
+  `add_member` raises `SubnetInvariantError`, route layer flips
   the row to `rejected` with `note="not_parent_member"`.
 
 ### Integration

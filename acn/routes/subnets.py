@@ -17,7 +17,7 @@ from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
-from ..services.subnet_service import SubnetNestingError
+from ..services.subnet_service import SubnetInvariantError
 from ._subnet_membership import (
     do_get_agent_subnets,
     do_join_subnet,
@@ -110,11 +110,11 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
     )
 
 
-def _nesting_error_to_acn(
-    exc: SubnetNestingError,
+def _invariant_error_to_acn(
+    exc: SubnetInvariantError,
     extra_details: dict | None = None,
 ) -> ACNHTTPError:
-    """Map a service-layer ``SubnetNestingError`` to the wire-format
+    """Map a service-layer ``SubnetInvariantError`` to the wire-format
     ``INVALID_REQUEST`` ACN error with the stable ``details.reason``
     string the route contract tests pin.
 
@@ -133,6 +133,12 @@ def _nesting_error_to_acn(
             ErrorCode.NOT_SUBNET_MEMBER, 403, details=details
         )
     return ACNHTTPError(ErrorCode.INVALID_REQUEST, 400, details=details)
+
+
+# Deprecated alias kept for one release cycle. Out-of-tree callers
+# importing ``_nesting_error_to_acn`` keep working; new code should
+# use ``_invariant_error_to_acn`` directly.
+_nesting_error_to_acn = _invariant_error_to_acn
 
 
 def _generate_subnet_id(name: str) -> str:
@@ -185,7 +191,7 @@ async def create_subnet(
             security_config=security_cfg,
             metadata={},
             # ADR-0003 nesting fields — service-layer validates the
-            # five invariant variants and raises ``SubnetNestingError``
+            # five invariant variants and raises ``SubnetInvariantError``
             # with a stable ``reason`` string.
             parent_subnet_id=body.parent_subnet_id,
             lifecycle=body.lifecycle,
@@ -194,7 +200,7 @@ async def create_subnet(
             # the service infer from ``is_private``; explicit values
             # go straight through and the
             # ``visibility_policy_conflict`` rejection surfaces via
-            # ``SubnetNestingError`` → ``_nesting_error_to_acn``.
+            # ``SubnetInvariantError`` → ``_invariant_error_to_acn``.
             join_policy=body.join_policy,
         )
 
@@ -244,11 +250,11 @@ async def create_subnet(
             # inferred (ADR-0004).
             join_policy=subnet.join_policy,
         )
-    except SubnetNestingError as e:
+    except SubnetInvariantError as e:
         # ADR-0003 invariant rejection — surface with the stable
         # ``details.reason`` token clients (route contract tests,
         # CLI / SDK error parsers) pin against.
-        raise _nesting_error_to_acn(e) from e
+        raise _invariant_error_to_acn(e) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
@@ -805,11 +811,11 @@ async def admin_add_subnet_member(
             404,
             details={"subnet_id": subnet_id},
         ) from e
-    except SubnetNestingError as e:
+    except SubnetInvariantError as e:
         # ADR-0003 child-subnet membership-subset rejection
         # propagated even through the internal admin path — keeps
         # the invariant uniformly enforced regardless of caller.
-        raise _nesting_error_to_acn(
+        raise _invariant_error_to_acn(
             e, extra_details={"subnet_id": subnet_id, "agent_id": agent_id}
         ) from e
     except ACNHTTPError:

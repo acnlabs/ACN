@@ -41,7 +41,7 @@ from acn.routes.dependencies import (
 )
 from acn.services.subnet_service import (
     REASON_VISIBILITY_POLICY_CONFLICT,
-    SubnetNestingError,
+    SubnetInvariantError,
 )
 
 
@@ -94,7 +94,7 @@ def stub_subnet_service():
             effective = "approval" if is_private else "open"
         else:
             if is_private and join_policy == "open":
-                raise SubnetNestingError(
+                raise SubnetInvariantError(
                     REASON_VISIBILITY_POLICY_CONFLICT,
                     "is_private=True requires join_policy='approval'",
                 )

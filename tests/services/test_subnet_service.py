@@ -8,7 +8,7 @@ import pytest
 from acn.services import SubnetService
 from acn.services.subnet_service import (
     REASON_VISIBILITY_POLICY_CONFLICT,
-    SubnetNestingError,
+    SubnetInvariantError,
 )
 
 
@@ -130,7 +130,7 @@ class TestSubnetServiceADR0004JoinPolicy:
        500 on the entity-layer invariant.
     2. **Forward-aware clients** — pass ``join_policy`` explicitly.
        The service trusts the explicit value but raises a structured
-       ``SubnetNestingError(visibility_policy_conflict)`` if the
+       ``SubnetInvariantError(visibility_policy_conflict)`` if the
        caller knowingly sends the rejected combination, instead of
        letting the entity's bare ``ValueError`` bubble up as a
        free-form message.
@@ -198,13 +198,13 @@ class TestSubnetServiceADR0004JoinPolicy:
         self, mock_subnet_repository
     ):
         """The ``visibility_policy_conflict`` rejection surfaces as a
-        ``SubnetNestingError`` with the stable reason token — clients
+        ``SubnetInvariantError`` with the stable reason token — clients
         / CLI / SDK parsers pin against ``details.reason`` and must
         not have to scrape a free-form message."""
         mock_subnet_repository.exists.return_value = False
         service = SubnetService(mock_subnet_repository)
 
-        with pytest.raises(SubnetNestingError) as exc_info:
+        with pytest.raises(SubnetInvariantError) as exc_info:
             await service.create_subnet(
                 subnet_id="subnet-priv-open",
                 name="Private Open",
