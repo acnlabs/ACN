@@ -7,7 +7,7 @@ enabling direct delivery between subnet peers.
 
 import pytest
 
-from acn.services.policy_service import PolicyCheckService, PolicyDecision
+from acn.services.policy_service import PolicyCheckService
 
 
 @pytest.fixture
