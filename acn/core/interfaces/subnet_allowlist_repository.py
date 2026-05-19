@@ -30,6 +30,7 @@ not a performance cache.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from ..entities import SubnetAllowlist
 
@@ -89,7 +90,9 @@ class ISubnetAllowlistRepository(ABC):
         """
 
     @abstractmethod
-    async def delete_for_subnet(self, subnet_id: str) -> int:
+    async def delete_for_subnet(
+        self, subnet_id: str, *, session: Any | None = None
+    ) -> int:
         """Cascade-delete all entries for a subnet. Returns count deleted.
 
         Called by ``SubnetService.delete_subnet`` before deleting
@@ -97,4 +100,12 @@ class ISubnetAllowlistRepository(ABC):
         ``ISubnetJoinRequestRepository.delete_for_subnet`` — see
         that interface's docstring for the cascade ordering /
         atomicity contract.
+
+        Transaction participation
+        -------------------------
+        ``session`` is the opaque :class:`IUnitOfWork` token. Same
+        contract as :meth:`ISubnetJoinRequestRepository.delete_for_subnet`:
+        Postgres impl binds to it (no internal commit / close);
+        Redis impl ignores it; ``None`` (default) is the legacy
+        path with self-managed session + commit.
         """

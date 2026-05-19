@@ -307,10 +307,26 @@ async def lifespan(app: FastAPI):
     # before the subnet record is removed (issue #56). Without this
     # wiring, agent-side dust accumulates and gets amplified by every
     # parent-delete cascade.
+    # ``unit_of_work`` (ADR-0004 Slice 2.1.1 / issue #75) is wired
+    # whenever PG mode is on so ``delete_subnet`` can run the
+    # three-table cascade (subnet_join_requests + subnet_allowlist +
+    # subnets) inside one transaction. In Redis-only mode
+    # ``_unit_of_work`` is None and the service falls back to the
+    # sequential-commit path, matching ADR §"Cascade deletion: Redis".
+    # The cascade ``subnet_join_request_repository`` and
+    # ``subnet_allowlist_repository`` themselves are deliberately
+    # NOT wired here yet — Slice 2.2 will land them together with
+    # the route handlers that actually create rows. Until then the
+    # cascade body short-circuits over those repos (Slice 2.1
+    # behaviour preserved) and the UoW transaction simply commits
+    # the subnet DELETE on its own — a no-op fast-path that costs
+    # nothing and lets the atomicity machinery be exercised end-to-end
+    # by the test suite before Slice 2.2 hooks up production rows.
     subnet_service_instance = SubnetService(
         subnet_repository,
         task_repository=task_repository,
         agent_repository=agent_repository,
+        unit_of_work=_unit_of_work,
     )
 
     # Phase 1 communication_policy gateway: a single PolicyCheckService

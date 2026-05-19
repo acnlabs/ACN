@@ -1,5 +1,7 @@
 """PostgreSQL Implementation of ISubnetRepository"""
 
+from contextlib import asynccontextmanager
+
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -11,6 +13,34 @@ from .models import SubnetModel
 class PostgresSubnetRepository(ISubnetRepository):
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
+
+    # =========================================================================
+    # Internal helpers
+    # =========================================================================
+
+    @asynccontextmanager
+    async def _session_scope(self, session: AsyncSession | None):
+        """Yield ``session`` if passed (no commit / no close) — caller
+        owns the transaction. Otherwise open + commit + close ourselves.
+
+        Used by ``delete`` and ``delete_with_children`` to participate
+        in :class:`SubnetService.delete_subnet`'s outer
+        :class:`IUnitOfWork` transaction (ADR-0004 §"Cascade deletion:
+        Postgres"). Same shape as the other ``Postgres*`` subnet repos
+        so the three cascade DELETEs (join_requests, allowlist, subnet)
+        plug into one transaction without anyone committing early.
+
+        Only ``delete`` / ``delete_with_children`` use this scope —
+        the read-side methods (``find_by_id`` / ``find_all`` / …) and
+        ``save`` keep their original self-managed shape because the
+        cascade orchestration never threads a session through them.
+        """
+        if session is not None:
+            yield session
+            return
+        async with self._session_factory() as own_session:
+            yield own_session
+            await own_session.commit()
 
     # =========================================================================
     # Mapping
@@ -132,16 +162,21 @@ class PostgresSubnetRepository(ISubnetRepository):
             )
             return [self._model_to_subnet(r) for r in result.scalars().all()]
 
-    async def delete(self, subnet_id: str) -> bool:
-        async with self._session_factory() as session:
-            result = await session.execute(
+    async def delete(
+        self, subnet_id: str, *, session: AsyncSession | None = None
+    ) -> bool:
+        async with self._session_scope(session) as sess:
+            result = await sess.execute(
                 delete(SubnetModel).where(SubnetModel.subnet_id == subnet_id)
             )
-            await session.commit()
             return result.rowcount > 0
 
     async def delete_with_children(
-        self, parent_id: str, child_ids: list[str]
+        self,
+        parent_id: str,
+        child_ids: list[str],
+        *,
+        session: AsyncSession | None = None,
     ) -> bool:
         """Delete parent + children atomically in one PG transaction.
 
@@ -150,14 +185,33 @@ class PostgresSubnetRepository(ISubnetRepository):
         uncommitted state — there shouldn't be one, but defence in
         depth) never observe a deleted parent with surviving children.
 
-        ``async with session.begin()`` is the SQLAlchemy idiom for
-        "transaction with auto rollback on exception": the context
-        manager calls ``commit()`` on a clean exit and ``rollback()`` on
-        any in-block raise, then re-raises. That means a failing child
-        DELETE leaves nothing committed — exactly what ADR-0003 §A.4
-        promises for the PG branch.
+        Transaction shape splits on ``session``:
+
+        - ``session=None`` (legacy + ADR-0003 contract): opens a fresh
+          session and uses ``async with session.begin():`` — the
+          SQLAlchemy idiom for "transaction with auto rollback on
+          exception". The ctx manager calls ``commit()`` on a clean
+          exit and ``rollback()`` on any in-block raise, then
+          re-raises. That means a failing child DELETE leaves nothing
+          committed — exactly what ADR-0003 §A.4 promises for the PG
+          branch. Pinned by
+          ``tests/infrastructure/test_postgres_subnet_repository_cascade.py``.
+        - ``session=<outer>`` (ADR-0004 cascade UoW path,
+          Slice 2.1.1 / issue #75): the caller
+          (``SubnetService.delete_subnet`` via
+          :meth:`IUnitOfWork.transaction`) already owns the outer
+          transaction. We just thread the cascade DELETEs into it.
+          We deliberately do NOT call ``session.begin()`` here in
+          this branch — a nested ``begin()`` would only create a
+          SAVEPOINT and conflate the cross-table cascade with
+          PG-specific nesting semantics, and SQLAlchemy 2.x's
+          autobegin model means the second ``begin()`` actually
+          raises ``InvalidRequestError`` outside savepoint mode.
+          The caller's outer ``commit``/``rollback`` decides the
+          batch's fate together with the sibling join_requests +
+          allowlist DELETEs (ADR-0004 §"Cascade deletion: Postgres").
         """
-        async with self._session_factory() as session, session.begin():
+        if session is not None:
             for child_id in child_ids:
                 await session.execute(
                     delete(SubnetModel).where(
@@ -165,6 +219,17 @@ class PostgresSubnetRepository(ISubnetRepository):
                     )
                 )
             result = await session.execute(
+                delete(SubnetModel).where(SubnetModel.subnet_id == parent_id)
+            )
+            return result.rowcount > 0
+        async with self._session_factory() as own_session, own_session.begin():
+            for child_id in child_ids:
+                await own_session.execute(
+                    delete(SubnetModel).where(
+                        SubnetModel.subnet_id == child_id
+                    )
+                )
+            result = await own_session.execute(
                 delete(SubnetModel).where(SubnetModel.subnet_id == parent_id)
             )
             return result.rowcount > 0

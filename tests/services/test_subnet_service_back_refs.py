@@ -238,8 +238,11 @@ class TestCascadeDeleteClearsBackRefs:
 
         assert ok is True
         # Repository cascade still fires with the right child ids.
-        mock_subnet_repository.delete_with_children.assert_awaited_once_with(
-            "team", ["squad-1", "squad-2"]
+        # Session-agnostic per issue #75 acceptance signal.
+        mock_subnet_repository.delete_with_children.assert_awaited_once()
+        assert mock_subnet_repository.delete_with_children.await_args.args == (
+            "team",
+            ["squad-1", "squad-2"],
         )
         # Saved agents' subnet_ids must NOT contain any of the three
         # subnets that were deleted (this is the user-visible signal
@@ -285,7 +288,7 @@ class TestCascadeDeleteClearsBackRefs:
             call_order.append(f"save:{agent.agent_id}")
 
         async def _record_cascade(
-            parent_id: str, child_ids: list[str]
+            parent_id: str, child_ids: list[str], **_kw
         ) -> bool:
             call_order.append("delete_with_children")
             return True
@@ -361,7 +364,9 @@ class TestCleanupBestEffort:
 
         # Subnet delete must succeed despite the per-agent failure.
         assert ok is True
-        mock_subnet_repository.delete.assert_awaited_once_with("team-a")
+        # Session-agnostic per issue #75.
+        mock_subnet_repository.delete.assert_awaited_once()
+        assert mock_subnet_repository.delete.await_args.args == ("team-a",)
         # Both members were attempted; one succeeded, one failed.
         assert mock_agent_repository.save.await_count == 2
 
@@ -490,4 +495,6 @@ class TestBackwardCompatNoAgentRepository:
         # ``subnet.member_agent_ids`` is non-empty.
         ok = await service.delete_subnet("team-a", owner="alice")
         assert ok is True
-        mock_subnet_repository.delete.assert_awaited_once_with("team-a")
+        # Session-agnostic per issue #75.
+        mock_subnet_repository.delete.assert_awaited_once()
+        assert mock_subnet_repository.delete.await_args.args == ("team-a",)

@@ -16,6 +16,8 @@ there is no FK to ``agents`` (ADR §"Cascade deletion" chooses
 manual cascade for observability).
 """
 
+from contextlib import asynccontextmanager
+
 from sqlalchemy import delete, desc, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -30,6 +32,28 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         self._session_factory = session_factory
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @asynccontextmanager
+    async def _session_scope(self, session: AsyncSession | None):
+        """Yield ``session`` if passed (no commit / no close) — caller
+        owns the transaction. Otherwise open + commit + close ourselves.
+
+        Mirrors
+        :meth:`PostgresSubnetJoinRequestRepository._session_scope` so
+        both halves of the ADR-0004 cascade compose under the same
+        outer ``IUnitOfWork`` transaction without either repo
+        committing early.
+        """
+        if session is not None:
+            yield session
+            return
+        async with self._session_factory() as own_session:
+            yield own_session
+            await own_session.commit()
 
     # ------------------------------------------------------------------
     # Mapping
@@ -132,18 +156,22 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
             )
             return [self._model_to_entity(r) for r in result.scalars().all()]
 
-    async def delete_for_subnet(self, subnet_id: str) -> int:
+    async def delete_for_subnet(
+        self, subnet_id: str, *, session: AsyncSession | None = None
+    ) -> int:
         """Cascade-delete all entries for a subnet. Returns count deleted.
 
         Called from ``SubnetService.delete_subnet`` — see
-        ``PostgresSubnetJoinRequestRepository.delete_for_subnet`` for
-        the symmetric cascade-ordering contract.
+        :meth:`PostgresSubnetJoinRequestRepository.delete_for_subnet`
+        for the symmetric outer-session contract (passing ``session``
+        binds this DELETE to the caller's :class:`IUnitOfWork`
+        transaction; ``None`` is the legacy self-managed path that
+        commits independently).
         """
-        async with self._session_factory() as session:
-            result = await session.execute(
+        async with self._session_scope(session) as sess:
+            result = await sess.execute(
                 delete(SubnetAllowlistModel).where(
                     SubnetAllowlistModel.subnet_id == subnet_id
                 )
             )
-            await session.commit()
             return result.rowcount or 0
