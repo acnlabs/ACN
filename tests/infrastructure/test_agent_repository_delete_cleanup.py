@@ -6,8 +6,9 @@ Before the fix:
   an agent left it in place, permanently blocking re-binding that token_id
   to a replacement agent (save() checks for duplicate bind).
 - `acn:agents:{id}:alive` had a 90s TTL so it would eventually evaporate on
-  its own, but for 90 seconds after deletion `filter_alive()` /
-  `mark_offline_stale()` could still "see" the dead agent.
+  its own, but for 90 seconds after deletion `filter_alive()` could still
+  "see" the dead agent — letting it surface in ``search_agents(status='online')``
+  even though the underlying row was already gone.
 """
 
 from datetime import datetime

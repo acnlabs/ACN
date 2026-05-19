@@ -168,11 +168,12 @@ class AgentService:
             if social_card_url is not None:
                 existing_agent.social_card_url = social_card_url
 
-            # ``mark_online()`` deliberately omitted: ``set_alive`` below is
-            # the single source of truth for online-ness (see ``touch_alive``
-            # / ``search_agents`` for the read side). Writing to the legacy
-            # DB column ``Agent.status`` on every register would re-introduce
-            # the dual-source drift this refactor eliminates.
+            # The ``set_alive`` call below is the single source of truth
+            # for online-ness (see ``touch_alive`` / ``search_agents``
+            # for the read side). ``update_heartbeat`` is kept because
+            # it stamps ``last_heartbeat`` which is a distinct, useful
+            # audit field — but no DB ``status`` is written, that
+            # column no longer exists.
             existing_agent.update_heartbeat()
 
             await self.repository.save(existing_agent)
@@ -375,7 +376,7 @@ class AgentService:
             # remove agents that ``_filter_by_status`` would otherwise
             # include (the same dual-source drift as the dropped status
             # filters in this method).
-            candidates = await self.repository.find_by_tags(tags, status="all")
+            candidates = await self.repository.find_by_tags(tags)
         else:
             candidates = await self.repository.find_all()
 
@@ -487,10 +488,9 @@ class AgentService:
             Updated agent entity
         """
         agent = await self.get_agent(agent_id)
-        # ``mark_online()`` deliberately omitted — see ``register_agent`` and
-        # ``touch_alive``: the alive key set below is the single source of
-        # truth, and writing to the legacy ``Agent.status`` column would
-        # re-introduce the dual-source drift this refactor removed.
+        # ``set_alive`` is the single source of truth for online-ness;
+        # ``update_heartbeat`` stamps the audit-only ``last_heartbeat``
+        # field. The legacy DB ``status`` column is gone.
         agent.update_heartbeat()
         await self.repository.save(agent)
         await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)

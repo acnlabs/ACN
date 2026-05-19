@@ -206,17 +206,13 @@ class PostgresAgentRepository(IAgentRepository):
             )
             return [self._model_to_agent(r) for r in result.scalars().all()]
 
-    async def find_by_tags(self, tags: list[str], status: str = "all") -> list[Agent]:
+    async def find_by_tags(self, tags: list[str]) -> list[Agent]:
         """Find agents with ALL of *tags*.
 
-        The ``status`` parameter is kept for ABI compatibility but is
-        intentionally ignored — see the Redis-side implementation and
-        ``AgentService._filter_by_status`` for the single-source-of-truth
-        contract (Redis alive key, applied at the service layer).
-        Pre-filtering by ``AgentModel.status`` here would re-introduce
-        the dual-source drift this refactor eliminates.
+        Online/offline filtering happens at the service layer via
+        ``AgentService._filter_by_status`` so the single source of
+        truth (Redis alive key) is consulted exactly once per query.
         """
-        del status  # see docstring — deliberately unused
         async with self._session_factory() as session:
             stmt = select(AgentModel)
             if tags:

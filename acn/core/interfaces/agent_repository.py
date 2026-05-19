@@ -77,19 +77,17 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_tags(self, tags: list[str], status: str = "all") -> list[Agent]:
+    async def find_by_tags(self, tags: list[str]) -> list[Agent]:
         """
         Find agents with ALL of the given tags.
 
+        Online/offline filtering is intentionally NOT a parameter
+        here. The single source of truth is the Redis alive key;
+        wrap this call with ``AgentService._filter_by_status`` to
+        apply that filter exactly once per query.
+
         Args:
             tags: List of required tag IDs
-            status: **Deprecated.** Kept for ABI compatibility; both the
-                Redis and PostgreSQL implementations ignore this argument.
-                Filter by online/offline at the service layer via
-                ``AgentService._filter_by_status`` so the single source
-                of truth (Redis alive key) is consulted exactly once per
-                query. To be removed in Phase 2 along with the legacy
-                ``Agent.status`` DB column.
 
         Returns:
             List of agents matching the tag criteria.

@@ -320,7 +320,10 @@ acn/
 # Entity 测试（无依赖）
 def test_agent_creation():
     agent = Agent(agent_id="123", owner="user", ...)
-    assert agent.is_online()
+    assert agent.agent_id == "123"
+# Note: online-ness is no longer an entity property. The Redis alive
+# TTL key is the single source of truth — query via
+# ``AgentService.is_alive`` / ``batch_alive``.
 
 # Service 测试（mock Repository）
 async def test_register_agent():
