@@ -33,23 +33,33 @@ Coverage choices
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
 from acn.api import app
 
 
 @pytest.fixture(scope="module")
 def openapi_spec() -> dict:
-    """Fetch the FastAPI-generated OpenAPI spec once per module.
+    """Generate the FastAPI OpenAPI spec once per module, via
+    ``app.openapi()``.
 
-    Uses ``TestClient`` rather than calling ``app.openapi()`` directly
-    so the spec is exactly what an SDK type-gen consumer would see
-    over HTTP.
+    We deliberately bypass the ``TestClient.get("/openapi.json")`` path
+    that an earlier revision of this fixture used. The ``/openapi.json``
+    HTTP endpoint is gated by ``settings.enable_docs`` (default
+    ``False`` — production-style deployments disable docs exposure;
+    set ``ENABLE_DOCS=true`` to enable it locally). Routing the test
+    through HTTP would couple the schema-contract suite to that
+    operational flag, which is the wrong axis: SDK type-gen consumers
+    care about the spec body, not the delivery surface. ``app.openapi()``
+    returns the same dict FastAPI would serialize over HTTP when the
+    endpoint is enabled, so all downstream assertions on the schema's
+    shape, components, and per-endpoint ``responses`` blocks remain
+    byte-equivalent.
+
+    Side effect: the suite now runs cleanly under default settings;
+    contributors no longer need ``ENABLE_DOCS=true`` to avoid 27
+    erroring fixtures on first ``pytest`` run.
     """
-    with TestClient(app) as client:
-        r = client.get("/openapi.json")
-        assert r.status_code == 200, f"openapi.json fetch failed: {r.status_code}"
-        return r.json()
+    return app.openapi()
 
 
 class TestACNErrorResponseSchemaPresence:
