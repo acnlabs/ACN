@@ -1110,6 +1110,319 @@ that calls out:
 - The three new endpoint families.
 - The new webhook events.
 
+## Phase 2 implementation plan
+
+The decision (chosen option A), data model, state machine, API
+contract, webhook catalogue, and migration semantics above are all
+**Phase 2 design**. This section pins the **execution plan** — how
+the work splits into reviewable PRs, what the dependency edges
+are, and what each PR's acceptance signal looks like — so the
+implementer never has to guess.
+
+### Why Phase 2 needs splitting at all
+
+Phase 1 (merged as PR #67) was already a 9-commit, 14-file PR that
+went through 5 self-audit cycles. Phase 2 is **3–5× the surface
+area**:
+
+- 2 new tables (`subnet_join_requests`, `subnet_allowlist`) + 2
+  new repositories (Postgres + Redis × 2).
+- 3 new entity classes (`SubnetJoinRequest`, `SubnetAllowlist`,
+  potentially `JoinRequestKind` / `JoinRequestStatus` enums).
+- 1 new domain service (`JoinFlowService` — orchestrates the 6-branch
+  join decision) and extensions to `SubnetService` (allowlist CRUD).
+- 6 new HTTP endpoints (§API changes covers them) + 1 modified
+  endpoint (the existing join endpoint grows the 6-branch logic).
+- 8 new webhook events (§Org Harness impact) wired into the
+  appropriate orchestrator call sites.
+- ~12 state-machine TEST markers + the per-edge route / service /
+  repository contract tests for each new table.
+
+Shipping that as a single PR makes review impossible. The plan
+below cuts it into **four vertical slices**, each of which:
+
+- Compiles and passes its own tests on its own branch.
+- Is independently reviewable in 1–2 hours.
+- Is independently mergeable in either order *within* a slice's
+  layer (Postgres / Redis / service / route can land
+  sub-PR-by-sub-PR), but the **slices** themselves are
+  strictly ordered.
+- Leaves the system in a deployable state at every commit
+  boundary, so a mid-rollout pause never strands the codebase.
+
+### Slice ordering and dependency graph
+
+```
+                  ┌─────────────────────────────┐
+   Slice 2.1     │  Schema + entities + repos   │
+   (data layer) │  Tables, models, repository  │
+                  │  interfaces, dual-store      │
+                  └──────────────┬──────────────┘
+                                 │  (entities + repos available)
+                                 ▼
+                  ┌─────────────────────────────┐
+   Slice 2.2     │  Domain services (no HTTP)   │
+   (services)    │  JoinFlowService + allowlist │
+                  │  ops on SubnetService        │
+                  └──────────────┬──────────────┘
+                                 │  (services callable + tested)
+                                 ▼
+                  ┌─────────────────────────────┐
+   Slice 2.3     │  HTTP routes + error mapping │
+   (routes)      │  6 new + 1 modified endpoint │
+                  │  Pydantic models, alias rules│
+                  └──────────────┬──────────────┘
+                                 │  (full API contract live)
+                                 ▼
+                  ┌─────────────────────────────┐
+   Slice 2.4     │  Webhooks + CLI + docs       │
+   (integration) │  8 new events, CLI deltas,   │
+                  │  cross-cuts, deprecation    │
+                  └─────────────────────────────┘
+```
+
+Each arrow is a **hard dependency** — Slice 2.N+1 cannot review
+cleanly without Slice 2.N landed, because the absent interfaces
+would force reviewers to mentally compile two PRs together.
+
+### Slice 2.1 — Schema + entities + repositories
+
+**Scope.** Everything from §Data model that is *storage shape*:
+two SQLAlchemy models, the matching Alembic revision, two new
+entity dataclasses, the Redis HASH/SET layout, two new
+`ISubnetJoinRequestRepository` / `ISubnetAllowlistRepository`
+interfaces with Postgres + Redis implementations, and the
+cascade-deletion logic in `SubnetService.delete_subnet`.
+
+**Out of scope.** No service-layer business logic, no HTTP
+endpoints, no webhooks. Repositories are exercised by direct unit
+tests and by the cascade-deletion path that already lives in
+`SubnetService.delete_subnet`.
+
+**Files (~14):**
+
+- `acn/core/entities/subnet_join_request.py` (new)
+- `acn/core/entities/subnet_allowlist.py` (new)
+- `acn/core/interfaces/repositories/i_subnet_join_request_repository.py` (new)
+- `acn/core/interfaces/repositories/i_subnet_allowlist_repository.py` (new)
+- `acn/infrastructure/persistence/postgres/models.py` (add 2 models)
+- `acn/infrastructure/persistence/postgres/subnet_join_request_repository.py` (new)
+- `acn/infrastructure/persistence/postgres/subnet_allowlist_repository.py` (new)
+- `acn/infrastructure/persistence/redis/subnet_join_request_repository.py` (new)
+- `acn/infrastructure/persistence/redis/subnet_allowlist_repository.py` (new)
+- `alembic/versions/<hash>_add_subnet_join_request_and_allowlist_tables.py` (new)
+- `acn/services/subnet_service.py` (extend `delete_subnet` cascade)
+- Test files mirroring each (~4 new test modules, ~40 tests).
+
+**Acceptance signal.**
+
+- Alembic upgrade + downgrade both green on a fresh DB.
+- Round-trip: `repo.save(entity)` → `repo.find_by_id(...)` returns
+  an entity equal by ID + all scalar fields, for every new entity
+  type, on both Postgres and Redis backends.
+- Cascade test: deleting a subnet with N pending join_requests and
+  M allowlist entries leaves 0 orphan rows in either table.
+- The unique partial index from §Data model (`status='pending'`)
+  rejects a second `pending` row for the same `(subnet_id,
+  agent_id)` with a `psycopg.errors.UniqueViolation`. Pin this
+  with an integration test.
+
+**Risk.** Lowest of the four slices — pure data plumbing,
+no business logic. The unique partial index is the one place where
+PG-version sensitivity could bite (partial indexes have been
+stable since PG 7.2, so safe), but ops should still verify on
+their target version.
+
+### Slice 2.2 — Domain services (no HTTP)
+
+**Scope.** The 6-branch §join decision tree, the three approval
+entry paths (request / invitation / allowlist), and the state
+transitions from §State transition table — all behind a callable
+service interface that takes domain entities and returns domain
+entities. No FastAPI, no HTTP, no Pydantic.
+
+**Two services:**
+
+1. **`JoinFlowService`** (new) — orchestrates the 6-branch
+   decision in §join. Takes `(subnet_id, agent_id, requesting_actor)`
+   and returns `JoinFlowResult` (a sealed union covering the 6
+   branches). Reads from all three new repositories, writes the
+   resulting row, and emits the abstract event payload that Slice
+   2.4 will route to webhooks.
+2. **`SubnetService` extensions** — `add_allowlist`,
+   `remove_allowlist`, `list_allowlist`,
+   `approve_join_request`, `reject_join_request`, `invite_agent`,
+   `accept_invitation`, `reject_invitation`. Each is a thin CAS
+   on the appropriate table plus an event payload.
+
+**Out of scope.** HTTP routing (Slice 2.3); webhook delivery
+(Slice 2.4 — service emits in-memory event payloads, doesn't
+post). The `WebhookService` is wired into `JoinFlowService` via
+an interface so Slice 2.4 can later swap the no-op stub for the
+real publisher without touching Slice 2.2 code.
+
+**Files (~6):**
+
+- `acn/services/join_flow_service.py` (new, ~400 LOC)
+- `acn/services/subnet_service.py` (extend with 8 methods)
+- `acn/services/_join_flow_result.py` (new, sealed-union types)
+- Test files (~3 new test modules, ~60 tests).
+
+**Acceptance signal.**
+
+- Every cell of §State transition table has at least one passing
+  test that exercises its happy-path edge.
+- Every **TEST** marker in §State machine edges has at least one
+  passing test pinning its resolution.
+- The 6 branches of §join return the expected `JoinFlowResult`
+  variant for each branch's canonical input.
+- CAS contention (the §State machine "Concurrent decision" edge)
+  is verified by an `asyncio.gather` test that fires two
+  `approve` calls and asserts exactly one wins.
+
+**Risk.** Highest of the four slices — the §State machine table
+has 12 edges and the §join branch table has 6, with cross-product
+interactions (e.g. "Allowlist hit AND pending invitation" is
+branch 4 of §join applying to edge 9 of §State machine). The
+sealed-union return type and exhaustive `match` statements are
+the design discipline that makes this tractable.
+
+### Slice 2.3 — HTTP routes + error mapping
+
+**Scope.** The 6 new endpoint families from §API changes plus the
+modification to the existing join endpoint to drive `JoinFlowService`
+instead of the legacy direct-add path. Pydantic models, URL alias
+rules, status code conventions, error code mapping (including the
+new `JOIN_REQUEST_PENDING`, `JOIN_REQUEST_ALREADY_DECIDED`,
+`INVITATION_PENDING`, `ALREADY_MEMBER` cases).
+
+**Files (~8):**
+
+- `acn/routes/join_requests.py` (new)
+- `acn/routes/invitations.py` (new)
+- `acn/routes/allowlist.py` (new)
+- `acn/routes/subnets.py` (modify existing join endpoint)
+- `acn/models.py` (add request/response models)
+- `acn/core/errors.py` (add new `ErrorCode` enum members)
+- Test files (~3 new test modules, ~50 tests).
+
+**Acceptance signal.**
+
+- Every endpoint in §API changes has at least one contract test
+  pinning request → response shape on the happy path.
+- Every error-mapping case from §Error codes is pinned by a
+  contract test that asserts the wire-format `details.reason`
+  token.
+- URL alias rules from §URL alias routing rules resolve to the
+  same handler regardless of which alias the client used.
+- The modified existing join endpoint passes all pre-existing
+  `test_subnets_create_membership.py` tests (no regression).
+
+**Risk.** Medium. The route layer is mostly mechanical Pydantic +
+service delegation, but the **6 branches × 6 endpoints**
+cross-product means a lot of test surface; allow time for the
+contract-test grind. Mitigate by reusing the `_make_subnet_mock` +
+fixture machinery from Phase 1's `tests/routes/`.
+
+### Slice 2.4 — Webhooks + CLI + docs
+
+**Scope.** Everything cross-cutting:
+
+- 8 new webhook events from §Webhook event catalogue,
+  wired into `JoinFlowService` and the `SubnetService` extension
+  methods at the precise call sites identified in §Merge-path
+  event mapping.
+- CLI surface updates from §CLI changes.
+- ADR-0004 §Status flipped from `Accepted` to `Implemented`.
+- AGENTS.md convention block updated to describe Phase 2
+  semantics (admission gate now reads `join_policy`).
+- Migration runbook entry added under `docs/runbooks/`.
+
+**Files (~10):**
+
+- `acn/services/join_flow_service.py` (wire webhook calls)
+- `acn/services/subnet_service.py` (wire webhook calls)
+- `acn/cli/` (8 new subcommands or extensions to existing)
+- `docs/adr/0004-subnet-join-policy.md` (§Status update)
+- `AGENTS.md` (Phase 2 convention update)
+- `docs/runbooks/<new>.md` (deploy + rollback)
+- Test files (~2 new test modules, ~30 tests for webhook
+  emission + CLI invocation).
+
+**Acceptance signal.**
+
+- Every event in §Webhook event catalogue is emitted at least
+  once in tests, with the payload shape from §Payload shape.
+- Webhook delivery failures **do not** roll back the underlying
+  DB transaction (defence: the webhook publisher's failure path
+  is async-fire-and-forget with structured logging).
+- CLI subcommands have golden-output tests against canned
+  responses.
+
+**Risk.** Low–medium. The work is mostly wiring already-designed
+events to already-tested service call sites; the one trap is the
+"webhook failure ≠ DB rollback" invariant — pin it with an
+explicit test that injects a `WebhookService` raising on every
+call and asserts the join request row still persists.
+
+### Cross-slice acceptance
+
+After all four slices land:
+
+- The full §State machine edges table is green (every **TEST**
+  marker has at least one passing edge-pinning test).
+- The §join 6-branch decision is exhaustively covered (each branch
+  has at least one happy-path + one edge-case test).
+- `alembic upgrade head` from a Phase 1 production database
+  succeeds without manual intervention.
+- AGENTS.md states that the admission gate now reads
+  `join_policy`, and the Phase 1 / Phase 2 split annotation is
+  removed.
+
+### Rollback strategy
+
+Each slice is independently rollback-able:
+
+- **Slice 2.1 (schema)** — `alembic downgrade -1` drops both new
+  tables. Safe at any time before Slice 2.2 lands (nothing reads
+  the tables yet). After Slice 2.2 lands, the downgrade is still
+  safe if no `subnet_join_requests` rows exist yet (which is the
+  case until Slice 2.3 exposes the create-row endpoint).
+- **Slice 2.2 (services)** — revert + redeploy. No data
+  consequences because no caller is reaching this code yet.
+- **Slice 2.3 (routes)** — revert + redeploy. Existing
+  `subnet_join_requests` / `subnet_allowlist` rows become
+  unreachable but are not corrupted; re-deploying the route layer
+  restores access. Clients that were issued
+  `JOIN_REQUEST_PENDING` responses while the slice was live will
+  receive `404` on follow-up calls; the Harness webhook for that
+  family already covers the "client may need to re-issue" case.
+- **Slice 2.4 (webhooks/CLI)** — revert + redeploy. Webhook
+  consumers stop receiving the 8 new event types; CLI users fall
+  back to direct HTTP. No data consequences.
+
+**Hard rollback point.** Once `subnet_join_requests` contains any
+row with `decided_by != NULL` (i.e. any approve/reject decision
+has been made), `alembic downgrade` becomes destructive (loses
+audit trail). Mark this in the deploy runbook as a
+no-going-back boundary — any rollback past this point requires a
+forward-fix, not a downgrade.
+
+### Estimated effort and review cost
+
+| Slice | Implementation | Self-audit + review | Total wall time |
+|-------|----------------|---------------------|-----------------|
+| 2.1   | ~2 days        | ~1 day              | ~3 days         |
+| 2.2   | ~3 days        | ~2 days             | ~5 days         |
+| 2.3   | ~2 days        | ~1 day              | ~3 days         |
+| 2.4   | ~1 day         | ~1 day              | ~2 days         |
+| **Total** | **~8 days**   | **~5 days**         | **~13 days**    |
+
+These assume one implementer working serially. Slices are
+**strictly sequential** (each depends on the previous landing on
+`main`), so parallelism doesn't help — but the review cost can
+overlap with the next slice's implementation.
+
 ## Out of scope
 
 The following are explicitly **not** addressed by this ADR. Each
