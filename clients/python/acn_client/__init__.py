@@ -44,7 +44,22 @@ from .models import (
 )
 from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState
 
-__version__ = "0.7.1"
+# Single source of truth: pyproject.toml ``[project].version``.
+# Hard-coded ``__version__`` strings drifted by 3 minor versions in the past
+# (pyproject said 0.10.0 while this file still said 0.7.1), making bug
+# reports and telemetry lie about the running SDK build. Reading via
+# importlib.metadata at import time eliminates that class of drift entirely.
+# The fallback only fires for non-installed checkouts (e.g. running tests
+# straight from source without ``pip install -e .``) — published wheels
+# always populate the metadata.
+try:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("acn-client")
+except PackageNotFoundError:  # pragma: no cover — only hits in uninstalled source trees
+    __version__ = "0.0.0+unknown"
+
 __all__ = [
     # Client
     "ACNClient",

@@ -2,6 +2,57 @@
 
 All notable changes to `acn-client` are documented here.
 
+## [Unreleased]
+
+### Changed
+- `__version__` is now read at import time from installed package metadata
+  (`importlib.metadata.version("acn-client")`) instead of a hard-coded
+  string. This makes `pyproject.toml` the single source of truth and
+  eliminates the kind of drift that previously had `__version__` reporting
+  `0.7.1` while the published wheel was `0.10.0`.
+
+## [0.10.0] - 2026-05-13
+
+> **Backfilled retroactively on 2026-05-19** — this entry was missing from
+> CHANGELOG when 0.10.0 was published. Content reconstructed from commit
+> `72ba729` ("feat: grader loop, agent task history, and v0.10.0 sync").
+
+### Added
+- `get_agent_task_history(agent_id, ...)` — `GET /api/v1/tasks/agent/{agent_id}/history`
+  for agent self-reflection.
+- `Task.max_resubmit_attempts` — caps automated grader-loop retries per
+  participant after rejection (`None` = unlimited).
+- `Participation.resubmit_count` — formalized as a dedicated field
+  (was previously stored in `metadata`).
+
+### Server-side counterparts (not SDK API surface but worth noting)
+- New webhook event `participation.rejected` for Org Harness grader loops.
+- `submit_task` service enforces `max_resubmit_attempts`.
+
+## [0.9.0] - 2026-05-12
+
+> **Backfilled retroactively on 2026-05-19** — content reconstructed from
+> commit `d083ced` ("feat(org-harness): pluggable Org Harness interface v0.9.0").
+
+### Added
+- `set_subnet_harness(subnet_id, harness_url, harness_secret)` —
+  registers (or clears) the per-subnet Org Harness webhook for external
+  orchestrators (Paperclip, OpenHarness, etc.).
+- `SubnetInfo.harness_url` / `SubnetInfo.harness_registered` — prospective
+  joiners can now discover the governing orchestration system before joining.
+  `harness_secret` is write-only and is never returned by the API.
+
+## [0.8.0] - 2026-05-12
+
+> **Backfilled retroactively on 2026-05-19** — content reconstructed from
+> commit `c5d17c0` ("chore(release): bump to v0.8.0, sync docs and skill").
+
+### Changed
+- Version bump to align with server / CLI release train; no SDK API
+  changes in this release. Companion docs / skill updates landed in the
+  server package (POST confirm endpoint replacing stale PATCH status;
+  Saga settlement & credits currency in `acn pay` subcommands).
+
 ## [0.7.1] - 2026-05-10
 
 ### Changed (BREAKING)
