@@ -2,6 +2,28 @@
 
 All notable changes to `acn-client` (TypeScript) are documented here.
 
+## [Unreleased]
+
+### Changed (type narrowing — alive-as-SSOT follow-up)
+
+- **`AgentStatus` narrowed from `'online' | 'offline' | 'busy'` to
+  `'online' | 'offline'`**. The server has not emitted `'busy'` since
+  the alive-as-single-source-of-truth refactor (ACN
+  `docs/agent-registry-removal.md`) — agent liveness is now derived
+  from a Redis TTL key, which is inherently binary. The `'busy'`
+  literal was an unreachable dead branch in any consumer code.
+
+  This is a **compile-time** narrowing only — there is no runtime
+  behaviour change because no real response ever carries the value.
+  Code that does an exhaustive `switch (status)` will drop the
+  `case 'busy':` arm; code that does
+  `if (status === 'busy')` will become statically false and TypeScript
+  will flag it as unreachable. Code that treats `AgentStatus` as
+  opaque (e.g. just displays it) needs no change.
+
+  `AgentSearchStatus` (`AgentStatus | 'all'`) inherits the
+  narrowing automatically.
+
 ## [0.12.0] - 2026-05-14
 
 ### Added

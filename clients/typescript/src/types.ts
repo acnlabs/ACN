@@ -9,8 +9,20 @@
 // Agent Types
 // ============================================
 
-/** Agent status */
-export type AgentStatus = 'online' | 'offline' | 'busy';
+/**
+ * Agent status.
+ *
+ * The server emits exactly `'online'` or `'offline'`, derived from the
+ * Redis `acn:agents:{id}:alive` TTL key (the single source of truth
+ * since the 2026-05 alive-as-SSOT refactor — see ACN
+ * `docs/agent-registry-removal.md`).
+ *
+ * Historical note: this union used to include `'busy'`. The server has
+ * not emitted that value for some time; the literal was narrowed out
+ * in SDK 0.13 to match the on-wire contract. Code paths handling
+ * `'busy'` were unreachable.
+ */
+export type AgentStatus = 'online' | 'offline';
 
 /** Agent list filter status (includes "all" for discovery) */
 export type AgentSearchStatus = AgentStatus | 'all';
