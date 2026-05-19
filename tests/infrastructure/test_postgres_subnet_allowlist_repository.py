@@ -35,11 +35,11 @@ def _make_session_factory():
 
 
 def _make_entry(**overrides) -> SubnetAllowlist:
-    defaults = dict(
-        subnet_id="s-1",
-        agent_id="a-1",
-        added_by="owner-1",
-    )
+    defaults: dict = {
+        "subnet_id": "s-1",
+        "agent_id": "a-1",
+        "added_by": "owner-1",
+    }
     defaults.update(overrides)
     return SubnetAllowlist(**defaults)  # type: ignore[arg-type]
 

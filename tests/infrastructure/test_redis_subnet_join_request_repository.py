@@ -41,7 +41,7 @@ What gets pinned
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fakeredis import aioredis as fakeredis_async
@@ -59,7 +59,6 @@ from acn.infrastructure.persistence.redis.subnet_join_request_repository import 
     _request_hash_key,
     _subnet_listing_key,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -82,14 +81,14 @@ async def fake_redis():
 
 
 def _make_request(**overrides) -> SubnetJoinRequest:
-    defaults = dict(
-        request_id="req-1",
-        subnet_id="s-1",
-        agent_id="a-1",
-        kind="join_request",
-        status="pending",
-        initiated_by="a-1",
-    )
+    defaults: dict = {
+        "request_id": "req-1",
+        "subnet_id": "s-1",
+        "agent_id": "a-1",
+        "kind": "join_request",
+        "status": "pending",
+        "initiated_by": "a-1",
+    }
     defaults.update(overrides)
     return SubnetJoinRequest(**defaults)  # type: ignore[arg-type]
 
@@ -251,7 +250,7 @@ class TestReadPathsAgainstFakeRedis:
         await fake_redis.set(_pending_by_agent_key("s-x", "a-x"), b"r-x")
         await fake_redis.hset(  # type: ignore[misc]
             _request_hash_key("s-x", "r-x"),
-            mapping={k: v for k, v in req.to_dict().items()},
+            mapping=req.to_dict(),
         )
 
         found = await repo.find_pending_for("s-x", "a-x")
@@ -307,14 +306,14 @@ class TestReadPathsAgainstFakeRedis:
         ):
             rid = f"r-{i}"
             ts = datetime.now(UTC)
-            kwargs = dict(
-                request_id=rid,
-                subnet_id="s-1",
-                agent_id=f"a-{i}",
-                kind=kind,
-                status=status,
-                initiated_by=f"a-{i}",
-            )
+            kwargs: dict = {
+                "request_id": rid,
+                "subnet_id": "s-1",
+                "agent_id": f"a-{i}",
+                "kind": kind,
+                "status": status,
+                "initiated_by": f"a-{i}",
+            }
             if status != "pending":
                 kwargs["decided_by"] = "owner-1"
                 kwargs["decided_at"] = ts

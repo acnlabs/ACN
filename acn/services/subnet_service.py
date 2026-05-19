@@ -10,7 +10,12 @@ import structlog  # type: ignore[import-untyped]
 
 from ..core.entities import Subnet
 from ..core.exceptions import SubnetNotFoundException
-from ..core.interfaces import IAgentRepository, ISubnetRepository
+from ..core.interfaces import (
+    IAgentRepository,
+    ISubnetAllowlistRepository,
+    ISubnetJoinRequestRepository,
+    ISubnetRepository,
+)
 from ..core.interfaces.task_repository import ITaskRepository
 
 logger = structlog.get_logger()
@@ -111,6 +116,8 @@ class SubnetService:
         subnet_repository: ISubnetRepository,
         task_repository: ITaskRepository | None = None,
         agent_repository: IAgentRepository | None = None,
+        subnet_join_request_repository: ISubnetJoinRequestRepository | None = None,
+        subnet_allowlist_repository: ISubnetAllowlistRepository | None = None,
     ):
         """
         Initialize Subnet Service
@@ -126,10 +133,26 @@ class SubnetService:
                 from each member's ``agent.subnet_ids`` set. Omit
                 for legacy fixtures; production must supply one to
                 avoid agent-side stale dust (issue #56).
+            subnet_join_request_repository: Optional — used by
+                ``delete_subnet`` to cascade-delete pending and
+                terminal join-requests / invitations when a subnet
+                is dissolved (ADR-0004 §"Cascade deletion"). Omit
+                for legacy fixtures that predate Slice 2.1; the
+                cascade silently skips when absent, leaving the
+                join_requests rows as dust against a no-longer-
+                existing subnet (cleaned by a future ops sweep).
+                Production composition must wire it once Slice 2.2
+                lands the route surface that actually creates rows.
+            subnet_allowlist_repository: Optional — used by
+                ``delete_subnet`` to cascade-delete admission
+                allowlist entries. Same opt-in pattern as
+                ``subnet_join_request_repository``.
         """
         self.repository = subnet_repository
         self.task_repository = task_repository
         self.agent_repository = agent_repository
+        self.join_request_repository = subnet_join_request_repository
+        self.allowlist_repository = subnet_allowlist_repository
 
     async def create_subnet(
         self,
@@ -513,6 +536,17 @@ class SubnetService:
                     child_subnet_ids=child_ids,
                     child_count=len(child_ids),
                 )
+                # ADR-0004 §"Cascade deletion" — sweep join_requests
+                # + allowlist for the parent AND every child BEFORE
+                # the subnet records themselves. Order matters: if
+                # the join_request cascade raises ``RuntimeError``
+                # (Redis partial failure), the subnet HASHes stay
+                # in place so the cascade can be retried.
+                for child in children:
+                    await self._cascade_join_policy_artifacts(
+                        child.subnet_id
+                    )
+                await self._cascade_join_policy_artifacts(subnet_id)
                 return await self.repository.delete_with_children(
                     subnet_id, child_ids
                 )
@@ -523,8 +557,52 @@ class SubnetService:
         await self._clear_agent_back_references(
             subnet_id, subnet.member_agent_ids
         )
+        await self._cascade_join_policy_artifacts(subnet_id)
         logger.info("delete_subnet", subnet_id=subnet_id)
         return await self.repository.delete(subnet_id)
+
+    async def _cascade_join_policy_artifacts(self, subnet_id: str) -> None:
+        """Sweep ADR-0004 join_requests + allowlist for ``subnet_id``.
+
+        Called from ``delete_subnet`` BEFORE the subnet HASH / row
+        delete. Either repository raising ``RuntimeError`` (Redis
+        partial failure) propagates here and aborts the caller's
+        subnet delete — exactly the behaviour ADR §"Cascade deletion"
+        requires so a half-cascade isn't treated as success.
+
+        Silent no-op when either repo wasn't wired (legacy
+        fixtures predating Slice 2.1) — same opt-in pattern
+        ``_clear_agent_back_references`` uses for
+        ``agent_repository``. Production composition wires both
+        once Slice 2.2 starts creating rows; until then,
+        ``delete_subnet`` retains its pre-Slice-2.1 behaviour.
+
+        Order: join_requests first, allowlist second. The order
+        matches the ADR §"Cascade deletion: Postgres" example
+        statement order, though for the manual cascade it's
+        cosmetic (both DELETEs run inside the outer service-layer
+        transaction in PG; in Redis they're independent passes).
+        """
+        if self.join_request_repository is not None:
+            deleted = await self.join_request_repository.delete_for_subnet(
+                subnet_id
+            )
+            if deleted:
+                logger.info(
+                    "delete_subnet_cascade_join_requests",
+                    subnet_id=subnet_id,
+                    deleted_count=deleted,
+                )
+        if self.allowlist_repository is not None:
+            deleted = await self.allowlist_repository.delete_for_subnet(
+                subnet_id
+            )
+            if deleted:
+                logger.info(
+                    "delete_subnet_cascade_allowlist",
+                    subnet_id=subnet_id,
+                    deleted_count=deleted,
+                )
 
     async def _clear_agent_back_references(
         self,

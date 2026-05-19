@@ -27,11 +27,11 @@ class TestIdentityInvariants:
         ["subnet_id", "agent_id", "added_by"],
     )
     def test_empty_identity_field_raises(self, field_name: str) -> None:
-        kwargs = dict(
-            subnet_id="s1",
-            agent_id="a1",
-            added_by="owner-1",
-        )
+        kwargs: dict = {
+            "subnet_id": "s1",
+            "agent_id": "a1",
+            "added_by": "owner-1",
+        }
         kwargs[field_name] = ""
         with pytest.raises(ValueError, match=f"{field_name} cannot be empty"):
             SubnetAllowlist(**kwargs)

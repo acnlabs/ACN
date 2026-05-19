@@ -55,14 +55,14 @@ def _make_session_factory():
 
 
 def _make_request(**overrides) -> SubnetJoinRequest:
-    defaults = dict(
-        request_id="req-1",
-        subnet_id="s-1",
-        agent_id="a-1",
-        kind="join_request",
-        status="pending",
-        initiated_by="a-1",
-    )
+    defaults: dict = {
+        "request_id": "req-1",
+        "subnet_id": "s-1",
+        "agent_id": "a-1",
+        "kind": "join_request",
+        "status": "pending",
+        "initiated_by": "a-1",
+    }
     defaults.update(overrides)
     return SubnetJoinRequest(**defaults)  # type: ignore[arg-type]
 

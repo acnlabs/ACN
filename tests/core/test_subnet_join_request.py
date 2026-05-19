@@ -42,14 +42,14 @@ class TestIdentityFieldInvariants:
         ["request_id", "subnet_id", "agent_id", "initiated_by"],
     )
     def test_empty_identity_field_raises(self, field_name: str) -> None:
-        kwargs = dict(
-            request_id="r1",
-            subnet_id="s1",
-            agent_id="a1",
-            kind="join_request",
-            status="pending",
-            initiated_by="a1",
-        )
+        kwargs: dict = {
+            "request_id": "r1",
+            "subnet_id": "s1",
+            "agent_id": "a1",
+            "kind": "join_request",
+            "status": "pending",
+            "initiated_by": "a1",
+        }
         kwargs[field_name] = ""
         with pytest.raises(ValueError, match=f"{field_name} cannot be empty"):
             SubnetJoinRequest(**kwargs)  # type: ignore[arg-type]
