@@ -24,7 +24,7 @@ def test_acn_api_imports_with_a2a_sdk_1_x():
 
 def test_create_a2a_app_mounts_agent_card_and_jsonrpc_routes():
     app = create_a2a_app(
-        registry=MagicMock(),
+        agent_service=MagicMock(),
         router=MagicMock(),
         broadcast=MagicMock(),
         subnet_manager=MagicMock(),

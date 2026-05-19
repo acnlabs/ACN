@@ -644,7 +644,7 @@ async def lifespan(app: FastAPI):
     # Mount A2A Protocol - Infrastructure Agent
     try:
         a2a_app = create_a2a_app(
-            registry=registry_instance,
+            agent_service=agent_service_instance,
             router=router_instance,
             broadcast=broadcast_instance,
             subnet_manager=subnet_manager_instance,

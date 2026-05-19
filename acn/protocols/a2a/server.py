@@ -59,8 +59,8 @@ from ...infrastructure.messaging import (
     SubnetManager,
 )
 from ...infrastructure.persistence.redis.a2a_task_store import RedisTaskStore
-from ...infrastructure.persistence.redis.registry import AgentRegistry
 from ...monitoring import MetricsCollector
+from ...services.agent_service import AgentService
 
 settings = get_settings()
 
@@ -167,7 +167,7 @@ class ACNAgentExecutor(AgentExecutor):
 
     def __init__(
         self,
-        registry: AgentRegistry,
+        agent_service: AgentService,
         router: MessageRouter,
         broadcast: BroadcastService,
         subnet_manager: SubnetManager,
@@ -176,7 +176,9 @@ class ACNAgentExecutor(AgentExecutor):
         """Initialize ACN Agent Executor
 
         Args:
-            registry: ACN Agent Registry for agent discovery
+            agent_service: ACN AgentService for agent discovery
+                (replaces the legacy ``AgentRegistry`` — see audit
+                report §AgentRegistry-parallel-implementation).
             router: Message Router for point-to-point routing
             broadcast: Broadcast Service for multi-agent messaging
             subnet_manager: Subnet Manager for subnet gateway routing
@@ -187,7 +189,7 @@ class ACNAgentExecutor(AgentExecutor):
                 working — production lifespan injects a real
                 MetricsCollector via ``create_a2a_app``.
         """
-        self.registry = registry
+        self.agent_service = agent_service
         self.router = router
         self.broadcast = broadcast
         self.subnet_manager = subnet_manager
@@ -566,17 +568,20 @@ class ACNAgentExecutor(AgentExecutor):
         status = params.get("status", "online")
 
         try:
-            # NOTE: ``self.registry`` is the legacy ``AgentRegistry``
-            # (``infrastructure/persistence/redis/registry.py``), a
-            # separate data plane from ``AgentService`` / the
-            # ``IAgentRepository`` family this PR touches. It is not
-            # written to by ``AgentService.touch_alive``, so the
-            # dual-source drift the rest of this refactor eliminates
-            # does not apply here — ``status`` is internally consistent
-            # within this registry.
-            agents = await self.registry.search_agents(
+            agents = await self.agent_service.search_agents(
                 tags=tags,
                 status=status,
+            )
+
+            # Agent entities no longer carry a ``status`` field — that's
+            # the whole point of the implicit-heartbeat refactor (Redis
+            # alive key is the single source of truth). For the A2A
+            # discovery wire format we still want a status string per
+            # agent, so we batch-fetch liveness from the repository in
+            # one Redis round-trip and project it back as the legacy
+            # "online" / "offline" literal.
+            alive_ids = await self.agent_service.repository.filter_alive(
+                [agent.agent_id for agent in agents]
             )
 
             # Return results
@@ -592,7 +597,11 @@ class ACNAgentExecutor(AgentExecutor):
                                     "name": agent.name,
                                     "endpoint": agent.endpoint,
                                     "tags": agent.tags,
-                                    "status": agent.status,
+                                    "status": (
+                                        "online"
+                                        if agent.agent_id in alive_ids
+                                        else "offline"
+                                    ),
                                 }
                                 for agent in agents
                             ],
@@ -811,7 +820,7 @@ class ACNAgentExecutor(AgentExecutor):
 
 
 def create_a2a_app(
-    registry: AgentRegistry,
+    agent_service: AgentService,
     router: MessageRouter,
     broadcast: BroadcastService,
     subnet_manager: SubnetManager,
@@ -821,7 +830,9 @@ def create_a2a_app(
     """Create A2A FastAPI application for ACN
 
     Args:
-        registry: ACN Agent Registry
+        agent_service: ACN AgentService for discovery (replaces the
+            legacy ``AgentRegistry`` — see audit report
+            §AgentRegistry-parallel-implementation).
         router: Message Router
         broadcast: Broadcast Service
         subnet_manager: Subnet Manager
@@ -836,7 +847,7 @@ def create_a2a_app(
     """
     # Create ACN agent executor
     executor = ACNAgentExecutor(
-        registry=registry,
+        agent_service=agent_service,
         router=router,
         broadcast=broadcast,
         subnet_manager=subnet_manager,

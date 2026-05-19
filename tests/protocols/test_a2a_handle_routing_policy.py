@@ -54,7 +54,7 @@ def _make_executor(*, route_side_effect=None, subnet_side_effect=None, metrics=N
     Tests that need to assert on counter writes pass a MagicMock
     explicitly.
     """
-    registry = MagicMock()
+    agent_service = MagicMock()
     router = MagicMock()
     broadcast = MagicMock()
     subnet_manager = MagicMock()
@@ -70,7 +70,7 @@ def _make_executor(*, route_side_effect=None, subnet_side_effect=None, metrics=N
         subnet_manager.forward_request = AsyncMock(return_value={"status": "ok"})
 
     return ACNAgentExecutor(
-        registry=registry,
+        agent_service=agent_service,
         router=router,
         broadcast=broadcast,
         subnet_manager=subnet_manager,
