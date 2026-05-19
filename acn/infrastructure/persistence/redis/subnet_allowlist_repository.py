@@ -147,7 +147,9 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         entries.sort(key=lambda e: e.added_at, reverse=True)
         return entries[offset : offset + limit]
 
-    async def delete_for_subnet(self, subnet_id: str) -> int:
+    async def delete_for_subnet(
+        self, subnet_id: str, *, session: object | None = None
+    ) -> int:
         """Cascade-delete all allowlist entries for a subnet.
 
         Iterate the SET, DEL each meta HASH, then DEL the SET
@@ -157,8 +159,15 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         ``delete_with_children_partial`` breadcrumb so the
         caller's cascade-ordering contract holds.
 
+        The ``session`` kwarg is part of the
+        :class:`ISubnetAllowlistRepository` contract (an
+        :class:`IUnitOfWork` token) — Redis ignores it for the same
+        reason :meth:`RedisSubnetJoinRequestRepository.delete_for_subnet`
+        does. See that method's docstring for the rationale.
+
         Returns the count of meta HASHes actually deleted.
         """
+        del session  # explicit ignore — see docstring
         set_key = _allowlist_set_key(subnet_id)
         agent_ids = await self.redis.smembers(set_key)
 

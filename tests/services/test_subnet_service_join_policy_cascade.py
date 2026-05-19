@@ -105,14 +105,19 @@ class TestSingleSubnetCascade:
         mock_subnet_repo.delete.return_value = True
 
         ordered_calls: list[str] = []
+        # ``**_kw`` swallows the ``session=`` kwarg the service now
+        # threads through every cascade method (added in Slice 2.1.1
+        # for the optional :class:`IUnitOfWork` atomic path). These
+        # side-effect lambdas pin cascade *ordering*, not the session
+        # value — keep them session-agnostic per issue #75 acceptance.
         mock_jr_repo.delete_for_subnet.side_effect = (
-            lambda sid: ordered_calls.append(f"jr:{sid}") or 0
+            lambda sid, **_kw: ordered_calls.append(f"jr:{sid}") or 0
         )
         mock_al_repo.delete_for_subnet.side_effect = (
-            lambda sid: ordered_calls.append(f"al:{sid}") or 0
+            lambda sid, **_kw: ordered_calls.append(f"al:{sid}") or 0
         )
 
-        async def record_subnet_delete(sid):
+        async def record_subnet_delete(sid, **_kw):
             ordered_calls.append(f"subnet_delete:{sid}")
             return True
 
@@ -357,7 +362,14 @@ class TestPartialWiring:
             # allowlist repo intentionally omitted
         )
         await service.delete_subnet("s-1", owner="alice")
-        mock_jr_repo.delete_for_subnet.assert_awaited_once_with("s-1")
+        # Session-agnostic assertion per issue #75 acceptance signal
+        # ("the contracts pinned there are session-agnostic") — pin
+        # "called once with the subnet id", but allow either ``session``
+        # kwarg shape (Slice 2.1.1 added ``session=None`` to the legacy
+        # path's call shape, but the contract intent here is just
+        # "this repo's cascade method ran for this subnet exactly once").
+        mock_jr_repo.delete_for_subnet.assert_awaited_once()
+        assert mock_jr_repo.delete_for_subnet.await_args.args == ("s-1",)
 
     @pytest.mark.asyncio
     async def test_only_allowlist_repo_wired(
@@ -375,4 +387,7 @@ class TestPartialWiring:
             # join_request repo intentionally omitted
         )
         await service.delete_subnet("s-1", owner="alice")
-        mock_al_repo.delete_for_subnet.assert_awaited_once_with("s-1")
+        # Session-agnostic — see sibling
+        # ``test_only_join_request_repo_wired`` for the rationale.
+        mock_al_repo.delete_for_subnet.assert_awaited_once()
+        assert mock_al_repo.delete_for_subnet.await_args.args == ("s-1",)

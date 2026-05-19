@@ -55,9 +55,16 @@ class TestDeleteSubnetCascade:
 
         assert ok is True
         # ONE batched cascade call — parent + children in the same
-        # repository invocation.
-        mock_subnet_repository.delete_with_children.assert_awaited_once_with(
-            "parent", ["child-1", "child-2"]
+        # repository invocation. Session-agnostic assertion (issue
+        # #75 acceptance signal): Slice 2.1.1 threads a
+        # ``session=`` kwarg through the cascade methods, but the
+        # legacy/Redis path passes ``session=None``. Pin the
+        # positional contract instead so the test doesn't lock in
+        # one or the other transactional wiring.
+        mock_subnet_repository.delete_with_children.assert_awaited_once()
+        assert mock_subnet_repository.delete_with_children.await_args.args == (
+            "parent",
+            ["child-1", "child-2"],
         )
         # Per-id ``delete()`` is no longer used on the cascade path —
         # this catches accidental regressions back to the looped impl.
@@ -82,8 +89,10 @@ class TestDeleteSubnetCascade:
         # Cascade only fires when ``parent_subnet_id is None``.
         mock_subnet_repository.find_by_parent.assert_not_called()
         mock_subnet_repository.delete_with_children.assert_not_called()
-        # Single-row delete path used directly.
-        mock_subnet_repository.delete.assert_awaited_once_with("child-1")
+        # Single-row delete path used directly. Session-agnostic per
+        # issue #75 — see sibling ``test_top_level_delegates_…``.
+        mock_subnet_repository.delete.assert_awaited_once()
+        assert mock_subnet_repository.delete.await_args.args == ("child-1",)
 
     @pytest.mark.asyncio
     async def test_cascade_failure_propagates_from_repository(
@@ -128,7 +137,9 @@ class TestDeleteSubnetCascade:
         ok = await service.delete_subnet("lonely-parent", owner="alice")
         assert ok is True
 
-        mock_subnet_repository.delete.assert_awaited_once_with("lonely-parent")
+        # Session-agnostic — see sibling ``test_top_level_delegates_…``.
+        mock_subnet_repository.delete.assert_awaited_once()
+        assert mock_subnet_repository.delete.await_args.args == ("lonely-parent",)
         mock_subnet_repository.delete_with_children.assert_not_called()
 
     @pytest.mark.asyncio

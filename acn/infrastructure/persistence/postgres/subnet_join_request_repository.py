@@ -19,6 +19,8 @@ partial index this is the dual-layer defence ADR §"Redis layout
 and atomicity" describes.
 """
 
+from contextlib import asynccontextmanager
+
 from sqlalchemy import delete, desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -50,6 +52,30 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         self._session_factory = session_factory
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @asynccontextmanager
+    async def _session_scope(self, session: AsyncSession | None):
+        """Yield ``session`` if passed (no commit / no close) — caller
+        owns the transaction. Otherwise open + commit + close ourselves.
+
+        Identical shape to
+        ``PostgresSettlementOutboxRepository._session_scope`` — picked
+        deliberately so the saga and the ADR-0004 cascade share one
+        outer-session contract: passing a session means "this call is
+        a brick in someone else's transaction; do not commit". The
+        outer Unit-of-Work owns commit-on-clean-exit and
+        rollback-on-exception; we just stay out of its way.
+        """
+        if session is not None:
+            yield session
+            return
+        async with self._session_factory() as own_session:
+            yield own_session
+            await own_session.commit()
 
     # ------------------------------------------------------------------
     # Mapping
@@ -209,25 +235,39 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
             )
             return [self._model_to_entity(r) for r in result.scalars().all()]
 
-    async def delete_for_subnet(self, subnet_id: str) -> int:
+    async def delete_for_subnet(
+        self, subnet_id: str, *, session: AsyncSession | None = None
+    ) -> int:
         """Cascade-delete all rows for a subnet. Returns count deleted.
 
-        Called from ``SubnetService.delete_subnet`` inside an outer
-        transaction that also DELETEs ``subnet_allowlist`` and the
-        ``subnets`` row itself. We don't open our own
-        ``session.begin()`` here — the outer service context manages
-        the transaction so all three DELETEs are atomic, matching
-        ADR §"Cascade deletion: Postgres" exactly.
+        When ``session`` is passed (the production cascade path —
+        ``SubnetService.delete_subnet`` opens a single
+        ``uow.transaction()`` and threads it through here, the
+        allowlist repo, and the ``subnets`` DELETE), this call
+        participates in that outer transaction: no internal commit,
+        no internal close, so a failure on any of the sibling DELETEs
+        rolls the whole batch back. This is what ADR §"Cascade
+        deletion: Postgres" actually promises ("any failure rolls back
+        the whole batch") — Slice 2.1 shipped this without the outer
+        session and issue #75 tracked the gap until Slice 2.1.1 (this
+        change) closed it.
+
+        When ``session`` is ``None`` (legacy fixtures, ad-hoc tools)
+        the call falls back to the original self-managed
+        ``self._session_factory() → execute → commit`` shape — the
+        cascade still works, just at lower atomicity. The behaviour
+        is byte-for-byte the same as the pre-Slice-2.1.1 code so
+        out-of-tree callers that constructed the repo bare keep
+        working unchanged.
 
         Returns the deleted-row count for audit logging; the service
         layer logs it but doesn't gate on it (zero rows is a valid
         outcome — subnets without any pending or terminal requests).
         """
-        async with self._session_factory() as session:
-            result = await session.execute(
+        async with self._session_scope(session) as sess:
+            result = await sess.execute(
                 delete(SubnetJoinRequestModel).where(
                     SubnetJoinRequestModel.subnet_id == subnet_id
                 )
             )
-            await session.commit()
             return result.rowcount or 0

@@ -390,7 +390,9 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         rows.sort(key=lambda r: r.created_at, reverse=True)
         return rows
 
-    async def delete_for_subnet(self, subnet_id: str) -> int:
+    async def delete_for_subnet(
+        self, subnet_id: str, *, session: object | None = None
+    ) -> int:
         """Cascade-delete all rows for a subnet.
 
         Best-effort sequential per ADR §"Cascade deletion: Redis":
@@ -403,9 +405,19 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         BEFORE touching the subnet HASH so a half-cascade isn't
         treated as success.
 
+        The ``session`` kwarg is part of the
+        :class:`ISubnetJoinRequestRepository` contract (an
+        :class:`IUnitOfWork` token) but Redis has no PG-style
+        transactional composition primitive — we ignore it and keep
+        the existing best-effort sequential behaviour. ADR-0004
+        §"Cascade deletion: Redis" makes the asymmetry explicit;
+        accepting + ignoring is the cleanest way to satisfy the
+        Liskov contract without pretending Redis is transactional.
+
         Returns the count of request HASHes actually deleted (for
         audit log; not gated on by the cascade control flow).
         """
+        del session  # explicit ignore — see docstring
         listing_key = _subnet_listing_key(subnet_id)
         request_ids = await self.redis.smembers(listing_key)
 

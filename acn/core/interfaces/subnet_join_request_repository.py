@@ -34,6 +34,7 @@ service's responsibility.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from ..entities import SubnetJoinRequest
 
@@ -127,7 +128,9 @@ class ISubnetJoinRequestRepository(ABC):
         """
 
     @abstractmethod
-    async def delete_for_subnet(self, subnet_id: str) -> int:
+    async def delete_for_subnet(
+        self, subnet_id: str, *, session: Any | None = None
+    ) -> int:
         """Cascade-delete all rows for a subnet. Returns count deleted.
 
         Called by ``SubnetService.delete_subnet`` before deleting
@@ -139,4 +142,19 @@ class ISubnetJoinRequestRepository(ABC):
 
         Returns the number of rows actually deleted (useful for
         audit logging; not used by the cascade control flow).
+
+        Transaction participation
+        -------------------------
+        ``session`` is the opaque token yielded by
+        :class:`IUnitOfWork`'s ``transaction()`` context manager
+        (see ``acn/core/interfaces/unit_of_work.py``). Implementations
+        that understand the token's runtime type MUST bind to it for
+        the duration of the call (no internal commit, no internal
+        close) so the outer Unit-of-Work owns the transaction
+        boundary; implementations that don't understand the token
+        (e.g. the Redis impl, which has no transaction model that
+        composes with PG's ``AsyncSession``) MUST ignore it and
+        keep their best-effort behaviour. Passing ``session=None``
+        (the default) is the legacy path: the implementation opens
+        and commits its own connection.
         """

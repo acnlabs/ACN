@@ -150,13 +150,25 @@ class RedisSubnetRepository(ISubnetRepository):
         all_subnets = await self.find_all()
         return [s for s in all_subnets if s.is_public()]
 
-    async def delete(self, subnet_id: str) -> bool:
+    async def delete(
+        self, subnet_id: str, *, session: object | None = None
+    ) -> bool:
         """Delete a subnet and all its secondary index entries.
 
         Reads the subnet first to know which index sets to clean up
         (owner, parent, linked-task). All deletions are then batched
         in a single pipeline.
+
+        The ``session`` kwarg is part of the :class:`ISubnetRepository`
+        contract (an :class:`IUnitOfWork` token used by the Postgres
+        impl to participate in the outer cascade transaction). Redis
+        ignores it — the per-call pipeline is the strongest atomicity
+        primitive available here and it doesn't compose across method
+        calls. See ADR-0004 §"Cascade deletion: Redis" for the
+        asymmetric ordering contract the service layer relies on
+        instead.
         """
+        del session  # explicit ignore — see docstring
         subnet = await self.find_by_id(subnet_id)
         if not subnet:
             return False
@@ -178,7 +190,11 @@ class RedisSubnetRepository(ISubnetRepository):
         return True
 
     async def delete_with_children(
-        self, parent_id: str, child_ids: list[str]
+        self,
+        parent_id: str,
+        child_ids: list[str],
+        *,
+        session: object | None = None,
     ) -> bool:
         """Sequential cascade delete with audit-log breadcrumb on
         partial failure (ADR-0003 §A.4 Redis branch).
@@ -197,7 +213,12 @@ class RedisSubnetRepository(ISubnetRepository):
         - On a fully successful child sweep, the parent delete is
           attempted last. Its return value propagates (False = parent
           already gone, but children were still cleaned).
+
+        The ``session`` kwarg is part of the :class:`ISubnetRepository`
+        contract — Redis ignores it for the same reason
+        :meth:`delete` does (no transactional composition primitive).
         """
+        del session  # explicit ignore — see docstring
         for child_id in child_ids:
             deleted = await self.delete(child_id)
             if not deleted:

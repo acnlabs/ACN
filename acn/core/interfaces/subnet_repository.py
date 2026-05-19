@@ -4,6 +4,7 @@ Defines contract for subnet persistence operations.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from ..entities import Subnet
 
@@ -72,12 +73,21 @@ class ISubnetRepository(ABC):
         pass
 
     @abstractmethod
-    async def delete(self, subnet_id: str) -> bool:
+    async def delete(
+        self, subnet_id: str, *, session: Any | None = None
+    ) -> bool:
         """
         Delete a subnet
 
         Args:
             subnet_id: Subnet identifier
+            session: Optional :class:`IUnitOfWork` token. When passed,
+                Postgres impl binds to it (no internal commit / close)
+                so the call participates in the outer transaction; the
+                Redis impl ignores it. Default ``None`` is the legacy
+                path with self-managed session + commit. See
+                ``acn/core/interfaces/unit_of_work.py`` for the
+                cross-cutting contract.
 
         Returns:
             True if deleted, False if not found
@@ -86,7 +96,11 @@ class ISubnetRepository(ABC):
 
     @abstractmethod
     async def delete_with_children(
-        self, parent_id: str, child_ids: list[str]
+        self,
+        parent_id: str,
+        child_ids: list[str],
+        *,
+        session: Any | None = None,
     ) -> bool:
         """
         Atomic-where-supported parent + children delete (ADR-0003 §A.4).
@@ -122,6 +136,16 @@ class ISubnetRepository(ABC):
             child_ids: Child subnet identifiers to delete first. May be
                 empty — in that case behaves identically to
                 ``delete(parent_id)``.
+            session: Optional :class:`IUnitOfWork` token. When passed,
+                Postgres impl binds to it and skips its own
+                ``session.begin()`` (the outer Unit-of-Work already
+                owns the transaction boundary, so a nested
+                ``session.begin()`` would only create a SAVEPOINT and
+                couple the cascade to PG-specific nesting semantics —
+                avoided by design). Redis impl ignores it. Default
+                ``None`` is the legacy self-managed path that still
+                uses ``async with session.begin()`` internally for
+                PG (single transaction across all child DELETEs).
 
         Returns:
             True on full cascade success, False when parent did not exist.

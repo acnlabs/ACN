@@ -15,6 +15,7 @@ from ..core.interfaces import (
     ISubnetAllowlistRepository,
     ISubnetJoinRequestRepository,
     ISubnetRepository,
+    IUnitOfWork,
 )
 from ..core.interfaces.task_repository import ITaskRepository
 
@@ -109,6 +110,26 @@ class SubnetService:
     #56). Production wiring supplies one; legacy fixtures that omit
     it get the pre-#56 behaviour (stale agent-side dust survives
     the delete) — best-effort and backward-compatible.
+
+    Optionally accepts an :class:`IUnitOfWork` so ``delete_subnet``
+    can run its three-table cascade (``subnet_join_requests``,
+    ``subnet_allowlist``, ``subnets``) inside one Postgres
+    transaction (issue #75 / ADR-0004 §"Cascade deletion: Postgres").
+    Slice 2.1.1 (this) wires the UoW machinery so the cascade is
+    genuinely atomic the moment both
+    ``subnet_join_request_repository`` and
+    ``subnet_allowlist_repository`` are also wired — currently the
+    cascade repos themselves stay unwired in production until
+    Slice 2.2 lands the route surface that creates rows. Until
+    then the UoW is opened around just the subnet DELETE itself
+    (the cascade sweeps short-circuit when their repos are
+    absent), exercising the atomicity machinery end-to-end before
+    real rows show up. When the UoW is omitted (Redis-only
+    deployments, legacy fixtures), the cascade falls back to the
+    Slice-2.1 sequential-commit shape: each repo commits
+    independently. ADR-0004 explicitly accepts the Redis
+    asymmetry; the legacy fallback exists only so out-of-tree
+    code that builds a bare ``SubnetService`` keeps working.
     """
 
     def __init__(
@@ -118,6 +139,7 @@ class SubnetService:
         agent_repository: IAgentRepository | None = None,
         subnet_join_request_repository: ISubnetJoinRequestRepository | None = None,
         subnet_allowlist_repository: ISubnetAllowlistRepository | None = None,
+        unit_of_work: IUnitOfWork | None = None,
     ):
         """
         Initialize Subnet Service
@@ -147,12 +169,22 @@ class SubnetService:
                 ``delete_subnet`` to cascade-delete admission
                 allowlist entries. Same opt-in pattern as
                 ``subnet_join_request_repository``.
+            unit_of_work: Optional — when present, ``delete_subnet``
+                runs the three cascade DELETEs (join_requests,
+                allowlist, subnet) inside a single
+                :meth:`IUnitOfWork.transaction` block, threading the
+                yielded session token through each repo's ``session=``
+                kwarg. When ``None``, ``delete_subnet`` falls back to
+                the Slice-2.1 sequential-commit shape (each repo
+                commits independently — see class docstring for the
+                acceptable use cases of that fallback).
         """
         self.repository = subnet_repository
         self.task_repository = task_repository
         self.agent_repository = agent_repository
         self.join_request_repository = subnet_join_request_repository
         self.allowlist_repository = subnet_allowlist_repository
+        self.unit_of_work = unit_of_work
 
     async def create_subnet(
         self,
@@ -472,6 +504,30 @@ class SubnetService:
         Both backends raise on partial failure, so callers cannot
         accidentally treat a partially-completed cascade as success.
 
+        Join-policy artifact cascade (ADR-0004 §"Cascade deletion")
+        runs immediately before the subnet record(s) are dropped:
+
+        - When :class:`IUnitOfWork` was injected at construction
+          (Postgres production wiring), the three cascade DELETEs
+          (``subnet_join_requests``, ``subnet_allowlist``, and
+          ``subnets``) are threaded through one
+          :meth:`IUnitOfWork.transaction` block so they commit or
+          roll back as a unit (issue #75 closed by Slice 2.1.1).
+        - When no UoW is wired (Redis-only deployments, legacy
+          fixtures), the cascade falls back to the Slice-2.1
+          sequential-commit shape — each repo commits independently.
+          ADR-0004 explicitly accepts the Redis asymmetry; the
+          fallback is what test fixtures predating Slice 2.1.1 rely
+          on, and it stays byte-for-byte the same as before so
+          out-of-tree callers keep working.
+
+        Agent back-reference cleanup (issue #56) deliberately stays
+        OUTSIDE the transaction in both modes — agent-side
+        ``subnet_ids`` mutations are best-effort by design (ADR-0001
+        §dual-store membership) and folding them into the cascade
+        transaction would couple agent-store reachability to subnet
+        delete success.
+
         Args:
             subnet_id: Subnet identifier
             owner: Owner identifier (or ``"system"`` for cascade)
@@ -486,7 +542,7 @@ class SubnetService:
                 ``delete_with_children_partial`` breadcrumb when a
                 child delete returned ``False`` (parent preserved).
             sqlalchemy.exc.SQLAlchemyError: PG cascade path bubbles
-                any DB error out of ``session.begin()`` after the
+                any DB error out of the UoW transaction after the
                 whole transaction is rolled back — parent + every
                 child preserved. Caller treats both backend-specific
                 exception types as "cascade aborted, retry-safe".
@@ -522,6 +578,8 @@ class SubnetService:
                 # Clear back-references for every child first, then
                 # the parent. Order mirrors the cascade delete order
                 # the repository will execute next.
+                # Stays outside the UoW transaction by design — see
+                # method docstring §"Agent back-reference cleanup".
                 for child in children:
                     await self._clear_agent_back_references(
                         child.subnet_id, child.member_agent_ids
@@ -536,19 +594,8 @@ class SubnetService:
                     child_subnet_ids=child_ids,
                     child_count=len(child_ids),
                 )
-                # ADR-0004 §"Cascade deletion" — sweep join_requests
-                # + allowlist for the parent AND every child BEFORE
-                # the subnet records themselves. Order matters: if
-                # the join_request cascade raises ``RuntimeError``
-                # (Redis partial failure), the subnet HASHes stay
-                # in place so the cascade can be retried.
-                for child in children:
-                    await self._cascade_join_policy_artifacts(
-                        child.subnet_id
-                    )
-                await self._cascade_join_policy_artifacts(subnet_id)
-                return await self.repository.delete_with_children(
-                    subnet_id, child_ids
+                return await self._run_cascade_delete(
+                    subnet_id, subnet_to_delete_with=children
                 )
 
         # No-cascade path: child subnet direct-delete OR top-level
@@ -557,18 +604,95 @@ class SubnetService:
         await self._clear_agent_back_references(
             subnet_id, subnet.member_agent_ids
         )
-        await self._cascade_join_policy_artifacts(subnet_id)
         logger.info("delete_subnet", subnet_id=subnet_id)
-        return await self.repository.delete(subnet_id)
+        return await self._run_cascade_delete(subnet_id, subnet_to_delete_with=None)
 
-    async def _cascade_join_policy_artifacts(self, subnet_id: str) -> None:
+    async def _run_cascade_delete(
+        self,
+        subnet_id: str,
+        *,
+        subnet_to_delete_with: list[Subnet] | None,
+    ) -> bool:
+        """Run the join-policy + subnet DELETE batch.
+
+        Branches on :attr:`unit_of_work` injection:
+
+        - **UoW wired (PG production)**: opens one
+          :meth:`IUnitOfWork.transaction`, threads the yielded
+          session into the join_requests + allowlist + subnet
+          DELETEs via their ``session=`` kwarg, and lets the UoW
+          commit-on-clean-exit / rollback-on-exception envelope
+          decide the batch's fate. This is the ADR-0004 §"Cascade
+          deletion: Postgres" promise.
+        - **UoW absent (Redis or legacy)**: calls each cascade
+          method without a session — the Slice-2.1 sequential-commit
+          path. Redis impls ignore the ``session`` kwarg either way;
+          legacy fixtures get the pre-Slice-2.1.1 behaviour
+          unchanged.
+
+        ``subnet_to_delete_with`` distinguishes the two delete
+        shapes:
+
+        - ``None`` → single subnet (no children, OR a child subnet
+          deleted directly). Final DELETE is
+          ``self.repository.delete(subnet_id, session=...)``.
+        - non-empty list → parent with children. Final DELETE is
+          ``self.repository.delete_with_children(parent_id,
+          [c.subnet_id for c in children], session=...)``. The
+          join-policy artifact sweep runs for every child AND the
+          parent inside the same transaction.
+        """
+        if self.unit_of_work is not None:
+            async with self.unit_of_work.transaction() as session:
+                return await self._cascade_delete_body(
+                    subnet_id, subnet_to_delete_with, session=session
+                )
+        return await self._cascade_delete_body(
+            subnet_id, subnet_to_delete_with, session=None
+        )
+
+    async def _cascade_delete_body(
+        self,
+        subnet_id: str,
+        subnet_to_delete_with: list[Subnet] | None,
+        *,
+        session: object | None,
+    ) -> bool:
+        """Inner body shared by atomic and legacy cascade paths.
+
+        Order — strictly join_requests → allowlist → subnets, for
+        every cascaded subnet (children first, then parent). The
+        order is cosmetic inside a single PG transaction (everything
+        commits together) but it matters in Redis-only / legacy
+        paths: if the join_request cascade raises ``RuntimeError``
+        (Redis partial failure), the subnet records stay in place so
+        the cascade can be retried.
+        """
+        if subnet_to_delete_with is not None:
+            children = subnet_to_delete_with
+            child_ids = [c.subnet_id for c in children]
+            for child in children:
+                await self._cascade_join_policy_artifacts(
+                    child.subnet_id, session=session
+                )
+            await self._cascade_join_policy_artifacts(subnet_id, session=session)
+            return await self.repository.delete_with_children(
+                subnet_id, child_ids, session=session
+            )
+        await self._cascade_join_policy_artifacts(subnet_id, session=session)
+        return await self.repository.delete(subnet_id, session=session)
+
+    async def _cascade_join_policy_artifacts(
+        self, subnet_id: str, *, session: object | None = None
+    ) -> None:
         """Sweep ADR-0004 join_requests + allowlist for ``subnet_id``.
 
-        Called from ``delete_subnet`` BEFORE the subnet HASH / row
-        delete. Either repository raising ``RuntimeError`` (Redis
-        partial failure) propagates here and aborts the caller's
-        subnet delete — exactly the behaviour ADR §"Cascade deletion"
-        requires so a half-cascade isn't treated as success.
+        Called from ``_cascade_delete_body`` BEFORE the subnet
+        HASH / row delete. Either repository raising
+        ``RuntimeError`` (Redis partial failure) propagates here
+        and aborts the caller's subnet delete — exactly the
+        behaviour ADR §"Cascade deletion" requires so a
+        half-cascade isn't treated as success.
 
         Silent no-op when either repo wasn't wired (legacy
         fixtures predating Slice 2.1) — same opt-in pattern
@@ -579,13 +703,23 @@ class SubnetService:
 
         Order: join_requests first, allowlist second. The order
         matches the ADR §"Cascade deletion: Postgres" example
-        statement order, though for the manual cascade it's
-        cosmetic (both DELETEs run inside the outer service-layer
-        transaction in PG; in Redis they're independent passes).
+        statement order, though for the PG-with-UoW path it's
+        cosmetic (both DELETEs commit together with the subnet
+        DELETE on UoW exit); in Redis or legacy paths they're
+        independent passes and the order matters for retry
+        recoverability.
+
+        ``session``: the opaque :class:`IUnitOfWork` token threaded
+        through from ``_run_cascade_delete``. ``None`` for legacy
+        / Redis paths (each repo manages its own session and
+        commits independently); a real token (currently
+        ``AsyncSession`` from ``PostgresUnitOfWork``) for the
+        atomic PG path — bound to ``session=`` of both repo
+        methods so they join the outer transaction.
         """
         if self.join_request_repository is not None:
             deleted = await self.join_request_repository.delete_for_subnet(
-                subnet_id
+                subnet_id, session=session
             )
             if deleted:
                 logger.info(
@@ -595,7 +729,7 @@ class SubnetService:
                 )
         if self.allowlist_repository is not None:
             deleted = await self.allowlist_repository.delete_for_subnet(
-                subnet_id
+                subnet_id, session=session
             )
             if deleted:
                 logger.info(
