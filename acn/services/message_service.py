@@ -67,10 +67,12 @@ class MessageService:
         # **not** registered agents — the registry can never issue a UUID
         # colliding with ``system:`` (see 14.5-1 / 14.6 design). Skip the
         # sender table lookup; recipient validation + routing still apply.
+        sender_subnet_ids: set[str] | None = None
         if not from_agent_id.startswith("system:"):
             sender = await self.agent_repository.find_by_id(from_agent_id)
             if not sender:
                 raise AgentNotFoundException(f"Sender agent {from_agent_id} not found")
+            sender_subnet_ids = set(getattr(sender, "subnet_ids", None) or [])
 
         # Verify recipient exists
         recipient = await self.agent_repository.find_by_id(to_agent_id)
@@ -110,6 +112,7 @@ class MessageService:
             from_agent=from_agent_id,
             to_agent=to_agent_id,
             message=message,
+            sender_subnet_ids=sender_subnet_ids,
             **router_kwargs,
         )
 

@@ -279,6 +279,7 @@ class PolicyCheckService:
         *,
         message_meta: dict[str, Any] | None = None,
         is_in_allowlist: Callable[[str, str], Awaitable[bool]] | None = None,
+        shared_subnet_ids: set[str] | None = None,
     ) -> PolicyDecision:
         """Return the access decision for ``sender_id`` -> ``recipient_id``.
 
@@ -303,6 +304,14 @@ class PolicyCheckService:
                 self) so this class has no IO dependencies — keeps
                 unit tests trivial and lets non-router callers
                 supply a stub.
+            shared_subnet_ids: Pre-computed set of non-reserved subnet
+                IDs that both sender and recipient share. When
+                non-empty, agents in ``manifest`` or ``allowlist``
+                mode treat the sender as implicitly trusted and route
+                to inbox (normal delivery) instead of manifest. The
+                ``public`` and ``system`` subnets are excluded by the
+                caller so membership in those does not grant implicit
+                trust. ``None`` or empty set means no shared subnets.
 
         Returns:
             ``PolicyDecision``. This method never raises for policy
@@ -332,15 +341,28 @@ class PolicyCheckService:
             )
 
         if mode == "manifest":
-            # Accept-but-divert. ``allow=True`` so the router doesn't
-            # increment ``acn_messages_rejected_total`` (these aren't
-            # rejections from the sender's perspective — the message
-            # is accepted, just stashed in a low-attention queue), and
-            # ``route_to="manifest"`` instructs the router to skip the
-            # inbox write and call ManifestService.write instead.
+            if shared_subnet_ids:
+                logger.debug(
+                    "policy_subnet_trust_bypass",
+                    sender_id=sender_id,
+                    recipient_id=recipient_id,
+                    shared_subnets=sorted(shared_subnet_ids),
+                )
+                return PolicyDecision(allow=True, route_to="inbox")
             return PolicyDecision(allow=True, route_to="manifest")
 
         if mode == "allowlist":
+            # Subnet co-membership grants implicit trust (checked before
+            # the explicit allowlist so we skip the IO call when possible).
+            if shared_subnet_ids:
+                logger.debug(
+                    "policy_subnet_trust_bypass",
+                    sender_id=sender_id,
+                    recipient_id=recipient_id,
+                    shared_subnets=sorted(shared_subnet_ids),
+                )
+                return PolicyDecision(allow=True, route_to="inbox")
+
             # The router is responsible for wiring
             # ``is_in_allowlist``; if it didn't, we cannot safely
             # decide — treat as configuration error and fail-closed
@@ -395,6 +417,7 @@ class PolicyCheckService:
         *,
         message_meta: dict[str, Any] | None = None,
         is_in_allowlist: Callable[[str, str], Awaitable[bool]] | None = None,
+        shared_subnet_ids: set[str] | None = None,
     ) -> None:
         """Raise ``PolicyRejected`` if the recipient's policy denies the message.
 
@@ -412,6 +435,7 @@ class PolicyCheckService:
             recipient_policy=recipient_policy,
             message_meta=message_meta,
             is_in_allowlist=is_in_allowlist,
+            shared_subnet_ids=shared_subnet_ids,
         )
         if decision.allow:
             return
