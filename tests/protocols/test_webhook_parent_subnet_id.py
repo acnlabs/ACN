@@ -33,6 +33,7 @@ import pytest
 from acn.core.entities import Subnet
 from acn.protocols.ap2 import WebhookEventType
 from acn.routes._subnet_membership import do_join_subnet, do_leave_subnet
+from acn.services._join_flow_result import JoinFlowJoinedOpenResult
 
 
 def _make_subnet(
@@ -68,6 +69,26 @@ def agent_service() -> AsyncMock:
     svc = AsyncMock()
     svc.join_subnet = AsyncMock(return_value=None)
     svc.leave_subnet = AsyncMock(return_value=None)
+    return svc
+
+
+def _build_join_flow_service(subnet_service: AsyncMock) -> AsyncMock:
+    """Stub ``JoinFlowService`` that forwards open-branch to subnet_service.
+
+    ADR-0004 Slice 2.3 — ``do_join_subnet`` now dispatches the
+    six-branch decision tree through ``JoinFlowService.join_subnet``
+    rather than calling ``subnet_service.add_member`` directly. The
+    webhook assertions still want ``add_member`` to fire (it now
+    happens inside the service), so the stub forwards to the same
+    underlying ``subnet_service`` mock the tests already pin.
+    """
+    svc = AsyncMock()
+
+    async def _join(subnet_id: str, agent_id: str):
+        await subnet_service.add_member(subnet_id, agent_id)
+        return JoinFlowJoinedOpenResult(subnet_id=subnet_id, agent_id=agent_id)
+
+    svc.join_subnet = AsyncMock(side_effect=_join)
     return svc
 
 
@@ -113,6 +134,7 @@ class TestJoinSubnetWebhookParentField:
     ):
         subnet = _make_subnet(parent_subnet_id=None)
         subnet_service = _build_subnet_service_for_join(subnet)
+        join_flow_service = _build_join_flow_service(subnet_service)
 
         await do_join_subnet(
             agent_id="alice",
@@ -121,6 +143,7 @@ class TestJoinSubnetWebhookParentField:
             subnet_service=subnet_service,
             agent_service=agent_service,
             webhook_service=webhook_service,
+            join_flow_service=join_flow_service,
         )
 
         webhook_service.send_to.assert_awaited_once()
@@ -152,6 +175,7 @@ class TestJoinSubnetWebhookParentField:
             harness_secret=None,
         )
         subnet_service = _build_subnet_service_for_join(child, parent_subnet=parent)
+        join_flow_service = _build_join_flow_service(subnet_service)
 
         await do_join_subnet(
             agent_id="alice",
@@ -160,6 +184,7 @@ class TestJoinSubnetWebhookParentField:
             subnet_service=subnet_service,
             agent_service=agent_service,
             webhook_service=webhook_service,
+            join_flow_service=join_flow_service,
         )
 
         webhook_service.send_to.assert_awaited_once()
@@ -185,6 +210,7 @@ class TestJoinSubnetWebhookParentField:
             harness_secret=None,
         )
         subnet_service = _build_subnet_service_for_join(subnet)
+        join_flow_service = _build_join_flow_service(subnet_service)
 
         await do_join_subnet(
             agent_id="alice",
@@ -193,6 +219,7 @@ class TestJoinSubnetWebhookParentField:
             subnet_service=subnet_service,
             agent_service=agent_service,
             webhook_service=webhook_service,
+            join_flow_service=join_flow_service,
         )
 
         webhook_service.send_to.assert_not_awaited()

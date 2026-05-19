@@ -403,15 +403,19 @@ async def withdraw_join_request(
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e
 
-    # Applicant-only: must match the row's initiated_by.
+    # Applicant-only: must match the row's initiated_by. Use the
+    # canonical ``{key_agent, path_agent}`` details shape per
+    # ``tests/test_error_code_details_consistency.py`` cross-sprint
+    # uniformity contract — ``path_agent`` is the agent the URL
+    # *implies* (the row's applicant), ``key_agent`` is whoever the
+    # caller actually authenticated as.
     if agent_info["agent_id"] != row.initiated_by:
         raise ACNHTTPError(
             ErrorCode.API_KEY_AGENT_MISMATCH,
             403,
             details={
-                "request_id": request_id,
-                "initiated_by": row.initiated_by,
-                "caller": agent_info["agent_id"],
+                "path_agent": row.initiated_by,
+                "key_agent": agent_info["agent_id"],
             },
         )
 
