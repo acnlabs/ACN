@@ -323,6 +323,12 @@ class SubnetCreateRequest(BaseModel):
     ADR-0003 nesting params (``parent_subnet_id`` / ``lifecycle`` /
     ``linked_task_id``) are optional; defaults preserve the legacy
     "flat top-level persistent subnet" shape.
+
+    ADR-0004 ``join_policy`` is optional and immutable post-creation:
+    ``"open"`` (default) preserves legacy unrestricted self-join,
+    ``"approval"`` opts the subnet into the admission state machine
+    (allowlist / join_request / invitation flow). Server defaults to
+    ``"open"`` when this field is omitted.
     """
 
     name: str
@@ -331,6 +337,7 @@ class SubnetCreateRequest(BaseModel):
     parent_subnet_id: str | None = None
     lifecycle: str = "persistent"
     linked_task_id: str | None = None
+    join_policy: str | None = None
 
 
 # ============================================
