@@ -173,8 +173,9 @@ class MessageRouter:
             agent_service: ACN agent service for discovery + liveness.
                 Replaces the legacy ``AgentRegistry`` (which read
                 ``status`` from a Redis hash field that the new
-                ``RedisAgentRepository`` no longer writes — see audit
-                report §AgentRegistry-parallel-implementation).
+                ``RedisAgentRepository`` no longer writes — see
+                ``docs/agent-registry-removal.md`` for the migration
+                record and the ``is_alive``-based offline pre-check).
             redis_client: Redis for logging and DLQ
             policy_service: Optional gateway-level access control. When
                 provided, ``route()`` short-circuits inbound delivery

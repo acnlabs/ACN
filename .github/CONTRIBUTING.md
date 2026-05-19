@@ -239,44 +239,74 @@ npm test
 ### Writing Tests
 
 - Place tests in `tests/` directory
-- Mirror the source structure: `acn/registry.py` → `tests/test_registry.py`
+- Mirror the source structure: `acn/services/agent_service.py` → `tests/services/test_agent_service.py`
 - Use descriptive test names: `test_register_agent_with_payment_capability`
 - Include both positive and negative test cases
 
 ```python
+from unittest.mock import AsyncMock
+
 import pytest
-from acn.registry import AgentRegistry
+
+from acn.core.entities import Agent
+from acn.services.agent_service import AgentService
 
 
-class TestAgentRegistry:
+class TestAgentService:
     @pytest.fixture
-    async def registry(self, mock_redis):
-        return AgentRegistry(redis=mock_redis)
+    def repository(self):
+        return AsyncMock()
 
-    async def test_register_agent_success(self, registry):
-        """Test successful agent registration."""
-        result = await registry.register_agent(
-            agent_id="test-agent",
+    @pytest.fixture
+    def service(self, repository):
+        return AgentService(repository=repository, redis_client=AsyncMock())
+
+    async def test_register_agent_success(self, service, repository):
+        """Successful agent registration returns a persisted Agent."""
+        repository.find_by_owner_and_endpoint.return_value = None
+        repository.save.return_value = Agent(
+            agent_id="acn_test",
+            name="Test Agent",
+            owner="owner-1",
+            endpoint="http://localhost:8001",
+        )
+
+        agent = await service.register_agent(
+            owner="owner-1",
             name="Test Agent",
             endpoint="http://localhost:8001",
         )
-        assert result.agent_id == "test-agent"
-        assert result.status == "online"
 
-    async def test_register_agent_duplicate_fails(self, registry):
-        """Test that duplicate registration raises error."""
-        await registry.register_agent(
-            agent_id="test-agent",
+        assert agent.agent_id == "acn_test"
+        # Agent.status field has been removed; liveness is read from the
+        # Redis alive-key via ``service.is_alive(agent_id)``. See
+        # ``docs/agent-registry-removal.md`` for the alive-as-SSOT
+        # contract.
+
+    async def test_register_agent_natural_key_idempotent(self, service, repository):
+        """Re-registering with same (owner, endpoint) returns the existing agent."""
+        existing = Agent(
+            agent_id="acn_test",
             name="Test Agent",
+            owner="owner-1",
             endpoint="http://localhost:8001",
         )
-        with pytest.raises(AgentExistsError):
-            await registry.register_agent(
-                agent_id="test-agent",
-                name="Another Agent",
-                endpoint="http://localhost:8002",
-            )
+        repository.find_by_owner_and_endpoint.return_value = existing
+
+        agent = await service.register_agent(
+            owner="owner-1",
+            name="Another Name",
+            endpoint="http://localhost:8001",
+        )
+
+        assert agent is existing
+        repository.save.assert_not_called()
 ```
+
+> ℹ️ The legacy `acn.registry.AgentRegistry` class was removed in 2026-05.
+> All new tests should be written against `acn.services.AgentService` with
+> a mocked `IAgentRepository`. See `docs/agent-registry-removal.md` for the
+> migration record and the `find_agent` / `get_agent` contract.
 
 ---
 

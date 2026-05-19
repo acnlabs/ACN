@@ -5,6 +5,8 @@
 **项目版本**: v0.1.0  
 **审核范围**: 完整系统架构、代码质量、可扩展性、安全性
 
+> ⚠️ **历史快照**：本审核基于 2024-12 时的架构形态。其中"AgentRegistry 封装数据访问"等 Repository Pattern 论断都已不再适用——`AgentRegistry` 类已于 2026-05（commit `4771a1b`）删除，Repository Pattern 现以 `IAgentRepository` 接口 + `RedisAgentRepository` / `PostgresAgentRepository` 实现的形式存在。文中 `RegistryDep` 注入示例已失效，新代码用 `AgentServiceDep`。最新状态见 `docs/agent-registry-removal.md`。本文保留作为历史档案。
+
 ---
 
 ## 📊 Executive Summary

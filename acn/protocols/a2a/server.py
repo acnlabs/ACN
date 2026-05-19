@@ -177,8 +177,9 @@ class ACNAgentExecutor(AgentExecutor):
 
         Args:
             agent_service: ACN AgentService for agent discovery
-                (replaces the legacy ``AgentRegistry`` — see audit
-                report §AgentRegistry-parallel-implementation).
+                (replaces the legacy ``AgentRegistry`` — see
+                ``docs/agent-registry-removal.md`` for the migration
+                record and the ``find_agent`` vs ``get_agent`` contract).
             router: Message Router for point-to-point routing
             broadcast: Broadcast Service for multi-agent messaging
             subnet_manager: Subnet Manager for subnet gateway routing
@@ -831,8 +832,8 @@ def create_a2a_app(
 
     Args:
         agent_service: ACN AgentService for discovery (replaces the
-            legacy ``AgentRegistry`` — see audit report
-            §AgentRegistry-parallel-implementation).
+            legacy ``AgentRegistry`` — see
+            ``docs/agent-registry-removal.md`` for the migration record).
         router: Message Router
         broadcast: Broadcast Service
         subnet_manager: Subnet Manager

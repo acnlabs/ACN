@@ -70,6 +70,8 @@ ACN 此前有两条 "agent 是否在线" 的事实来源：
 
 ## 5. 待办（不在本轮范围）
 
-- `WebSocketManager` 仍持有 Redis 但不直接读 `agent.status`；后续若有新的 alive-相关读路径，统一走 `AgentService.is_alive` / `repository.filter_alive`。
+- ~~`WebSocketManager` 仍持有 Redis 但不直接读 `agent.status`；后续若有新的 alive-相关读路径，统一走 `AgentService.is_alive` / `repository.filter_alive`。~~
+  **完工审核纠正**：`WebSocketManager` 与 alive-SSOT **没有耦合**——它不持有 / 不读 / 不写 agent 状态，只是 chat 频道广播层。原 TODO 是误判，已撤回。`broadcast_agent_status` 这个方法的 docstring 还提 `(online/offline/busy)` 三态，但该方法 0 调用方，是 dead code，不影响 alive-SSOT 契约。
+- 测试覆盖缺口：`SubnetManager._handle_register` 重写、`a2a._handle_discovery.status` 动态算法、gateway-注册 agent `owner=None` 持久化 —— 三条新路径缺直接回归测试。完工审核轮已补 3 个测试（见 commit 历史 `test_subnet_manager_register.py` / `test_a2a_discovery_alive_status.py`）。
 - `docs/REFACTOR_AUDIT_REPORT.md` 与 `docs/CLEAN_ARCHITECTURE_STATUS.md` 已标 deprecation；如要恢复成"活文档"应整篇重写而非追加补丁。
-- 已知 `tests/test_openapi_acn_error_response.py` 在 `ENABLE_DOCS=false` 默认环境下失败——属预存在条件（`/openapi.json` 路由按设置关闭），与本轮无关。
+- 已知 `tests/test_openapi_acn_error_response.py` 在 `ENABLE_DOCS=false` 默认环境下失败——属预存在条件（`/openapi.json` 路由按设置关闭），与本轮无关。建议把 fixture 改为 `pytest.skip()` 而不是 ERROR，以减少新贡献者首次跑测试时的困扰。

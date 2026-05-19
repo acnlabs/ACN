@@ -15,7 +15,9 @@ Architecture:
     │                     Analytics                         │
     │                                                        │
     │  Data Sources:                                        │
-    │  ├─ AgentRegistry     -> Agent stats                 │
+    │  ├─ IAgentRepository  -> Agent stats (find_all,      │
+    │  │                       count_by_subnet)            │
+    │  ├─ ISubnetRepository -> Subnet stats                │
     │  ├─ MetricsCollector  -> Performance metrics         │
     │  └─ AuditLogger       -> Event analytics             │
     │                                                        │
@@ -24,6 +26,13 @@ Architecture:
     │  ├─ Historical reports                               │
     │  └─ Alerts and anomaly detection                     │
     └──────────────────────────────────────────────────────┘
+
+Note: pre-2026-05 this module pulled agent stats from the legacy
+``AgentRegistry``. After ``AgentRegistry`` was removed (commit
+``4771a1b``) the data sources are the clean-architecture
+``IAgentRepository`` / ``ISubnetRepository`` injected at construction
+time, with a Redis-scan fallback when neither is wired. See
+``docs/agent-registry-removal.md``.
 """
 
 import json

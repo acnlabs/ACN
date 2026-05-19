@@ -270,7 +270,8 @@ async def lifespan(app: FastAPI):
     # assume str values, not bytes). Replaces the
     # ``redis_client`` access pattern that previously
     # piggybacked on ``AgentRegistry`` as a redis-client holder —
-    # see audit report §AgentRegistry-parallel-implementation.
+    # see ``docs/agent-registry-removal.md`` for the 7-commit
+    # migration record (commits 1ee1015..4771a1b).
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
 
     # Initialize Auth0 Credential Client (for Agent M2M credentials)

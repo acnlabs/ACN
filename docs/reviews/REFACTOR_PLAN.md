@@ -1,5 +1,7 @@
 # ACN API 重构计划
 
+> ⚠️ **历史快照**：本文档是 2024-12 的 `api.py` 模块化拆分计划。文中所有 `from ..registry import AgentRegistry` / `Depends(get_registry)` 的代码示例都已失效——`AgentRegistry` 类已于 2026-05（commit `4771a1b`）删除，依赖注入改为 `AgentServiceDep`。最新调用约定见 `docs/agent-registry-removal.md` 与 `.github/CONTRIBUTING.md` 的"Writing Tests"章节。本文保留作为历史档案。
+
 ## 🎯 目标
 
 将 `api.py`（1794行）拆分为模块化的路由结构，提升可维护性。

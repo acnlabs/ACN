@@ -2,6 +2,13 @@
 
 System architecture design for ACN (Agent Collaboration Network).
 
+> ⚠️ **Historical snapshot**: The component diagrams below still show
+> `AgentRegistry` as a live component. That class was removed in 2026-05
+> (commit `4771a1b`); its responsibilities are now split across
+> `AgentService` (business logic) + `IAgentRepository` (persistence) +
+> Redis `acn:agents:{id}:alive` keys (liveness, SSOT). See
+> `docs/agent-registry-removal.md` for the migration record.
+
 ---
 
 ## System Overview

@@ -112,8 +112,9 @@ class BroadcastService:
             agent_service: AgentService for discovery (optional — uses
                 router's if omitted). Replaces the legacy
                 ``AgentRegistry`` injection that drove
-                ``send_by_tag`` / ``send_to_project``; see audit
-                report §AgentRegistry-parallel-implementation.
+                ``send_by_tag`` / ``send_to_project``; see
+                ``docs/agent-registry-removal.md`` for the migration
+                record (and why ``send_to_project`` now raises).
             agent_repository: Clean-architecture agent repository
                 (PG or Redis impl). Enables the unified
                 :py:meth:`broadcast` entry that replaced
@@ -417,8 +418,9 @@ class BroadcastService:
         # NOTE: ``send_to_project`` was wired against
         # ``AgentRegistry.search_agents(metadata=...)`` — a parameter
         # AgentRegistry never actually accepted (the call has been a
-        # silent ``TypeError`` since introduction; see audit report
-        # §dead-call-sites). The successor ``AgentService.search_agents``
+        # silent ``TypeError`` since introduction; see
+        # ``docs/agent-registry-removal.md`` §3 for the dead-call-site
+        # accounting). The successor ``AgentService.search_agents``
         # also has no metadata-based search by design (project
         # membership belongs in a dedicated index, not in the agent
         # blob). Until a real project-membership index ships, fail
@@ -426,8 +428,9 @@ class BroadcastService:
         del exclude  # parameter retained for ABI compat with stale callers
         raise NotImplementedError(
             "BroadcastService.send_to_project requires a project-membership "
-            "index that is not yet implemented; see audit report "
-            f"§dead-call-sites (project_id={project_id!r})"
+            "index that is not yet implemented; see "
+            "docs/agent-registry-removal.md §3 for the dead-call-site "
+            f"history (project_id={project_id!r})"
         )
 
     async def _send_parallel(

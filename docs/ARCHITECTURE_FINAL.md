@@ -4,6 +4,8 @@
 **日期**: 2024-12-25  
 **状态**: ✅ 生产就绪
 
+> ⚠️ **历史快照（2024-12）**：本文为 Clean Architecture 切换完成时的快照。架构后续经过多轮演化（alive-as-SSOT、ADR-0004 子网 join policy、AgentRegistry 整体移除等），文中所有提到 `AgentRegistry` 的图表都已过时——该类已于 2026-05（commit `4771a1b`）删除。最新状态见 `docs/agent-registry-removal.md` 与各 ADR。本文保留作为历史档案。
+
 ---
 
 ## 🎯 架构概述

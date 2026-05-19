@@ -121,7 +121,7 @@ class SubnetManager:
     - Cross-subnet communication via MessageRouter
 
     Usage:
-        subnet_manager = SubnetManager(registry, redis_client)
+        subnet_manager = SubnetManager(agent_service, redis_client)
 
         # Create subnet
         await subnet_manager.create_subnet("enterprise-a", "Enterprise A")
@@ -156,8 +156,9 @@ class SubnetManager:
 
         Args:
             agent_service: AgentService for registry-side persistence
-                (replaces the legacy ``AgentRegistry``; see audit
-                report §AgentRegistry-parallel-implementation). The
+                (replaces the legacy ``AgentRegistry``; see
+                ``docs/agent-registry-removal.md`` for the migration
+                record and the gateway-owner=None decision). The
                 gateway register / disconnect / forward paths reach
                 into ``agent_service.repository`` directly because
                 the gateway owns its own agent_id namespace (the WS
