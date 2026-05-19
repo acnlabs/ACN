@@ -588,3 +588,142 @@ class ReputationEventModel(Base):
         # "Events for task X" — used by smoke-test backfill / ops.
         Index("ix_reputation_events_task_id", "task_id"),
     )
+
+
+# =============================================================================
+# Subnet Join Requests (ADR-0004 Phase 2 Slice 2.1)
+# =============================================================================
+#
+# Three-in-one table backing the ``SubnetJoinRequest`` entity. Single ``kind``
+# discriminator covers ``join_request`` / ``invitation`` / ``allowlist_auto``;
+# every other column has uniform semantics across the three flows. See the
+# entity's docstring for the per-kind state-transition table and ADR-0004
+# §"SubnetJoinRequest schema (three-in-one table)" for the full data-model
+# rationale.
+#
+# Why no FK to ``subnets.subnet_id``: ADR §"Cascade deletion" explicitly
+# chooses a manual cascade for symmetry with ADR-0003's parent-subnet
+# cascade — the service layer DELETEs both tables in the same transaction
+# so cascade behaviour is observable through code, not hidden in DDL. A
+# future ADR is free to add the FK once cascade observability is no
+# longer a design goal.
+#
+# The unique partial index on ``(subnet_id, agent_id) WHERE status='pending'``
+# is the schema-level enforcement of the "at most one pending per
+# (subnet, agent) across all kinds" invariant that the §join branch table
+# relies on. Without it, a self-join racing an invitation could create
+# two concurrent pending rows that both try to transition to approved.
+
+
+class SubnetJoinRequestModel(Base):
+    __tablename__ = "subnet_join_requests"
+
+    # ``String`` for ``request_id`` (UUID4 stored as text) mirrors the
+    # convention every other ID column in this codebase uses (``agent_id``,
+    # ``task_id``, ``subnet_id``). UUID column type would force callers to
+    # use ``uuid.UUID`` rather than the lower-case-hex string the rest of
+    # the codebase passes around.
+    request_id: Mapped[str] = mapped_column(String, primary_key=True)
+    subnet_id: Mapped[str] = mapped_column(String, nullable=False)
+    agent_id: Mapped[str] = mapped_column(String, nullable=False)
+    # ``length=16`` mirrors the ADR data-model table for ``kind``; the
+    # three legal values (``join_request`` is the longest at 13 chars)
+    # fit comfortably with headroom for a future fourth kind.
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # ``length=16`` likewise covers the four legal status values
+    # (``withdrawn`` is the longest at 9 chars) with headroom.
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    initiated_by: Mapped[str] = mapped_column(String, nullable=False)
+    # Nullable: NULL while ``status='pending'``; set on transition out.
+    # Entity-layer ``__post_init__`` enforces the bidirectional coherence
+    # (NULL iff pending) — this column's nullability tracks it.
+    decided_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Cap at 500 chars matches ``SubnetJoinRequest._NOTE_MAX_LEN``;
+    # ``Text`` column with app-layer enforcement mirrors the same pattern
+    # ``AgentAllowlistModel.reason`` uses (DB unbounded, app truncates).
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        # **The** invariant of this table. ``UNIQUE … WHERE status='pending'``
+        # lets terminal rows (approved / rejected / withdrawn) accumulate
+        # freely for audit while blocking a second pending row for the
+        # same ``(subnet, agent)`` regardless of kind. Backed by Redis's
+        # reverse index ``acn:subnets:{s}:pending_by_agent:{a}`` for the
+        # cache layer.
+        Index(
+            "subnet_join_requests_pending_unique",
+            "subnet_id",
+            "agent_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        # Owner-facing listing path:
+        # ``GET /subnets/{s}/join-requests`` and ``/invitations``. The
+        # filter on ``kind`` / ``status`` is application-side; the index
+        # only needs ``subnet_id`` to seek.
+        Index("ix_subnet_join_requests_subnet_id", "subnet_id"),
+        # Invitee-facing listing path:
+        # ``GET /agents/{a}/subnet-invitations``. Composite predicate
+        # selects the pending invitations the agent must decide; partial
+        # index keeps the size proportional to in-flight invitations
+        # rather than full audit history.
+        Index(
+            "ix_subnet_join_requests_agent_pending_invitations",
+            "agent_id",
+            postgresql_where=text(
+                "kind = 'invitation' AND status = 'pending'"
+            ),
+        ),
+    )
+
+
+# =============================================================================
+# Subnet Admission Allowlist (ADR-0004 Phase 2 Slice 2.1)
+# =============================================================================
+#
+# Per-subnet preauthorisation set: an entry preapproves the
+# ``(subnet_id, agent_id)`` pair for the §join branch 4 fast path.
+# Distinct from ``AgentAllowlistModel`` (which lives in the comm-policy
+# namespace, governs **agent-to-agent messaging** under
+# ``communication_policy.mode=allowlist``); the table-name prefix
+# ``subnet_`` keeps the two namespaces unambiguous in DBA-side queries.
+#
+# Composite primary key ``(subnet_id, agent_id)`` makes the natural-key
+# uniqueness DB-enforced; no surrogate id needed. Mirrors the convention
+# ``AgentAllowlistModel`` uses for the same shape.
+
+
+class SubnetAllowlistModel(Base):
+    __tablename__ = "subnet_allowlist"
+
+    subnet_id: Mapped[str] = mapped_column(String, nullable=False)
+    # ``agent_id`` references ``agents.agent_id`` — but **no FK**. Symmetric
+    # with ``subnet_join_requests``: ADR §"Cascade deletion" makes the
+    # cascade manual for observability, and the route-layer existence
+    # check (per ADR §SubnetAllowlist "Allowlist add requires the target
+    # agent_id to already exist in the agent registry") returns a clean
+    # 404 AGENT_NOT_FOUND instead of a raw IntegrityError.
+    agent_id: Mapped[str] = mapped_column(String, nullable=False)
+    # Owner agent_id who added the entry. Required (entity layer rejects
+    # empty) so every mutation is audit-traceable; the synthetic
+    # ``system:<reason>`` actor convention from
+    # ``SubnetJoinRequest.SYSTEM_ALLOWLIST_ACTOR`` covers admin-side
+    # paths that lack a real owner identity.
+    added_by: Mapped[str] = mapped_column(String, nullable=False)
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint("subnet_id", "agent_id"),
+        # Reverse lookup: "which subnets is agent X preauthorised on?"
+        # — used by the agent-facing dashboard view; ops-only today,
+        # cheap enough to keep around for future API surfaces.
+        Index("ix_subnet_allowlist_agent_id", "agent_id"),
+    )
