@@ -56,8 +56,12 @@ def policy_service() -> PolicyCheckService:
 
 
 @pytest.fixture
-def mock_registry() -> MagicMock:
-    return MagicMock()
+def mock_agent_service() -> AsyncMock:
+    # Default to is_alive=True so legacy tests written for status='online''
+    # keep their happy-path semantics. Offline tests override per-test.
+    svc = AsyncMock()
+    svc.is_alive = AsyncMock(return_value=True)
+    return svc
 
 
 def _make_agent_info(
@@ -105,15 +109,15 @@ class TestClosedRecipientShortCircuits:
 
     @pytest.mark.asyncio
     async def test_raises_policy_rejected(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "closed", "reject_reason": "busy"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -131,18 +135,18 @@ class TestClosedRecipientShortCircuits:
 
     @pytest.mark.asyncio
     async def test_does_not_write_inbox(
-        self, mock_registry, fake_redis, fake_pipe, policy_service
+        self, mock_agent_service, fake_redis, fake_pipe, policy_service
     ):
         """Pinning that ``closed`` rejection does NOT silently park the
         message in the recipient's inbox — that would defeat the whole
         point of opting out of inbound traffic."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "closed"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -159,18 +163,18 @@ class TestClosedRecipientShortCircuits:
 
     @pytest.mark.asyncio
     async def test_does_not_write_dlq(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Pinning that policy rejection is treated as access-denied,
         not as a retryable delivery failure. DLQ is reserved for
         genuine network/upstream errors."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "closed"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -187,18 +191,18 @@ class TestClosedRecipientShortCircuits:
 
     @pytest.mark.asyncio
     async def test_does_not_open_http_connection(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Pinning that the rejection happens before any A2A client
         instantiation. Even SSRF resolution shouldn't fire on a
         closed-policy path."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "closed"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -217,19 +221,19 @@ class TestClosedRecipientShortCircuits:
 
     @pytest.mark.asyncio
     async def test_offline_closed_agent_still_rejected(
-        self, mock_registry, fake_redis, fake_pipe, policy_service
+        self, mock_agent_service, fake_redis, fake_pipe, policy_service
     ):
         """Edge case worth pinning: ``closed`` ∧ ``offline`` must still
         reject (no inbox write). Without the early policy gate the
         offline-pre-check branch would happily park the message."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 status="offline",
                 communication_policy={"mode": "closed"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -252,19 +256,19 @@ class TestClosedRecipientShortCircuits:
 class TestSystemSenderExemption:
     @pytest.mark.asyncio
     async def test_system_sender_bypasses_closed_recipient(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Pinning at the router so a refactor that loses the exemption
         on the way down (e.g. service mutates sender_id) is loud."""
         from acn.infrastructure.messaging.message_router import create_text_message
 
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "closed"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -292,20 +296,20 @@ class TestSystemSenderExemption:
 class TestOpenRecipientUnaffected:
     @pytest.mark.asyncio
     async def test_open_policy_passes_through_to_http(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Regression guard: installing the policy gate must not change
         the happy-path delivery flow for ``open`` agents (the legacy
         default)."""
         from acn.infrastructure.messaging.message_router import create_text_message
 
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "open"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -325,17 +329,17 @@ class TestOpenRecipientUnaffected:
 
     @pytest.mark.asyncio
     async def test_no_policy_field_treated_as_open(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Backward compat: an AgentInfo without ``communication_policy``
         (pre-Step-2.2 legacy entry) must be treated as ``open``."""
         from acn.infrastructure.messaging.message_router import create_text_message
 
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(communication_policy=None)
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -361,7 +365,7 @@ class TestOpenRecipientUnaffected:
 class TestPolicyServiceOptional:
     @pytest.mark.asyncio
     async def test_no_policy_service_skips_gate(
-        self, mock_registry, fake_redis
+        self, mock_agent_service, fake_redis
     ):
         """Pinning the rollout opt-out: routers built without a policy
         service (legacy tests, scripts, the api.py that's about to be
@@ -372,13 +376,13 @@ class TestPolicyServiceOptional:
 
         # Even a closed policy must NOT short-circuit when the service
         # is not installed.
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "closed"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=None,
         )
@@ -419,7 +423,7 @@ class TestDlqRetryHonorsCurrentPolicy:
 
     @pytest.mark.asyncio
     async def test_policy_rejected_during_retry_drops_without_requeue(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         dlq_entry = {
             "route_id": "deadbeef",
@@ -438,7 +442,7 @@ class TestDlqRetryHonorsCurrentPolicy:
         fake_redis.rpop = AsyncMock(side_effect=[json.dumps(dlq_entry), None])
 
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -462,7 +466,7 @@ class TestDlqRetryHonorsCurrentPolicy:
 
     @pytest.mark.asyncio
     async def test_generic_exception_during_retry_still_requeues(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Regression guard: only ``PolicyRejected`` triggers the new
         drop path. Genuine network failures must keep their existing
@@ -485,7 +489,7 @@ class TestDlqRetryHonorsCurrentPolicy:
         fake_redis.rpop = AsyncMock(side_effect=[json.dumps(dlq_entry), None])
 
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )

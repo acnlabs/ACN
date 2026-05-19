@@ -48,14 +48,14 @@ async def test_router_uses_registered_endpoint_as_direct_legacy_jsonrpc_target(m
 
     agent_info = MagicMock()
     agent_info.endpoint = "https://agent.example.com/a2a"
-    agent_info.status = "online"
     agent_info.communication_policy = {"mode": "open"}
 
-    registry = MagicMock()
-    registry.get_agent = AsyncMock(return_value=agent_info)
+    agent_service = AsyncMock()
+    agent_service.find_agent = AsyncMock(return_value=agent_info)
+    agent_service.is_alive = AsyncMock(return_value=True)
 
     router = MessageRouter(
-        registry=registry,
+        agent_service=agent_service,
         redis_client=AsyncMock(),
     )
 

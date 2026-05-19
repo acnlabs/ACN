@@ -44,7 +44,6 @@ from a2a.types.a2a_pb2 import (  # type: ignore[import-untyped]
 from ...config import get_settings
 from ...core.exceptions import PolicyRejected
 from ...security import SSRFViolation, safe_resolve_target
-from ..persistence.redis.registry import AgentRegistry
 
 
 class AttentionFeeWrongModeError(Exception):
@@ -94,6 +93,7 @@ class ContentUrlWrongModeError(Exception):
 # import, which is what would cause a circular dependency
 # (services -> infrastructure -> services).
 if TYPE_CHECKING:
+    from ...services.agent_service import AgentService
     from ...services.allowlist_service import AllowlistService
     from ...services.policy_service import PolicyCheckService
     from .manifest_dispatcher import ManifestDispatcher
@@ -141,7 +141,7 @@ class MessageRouter:
     3. Handle message logging and dead letter queue
 
     Usage:
-        router = MessageRouter(registry, redis_client)
+        router = MessageRouter(agent_service, redis_client)
 
         # Route message to single agent
         response = await router.route(
@@ -160,7 +160,7 @@ class MessageRouter:
 
     def __init__(
         self,
-        registry: AgentRegistry,
+        agent_service: "AgentService",
         redis_client: redis.Redis,
         policy_service: "PolicyCheckService | None" = None,
         manifest_dispatcher: "ManifestDispatcher | None" = None,
@@ -170,7 +170,11 @@ class MessageRouter:
         Initialize Message Router
 
         Args:
-            registry: ACN Registry for agent discovery
+            agent_service: ACN agent service for discovery + liveness.
+                Replaces the legacy ``AgentRegistry`` (which read
+                ``status`` from a Redis hash field that the new
+                ``RedisAgentRepository`` no longer writes — see audit
+                report §AgentRegistry-parallel-implementation).
             redis_client: Redis for logging and DLQ
             policy_service: Optional gateway-level access control. When
                 provided, ``route()`` short-circuits inbound delivery
@@ -207,7 +211,7 @@ class MessageRouter:
                 missing-collaborator path. See PR #2 plan P0-2 for
                 the design rationale.
         """
-        self.registry = registry
+        self.agent_service = agent_service
         self.redis = redis_client
         self.policy_service = policy_service
         self.manifest_dispatcher = manifest_dispatcher
@@ -364,8 +368,8 @@ class MessageRouter:
 
         logger.info(f"[{route_id}] Routing: {from_agent} -> {to_agent}")
 
-        # 1. Discover agent endpoint via ACN Registry
-        agent_info = await self.registry.get_agent(to_agent)
+        # 1. Discover agent endpoint via AgentService
+        agent_info = await self.agent_service.find_agent(to_agent)
         if not agent_info:
             raise ValueError(f"Agent not found in ACN Registry: {to_agent}")
 
@@ -450,23 +454,23 @@ class MessageRouter:
         endpoint = _agent_delivery_endpoint(agent_info)
         logger.debug(f"[{route_id}] Discovered endpoint: {endpoint}")
 
-        # 2. Offline pre-check — skip the HTTP round-trip when the registry
-        #    already knows the agent is not online.
+        # 2. Offline pre-check — skip the HTTP round-trip when the recipient
+        #    is not currently alive (per the Redis ``acn:agents:{id}:alive``
+        #    TTL key, the single source of truth for online-ness since the
+        #    implicit-heartbeat refactor).
         #
         #    Done before _log_message so the audit stream reflects the real
         #    delivery direction ("inbound" inbox write, not a false "outbound").
         #
-        #    Accuracy note: `status` is written on registration/heartbeat and
-        #    cleared to "offline" by the background watchdog when the heartbeat
-        #    TTL expires (~30 s window).  A false-positive (marked online but
-        #    actually down) will fall through to the HTTP path and write to
-        #    inbox on failure — unchanged from the old behaviour.  A
-        #    false-negative (marked offline but actually responsive) is rare
-        #    and self-heals on the next heartbeat; for now we skip the attempt
-        #    to avoid a guaranteed timeout.
-        if agent_info.status != "online":
+        #    Accuracy note: a false-positive (key present but the agent is
+        #    actually down) falls through to the HTTP path and writes to inbox
+        #    on failure — unchanged from the legacy behaviour. A false-negative
+        #    (key expired in the few-second window before the next implicit
+        #    renewal) is rare and self-heals on the next authenticated request;
+        #    we skip the HTTP attempt to avoid a guaranteed timeout.
+        if not await self.agent_service.is_alive(to_agent):
             logger.info(
-                f"[{route_id}] Agent {to_agent!r} is {agent_info.status!r};"
+                f"[{route_id}] Agent {to_agent!r} is offline (alive key absent);"
                 " skipping HTTP, delivering directly to inbox"
             )
             log_entry = {
@@ -574,17 +578,24 @@ class MessageRouter:
         Raises:
             ValueError: If no suitable agent found
         """
-        # Discover agents with required tags
-        status = "online" if prefer_online else None
-        agents = await self.registry.search_agents(
+        # Discover agents with required tags.
+        # ``AgentService.search_agents`` treats ``status="all"`` as
+        # "no liveness filter" (the legacy ``AgentRegistry`` used
+        # ``None`` here, which collapsed to "no match" — see audit
+        # report). Translating prefer_online=False → "all" finally
+        # makes that branch reachable.
+        status = "online" if prefer_online else "all"
+        agents = await self.agent_service.search_agents(
             tags=tags,
             status=status,
         )
 
         if not agents:
-            # Fallback: try without status filter
+            # Fallback: try without liveness filter
             if prefer_online:
-                agents = await self.registry.search_agents(tags=tags)
+                agents = await self.agent_service.search_agents(
+                    tags=tags, status="all"
+                )
 
             if not agents:
                 raise ValueError(f"No agents found with tags: {tags}")
@@ -619,7 +630,7 @@ class MessageRouter:
             SSE events from target agent
         """
         # Discover endpoint
-        agent_info = await self.registry.get_agent(to_agent)
+        agent_info = await self.agent_service.find_agent(to_agent)
         if not agent_info:
             raise ValueError(f"Agent not found: {to_agent}")
 

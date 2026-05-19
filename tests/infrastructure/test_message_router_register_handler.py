@@ -24,7 +24,7 @@ from acn.infrastructure.messaging.message_router import (
 def router():
     # Registry/redis aren't touched by register_handler, plain AsyncMocks
     # are enough — the handler registry is a pure in-memory dict.
-    return MessageRouter(registry=AsyncMock(), redis_client=AsyncMock())
+    return MessageRouter(agent_service=AsyncMock(), redis_client=AsyncMock())
 
 
 class TestDedupe:

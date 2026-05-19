@@ -15,8 +15,12 @@ from acn.infrastructure.messaging.message_router import MessageRouter
 
 
 @pytest.fixture
-def mock_registry() -> MagicMock:
-    return MagicMock()
+def mock_agent_service() -> AsyncMock:
+    # Default to is_alive=True so legacy tests written for status='online''
+    # keep their happy-path semantics. Offline tests override per-test.
+    svc = AsyncMock()
+    svc.is_alive = AsyncMock(return_value=True)
+    return svc
 
 
 @pytest.fixture
@@ -54,8 +58,8 @@ def fake_redis(fake_pipe) -> AsyncMock:
 
 
 @pytest.fixture
-def router(mock_registry, fake_redis) -> MessageRouter:
-    return MessageRouter(registry=mock_registry, redis_client=fake_redis)
+def router(mock_agent_service, fake_redis) -> MessageRouter:
+    return MessageRouter(agent_service=mock_agent_service, redis_client=fake_redis)
 
 
 class TestStoreInbox:
@@ -206,9 +210,12 @@ class TestOfflinePrecheck:
     @pytest.mark.asyncio
     async def test_offline_agent_skips_http_and_writes_inbox(self, router, fake_pipe):
         """Core contract: no HTTP call, message lands in inbox."""
-        router.registry.get_agent = AsyncMock(
+        router.agent_service.find_agent = AsyncMock(
             return_value=self._make_agent_info("offline")
         )
+        # Liveness now drives the offline short-circuit (Redis alive key,
+        # single source of truth); legacy ``info.status`` is no longer read.
+        router.agent_service.is_alive = AsyncMock(return_value=False)
         message = MagicMock()
         message.model_dump.return_value = {"role": "user", "parts": []}
 
@@ -230,9 +237,10 @@ class TestOfflinePrecheck:
     @pytest.mark.asyncio
     async def test_offline_agent_does_not_open_http_connection(self, router, fake_redis):
         """No A2A client should be created or called for offline agents."""
-        router.registry.get_agent = AsyncMock(
+        router.agent_service.find_agent = AsyncMock(
             return_value=self._make_agent_info("offline")
         )
+        router.agent_service.is_alive = AsyncMock(return_value=False)
         message = MagicMock()
         message.model_dump.return_value = {"role": "user", "parts": []}
 
@@ -248,9 +256,12 @@ class TestOfflinePrecheck:
         """Online agents must still go through the normal HTTP path."""
         from acn.infrastructure.messaging.message_router import create_text_message
 
-        router.registry.get_agent = AsyncMock(
+        router.agent_service.find_agent = AsyncMock(
             return_value=self._make_agent_info("online")
         )
+        # ``mock_agent_service`` fixture already defaults is_alive=True, but
+        # we restate it here so this test's intent stays explicit.
+        router.agent_service.is_alive = AsyncMock(return_value=True)
         # A real Message is required — the HTTP path constructs SendMessageRequest
         # which runs Pydantic validation on the message field.
         message = create_text_message("hello")
@@ -277,9 +288,10 @@ class TestOfflinePrecheck:
         path writes only inbox so retry_dlq doesn't get flooded with messages
         destined for agents that are intentionally offline.
         """
-        router.registry.get_agent = AsyncMock(
+        router.agent_service.find_agent = AsyncMock(
             return_value=self._make_agent_info("offline")
         )
+        router.agent_service.is_alive = AsyncMock(return_value=False)
         message = MagicMock()
         message.model_dump.return_value = {"role": "user", "parts": []}
 

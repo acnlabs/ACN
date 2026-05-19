@@ -62,8 +62,12 @@ def policy_service() -> PolicyCheckService:
 
 
 @pytest.fixture
-def mock_registry() -> MagicMock:
-    return MagicMock()
+def mock_agent_service() -> AsyncMock:
+    # Default to is_alive=True so legacy tests written for status='online''
+    # keep their happy-path semantics. Offline tests override per-test.
+    svc = AsyncMock()
+    svc.is_alive = AsyncMock(return_value=True)
+    return svc
 
 
 @pytest.fixture
@@ -117,17 +121,21 @@ class TestAllowlistMember:
     trusted senders get the fast path."""
 
     async def test_member_does_not_trigger_dispatcher(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 status="offline",  # falls into inbox path; HTTP is mocked anyway
                 policy={"mode": "allowlist"},
             )
         )
+        # Single source of truth for online-ness is the Redis alive key
+        # via ``AgentService.is_alive`` — the ``status`` arg above is
+        # now only a label, so set the liveness mock explicitly.
+        mock_agent_service.is_alive = AsyncMock(return_value=False)
         allowlist_service = _allowlist_service({"agent-b": {"alice"}})
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -159,14 +167,14 @@ class TestAllowlistNonMember:
     divert)."""
 
     async def test_non_member_routes_to_dispatcher(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(policy={"mode": "allowlist"})
         )
         allowlist_service = _allowlist_service({"agent-b": {"alice"}})
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -188,14 +196,14 @@ class TestAllowlistNonMember:
         assert kwargs["path"] == "router"
 
     async def test_non_member_does_not_open_http(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(policy={"mode": "allowlist"})
         )
         allowlist_service = _allowlist_service({"agent-b": {"alice"}})
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -223,14 +231,14 @@ class TestAllowlistFailClosed:
     list), the router must DIVERT, not raise / not open."""
 
     async def test_empty_list_diverts_everyone_to_manifest(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(policy={"mode": "allowlist"})
         )
         allowlist_service = _allowlist_service({"agent-b": set()})
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -247,17 +255,17 @@ class TestAllowlistFailClosed:
         stub_dispatcher.dispatch.assert_awaited_once()
 
     async def test_missing_allowlist_service_diverts_to_manifest(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """Rollout-opt-out path: ``allowlist_service=None`` + recipient
         flipped to ``mode=allowlist``. PolicyCheckService's "missing
         callback → divert to manifest" branch must engage so the
         router does NOT crash."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(policy={"mode": "allowlist"})
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -274,11 +282,11 @@ class TestAllowlistFailClosed:
         stub_dispatcher.dispatch.assert_awaited_once()
 
     async def test_callback_failure_diverts_to_manifest(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """Redis / PG outage on the cache layer must NOT propagate as
         a 5xx — divert to manifest preserves the message."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(policy={"mode": "allowlist"})
         )
         broken = MagicMock()
@@ -289,7 +297,7 @@ class TestAllowlistFailClosed:
         broken.is_member = _explode
 
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -312,21 +320,23 @@ class TestAllowlistFailClosed:
 
 
 async def test_system_sender_bypasses_allowlist(
-    mock_registry, fake_redis, policy_service, stub_dispatcher
+    mock_agent_service, fake_redis, policy_service, stub_dispatcher
 ):
     """Same uniformity property as manifest mode: system traffic
     never gets diverted regardless of the recipient's policy. A
     user-facing chat-mention notification must reach the inbox even
     if the recipient is in strict allowlist mode."""
-    mock_registry.get_agent = AsyncMock(
+    mock_agent_service.find_agent = AsyncMock(
         return_value=_make_agent_info(
             status="offline",
             policy={"mode": "allowlist"},
         )
     )
+    # System sender bypass + offline recipient → inbox path.
+    mock_agent_service.is_alive = AsyncMock(return_value=False)
     allowlist_service = _allowlist_service({"agent-b": set()})
     router = MessageRouter(
-        registry=mock_registry,
+        agent_service=mock_agent_service,
         redis_client=fake_redis,
         policy_service=policy_service,
         manifest_dispatcher=stub_dispatcher,

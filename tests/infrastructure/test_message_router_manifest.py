@@ -64,8 +64,12 @@ def policy_service() -> PolicyCheckService:
 
 
 @pytest.fixture
-def mock_registry() -> MagicMock:
-    return MagicMock()
+def mock_agent_service() -> AsyncMock:
+    # Default to is_alive=True so legacy tests written for status='online''
+    # keep their happy-path semantics. Offline tests override per-test.
+    svc = AsyncMock()
+    svc.is_alive = AsyncMock(return_value=True)
+    return svc
 
 
 @pytest.fixture
@@ -122,7 +126,7 @@ class TestManifestRecipientDiverts:
 
     @pytest.mark.asyncio
     async def test_returns_status_sent_with_delivery_mode_manifest(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """The public response contract.
 
@@ -133,13 +137,13 @@ class TestManifestRecipientDiverts:
         ``delivery_mode == "manifest"`` is the new field for clients
         that want to distinguish the two delivery paths.
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "manifest"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -159,7 +163,7 @@ class TestManifestRecipientDiverts:
 
     @pytest.mark.asyncio
     async def test_dispatcher_called_with_router_path(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """Pin the ``path="router"`` label.
 
@@ -168,13 +172,13 @@ class TestManifestRecipientDiverts:
         on this string would silently break the operator's ability
         to correlate divert volume with ingress channel.
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "manifest"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -194,7 +198,7 @@ class TestManifestRecipientDiverts:
 
     @pytest.mark.asyncio
     async def test_does_not_open_http_connection(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """The whole point of the divert: don't bother the recipient.
 
@@ -204,13 +208,13 @@ class TestManifestRecipientDiverts:
         their A2A endpoint may not even be reachable, which would
         also crash the divert.
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "manifest"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -227,20 +231,20 @@ class TestManifestRecipientDiverts:
 
     @pytest.mark.asyncio
     async def test_does_not_write_inbox(
-        self, mock_registry, fake_redis, fake_pipe, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, fake_pipe, policy_service, stub_dispatcher
     ):
         """Manifest is the *opposite* of inbox — recipient pulled out.
 
         ``_store_inbox`` calls ``pipe.zadd``. If that fires under a
         manifest-mode recipient, we've accidentally double-stored.
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "manifest"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -256,7 +260,7 @@ class TestManifestRecipientDiverts:
 
     @pytest.mark.asyncio
     async def test_offline_recipient_still_diverts(
-        self, mock_registry, fake_redis, fake_pipe, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, fake_pipe, policy_service, stub_dispatcher
     ):
         """Edge case: ``manifest`` ∧ ``offline``.
 
@@ -265,14 +269,14 @@ class TestManifestRecipientDiverts:
         still happen; we must NOT fall through to the offline-inbox
         branch (which would defeat the recipient's manifest opt-in).
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 status="offline",
                 communication_policy={"mode": "manifest"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -297,7 +301,7 @@ class TestManifestRecipientDiverts:
 class TestSystemSenderBypassesManifest:
     @pytest.mark.asyncio
     async def test_system_sender_reaches_http_path_under_manifest_recipient(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """The system bypass is single-source (PolicyCheckService).
 
@@ -308,13 +312,13 @@ class TestSystemSenderBypassesManifest:
         queue — they're often time-sensitive (rate-limit warnings,
         admin reset confirmations) and the recipient may not poll.
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "manifest"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -345,7 +349,7 @@ class TestSystemSenderBypassesManifest:
 class TestMissingDispatcherFailsLoudly:
     @pytest.mark.asyncio
     async def test_raises_runtime_error_when_dispatcher_unwired(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Configuration error must surface immediately.
 
@@ -354,13 +358,13 @@ class TestMissingDispatcherFailsLoudly:
         Both are worse than a loud RuntimeError that the operator
         sees during deploy or in their first manifest send.
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 communication_policy={"mode": "manifest"},
             )
         )
         router = MessageRouter(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=None,
