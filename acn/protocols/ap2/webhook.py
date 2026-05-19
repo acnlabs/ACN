@@ -75,6 +75,27 @@ class WebhookEventType(StrEnum):
     AGENT_JOINED_SUBNET = "agent.joined_subnet"
     AGENT_LEFT_SUBNET = "agent.left_subnet"
 
+    # ADR-0004 §"Webhook event catalogue" — eight new join-flow
+    # lifecycle events fired through the same ``WebhookService.send_to``
+    # transport as the two ``agent.*_subnet`` events above. The string
+    # values match ``acn.core.interfaces.join_flow_event_publisher.
+    # JoinFlowEventType`` 1-1; the no-drift contract is pinned by
+    # ``tests/services/test_join_flow_webhook_enum_mapping.py``.
+    #
+    # Allowlist add / remove deliberately have **no** webhook entries:
+    # ADR §"Webhook event catalogue" notes allowlist mutation is
+    # configuration state, not lifecycle. A Harness audit replay reads
+    # ``GET /allowlist`` instead.
+    SUBNET_JOIN_REQUESTED = "subnet.join_requested"
+    SUBNET_JOIN_APPROVED = "subnet.join_approved"
+    SUBNET_JOIN_REJECTED = "subnet.join_rejected"
+    SUBNET_JOIN_WITHDRAWN = "subnet.join_withdrawn"
+
+    SUBNET_INVITATION_SENT = "subnet.invitation_sent"
+    SUBNET_INVITATION_ACCEPTED = "subnet.invitation_accepted"
+    SUBNET_INVITATION_REJECTED = "subnet.invitation_rejected"
+    SUBNET_INVITATION_CANCELED = "subnet.invitation_canceled"
+
     # Backward compatibility aliases
     # These map old names to new values for existing code
     @classmethod
