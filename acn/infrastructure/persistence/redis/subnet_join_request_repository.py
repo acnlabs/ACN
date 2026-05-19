@@ -60,6 +60,8 @@ from ....core.interfaces import ISubnetJoinRequestRepository
 from ..postgres.subnet_join_request_repository import (
     SubnetJoinRequestPendingError,
 )
+from ._hash_utils import decode_value as _decode
+from ._hash_utils import normalize_hash as _normalize_hash
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +72,14 @@ logger = logging.getLogger(__name__)
 # KEYS[3] = subnet listing SET
 # KEYS[4] = agent invitations SET (only SADD'd if ARGV[2]='invitation')
 #
-# ARGV[1] = request_id (the value to SET into KEYS[1])
+# ARGV[1] = request_id (the value to SET into KEYS[1] and SADD into KEYS[3])
 # ARGV[2] = kind discriminator ('invitation' or other)
-# ARGV[3..N] = HSET field/value pairs (even count)
+# ARGV[3] = subnet_id:request_id composite key (the value SADD'd into
+#           KEYS[4] when ARGV[2]='invitation'; ignored otherwise). The
+#           composite key lets ``list_pending_invitations_for_agent``
+#           dereference each entry to its subnet HASH directly without
+#           the previous N×S full-keyspace scan (review fix B1).
+# ARGV[4..N] = HSET field/value pairs (even count)
 #
 # Returns:
 #   {'exists', <existing_request_id>}   on reverse-index collision
@@ -83,12 +90,12 @@ if existing then
     return {'exists', existing}
 end
 redis.call('SET', KEYS[1], ARGV[1])
-for i = 3, #ARGV, 2 do
+for i = 4, #ARGV, 2 do
     redis.call('HSET', KEYS[2], ARGV[i], ARGV[i + 1])
 end
 redis.call('SADD', KEYS[3], ARGV[1])
 if ARGV[2] == 'invitation' then
-    redis.call('SADD', KEYS[4], ARGV[1])
+    redis.call('SADD', KEYS[4], ARGV[3])
 end
 return {'created', ARGV[1]}
 """
@@ -99,21 +106,43 @@ return {'created', ARGV[1]}
 # KEYS[2] = request HASH (HSET updated)
 # KEYS[3] = agent invitations SET (SREM'd if kind='invitation')
 #
-# ARGV[1] = request_id (to SREM from KEYS[3] if invitation)
+# ARGV[1] = request_id  (no longer used; kept for ABI symmetry with create)
 # ARGV[2] = kind discriminator ('invitation' or other)
-# ARGV[3..N] = HSET field/value pairs (even count)
+# ARGV[3] = subnet_id:request_id composite key (to SREM from KEYS[3] —
+#           must match the SADD value the create path used or the
+#           invitations SET leaks the obsolete entry)
+# ARGV[4..N] = HSET field/value pairs (even count)
 #
 # Returns 1 always (no failure mode worth distinguishing — replay is safe).
 DECIDE_LUA = """
 redis.call('DEL', KEYS[1])
-for i = 3, #ARGV, 2 do
+for i = 4, #ARGV, 2 do
     redis.call('HSET', KEYS[2], ARGV[i], ARGV[i + 1])
 end
 if ARGV[2] == 'invitation' then
-    redis.call('SREM', KEYS[3], ARGV[1])
+    redis.call('SREM', KEYS[3], ARGV[3])
 end
 return 1
 """
+
+
+def _invitation_set_member(subnet_id: str, request_id: str) -> str:
+    """The composite key used as a member of
+    ``acn:agents:{a}:subnet_invitations``.
+
+    Storing ``subnet_id:request_id`` (rather than the bare
+    request_id) lets ``list_pending_invitations_for_agent``
+    dereference each entry to its subnet HASH directly — fixing the
+    O(N·S·k) full-keyspace scan that the bare-request_id storage
+    would have forced (review fix B1).
+
+    ``:`` is the chosen separator because every other ID in this
+    codebase is already colon-free (UUID4 hex / agent-* prefixes)
+    and the existing Redis key layout uses ``:`` as the namespace
+    separator — so the composite member can never collide with a
+    legitimate single-component id.
+    """
+    return f"{subnet_id}:{request_id}"
 
 
 def _request_hash_key(subnet_id: str, request_id: str) -> str:
@@ -130,20 +159,6 @@ def _subnet_listing_key(subnet_id: str) -> str:
 
 def _agent_invitations_key(agent_id: str) -> str:
     return f"acn:agents:{agent_id}:subnet_invitations"
-
-
-def _decode(value) -> str:
-    """Coerce bytes/str/None from redis-py to ``str`` ('' for None).
-
-    Mirrors the same ``decode_responses``-tolerant pattern
-    ``RedisSubnetRepository._normalize_redis_dict`` uses — the repo
-    layer shouldn't depend on the client's configuration flag being
-    pinned correctly forever."""
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode()
-    return str(value)
 
 
 class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
@@ -202,7 +217,12 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
             _subnet_listing_key(request.subnet_id),
             _agent_invitations_key(request.agent_id),
         ]
-        args = [request.request_id, request.kind, *hash_pairs]
+        args = [
+            request.request_id,
+            request.kind,
+            _invitation_set_member(request.subnet_id, request.request_id),
+            *hash_pairs,
+        ]
         script = self._get_create_pending_script()
         result = await script(keys=keys, args=args, client=self.redis)
         # Lua returns a 2-element table; redis-py renders it as a list
@@ -225,7 +245,12 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
             _request_hash_key(request.subnet_id, request.request_id),
             _agent_invitations_key(request.agent_id),
         ]
-        args = [request.request_id, request.kind, *hash_pairs]
+        args = [
+            request.request_id,
+            request.kind,
+            _invitation_set_member(request.subnet_id, request.request_id),
+            *hash_pairs,
+        ]
         script = self._get_decide_script()
         await script(keys=keys, args=args, client=self.redis)
 
@@ -316,26 +341,51 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
     ) -> list[SubnetJoinRequest]:
         """List pending invitations across all subnets.
 
-        Reads the per-agent SET and dereferences each request_id
-        against its subnet HASH. The SET membership is maintained
-        by ``CREATE_PENDING_LUA`` (SADD on kind='invitation') and
-        ``DECIDE_LUA`` (SREM on transition out), so it always
-        reflects the actual pending invitation set without a
-        separate filter pass.
+        Reads the per-agent SET — whose members are
+        ``subnet_id:request_id`` composite keys (see
+        :func:`_invitation_set_member`) — and dereferences each one
+        to its subnet HASH **directly**. No N×S keyspace scan; each
+        invitation costs exactly one ``HGETALL`` (review fix B1).
 
-        Quadratic-ish in the SET size — but the per-agent invitation
-        backlog is bounded by sensible UX (humans don't invite the
-        same agent into hundreds of subnets simultaneously); no
-        secondary pagination needed at Slice 2.1.
+        The SET membership is maintained by ``CREATE_PENDING_LUA``
+        (SADD on kind='invitation') and ``DECIDE_LUA`` (SREM on
+        transition out), so it always reflects the actual pending
+        invitation set without a separate filter pass — but we
+        still defensively check ``kind == 'invitation' and is_pending``
+        after deref in case a stale member survives a partial-failure
+        DECIDE (the SET membership is best-effort under
+        non-transactional Redis writes).
+
+        Composite-key members written by the old (Slice 2.1 v1) code
+        path would have been bare ``request_id`` strings; this method
+        treats any member that doesn't parse as ``subnet:rid`` as a
+        legacy bare-rid and silently skips it. The migration from v1
+        → v2 storage layout is "wait for terminal transition; SREM
+        cleans them out naturally". There is no Slice 2.1 v1 in
+        production so this branch is purely defensive against the
+        in-flight PR-review window.
         """
         invitations_key = _agent_invitations_key(agent_id)
-        request_ids = await self.redis.smembers(invitations_key)
+        raw_members = await self.redis.smembers(invitations_key)
         rows: list[SubnetJoinRequest] = []
-        for raw_rid in request_ids:
-            rid = _decode(raw_rid)
-            # Have to find the subnet — the SET stores only request_ids.
-            req = await self.find_by_id(rid)
-            if req is not None and req.kind == "invitation" and req.is_pending:
+        for raw_member in raw_members:
+            member = _decode(raw_member)
+            # Composite member format: ``subnet_id:request_id``. Split
+            # on the FIRST ``:`` only — subnet_id is colon-free in
+            # this codebase but defence in depth.
+            if ":" not in member:
+                # Legacy bare-rid member (pre-B1 fix). Skip — there is
+                # no way to reconstruct the subnet without the
+                # expensive scan we are trying to avoid.
+                continue
+            subnet_id, request_id = member.split(":", 1)
+            hash_data = await self.redis.hgetall(
+                _request_hash_key(subnet_id, request_id)
+            )
+            if not hash_data:
+                continue
+            req = SubnetJoinRequest.from_dict(_normalize_hash(hash_data))
+            if req.kind == "invitation" and req.is_pending:
                 rows.append(req)
         rows.sort(key=lambda r: r.created_at, reverse=True)
         return rows
@@ -380,8 +430,15 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
                                 _pending_by_agent_key(subnet_id, agent_id)
                             )
                             if kind == "invitation":
+                                # Composite-key SREM — must match the
+                                # value CREATE_PENDING_LUA SADD'd, or
+                                # the invitations SET leaks the
+                                # obsolete entry past subnet deletion.
                                 pipe.srem(
-                                    _agent_invitations_key(agent_id), rid
+                                    _agent_invitations_key(agent_id),
+                                    _invitation_set_member(
+                                        subnet_id, rid
+                                    ),
                                 )
                         await pipe.execute()
                     deleted_count += 1
@@ -409,19 +466,3 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
             )
 
         return deleted_count
-
-
-def _normalize_hash(raw: dict) -> dict[str, str]:
-    """Coerce a Redis HASH dict to ``dict[str, str]``.
-
-    Mirrors ``RedisSubnetRepository._normalize_redis_dict`` — guards
-    against the ``decode_responses=False`` client configuration that
-    backfill scripts and ad-hoc tooling sometimes use."""
-    if not raw:
-        return {}
-    out: dict[str, str] = {}
-    for k, v in raw.items():
-        key = k.decode() if isinstance(k, bytes) else str(k)
-        val = v.decode() if isinstance(v, bytes) else v
-        out[key] = val
-    return out

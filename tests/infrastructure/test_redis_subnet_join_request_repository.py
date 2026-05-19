@@ -55,6 +55,7 @@ from acn.infrastructure.persistence.redis.subnet_join_request_repository import 
     DECIDE_LUA,
     RedisSubnetJoinRequestRepository,
     _agent_invitations_key,
+    _invitation_set_member,
     _pending_by_agent_key,
     _request_hash_key,
     _subnet_listing_key,
@@ -150,6 +151,33 @@ class TestLuaCallContract:
         repo = RedisSubnetJoinRequestRepository(mock_redis)
         await repo.save(_make_request(kind="invitation"))
         assert captured["args"][1] == "invitation"
+
+    @pytest.mark.asyncio
+    async def test_create_pending_argv3_is_invitation_composite_key(self):
+        """ARGV[3] is the ``subnet_id:request_id`` composite key
+        the Lua script SADDs into the per-agent invitations SET.
+        The composite layout is the B1 fix — bare request_id storage
+        would force ``list_pending_invitations_for_agent`` into an
+        O(N·S) full-keyspace scan to find each invitation's subnet."""
+        captured: dict = {}
+
+        async def fake_script(*, keys, args, client):
+            captured["args"] = args
+            return [b"created", args[0].encode()]
+
+        mock_redis = MagicMock()
+        mock_redis.register_script = MagicMock(return_value=fake_script)
+
+        repo = RedisSubnetJoinRequestRepository(mock_redis)
+        await repo.save(
+            _make_request(
+                subnet_id="sub-A",
+                request_id="r-1",
+                kind="invitation",
+            )
+        )
+        assert captured["args"][2] == _invitation_set_member("sub-A", "r-1")
+        assert captured["args"][2] == "sub-A:r-1"
 
     @pytest.mark.asyncio
     async def test_create_pending_exists_with_different_id_raises(self):
@@ -289,6 +317,57 @@ class TestReadPathsAgainstFakeRedis:
         assert any(
             "dangling reverse index" in rec.message for rec in caplog.records
         )
+
+    @pytest.mark.asyncio
+    async def test_list_pending_invitations_dereferences_composite_keys(
+        self, fake_redis
+    ):
+        """End-to-end fakeredis: invitee SET stores
+        ``subnet_id:request_id`` composite keys; ``list_pending_*``
+        deref's each directly to its subnet HASH without any
+        keyspace scan. Pins the B1 perf fix at the integration level
+        — not just the Lua call shape."""
+        repo = RedisSubnetJoinRequestRepository(fake_redis)
+        # Seed two invitations for agent-X across different subnets.
+        ts = datetime.now(UTC)
+        for sub_idx in [1, 2]:
+            req = SubnetJoinRequest(
+                request_id=f"r-{sub_idx}",
+                subnet_id=f"s-{sub_idx}",
+                agent_id="agent-X",
+                kind="invitation",
+                status="pending",
+                initiated_by="owner-1",
+                created_at=ts,
+            )
+            await fake_redis.hset(  # type: ignore[misc]
+                _request_hash_key(f"s-{sub_idx}", f"r-{sub_idx}"),
+                mapping=req.to_dict(),
+            )
+            await fake_redis.sadd(  # type: ignore[misc]
+                _agent_invitations_key("agent-X"),
+                _invitation_set_member(f"s-{sub_idx}", f"r-{sub_idx}"),
+            )
+
+        rows = await repo.list_pending_invitations_for_agent("agent-X")
+        assert len(rows) == 2
+        assert {r.subnet_id for r in rows} == {"s-1", "s-2"}
+
+    @pytest.mark.asyncio
+    async def test_list_pending_invitations_skips_legacy_bare_rid_members(
+        self, fake_redis
+    ):
+        """Defensive path: a stale Slice 2.1 v1 SET member (bare
+        request_id without ``subnet_id:`` prefix) is silently
+        skipped rather than triggering the old expensive scan or
+        raising a parse error."""
+        repo = RedisSubnetJoinRequestRepository(fake_redis)
+        await fake_redis.sadd(  # type: ignore[misc]
+            _agent_invitations_key("agent-X"),
+            b"legacy-bare-rid",
+        )
+        rows = await repo.list_pending_invitations_for_agent("agent-X")
+        assert rows == []
 
     @pytest.mark.asyncio
     async def test_list_by_subnet_filters_by_kind_and_status(

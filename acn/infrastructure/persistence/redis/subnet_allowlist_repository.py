@@ -41,6 +41,8 @@ import redis.asyncio as redis  # type: ignore[import-untyped]
 
 from ....core.entities import SubnetAllowlist
 from ....core.interfaces import ISubnetAllowlistRepository
+from ._hash_utils import decode_value as _decode
+from ._hash_utils import normalize_hash as _normalize_hash
 
 logger = logging.getLogger(__name__)
 
@@ -51,25 +53,6 @@ def _allowlist_set_key(subnet_id: str) -> str:
 
 def _allowlist_meta_key(subnet_id: str, agent_id: str) -> str:
     return f"acn:subnets:{subnet_id}:allowlist_meta:{agent_id}"
-
-
-def _decode(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode()
-    return str(value)
-
-
-def _normalize_hash(raw: dict) -> dict[str, str]:
-    if not raw:
-        return {}
-    out: dict[str, str] = {}
-    for k, v in raw.items():
-        key = k.decode() if isinstance(k, bytes) else str(k)
-        val = v.decode() if isinstance(v, bytes) else v
-        out[key] = val
-    return out
 
 
 class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
@@ -104,10 +87,9 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         # readable audit attribution; that's worse than a missing
         # entry but doesn't change admission decisions).
         added_count = await self.redis.sadd(set_key, entry.agent_id)
-        async with self.redis.pipeline(transaction=False) as pipe:
-            data = entry.to_dict()
-            pipe.hset(meta_key, mapping=data)
-            await pipe.execute()
+        # Single HSET — no pipeline needed; one command = one
+        # round-trip either way (review fix N1).
+        await self.redis.hset(meta_key, mapping=entry.to_dict())  # type: ignore[misc]
         return added_count > 0
 
     async def remove(self, subnet_id: str, agent_id: str) -> bool:

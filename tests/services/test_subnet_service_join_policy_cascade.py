@@ -148,19 +148,23 @@ class TestSingleSubnetCascade:
         assert ok is True  # No raise, no fabricated cascade.
 
     @pytest.mark.asyncio
-    async def test_cascade_logs_when_rows_deleted(
+    async def test_cascade_logs_event_name_when_rows_deleted(
         self,
         mock_subnet_repo: AsyncMock,
         mock_jr_repo: AsyncMock,
         mock_al_repo: AsyncMock,
-        caplog,
     ):
-        """``deleted_count > 0`` is logged at info level for audit;
-        zero is silent (don't pollute logs with no-op cascades).
-        Pin the gating so a future refactor that always-logs can't
-        slip through."""
-        import logging
-        caplog.set_level(logging.INFO)
+        """``deleted_count > 0`` triggers an info-level audit event
+        with the canonical event name; zero is silent (don't pollute
+        logs with no-op cascades). We patch ``logger.info`` directly
+        rather than using ``caplog`` because structlog routes
+        through a different formatter chain than stdlib in this
+        codebase — ``caplog`` was producing inconsistent capture
+        across local vs CI envs."""
+        import unittest.mock as _mock
+
+        from acn.services import subnet_service as _svc_mod
+
         sn = _subnet("s-with-rows")
         mock_subnet_repo.find_by_id.return_value = sn
         mock_subnet_repo.delete.return_value = True
@@ -172,16 +176,53 @@ class TestSingleSubnetCascade:
             subnet_join_request_repository=mock_jr_repo,
             subnet_allowlist_repository=mock_al_repo,
         )
-        await service.delete_subnet("s-with-rows", owner="alice")
+        with _mock.patch.object(_svc_mod.logger, "info") as log_info:
+            await service.delete_subnet("s-with-rows", owner="alice")
 
-        events = [r.message for r in caplog.records]
-        # structlog renders the event name as the message by default
-        # in test runs; cope with either case.
-        joined = " ".join(events)
-        assert "delete_subnet_cascade_join_requests" in joined or any(
-            "delete_subnet_cascade_join_requests" in str(getattr(r, "msg", ""))
-            for r in caplog.records
-        ) or True  # Don't fail on log-format flake; log emission tested above.
+        event_names = [c.args[0] for c in log_info.call_args_list if c.args]
+        assert "delete_subnet_cascade_join_requests" in event_names
+        assert "delete_subnet_cascade_allowlist" in event_names
+        # Per-event payloads carry the deleted count.
+        jr_call = next(
+            c
+            for c in log_info.call_args_list
+            if c.args
+            and c.args[0] == "delete_subnet_cascade_join_requests"
+        )
+        assert jr_call.kwargs.get("deleted_count") == 7
+        assert jr_call.kwargs.get("subnet_id") == "s-with-rows"
+
+    @pytest.mark.asyncio
+    async def test_cascade_silent_when_zero_rows_deleted(
+        self,
+        mock_subnet_repo: AsyncMock,
+        mock_jr_repo: AsyncMock,
+        mock_al_repo: AsyncMock,
+    ):
+        """Zero-row cascade emits no log noise — the gating that the
+        previous test pins, viewed from the negative case so a
+        future refactor that always-logs can't slip through either
+        direction."""
+        import unittest.mock as _mock
+
+        from acn.services import subnet_service as _svc_mod
+
+        sn = _subnet("s-empty")
+        mock_subnet_repo.find_by_id.return_value = sn
+        mock_subnet_repo.delete.return_value = True
+        # Default fixture already returns 0 from delete_for_subnet.
+
+        service = SubnetService(
+            mock_subnet_repo,
+            subnet_join_request_repository=mock_jr_repo,
+            subnet_allowlist_repository=mock_al_repo,
+        )
+        with _mock.patch.object(_svc_mod.logger, "info") as log_info:
+            await service.delete_subnet("s-empty", owner="alice")
+
+        event_names = [c.args[0] for c in log_info.call_args_list if c.args]
+        assert "delete_subnet_cascade_join_requests" not in event_names
+        assert "delete_subnet_cascade_allowlist" not in event_names
 
 
 # ---------------------------------------------------------------------------
