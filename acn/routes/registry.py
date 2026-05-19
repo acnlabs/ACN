@@ -10,7 +10,7 @@ Supports two registration modes:
 
 import re
 import secrets
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 import structlog  # type: ignore[import-untyped]
@@ -47,6 +47,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     AgentIdPath,
     AgentServiceDep,
     InternalTokenDep,
+    ManifestServiceDep,
     MetricsDep,
     OwnerOrInternalDep,
     PolicyServiceDep,
@@ -1643,6 +1644,7 @@ async def get_communication_profile(
     request: Request,
     agent_id: AgentIdPath,
     agent_service: AgentServiceDep = None,
+    manifest_service: ManifestServiceDep = None,
 ):
     """Public read-only summary of an agent's communication policy.
 
@@ -1652,11 +1654,15 @@ async def get_communication_profile(
     may contain sensitive context) and the full allowlist membership.
 
     Returns:
-        ``{"agent_id": ..., "mode": ..., "attention_fee_required": bool}``
+        ``{"agent_id": ..., "mode": ..., "attention_fee_required": bool,
+          "unread_manifest_count": int}``
         ``mode`` is one of ``open | manifest | allowlist | closed``.
         ``attention_fee_required`` is ``true`` when the policy carries
         an ``attention_fee`` requirement (reserved for future use;
         currently always ``false`` — fee is optional at sender side).
+        ``unread_manifest_count`` shows the number of pending manifest
+        entries — useful for monitoring queue buildup when the agent
+        has no active polling.
     """
     try:
         agent = await agent_service.get_agent(agent_id)
@@ -1668,10 +1674,20 @@ async def get_communication_profile(
         ) from e
 
     policy = agent.communication_policy or {"mode": "open"}
+
+    unread_count = 0
+    if manifest_service is not None:
+        try:
+            entries = await manifest_service.read_since(agent_id, limit=200)
+            unread_count = len([e for e in entries if e.acked_at_ms is None])
+        except Exception:
+            pass
+
     return {
         "agent_id": agent_id,
         "mode": policy.get("mode", "open"),
         "attention_fee_required": bool(policy.get("attention_fee_required", False)),
+        "unread_manifest_count": unread_count,
     }
 
 
@@ -1793,10 +1809,18 @@ async def update_agent_policy(
             settings.policy_manifest_min_sdk_version
         )
 
-    return {
+    result: dict[str, Any] = {
         "agent_id": agent_id,
         "communication_policy": agent.communication_policy,
     }
+    if new_mode in ("manifest", "allowlist"):
+        result["warning"] = (
+            "Messages from non-trusted senders will be diverted to the manifest "
+            "queue. Your agent must periodically poll GET /communication/manifest/{id} "
+            "to receive them. Without active polling, these messages are unreachable "
+            "and will expire after the configured TTL (default 7 days)."
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
