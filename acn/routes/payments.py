@@ -23,7 +23,6 @@ from .dependencies import (  # type: ignore[import-untyped]
     InternalTokenDep,
     PaymentDiscoveryDep,
     PaymentTasksDep,
-    RegistryDep,
     limiter,
 )
 
@@ -437,7 +436,7 @@ async def set_token_pricing(
     agent_id: str,
     request: TokenPricingRequest,
     agent_info: AgentApiKeyDep,
-    registry: RegistryDep = None,
+    agent_service: AgentServiceDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """
@@ -455,7 +454,10 @@ async def set_token_pricing(
                 "key_agent": agent_info["agent_id"],
             },
         )
-    agent = await registry.get_agent(agent_id)
+    # ``find_agent`` (non-throwing) matches the legacy
+    # ``AgentRegistry.get_agent`` contract this call site was wired
+    # against — absence is a normal 404 branch, not an exception.
+    agent = await agent_service.find_agent(agent_id)
     if not agent:
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
@@ -569,7 +571,7 @@ async def bill_usage(
     _: InternalTokenDep,
     payment_discovery: PaymentDiscoveryDep = None,
     billing_service: BillingServiceDep = None,
-    registry: RegistryDep = None,
+    agent_service: AgentServiceDep = None,
 ):
     """
     Bill token usage after a service call (requires X-Internal-Token).
@@ -587,8 +589,10 @@ async def bill_usage(
             details={"agent_id": request.agent_id},
         )
 
-    # Get agent owner
-    agent = await registry.get_agent(request.agent_id)
+    # Get agent owner — None is a legitimate state (autonomous /
+    # unclaimed agent), so the billing record stays owner-less rather
+    # than erroring out.
+    agent = await agent_service.find_agent(request.agent_id)
     agent_owner_id = agent.owner if agent else None
 
     # Calculate cost
