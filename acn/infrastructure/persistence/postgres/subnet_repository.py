@@ -18,6 +18,18 @@ class PostgresSubnetRepository(ISubnetRepository):
 
     def _model_to_subnet(self, row: SubnetModel) -> Subnet:
         meta = row.subnet_metadata or {}
+        # ADR-0004 legacy compatibility: rows that landed before the
+        # ``join_policy`` column existed read back with ``row.join_policy
+        # is None`` on a fresh ORM session if the Alembic migration
+        # somehow rolled back column defaults — fall through to the
+        # entity-level default ("open"), then ``Subnet.from_dict``-style
+        # auto-upgrade rules kick in via ``__post_init__``. Practically
+        # speaking the ``server_default`` on the model makes this branch
+        # unreachable on healthy deployments, but the explicit guard
+        # keeps the mapper safe against migration mishaps and is cheap.
+        join_policy = row.join_policy or (
+            "approval" if row.is_private else "open"
+        )
         return Subnet(
             subnet_id=row.subnet_id,
             name=row.name,
@@ -33,6 +45,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             parent_subnet_id=row.parent_subnet_id,
             lifecycle=row.lifecycle,
             linked_task_id=row.linked_task_id,
+            join_policy=join_policy,
         )
 
     def _subnet_to_model(self, subnet: Subnet) -> SubnetModel:
@@ -54,6 +67,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             parent_subnet_id=subnet.parent_subnet_id,
             lifecycle=subnet.lifecycle,
             linked_task_id=subnet.linked_task_id,
+            join_policy=subnet.join_policy,
             created_at=created,
         )
 
@@ -87,6 +101,7 @@ class PostgresSubnetRepository(ISubnetRepository):
                         parent_subnet_id=model.parent_subnet_id,
                         lifecycle=model.lifecycle,
                         linked_task_id=model.linked_task_id,
+                        join_policy=model.join_policy,
                     )
                 )
             else:

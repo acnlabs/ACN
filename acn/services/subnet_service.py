@@ -25,13 +25,26 @@ REASON_PARENT_IS_NESTED = "parent_is_nested"
 REASON_TASK_SCOPED_REQUIRES_LINKED_TASK = "task_scoped_requires_linked_task"
 REASON_LINKED_TASK_NOT_FOUND = "linked_task_not_found"
 REASON_NOT_PARENT_MEMBER = "not_parent_member"
+# ADR-0004: explicit ``is_private=True`` + ``join_policy='open'`` combination
+# (the historical "private but joinable by anyone who knows the id" gap that
+# ADR-0004 closes). When the caller doesn't pass ``join_policy`` we silently
+# default to ``'approval'`` on private subnets, so this reason only ever
+# surfaces when the caller knowingly sends the conflicting combination.
+REASON_VISIBILITY_POLICY_CONFLICT = "visibility_policy_conflict"
 
 
 class SubnetNestingError(ValueError):
-    """Raised by ``SubnetService`` when a nesting invariant rejects a
-    request. Carries a stable ``reason`` string (one of the
-    ``REASON_*`` constants above) that the route layer surfaces as
-    ``details.reason``.
+    """Raised by ``SubnetService`` when a subnet construction-time
+    invariant rejects a request. Carries a stable ``reason`` string
+    (one of the ``REASON_*`` constants above) that the route layer
+    surfaces as ``details.reason`` for client / CLI / SDK parsers.
+
+    The class name is a historical artefact of ADR-0003 (which only
+    raised nesting-related rejections through it). ADR-0004 extends
+    its use to the ``visibility_policy_conflict`` invariant; future
+    ADRs are expected to keep piling stable reasons onto the same
+    exception class rather than fork it, so the route layer can keep
+    a single ``_nesting_error_to_acn`` switch.
 
     Kept as a ``ValueError`` subclass so legacy callers that catch
     ``ValueError`` (e.g. ``routes/subnets.py::create_subnet``) keep
@@ -103,6 +116,7 @@ class SubnetService:
         parent_subnet_id: str | None = None,
         lifecycle: Literal["persistent", "task_scoped"] = "persistent",
         linked_task_id: str | None = None,
+        join_policy: Literal["open", "approval"] | None = None,
     ) -> Subnet:
         """
         Create a new subnet.
@@ -121,6 +135,26 @@ class SubnetService:
         - ``linked_task_id`` must reference an existing task when a
           ``task_repository`` is wired — ``linked_task_not_found``.
 
+        ADR-0004 invariant on ``join_policy``:
+
+        - When ``join_policy`` is omitted (the common case — legacy
+          callers and clients that don't yet know about the field),
+          the service infers it from ``is_private``: ``'approval'``
+          for private subnets, ``'open'`` for public ones. This
+          preserves backward compatibility and closes the
+          ``private + open`` gap automatically for callers that just
+          flip ``is_private=True``.
+        - When the caller passes ``join_policy='open'`` together
+          with ``is_private=True`` knowingly, the service rejects
+          with ``visibility_policy_conflict`` rather than letting
+          the entity's bare ``ValueError`` bubble up — the route
+          layer's ``_nesting_error_to_acn`` already maps it to
+          ``INVALID_REQUEST 400 {"details": {"reason":
+          "visibility_policy_conflict"}}``.
+        - The other three combinations (``public+open``,
+          ``public+approval``, ``private+approval``) are accepted
+          as-is and persisted on the entity.
+
         Args:
             subnet_id: Subnet identifier
             name: Subnet name
@@ -132,13 +166,17 @@ class SubnetService:
             parent_subnet_id: Optional parent subnet ID (ADR-0003)
             lifecycle: ``"persistent"`` (default) or ``"task_scoped"``
             linked_task_id: Required when ``lifecycle == "task_scoped"``
+            join_policy: ``"open"`` / ``"approval"`` / ``None``
+                (default — inferred from ``is_private``)
 
         Returns:
             Created subnet entity
 
         Raises:
             ValueError: If subnet already exists
-            SubnetNestingError: On any of the five invariant rejections
+            SubnetNestingError: On any of the five ADR-0003 invariant
+                rejections, or the ADR-0004
+                ``visibility_policy_conflict`` rejection.
         """
         # ADR-0002: reject the internal-service placeholder as owner.
         # Defence-in-depth — the route layer already enforces AgentApiKeyDep
@@ -206,6 +244,33 @@ class SubnetService:
                     f"Linked task '{linked_task_id}' does not exist",
                 )
 
+        # --- ADR-0004 join_policy resolution ---------------------------
+        # When the caller omits ``join_policy`` we infer it from
+        # ``is_private`` — this preserves backward compatibility for
+        # every existing client (CLI / SDK / tests) that doesn't yet
+        # know about the field, and closes the ``private + open`` gap
+        # automatically.
+        #
+        # When the caller explicitly passes the conflicting combination
+        # we raise a structured ``SubnetNestingError`` with a stable
+        # ``reason`` token rather than letting the entity's bare
+        # ``ValueError`` bubble up through the route's generic catch —
+        # the route's existing ``_nesting_error_to_acn`` switch already
+        # maps unknown reasons to ``INVALID_REQUEST 400``, so this gives
+        # clients a clean parseable token instead of a free-form message.
+        if join_policy is None:
+            effective_join_policy: Literal["open", "approval"] = (
+                "approval" if is_private else "open"
+            )
+        else:
+            effective_join_policy = join_policy
+            if is_private and effective_join_policy == "open":
+                raise SubnetNestingError(
+                    REASON_VISIBILITY_POLICY_CONFLICT,
+                    "is_private=True requires join_policy='approval' "
+                    "(omit join_policy to let the service default it)",
+                )
+
         subnet = Subnet(
             subnet_id=subnet_id,
             name=name,
@@ -217,6 +282,7 @@ class SubnetService:
             parent_subnet_id=parent_subnet_id,
             lifecycle=lifecycle,
             linked_task_id=linked_task_id,
+            join_policy=effective_join_policy,
         )
         # The owner is implicitly a member: every ACL that keys off
         # `subnet.member_agent_ids` (private GET /tasks/{id}, accept_task,
@@ -246,6 +312,7 @@ class SubnetService:
             parent_subnet_id=parent_subnet_id,
             lifecycle=lifecycle,
             linked_task_id=linked_task_id,
+            join_policy=effective_join_policy,
         )
         await self.repository.save(subnet)
         return subnet

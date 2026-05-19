@@ -76,6 +76,13 @@ class RedisSubnetRepository(ISubnetRepository):
             subnet_dict["parent_subnet_id"] = ""
         if subnet_dict.get("linked_task_id") is None:
             subnet_dict["linked_task_id"] = ""
+        # ADR-0004: ``join_policy`` is always populated on the entity
+        # (defaults to ``"open"``), so no None-to-empty translation is
+        # needed here — but we coerce ``str(...)`` defensively in case a
+        # caller smuggles a non-string in via ``to_dict`` overrides.
+        subnet_dict["join_policy"] = str(
+            subnet_dict.get("join_policy") or "open"
+        )
         # redis-py refuses raw bool values for HSET — round-trip via the
         # "True"/"False" string form that `_dict_to_subnet` already parses
         # (see `is_private` parser).
@@ -277,6 +284,34 @@ class RedisSubnetRepository(ISubnetRepository):
             )
             return default
 
+    @staticmethod
+    def _normalize_redis_dict(raw: dict) -> dict[str, str]:
+        """Coerce a Redis HASH dict to ``dict[str, str]`` regardless of
+        the client's ``decode_responses`` setting.
+
+        Production composition (``registry.py``) sets
+        ``decode_responses=True`` so ``hgetall`` already returns
+        ``dict[str, str]``; this normalisation is then a no-op. But
+        external callers (the backfill script, ad-hoc scripts, future
+        repo-level reuse) sometimes construct a client without that
+        flag — ``hgetall`` then returns ``dict[bytes, bytes]`` and
+        every ``subnet_dict.get("is_private")`` silently misses,
+        defaulting ``is_private`` to ``False`` and corrupting the
+        ``join_policy`` legacy auto-upgrade rule below.
+
+        Normalising here is defence in depth: the repo's parsing
+        logic stays self-contained instead of depending on the
+        client's configuration being pinned correctly forever.
+        """
+        if not raw:
+            return {}
+        out: dict[str, str] = {}
+        for k, v in raw.items():
+            key = k.decode() if isinstance(k, bytes) else str(k)
+            val = v.decode() if isinstance(v, bytes) else v
+            out[key] = val
+        return out
+
     def _dict_to_subnet(self, subnet_dict: dict) -> Subnet:
         """Convert Redis dict to Subnet entity.
 
@@ -286,7 +321,13 @@ class RedisSubnetRepository(ISubnetRepository):
         predate ADR-0003 don't carry the nesting keys at all; the
         ``.get("parent_subnet_id") or None`` pattern handles both
         "missing key" and "empty string" identically.
+
+        Input is normalised through :meth:`_normalize_redis_dict`
+        first so byte-keyed dicts (``decode_responses=False`` client)
+        and string-keyed dicts behave identically — protects every
+        ``subnet_dict.get("...")`` call below from silently missing.
         """
+        subnet_dict = self._normalize_redis_dict(subnet_dict)
         description = subnet_dict.get("description") or None
         harness_url = subnet_dict.get("harness_url") or None
         harness_secret = subnet_dict.get("harness_secret") or None
@@ -296,12 +337,30 @@ class RedisSubnetRepository(ISubnetRepository):
         # (legacy row) and when stored value is empty/falsy.
         lifecycle = subnet_dict.get("lifecycle") or "persistent"
 
+        # ADR-0004: legacy rows predate the ``join_policy`` field. If
+        # the key is missing and ``is_private`` is true, auto-upgrade to
+        # ``"approval"`` so the entity invariant accepts the row even
+        # before the Redis backfill script runs. Otherwise default to
+        # ``"open"``. This mirrors ``Subnet.from_dict``'s auto-upgrade
+        # rule (kept in sync with the entity for defence in depth — the
+        # entity is the single source of truth, the repo's logic just
+        # prevents the entity from having to special-case "missing key"
+        # vs "empty string" twice).
+        is_private = subnet_dict.get("is_private") == "True"
+        join_policy_raw = subnet_dict.get("join_policy") or ""
+        if join_policy_raw:
+            join_policy = join_policy_raw
+        elif is_private:
+            join_policy = "approval"
+        else:
+            join_policy = "open"
+
         data = {
             "subnet_id": subnet_dict["subnet_id"],
             "name": subnet_dict["name"],
             "owner": subnet_dict["owner"],
             "description": description,
-            "is_private": subnet_dict.get("is_private") == "True",
+            "is_private": is_private,
             "security_config": self._safe_loads(subnet_dict.get("security_config", "{}"), {}),
             "member_agent_ids": set(
                 self._safe_loads(subnet_dict.get("member_agent_ids", "[]"), [])
@@ -315,6 +374,7 @@ class RedisSubnetRepository(ISubnetRepository):
             "parent_subnet_id": parent_subnet_id,
             "lifecycle": lifecycle,
             "linked_task_id": linked_task_id,
+            "join_policy": join_policy,
         }
 
         return Subnet(**data)

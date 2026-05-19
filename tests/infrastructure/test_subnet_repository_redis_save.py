@@ -71,6 +71,12 @@ async def test_save_serialises_is_private_as_string_not_bool() -> None:
     Previously the field was passed through as Python ``True``/``False``,
     which redis-py refuses (``DataError: Invalid input of type 'bool'``),
     crashing every subnet create on Redis-fallback deployments.
+
+    ADR-0004 note: this test constructs a private subnet which now
+    requires ``join_policy='approval'`` per the entity invariant. The
+    explicit kwarg keeps the original test intent (bool serialisation)
+    intact without re-litigating policy semantics here — those live
+    in ``test_subnet_repository_redis_join_policy.py``.
     """
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
@@ -79,6 +85,7 @@ async def test_save_serialises_is_private_as_string_not_bool() -> None:
         name="test",
         owner="agent-owner",
         is_private=True,
+        join_policy="approval",
     )
 
     await repo.save(subnet)
@@ -96,21 +103,31 @@ async def test_save_serialises_is_private_as_string_not_bool() -> None:
 
 @pytest.mark.asyncio
 async def test_save_round_trip_preserves_is_private() -> None:
-    """``save`` + ``_dict_to_subnet`` must preserve ``is_private`` value."""
+    """``save`` + ``_dict_to_subnet`` must preserve ``is_private`` value.
+
+    ADR-0004 note: the ``is_private=True`` case is constructed with
+    ``join_policy='approval'`` because the entity invariant rejects
+    the legacy ``private + open`` combination. The test still pins
+    the bool round-trip — that's its purpose; ``join_policy`` is
+    incidental here and exhaustively tested in
+    ``test_subnet_repository_redis_join_policy.py``.
+    """
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
 
-    for value in (True, False):
+    cases: list[tuple[bool, str]] = [(True, "approval"), (False, "open")]
+    for is_private, join_policy in cases:
         subnet = Subnet(
-            subnet_id=f"subnet-rt-{value}",
+            subnet_id=f"subnet-rt-{is_private}",
             name="rt",
             owner="agent-owner",
-            is_private=value,
+            is_private=is_private,
+            join_policy=join_policy,
         )
         await repo.save(subnet)
         _, kwargs = redis.hset.await_args
         loaded = repo._dict_to_subnet(kwargs["mapping"])
-        assert loaded.is_private is value
+        assert loaded.is_private is is_private
 
 
 @pytest.mark.asyncio
