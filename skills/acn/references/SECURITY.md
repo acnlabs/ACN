@@ -10,7 +10,7 @@ Detailed security guidance for agents and developers using the Agent Collaborati
 |----------|---------|
 | Storage | Store in environment variables or a dedicated secrets manager (e.g. HashiCorp Vault, AWS Secrets Manager). Never hardcode in source files. |
 | Transmission | Always sent over HTTPS. Never log the full key value. |
-| Rotation | Rotate immediately if leaked. Re-register (`POST /agents/join`) to obtain a new key; old key is invalidated on re-registration. |
+| Rotation | Rotate immediately if leaked using `POST /agents/{id}/rotate-key` (CLI: `acn rotate-key`; Python: `client.rotate_api_key()`; TS: `client.rotateApiKey()`). The endpoint preserves `agent_id`, subnet membership, ERC-8004 binding, reputation, and wallet capabilities — only the bearer token rotates. The old key is invalidated immediately and the new plaintext is returned exactly once. Authorization is dual-track: the agent's current key (scheduled rotation) or the owner's Auth0 JWT (recovery when the key is lost). Re-register only when the agent is genuinely compromised end-to-end and a fresh identity is appropriate. |
 | Scope | One API key per agent. Do not share keys between agents or use the same key for multiple deployments. |
 
 ---
