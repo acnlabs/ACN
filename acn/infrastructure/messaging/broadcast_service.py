@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import redis.asyncio as redis
@@ -26,8 +26,10 @@ from a2a.compat.v0_3.types import Message  # type: ignore[import-untyped]
 from ...core.exceptions import AgentNotFoundException, PolicyRejected
 from ...core.interfaces import IAgentRepository
 from ...security import safe_external_error
-from ..persistence.redis.registry import AgentRegistry
 from .message_router import MessageRouter
+
+if TYPE_CHECKING:
+    from ...services.agent_service import AgentService
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +100,7 @@ class BroadcastService:
         self,
         router: MessageRouter,
         redis_client: redis.Redis,
-        registry: AgentRegistry | None = None,
+        agent_service: "AgentService | None" = None,
         agent_repository: IAgentRepository | None = None,
     ):
         """
@@ -107,9 +109,11 @@ class BroadcastService:
         Args:
             router: Message Router for delivery.
             redis_client: Redis for broadcast log persistence.
-            registry: ACN Registry (optional — uses router's if omitted).
-                Drives the legacy ``send_by_tag`` / ``send_to_project``
-                paths that resolve agents through Redis search.
+            agent_service: AgentService for discovery (optional — uses
+                router's if omitted). Replaces the legacy
+                ``AgentRegistry`` injection that drove
+                ``send_by_tag`` / ``send_to_project``; see audit
+                report §AgentRegistry-parallel-implementation.
             agent_repository: Clean-architecture agent repository
                 (PG or Redis impl). Enables the unified
                 :py:meth:`broadcast` entry that replaced
@@ -122,7 +126,7 @@ class BroadcastService:
         """
         self.router = router
         self.redis = redis_client
-        self.registry = registry or router.registry
+        self.agent_service = agent_service or router.agent_service
         self.agent_repository = agent_repository
 
         logger.info("Broadcast Service initialized")
@@ -361,10 +365,13 @@ class BroadcastService:
         Returns:
             BroadcastResult
         """
-        # Discover agents with tags
-        agents = await self.registry.search_agents(
+        # Discover agents with tags.
+        # ``AgentService.search_agents`` uses the literal "all" to
+        # disable the liveness filter (instead of ``None``), so we
+        # translate the legacy ``status_filter=None`` form here.
+        agents = await self.agent_service.search_agents(
             tags=tags,
-            status=status_filter,
+            status=status_filter or "all",
         )
 
         if not agents:
@@ -407,17 +414,20 @@ class BroadcastService:
         Returns:
             BroadcastResult
         """
-        # Get all agents in project
-        # This requires project metadata in Registry
-        # For now, use metadata search
-        agents = await self.registry.search_agents(metadata={"project_id": project_id})
-
-        to_agents = [agent.agent_id for agent in agents if agent.agent_id not in (exclude or [])]
-
-        return await self.send(
-            from_agent=from_agent,
-            to_agents=to_agents,
-            message=message,
+        # NOTE: ``send_to_project`` was wired against
+        # ``AgentRegistry.search_agents(metadata=...)`` — a parameter
+        # AgentRegistry never actually accepted (the call has been a
+        # silent ``TypeError`` since introduction; see audit report
+        # §dead-call-sites). The successor ``AgentService.search_agents``
+        # also has no metadata-based search by design (project
+        # membership belongs in a dedicated index, not in the agent
+        # blob). Until a real project-membership index ships, fail
+        # loudly so callers can't believe this path works.
+        del exclude  # parameter retained for ABI compat with stale callers
+        raise NotImplementedError(
+            "BroadcastService.send_to_project requires a project-membership "
+            "index that is not yet implemented; see audit report "
+            f"§dead-call-sites (project_id={project_id!r})"
         )
 
     async def _send_parallel(

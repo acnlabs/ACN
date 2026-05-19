@@ -102,7 +102,7 @@ def _make_router():
         return {"status": "delivered", "to": to_agent}
 
     router.route = route
-    router.registry = MagicMock()
+    router.agent_service = MagicMock()
     return router
 
 

@@ -61,7 +61,7 @@ def _make_router(*, side_effects_by_agent: dict | None = None):
         return outcome or {"status": "delivered", "to": to_agent}
 
     router.route = route
-    router.registry = MagicMock()
+    router.agent_service = MagicMock()
     return router
 
 
