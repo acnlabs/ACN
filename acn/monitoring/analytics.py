@@ -163,7 +163,21 @@ class Analytics:
         }
 
     async def _get_agent_stats_from_redis(self) -> dict[str, Any]:
-        """Fallback: build agent stats by scanning Redis agent hash keys."""
+        """Fallback: build agent stats by scanning Redis agent hash keys.
+
+        Active only when no ``IAgentRepository`` is wired in (the
+        Redis-only deployment mode used by dev fixtures and the
+        smoke-test profile).
+
+        Online-ness is derived from the Redis
+        ``acn:agents:{id}:alive`` TTL key, NOT from a ``status``
+        field on the hash. The legacy ``status`` field is no longer
+        written by ``Agent.to_dict()`` (alive-as-single-source phase 2);
+        legacy hashes may still carry a stale value but the count it
+        would produce drifts from reality the moment any TTL expires,
+        so we explicitly ignore it and use the same liveness signal
+        the PG-backed path does (see ``_get_agent_stats_from_repo``).
+        """
         # The real agent hash key schema is `acn:agents:{uuid}` (3 segments).
         # Index keys (`acn:agents:by_endpoint:…`, `{uuid}:alive`, etc.) have
         # ≥4 segments and are excluded by the length filter.
@@ -175,7 +189,7 @@ class Analytics:
 
         stats: dict[str, Any] = {
             "total": len(agent_keys),
-            "by_status": {"online": 0, "offline": 0, "unknown": 0},
+            "by_status": {"online": 0, "offline": 0},
             "by_subnet": {},
             "by_tag": {},
             "recent_registrations": [],
@@ -194,8 +208,14 @@ class Analytics:
                     for k, v in agent_data.items()
                 }
 
-                status = agent.get("status", "unknown")
-                stats["by_status"][status] = stats["by_status"].get(status, 0) + 1
+                agent_id = agent.get("agent_id") or (
+                    key.decode() if isinstance(key, bytes) else key
+                ).rsplit(":", 1)[-1]
+                is_alive = bool(
+                    await self.redis.exists(f"acn:agents:{agent_id}:alive")
+                )
+                status_bucket = "online" if is_alive else "offline"
+                stats["by_status"][status_bucket] += 1
 
                 subnet = agent.get("subnet_id", "public")
                 stats["by_subnet"][subnet] = stats["by_subnet"].get(subnet, 0) + 1
