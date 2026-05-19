@@ -4,6 +4,15 @@
 **架构覆盖率**: **~50%**  
 **状态**: ✅ 核心功能已迁移，服务正常运行
 
+> ⚠️ **历史快照（2024-12）**：本文记录的是首轮 Clean Architecture 切换后的状态，**不再反映当前代码**。
+> 截至 2026-05（commit `4771a1b`），以下"部分迁移 / 未迁移"条目都已完成：
+> - ✅ `MessageRouter` / `BroadcastService` / `SubnetManager` 已切到 `AgentService`，不再持有 `AgentRegistry`；
+> - ✅ `routes/payments.py` 已用 `AgentServiceDep` 替换 `RegistryDep`；
+> - ✅ legacy 类 `acn/infrastructure/persistence/redis/registry.py`（503 行）已删除，`RegistryDep` / `get_registry` / `registry_instance` 单例同步移除；
+> - ✅ Agent 在线状态以 Redis `acn:agents:{id}:alive` 键为单一来源（`agents.status` 列已删除）。
+>
+> 详见 `docs/agent-registry-removal.md`。下方"部分迁移 / 未迁移"章节仅保留作为历史档案。
+
 ---
 
 ## ✅ 已完成（真实工作）

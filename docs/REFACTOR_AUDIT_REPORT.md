@@ -4,6 +4,14 @@
 **版本**: 1.0.0  
 **状态**: ✅ 通过
 
+> ⚠️ **历史快照（2024-12）**：本报告记录的是首轮 Clean Architecture 切换后的状态，**不再反映当前代码**。
+> 此后 ACN 又经历了多轮重构，包括：
+> - **alive-as-SSOT**：删除 `Agent.status` 字段与 `agents.status` 列，agent 在线状态以 Redis `acn:agents:{id}:alive` 键为单一来源；
+> - **AgentRegistry 整体移除**（2026-05，commit `4771a1b`）：legacy 类 `acn/infrastructure/persistence/redis/registry.py` 已删除，`RegistryDep` 与 `registry_instance` 单例消失，所有调用点（`payments` / `message_router` / `broadcast_service` / `subnet_manager` / `a2a/server`）均迁至 `AgentService`；
+> - **ADR-0004 子网级联**：`SubnetService` 引入 `IUnitOfWork` 原子级联删除。
+>
+> 详见 `docs/agent-registry-removal.md` 与各 ADR。本文除做最小修正外保持原貌作为历史档案。
+
 ---
 
 ## 📋 执行摘要
@@ -239,7 +247,7 @@ ACN (Agent Communication Network) 已完成从混乱代码库到 Clean Architect
 **持久化 (Persistence)**:
 - ✅ `RedisAgentRepository` (178 lines)
 - ✅ `RedisSubnetRepository` (116 lines)
-- ✅ `AgentRegistry` (503 lines, legacy 但组织化)
+- ~~`AgentRegistry` (503 lines, legacy 但组织化)~~ — **已删除（2026-05，commit `4771a1b`）**
 
 **消息传递 (Messaging)**:
 - ✅ `MessageRouter` (457 lines) - A2A 客户端
