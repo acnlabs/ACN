@@ -6,6 +6,8 @@ These represent the core business concepts of ACN.
 
 from .agent import Agent, ClaimStatus
 from .subnet import Subnet
+from .subnet_allowlist import SubnetAllowlist
+from .subnet_join_request import SYSTEM_ALLOWLIST_ACTOR, SubnetJoinRequest
 from .task import (
     Participation,
     ParticipationStatus,
@@ -20,11 +22,14 @@ from .task import (
 # import it from there if you need the response/SDK representation.
 
 __all__ = [
+    "SYSTEM_ALLOWLIST_ACTOR",
     "Agent",
     "ClaimStatus",
     "Participation",
     "ParticipationStatus",
     "Subnet",
+    "SubnetAllowlist",
+    "SubnetJoinRequest",
     "Task",
     "TaskStatus",
 ]
