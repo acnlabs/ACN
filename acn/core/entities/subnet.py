@@ -49,8 +49,9 @@ class Subnet:
     # Join admission policy (ADR-0004). Decouples admission control from
     # discoverability (``is_private``). ``"open"`` keeps today's "any
     # registered agent may join" behaviour; ``"approval"`` requires an
-    # owner-side decision (the request / invitation / allowlist state
-    # machine lands in Phase 2 with the service layer). Defaults to
+    # owner-side decision via the request / invitation / allowlist
+    # state machine implemented in ``acn/services/join_flow_service.py``
+    # and surfaced through ``acn/routes/subnet_admission.py``. Defaults to
     # ``"open"`` so legacy callers that never set the field behave
     # exactly as before; the ``__post_init__`` invariant below rejects
     # the ``is_private=True + join_policy="open"`` combination that the

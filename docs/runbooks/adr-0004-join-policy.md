@@ -85,14 +85,23 @@ modifications required.
 
 ### Log keys to watch
 
-| `structlog` event | What it means | Severity |
-|-------------------|---------------|----------|
-| `join_flow_webhook_delivery_failed` | Webhook `send_to` raised or returned `False`; **state machine still advanced** (per ADR §Cross-slice acceptance) | warn — only alert on sustained rate ≥ N/min |
-| `join_flow_webhook_skipped_no_harness` | Subnet has no `harness_url`; webhook intentionally skipped | debug |
-| `join_flow_webhook_unmapped_event` | Brand-new `JoinFlowEventType` member not in `_EVENT_MAP` — should be impossible (pinned by test) | **error → page** |
-| `join_request_approved` / `_rejected` / `_withdrawn` | Lifecycle audit trail | info |
-| `invitation_sent` / `_accepted` / `_rejected` / `_canceled` | Lifecycle audit trail | info |
-| `visibility_policy_conflict` | Caller tried `is_private=True + join_policy='open'` | info (4xx, not a service bug) |
+All keys verified emitted at the source files listed in the rightmost
+column. Greppable in production logs as the literal string.
+
+| `structlog` event | Emitted from | What it means | Severity |
+|-------------------|--------------|---------------|----------|
+| `join_flow_webhook_delivery_failed` | `acn/services/webhook_join_flow_event_publisher.py` | Webhook `send_to` raised or returned `False`; **state machine still advanced** (per ADR §Cross-slice acceptance) | warn — only alert on sustained rate ≥ N/min |
+| `join_flow_webhook_skipped_no_harness` | `acn/services/webhook_join_flow_event_publisher.py` | Subnet has no `harness_url`; webhook intentionally skipped | debug |
+| `join_flow_webhook_unmapped_event` | `acn/services/webhook_join_flow_event_publisher.py` | Brand-new `JoinFlowEventType` member not in `_EVENT_MAP` — should be impossible (pinned by test) | **error → page** |
+| `subnet_join_request_approved` / `_rejected` / `_withdrawn` | `acn/services/subnet_service.py` | Lifecycle audit trail | info |
+| `subnet_invitation_sent` / `_accepted` / `_rejected` / `_canceled` | `acn/services/subnet_service.py` | Lifecycle audit trail | info |
+
+The `visibility_policy_conflict` reason is **not** a structlog event
+— it's a string surfaced on the wire inside `ACNHTTPError.details.reason`
+for the `is_private=True + join_policy='open'` 4xx rejection at
+entity construction (raised from `acn/core/entities/subnet.py`). Find
+it in production via HTTP access logs / 4xx dashboards, not a log
+key search.
 
 ### Prometheus
 
@@ -127,7 +136,7 @@ reverting #74's PG migration is high.
 ## 6) Known gotchas
 
 - **Allowlist add/remove has no webhook**. ADR §"Webhook event catalogue" classifies allowlist mutation as configuration state. If a Harness needs a snapshot, replay via `GET /api/v1/subnets/{id}/allowlist` (owner-only). Don't add webhooks for these without re-reading the ADR's reasoning.
-- **`Invited?` is evaluated before `Allow?`**. If both an invitation and an allowlist entry exist for the same agent, the invitation's `accept` is the canonical path; the allowlist entry is "absorbed" as `via=allowlist` on the invitation row. This prevents two membership events for one join. The order is pinned by `tests/services/test_join_flow_service.py::TestInvitationBeforeAllowlist`.
+- **`Invited?` is evaluated before `Allow?`**. If both an invitation and an allowlist entry exist for the same agent, the invitation's `accept` is the canonical path; the allowlist entry is "absorbed" as `via=allowlist` on the invitation row, `decided_by=system:allowlist`, and **no separate `allowlist_auto` row is written** (the merge is the test contract). This prevents two membership events for one join. Pinned by `tests/services/test_join_flow_service.py::TestBranch4InvitationWithAllowlistMerge::test_invitation_wins_over_allowlist_auto` (the merge invariant) and `TestBranchOrderNormativity` (general branch precedence).
 - **`is_private` is read visibility, `join_policy` is admission**. Don't conflate them. A `is_private=False, join_policy='approval'` subnet (curated public community) is a legitimate configuration. The two axes are intentionally orthogonal; see `acnlabs/ACN#68` for the orthogonal read-side ACL fix.
 - **Webhook failures must not roll back state transitions**. This is pinned twice in `tests/services/test_join_flow_webhook_composition.py`. If you're adding a new emit site to `SubnetService` or `JoinFlowService`, the publish call must be the **last** thing the method does after commit, and must not re-raise. Use `WebhookJoinFlowEventPublisher` as the reference.
 

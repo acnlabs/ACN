@@ -1692,9 +1692,9 @@ order.
 
 The ADR §Cross-slice acceptance checklist is satisfied as follows:
 
-- **State machine convergence** — pinned by `tests/services/test_join_flow_service.py` (60+ tests across the six branches, all approval-entry paths, and the `Invited?` ⊳ `Allow?` ordering invariant).
-- **No double-membership** — pinned by `tests/services/test_subnet_service_allowlist.py` and the invitation-folds-into-allowlist tests in `test_join_flow_service.py`.
-- **ADR-0003 cascade preserved** — `tests/services/test_subnet_service_cascade.py` + `tests/infrastructure/test_unit_of_work_cascade.py` (#76).
+- **State machine convergence** — pinned by `tests/services/test_join_flow_service.py` (14 tests across `TestBranch{1..6}` covering each of the six branches, plus `TestStateMachineEdges` and `TestBranchOrderNormativity` for the `Invited?` ⊳ `Allow?` precedence and other edge orderings).
+- **No double-membership** — pinned by `tests/services/test_subnet_service_allowlist.py` and `tests/services/test_join_flow_service.py::TestBranch4InvitationWithAllowlistMerge::test_invitation_wins_over_allowlist_auto` (the invitation-folds-into-allowlist test).
+- **ADR-0003 cascade preserved** — `tests/services/test_subnet_service_cascade.py` (Slice 2.1 surface) + `tests/services/test_subnet_service_cascade_atomic.py` (#76 single-transaction guarantee, threading `IUnitOfWork`'s session token through all three cascade methods).
 - **Webhook lifecycle invariant** — `tests/services/test_join_flow_webhook_composition.py` pins that webhook transport failure (exception or `return False`) does **not** roll back the underlying state transition.
 - **No-drift enum contract** — `tests/services/test_webhook_join_flow_event_publisher.py::TestEnumMapping` asserts `_EVENT_MAP` is exhaustive over `JoinFlowEventType` and every pair shares the same string value.
 - **Backward compatibility** — `tests/test_openapi_acn_error_response.py` + `tests/test_error_code_details_consistency.py` keep the error-shape contract stable across the 11 new `ErrorCode`s; existing `is_private` + `POST /agents/{id}/subnets/{id}` callers behave identically when they omit the new fields.
