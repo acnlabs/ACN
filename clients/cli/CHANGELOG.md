@@ -2,6 +2,42 @@
 
 All notable changes to `@acnlabs/acn-cli` are documented here.
 
+## [Unreleased]
+
+### Added — ADR-0004 Slice 2.3 PR B (subnet admission verbs)
+- `acn subnet create --join-policy <open|approval>` — opt the new
+  subnet into the approval gate. `--private` continues to imply
+  `--join-policy=approval`; explicit `--private --join-policy=open`
+  is now rejected client-side with exit 2 (matching the server's
+  `INVALID_REQUEST` + `details.reason="visibility_policy_conflict"`
+  response).
+- `acn subnet allowlist <list|add|remove>` — owner-only management
+  of a subnet's pre-authorisation allowlist.
+- `acn subnet requests <list|approve|reject|withdraw|pending>` —
+  owner-side approve/reject of pending `join_request` rows,
+  applicant-side `withdraw` of one's own pending row, and an
+  owner-side `pending` aggregator across every subnet you own.
+- `acn subnet invitations <send|list|accept|reject|cancel|pending>`
+  — owner sends/cancels invitations, invitee accepts/rejects, plus
+  a cross-subnet `pending` view for the invitee backed by
+  `GET /agents/{aid}/subnet-invitations`. `send` understands the
+  ADR-0004 merge path: if the target already has a pending
+  `join_request`, the response is `auto_resolved` and the CLI
+  reports `"… auto-approved (request <rid>)"`.
+
+### Changed
+- `acn subnet join` now branches on the six ADR-0004 response
+  shapes (open join / owner self-join / invitation auto-accepted
+  via self-join / invitation auto-accepted via allowlist match /
+  allowlist hit with new approved row / pending join_request),
+  printing a distinct human line per branch so operators can tell
+  which path their join took without inspecting the raw JSON.
+- `acn subnet join` and `acn subnet leave` now hit the canonical
+  `/api/v1/agents/{aid}/subnets/{sid}` URL instead of the
+  deprecated `/api/v1/subnets/{aid}/subnets/{sid}` alias. The
+  legacy route still works server-side, but the CLI emits the
+  newer surface so request logs are consistent.
+
 ## [0.7.0] - 2026-05-10
 
 ### Added
