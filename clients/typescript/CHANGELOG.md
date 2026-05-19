@@ -4,6 +4,55 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+### Added (ADR-0004 subnet admission)
+
+- `SubnetCreateRequest.join_policy?: SubnetJoinPolicy` — opt
+  subnets into the admission state machine at creation time.
+  `'open'` (or omitted) preserves legacy unrestricted self-join;
+  `'approval'` gates membership through allowlist /
+  join_request / invitation. Immutable post-creation.
+- New types in `types.ts` (un-modeled passthrough mirrors of the
+  server's un-typed JSON responses, each with a `[key: string]:
+  unknown` index signature so future server-added fields don't
+  break callers):
+  - `SubnetJoinPolicy`, `SubnetAllowlistEntry`,
+    `SubnetAllowlistListResponse`
+  - `SubnetJoinRequestRow` — single audit-row shape covering all
+    three row kinds (`'join_request' | 'allowlist_auto' |
+    'invitation'`).
+  - `SubnetJoinRequestListResponse`, `SubnetInvitationListResponse`,
+    `AgentSubnetInvitationsResponse`
+  - `SubnetInvitationSendResponse` — discriminated union of the
+    202 normal-path `{ invitation_id, status: 'pending' }` and
+    the 200 merge-path `{ auto_resolved: true, resolved_kind:
+    'join_request', request_id }` shapes; discriminate on
+    `auto_resolved` to dispatch.
+  - `SubnetJoinRequestListOptions`, `SubnetInvitationListOptions`
+- 13 admission methods on `ACNClient` (`subnet*` prefix to avoid
+  colliding with the existing inbox `addToAllowlist` surface):
+  - Allowlist (3): `subnetAllowlistAdd` / `_Remove` / `_List` —
+    owner only.
+  - Join requests (4): `subnetJoinRequestApprove` / `_Reject` /
+    `_List` — owner only; `_Withdraw` — applicant (self) only.
+  - Invitations (5): `subnetInvitationSend` / `_Cancel` /
+    `_List` — owner only; `_Accept` / `_Reject` — invitee
+    (self) only.
+  - Agent-side: `agentSubnetInvitations` — invitee's
+    cross-subnet pending view (self only).
+- 19 vitest tests in `src/admission.test.ts` pinning verb +
+  path + body/params for every method by stubbing
+  `globalThis.fetch` per test and asserting on the captured
+  `(url, init)` tuple. **First test file in the TypeScript
+  SDK** — establishes the testing baseline (vitest 2.x).
+
+### Changed (devDependencies)
+
+- `vitest` bumped from `^1.0.0` to `^2.1.9`. The 1.x install
+  pinned by the existing `package-lock.json` had a broken
+  `dist/cli-wrapper.js` resolution against Node 20 and could
+  not actually run tests — adding the first test file required
+  unblocking it. No source-code impact.
+
 ### Changed (type narrowing — alive-as-SSOT follow-up)
 
 - **`AgentStatus` narrowed from `'online' | 'offline' | 'busy'` to

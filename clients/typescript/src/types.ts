@@ -146,6 +146,15 @@ export interface SubnetCreateRequest {
   name: string;
   description?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * ADR-0004 admission policy. When omitted the server defaults to
+   * `'open'` (legacy unrestricted self-join). `'approval'` opts the
+   * subnet into the admission state machine — joins are gated by
+   * allowlist / join_request / invitation.
+   *
+   * Immutable post-creation.
+   */
+  join_policy?: SubnetJoinPolicy;
 }
 
 /** Subnet creation response */
@@ -153,6 +162,120 @@ export interface SubnetCreateResponse {
   success: boolean;
   subnet_id: string;
   message: string;
+}
+
+// ============================================
+// ADR-0004 Subnet Admission Types
+// ============================================
+//
+// The 13 admission verbs return un-typed JSON on the server side
+// (no FastAPI `response_model=`). The interfaces below capture the
+// observed wire shape for IDE-completion convenience but each
+// extends the open-ended `Record<string, unknown>` index signature
+// so future server fields don't break callers — the SDK keeps
+// "raw forwarded dict" semantics matching the Python SDK
+// (see acn-client (Python) PR for the same trade-off).
+
+/** Subnet join-policy values. Immutable post-creation. */
+export type SubnetJoinPolicy = 'open' | 'approval';
+
+/** Single allowlist entry (returned by `subnetAllowlistAdd`). */
+export interface SubnetAllowlistEntry {
+  agent_id: string;
+  added_by: string;
+  added_at: string;
+  [key: string]: unknown;
+}
+
+/** Response envelope for `subnetAllowlistList` (owner only). */
+export interface SubnetAllowlistListResponse {
+  subnet_id: string;
+  entries: SubnetAllowlistEntry[];
+  [key: string]: unknown;
+}
+
+/**
+ * Audit row covering the three ADR-0004 row kinds. The same shape
+ * is returned for join_request approve/reject/withdraw,
+ * invitation accept/reject/cancel, and the allowlist_auto rows
+ * synthesised on allowlist-hit joins. `agent_id` is the applicant
+ * for join_requests / allowlist_auto and the invitee for
+ * invitations.
+ */
+export interface SubnetJoinRequestRow {
+  request_id: string;
+  subnet_id: string;
+  kind: 'join_request' | 'allowlist_auto' | 'invitation';
+  status: 'pending' | 'approved' | 'rejected' | 'withdrawn';
+  initiated_by: string;
+  agent_id: string;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  note?: string | null;
+  created_at: string;
+  [key: string]: unknown;
+}
+
+/** Response envelope for `subnetJoinRequestList` (owner only). */
+export interface SubnetJoinRequestListResponse {
+  subnet_id: string;
+  items: SubnetJoinRequestRow[];
+  [key: string]: unknown;
+}
+
+/** Response envelope for `subnetInvitationList` (owner only). */
+export interface SubnetInvitationListResponse {
+  subnet_id: string;
+  items: SubnetJoinRequestRow[];
+  [key: string]: unknown;
+}
+
+/** Response envelope for `agentSubnetInvitations` (self only). */
+export interface AgentSubnetInvitationsResponse {
+  agent_id: string;
+  items: SubnetJoinRequestRow[];
+  [key: string]: unknown;
+}
+
+/**
+ * Discriminated union for `subnetInvitationSend`. The server
+ * returns 202 + the normal-path shape when the target has no
+ * pending join_request, and 200 + the merge-path shape when an
+ * existing pending join_request is auto-approved by the invite.
+ *
+ * Discriminate on `auto_resolved` (absent | true) to dispatch.
+ */
+export type SubnetInvitationSendResponse =
+  | {
+      invitation_id: string;
+      status: 'pending';
+      auto_resolved?: undefined;
+      [key: string]: unknown;
+    }
+  | {
+      auto_resolved: true;
+      resolved_kind: 'join_request';
+      request_id: string;
+      [key: string]: unknown;
+    };
+
+/** Pagination + filter options for the two list endpoints. */
+export interface SubnetJoinRequestListOptions {
+  /**
+   * Defaults to `'join_request'` server-side. Pass `'allowlist_auto'`
+   * to inspect synthesised audit rows. `'invitation'` is rejected
+   * with 400 INVALID_KIND_FILTER — use `subnetInvitationList`.
+   */
+  kind?: 'join_request' | 'allowlist_auto';
+  status?: 'pending' | 'approved' | 'rejected' | 'withdrawn';
+  limit?: number;
+  offset?: number;
+}
+
+export interface SubnetInvitationListOptions {
+  status?: 'pending' | 'approved' | 'rejected' | 'withdrawn';
+  limit?: number;
+  offset?: number;
 }
 
 // ============================================
