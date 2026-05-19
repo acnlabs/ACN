@@ -72,9 +72,8 @@ async def test_ws_heartbeat_frame_renews_alive_ttl_via_touch_alive():
     ``touch_alive(agent_id)`` exactly once and still send the HEARTBEAT_ACK."""
     agent_service = AsyncMock()
     manager = SubnetManager(
-        registry=MagicMock(),
-        redis_client=AsyncMock(),
         agent_service=agent_service,
+        redis_client=AsyncMock(),
     )
     ws = _mock_ws_yielding_one_heartbeat()
     connection = _make_connection(ws)
@@ -97,24 +96,14 @@ async def test_ws_heartbeat_frame_renews_alive_ttl_via_touch_alive():
 
 
 @pytest.mark.asyncio
-async def test_ws_heartbeat_without_agent_service_is_noop_not_crash():
-    """Legacy callers construct ``SubnetManager`` without ``agent_service=``.
-    The HEARTBEAT branch must complete normally — ACK sent, no
-    ``AttributeError`` from dereferencing a ``None`` hook. This is the
-    opt-out path the api.py rollout doc promises for downstream forks
-    that haven't wired AgentService into their gateway yet."""
-    manager = SubnetManager(
-        registry=MagicMock(),
-        redis_client=AsyncMock(),
-        # agent_service omitted on purpose
-    )
-    ws = _mock_ws_yielding_one_heartbeat()
-    connection = _make_connection(ws)
+async def test_ws_heartbeat_requires_agent_service_constructor_arg():
+    """Post-AgentRegistry migration, ``agent_service`` is required at
+    construction time — the legacy opt-out (None) no longer makes sense
+    because the gateway needs the service for both register and unregister.
 
-    with pytest.raises(WebSocketDisconnect):
-        await manager._message_loop(connection)
-
-    assert manager._alive_renewal_tasks == set()
-    ws.send_json.assert_awaited_once()
-    sent = ws.send_json.await_args.args[0]
-    assert sent["type"] == GatewayMessageType.HEARTBEAT_ACK
+    This test pins the contract so a future refactor can't silently
+    re-introduce the None fallback that the audit eliminated."""
+    with pytest.raises(TypeError):
+        SubnetManager(  # type: ignore[call-arg]
+            redis_client=AsyncMock(),
+        )

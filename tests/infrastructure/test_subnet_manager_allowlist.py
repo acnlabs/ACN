@@ -54,7 +54,7 @@ def fake_redis() -> AsyncMock:
 
 
 @pytest.fixture
-def mock_registry() -> MagicMock:
+def mock_agent_service() -> MagicMock:
     return MagicMock()
 
 
@@ -101,7 +101,7 @@ def _exploding_allowlist_service():
 
 def _build_manager(
     *,
-    registry: MagicMock,
+    agent_service: AsyncMock,
     redis_client: AsyncMock,
     policy_service: PolicyCheckService | None,
     manifest_dispatcher: MagicMock | None = None,
@@ -110,7 +110,7 @@ def _build_manager(
     agent_id: str = "agent-b",
 ) -> tuple[SubnetManager, MagicMock]:
     manager = SubnetManager(
-        registry=registry,
+        agent_service=agent_service,
         redis_client=redis_client,
         policy_service=policy_service,
         manifest_dispatcher=manifest_dispatcher,
@@ -146,13 +146,13 @@ class TestAllowlistNonMemberDiverts:
     WebSocket push."""
 
     async def test_no_websocket_frame_on_non_member(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "allowlist"})
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -168,17 +168,17 @@ class TestAllowlistNonMemberDiverts:
         assert result["delivery_mode"] == "manifest"
 
     async def test_dispatcher_called_with_subnet_path(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """Metric label parity — same ``path="subnet"`` shape as
         manifest mode. The metric does not differentiate "diverted
         because non-allowlisted" vs "diverted because manifest-mode";
         intentional, see PR #2 plan B2 decision."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "allowlist"})
         )
         manager, _ = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -202,7 +202,7 @@ class TestAllowlistNonMemberDiverts:
 
 
 async def test_allowlist_member_uses_websocket(
-    mock_registry, fake_redis, policy_service, stub_dispatcher, monkeypatch
+    mock_agent_service, fake_redis, policy_service, stub_dispatcher, monkeypatch
 ):
     """Members get the fast path (subnet WebSocket push). Without
     this regression test a future refactor could accidentally
@@ -216,11 +216,11 @@ async def test_allowlist_member_uses_websocket(
     routing decision (member → WebSocket push) without standing
     up the full reply round-trip.
     """
-    mock_registry.get_agent = AsyncMock(
+    mock_agent_service.find_agent = AsyncMock(
         return_value=_make_agent_info({"mode": "allowlist"})
     )
     manager, websocket = _build_manager(
-        registry=mock_registry,
+        agent_service=mock_agent_service,
         redis_client=fake_redis,
         policy_service=policy_service,
         manifest_dispatcher=stub_dispatcher,
@@ -254,13 +254,13 @@ class TestAllowlistFailClosedOnSubnet:
     pick the ingress channel that fails open."""
 
     async def test_empty_allowlist_diverts(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "allowlist"})
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -275,13 +275,13 @@ class TestAllowlistFailClosedOnSubnet:
         assert result["delivery_mode"] == "manifest"
 
     async def test_missing_allowlist_service_diverts(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "allowlist"})
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -296,13 +296,13 @@ class TestAllowlistFailClosedOnSubnet:
         assert result["delivery_mode"] == "manifest"
 
     async def test_callback_failure_diverts(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "allowlist"})
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -323,16 +323,16 @@ class TestAllowlistFailClosedOnSubnet:
 
 
 async def test_system_sender_bypasses_allowlist_on_subnet(
-    mock_registry, fake_redis, policy_service, stub_dispatcher, monkeypatch
+    mock_agent_service, fake_redis, policy_service, stub_dispatcher, monkeypatch
 ):
     """System namespace bypasses every gate uniformly across
     ingress channels — same property pinned for HTTP path, must
     also hold on subnet."""
-    mock_registry.get_agent = AsyncMock(
+    mock_agent_service.find_agent = AsyncMock(
         return_value=_make_agent_info({"mode": "allowlist"})
     )
     manager, websocket = _build_manager(
-        registry=mock_registry,
+        agent_service=mock_agent_service,
         redis_client=fake_redis,
         policy_service=policy_service,
         manifest_dispatcher=stub_dispatcher,

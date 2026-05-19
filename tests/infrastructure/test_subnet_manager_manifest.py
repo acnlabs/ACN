@@ -55,7 +55,7 @@ def fake_redis() -> AsyncMock:
 
 
 @pytest.fixture
-def mock_registry() -> MagicMock:
+def mock_agent_service() -> MagicMock:
     return MagicMock()
 
 
@@ -83,7 +83,7 @@ def _make_agent_info(communication_policy: dict | None = None) -> MagicMock:
 
 def _build_manager(
     *,
-    registry: MagicMock,
+    agent_service: AsyncMock,
     redis_client: AsyncMock,
     policy_service: PolicyCheckService | None,
     manifest_dispatcher: MagicMock | None = None,
@@ -91,7 +91,7 @@ def _build_manager(
     agent_id: str = "agent-b",
 ) -> tuple[SubnetManager, MagicMock]:
     manager = SubnetManager(
-        registry=registry,
+        agent_service=agent_service,
         redis_client=redis_client,
         policy_service=policy_service,
         manifest_dispatcher=manifest_dispatcher,
@@ -123,14 +123,14 @@ class TestManifestRecipientDivertsOnSubnet:
 
     @pytest.mark.asyncio
     async def test_does_not_send_websocket_frame(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """The single most important assertion: no ``send_json``."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "manifest"})
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -155,17 +155,17 @@ class TestManifestRecipientDivertsOnSubnet:
 
     @pytest.mark.asyncio
     async def test_dispatcher_called_with_subnet_path(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """Pin the ``path="subnet"`` metric label so the divert
         counter can separate subnet vs router traffic. Drift on this
         string would silently merge the two channels in dashboards.
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "manifest"})
         )
         manager, _ws = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -208,17 +208,17 @@ class TestClosedStillRejectsAfterManifestRefactor:
 
     @pytest.mark.asyncio
     async def test_closed_recipient_raises_policy_rejected(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         from acn.core.exceptions import PolicyRejected
 
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 {"mode": "closed", "reject_reason": "do not disturb"}
             )
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -248,7 +248,7 @@ class TestClosedStillRejectsAfterManifestRefactor:
 class TestMissingDispatcherFailsLoudly:
     @pytest.mark.asyncio
     async def test_raises_runtime_error_when_dispatcher_unwired(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Configuration error must surface immediately on the subnet
         path too. Same rationale as the router-side guard:
@@ -261,11 +261,11 @@ class TestMissingDispatcherFailsLoudly:
         on first manifest send rather than chasing ghost messages
         across logs.
         """
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "manifest"})
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=None,
@@ -290,16 +290,16 @@ class TestMissingDispatcherFailsLoudly:
 class TestOpenAndSystemUnaffected:
     @pytest.mark.asyncio
     async def test_open_recipient_still_uses_websocket_push(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """Regression guard: open recipients still get WebSocket
         push. The manifest branch must never accidentally swallow
         non-manifest traffic."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "open"})
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,
@@ -319,17 +319,17 @@ class TestOpenAndSystemUnaffected:
 
     @pytest.mark.asyncio
     async def test_system_sender_bypasses_manifest_recipient(
-        self, mock_registry, fake_redis, policy_service, stub_dispatcher
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """``system:*`` exemption must beat manifest divert on the
         subnet path too — internal notifications are time-sensitive
         and shouldn't sit in a manifest queue waiting for the
         recipient to poll."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "manifest"})
         )
         manager, websocket = _build_manager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
             manifest_dispatcher=stub_dispatcher,

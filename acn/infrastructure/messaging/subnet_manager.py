@@ -48,9 +48,9 @@ import redis.asyncio as redis
 from a2a.compat.v0_3.types import Message  # type: ignore[import-untyped]
 from fastapi import WebSocket, WebSocketDisconnect
 
+from ...core.entities import Agent
 from ...core.exceptions import PolicyRejected
 from ...models import AgentInfo, SubnetInfo
-from ..persistence.redis.registry import AgentRegistry
 
 # ``PolicyCheckService`` is only referenced for type hints; importing
 # the submodule directly avoids triggering ``services/__init__.py``
@@ -142,7 +142,7 @@ class SubnetManager:
 
     def __init__(
         self,
-        registry: AgentRegistry,
+        agent_service: "AgentService",
         redis_client: redis.Redis,
         gateway_base_url: str = "https://gateway.agentplanet.com",
         heartbeat_interval: int = 30,
@@ -150,13 +150,21 @@ class SubnetManager:
         policy_service: "PolicyCheckService | None" = None,
         manifest_dispatcher: "ManifestDispatcher | None" = None,
         allowlist_service: "AllowlistService | None" = None,
-        agent_service: "AgentService | None" = None,
     ):
         """
         Initialize Subnet Manager
 
         Args:
-            registry: ACN Registry for agent registration
+            agent_service: AgentService for registry-side persistence
+                (replaces the legacy ``AgentRegistry``; see audit
+                report §AgentRegistry-parallel-implementation). The
+                gateway register / disconnect / forward paths reach
+                into ``agent_service.repository`` directly because
+                the gateway owns its own agent_id namespace (the WS
+                path carries the id) and ``AgentService.register_agent``
+                deliberately allocates ids internally. This is the
+                one place that breaks the service-only rule, on
+                purpose — see the per-call comments below.
             redis_client: Redis for state persistence
             gateway_base_url: Public URL of this gateway
             heartbeat_interval: Seconds between heartbeat checks
@@ -186,18 +194,8 @@ class SubnetManager:
                 policy_service's "missing callback → divert to
                 manifest" safety branch — same shape as
                 ``MessageRouter`` for symmetry.
-            agent_service: Implicit-heartbeat hook. When provided, every
-                inbound WebSocket HEARTBEAT frame fires
-                ``AgentService.touch_alive(agent_id)`` as a detached
-                ``asyncio.create_task`` so the agent's Redis ``alive``
-                TTL renews without blocking the WS read loop. Symmetric
-                to the HTTP-side implicit heartbeat scheduled by
-                ``acn.routes.dependencies._schedule_alive_renewal``.
-                ``None`` keeps legacy fixtures green — the existing
-                ``connection.last_heartbeat`` in-memory bookkeeping
-                continues, only the Redis renewal is skipped.
         """
-        self.registry = registry
+        self.agent_service = agent_service
         self.redis = redis_client
         self.gateway_base_url = gateway_base_url.rstrip("/")
         self.heartbeat_interval = heartbeat_interval
@@ -205,6 +203,10 @@ class SubnetManager:
         self.policy_service = policy_service
         self.manifest_dispatcher = manifest_dispatcher
         self.allowlist_service = allowlist_service
+        # Alias kept for the implicit-heartbeat hook that used to
+        # depend on a separately-injected ``_agent_service``. With the
+        # AgentRegistry migration the gateway always has an
+        # AgentService, so the field is no longer optional.
         self._agent_service = agent_service
         # Hold strong refs to fire-and-forget alive-renewal tasks so the
         # asyncio GC cannot collect them mid-await (Python 3.11+ keeps a
@@ -590,31 +592,55 @@ class SubnetManager:
         # Read: support both new "tags" and legacy "skills" key from gateway payload
         _agent_tags = agent_data.get("tags") or agent_data.get("skills", [])
 
-        # Register in ACN (auto-generates Agent Card if not provided)
-        await self.registry.register_agent(
+        # Persist via the repository directly rather than
+        # ``AgentService.register_agent`` because the gateway owns the
+        # ``agent_id`` namespace (the WS URL path is the canonical
+        # identifier — both the agent and any forwarder use the same
+        # string to address frames) while ``AgentService.register_agent``
+        # deliberately allocates ids internally. owner=None mirrors the
+        # autonomous-join semantics (unclaimed agent, can be claimed
+        # later) — see audit-resolution decision: gateway agents have
+        # no implicit owner because the WS handshake never carries
+        # one. The matching alive-key write is implicit: every WS
+        # HEARTBEAT frame fires ``touch_alive`` below.
+        await self.agent_service.repository.save(
+            Agent(
+                agent_id=connection.agent_id,
+                name=agent_data.get("name", connection.agent_id),
+                owner=None,
+                endpoint=gateway_endpoint,
+                a2a_endpoint=gateway_endpoint,
+                description=agent_data.get("description", ""),
+                tags=_agent_tags,
+                subnet_ids=[connection.subnet_id],
+                metadata=metadata,
+                agent_card=agent_data.get("agent_card"),
+            )
+        )
+        # Seed the alive key so the first HTTP discovery after register
+        # sees the agent as online; subsequent WS HEARTBEATs renew it.
+        await self.agent_service.touch_alive(connection.agent_id)
+
+        # Build agent info for local cache. We use the public ``AgentInfo``
+        # DTO (still present for API serialization elsewhere) so anything
+        # holding ``connection.agent_info`` keeps the same shape — the
+        # owner-less, ``subnet_ids=[...]`` (plural) form matches the
+        # rest of the codebase. ``status="online"`` is the legacy enum
+        # label only; liveness reads come from ``AgentService.is_alive``.
+        # Owner is required by the DTO; use a synthetic ``gateway:``
+        # namespace marker (not a real user identifier) so internal
+        # caches stay self-describing without overloading the
+        # autonomous-join semantic.
+        connection.agent_info = AgentInfo(
             agent_id=connection.agent_id,
+            owner=f"gateway:{connection.subnet_id}",
             name=agent_data.get("name", connection.agent_id),
-            endpoint=gateway_endpoint,
+            description=agent_data.get("description", ""),
             tags=_agent_tags,
-            agent_card=agent_data.get("agent_card"),  # May be None, will be auto-generated
-            subnet_id=connection.subnet_id,
-            description=agent_data.get("description", ""),
-            metadata=metadata,
-        )
-
-        # Build agent info for local cache
-        agent_info = AgentInfo(
-            agent_id=connection.agent_id,
-            name=agent_data.get("name", connection.agent_id),
-            description=agent_data.get("description", ""),
-            tags=_agent_tags,  # AgentInfo.tags field (not renamed)
             endpoint=gateway_endpoint,
-            status="online",
-            subnet_id=connection.subnet_id,
+            subnet_ids=[connection.subnet_id],
             metadata=metadata,
         )
-
-        connection.agent_info = agent_info
 
         # Acknowledge
         await connection.websocket.send_json(
@@ -707,9 +733,15 @@ class SubnetManager:
             if not future.done():
                 future.set_exception(ConnectionError(f"Agent disconnected: {reason}"))
 
-        # Unregister from ACN
+        # Unregister from ACN. We bypass ``AgentService.unregister_agent``
+        # here because that method enforces owner-based authorization
+        # (caller must match ``agent.owner``) and the gateway has no
+        # owner context — the connection is identified by its WS
+        # session, not a user identity. Going straight to the
+        # repository preserves the legacy "best-effort cleanup"
+        # contract.
         try:
-            await self.registry.unregister_agent(agent_id)
+            await self.agent_service.repository.delete(agent_id)
         except Exception as e:
             logger.warning(f"Failed to unregister {agent_id}: {e}")
 
@@ -824,7 +856,7 @@ class SubnetManager:
         if self.policy_service is not None:
             policy: dict[str, Any] | None = None
             try:
-                fresh_info = await self.registry.get_agent(agent_id)
+                fresh_info = await self.agent_service.find_agent(agent_id)
                 if fresh_info is not None:
                     policy = fresh_info.communication_policy
             except Exception as exc:  # noqa: BLE001 — see fall-through note above

@@ -55,14 +55,15 @@ def fake_redis() -> AsyncMock:
 
 
 @pytest.fixture
-def mock_registry() -> MagicMock:
-    """Registry is the lookup the policy gate fans out to. Tests
-    override ``get_agent`` per-case."""
-    return MagicMock()
+def mock_agent_service() -> AsyncMock:
+    """AgentService is the lookup the policy gate fans out to. Tests
+    override ``find_agent`` per-case. AsyncMock so awaitable members
+    work out of the box."""
+    return AsyncMock()
 
 
 def _make_agent_info(communication_policy: dict | None = None) -> MagicMock:
-    """Minimal AgentInfo-shaped mock (only the field policy reads)."""
+    """Minimal Agent-shaped mock (only the field policy reads)."""
     info = MagicMock()
     info.communication_policy = communication_policy
     return info
@@ -70,7 +71,7 @@ def _make_agent_info(communication_policy: dict | None = None) -> MagicMock:
 
 def _build_manager_with_connected_agent(
     *,
-    registry: MagicMock,
+    agent_service: AsyncMock,
     redis_client: AsyncMock,
     policy_service: PolicyCheckService | None,
     subnet_id: str = "public",
@@ -83,7 +84,7 @@ def _build_manager_with_connected_agent(
     paths, which is the central contract of this layer).
     """
     manager = SubnetManager(
-        registry=registry,
+        agent_service=agent_service,
         redis_client=redis_client,
         policy_service=policy_service,
     )
@@ -107,15 +108,15 @@ def _build_manager_with_connected_agent(
 class TestClosedRecipientShortCircuits:
     @pytest.mark.asyncio
     async def test_raises_policy_rejected(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
                 {"mode": "closed", "reject_reason": "do not disturb"}
             )
         )
         manager, _ws = _build_manager_with_connected_agent(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -134,16 +135,16 @@ class TestClosedRecipientShortCircuits:
 
     @pytest.mark.asyncio
     async def test_does_not_send_websocket_frame(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """The single most important assertion at this layer: a closed
         recipient never observes a rejected request — there must be
         ZERO ``send_json`` calls when policy denies the forward."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "closed"})
         )
         manager, websocket = _build_manager_with_connected_agent(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -167,18 +168,18 @@ class TestClosedRecipientShortCircuits:
 class TestSystemSenderExemption:
     @pytest.mark.asyncio
     async def test_system_sender_bypasses_closed_recipient(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """``system:*`` sender must reach the WebSocket layer even when
         recipient is closed. The forward will time out (no responder
         wires up the future in this unit test), but the policy gate
         itself must NOT fire — that's what we assert here by checking
         that ``send_json`` did go through."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "closed"})
         )
         manager, websocket = _build_manager_with_connected_agent(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -208,13 +209,13 @@ class TestSystemSenderExemption:
 class TestOpenRecipientUnaffected:
     @pytest.mark.asyncio
     async def test_open_policy_lets_request_through(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "open"})
         )
         manager, websocket = _build_manager_with_connected_agent(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -239,7 +240,7 @@ class TestOpenRecipientUnaffected:
 class TestPolicyServiceOptional:
     @pytest.mark.asyncio
     async def test_no_policy_service_skips_gate(
-        self, mock_registry, fake_redis
+        self, mock_agent_service, fake_redis
     ):
         """Pinning the rollout opt-out: a SubnetManager built without a
         policy service must behave exactly as before — even a closed
@@ -247,11 +248,11 @@ class TestPolicyServiceOptional:
         forces every test fixture and the api.py wiring to flip in the
         same PR."""
         # Even closed must NOT short-circuit when the service is absent.
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "closed"})
         )
         manager, websocket = _build_manager_with_connected_agent(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=None,
         )
@@ -269,7 +270,7 @@ class TestPolicyServiceOptional:
         # And critically: when the gate is uninstalled, the registry is
         # not consulted either — important for legacy fixtures that
         # don't set up ``registry.get_agent`` at all.
-        mock_registry.get_agent.assert_not_called()
+        mock_agent_service.find_agent.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +281,7 @@ class TestPolicyServiceOptional:
 class TestRegistryLookupResilience:
     @pytest.mark.asyncio
     async def test_registry_lookup_exception_falls_through_to_open(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Pinning the explicit availability decision: when the registry
         read raises (Redis flake, transient timeout), we treat the
@@ -288,9 +289,9 @@ class TestRegistryLookupResilience:
         WebSocket connection itself proves the agent's presence; failing
         closed here would manufacture an outage on top of whatever
         caused the registry flake."""
-        mock_registry.get_agent = AsyncMock(side_effect=ConnectionError("redis flake"))
+        mock_agent_service.find_agent = AsyncMock(side_effect=ConnectionError("redis flake"))
         manager, websocket = _build_manager_with_connected_agent(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -308,16 +309,16 @@ class TestRegistryLookupResilience:
 
     @pytest.mark.asyncio
     async def test_registry_returns_none_falls_through_to_open(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """Edge case: the registry no longer has this agent (e.g. it
         was unregistered between WebSocket connect and forward). The
         connection cache still has a slot; the policy gate must not
         crash the forward — fall through to ``open`` for the same
         availability reason as the exception case."""
-        mock_registry.get_agent = AsyncMock(return_value=None)
+        mock_agent_service.find_agent = AsyncMock(return_value=None)
         manager, websocket = _build_manager_with_connected_agent(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -342,16 +343,16 @@ class TestRegistryLookupResilience:
 class TestFromAgentDefault:
     @pytest.mark.asyncio
     async def test_unknown_sender_treated_as_non_system(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
         """When the caller doesn't supply ``from_agent`` (legacy code
         path), the gate must NOT silently treat them as system-exempt.
         Closed policy still wins."""
-        mock_registry.get_agent = AsyncMock(
+        mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info({"mode": "closed"})
         )
         manager, websocket = _build_manager_with_connected_agent(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -382,11 +383,11 @@ class TestPreconditionsFireBeforePolicyCheck:
 
     @pytest.mark.asyncio
     async def test_unknown_subnet_raises_value_error_without_policy_lookup(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
-        mock_registry.get_agent = AsyncMock()
+        mock_agent_service.find_agent = AsyncMock()
         manager = SubnetManager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -399,15 +400,15 @@ class TestPreconditionsFireBeforePolicyCheck:
                 from_agent="agent-a",
             )
 
-        mock_registry.get_agent.assert_not_called()
+        mock_agent_service.find_agent.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_agent_not_connected_raises_value_error_without_policy_lookup(
-        self, mock_registry, fake_redis, policy_service
+        self, mock_agent_service, fake_redis, policy_service
     ):
-        mock_registry.get_agent = AsyncMock()
+        mock_agent_service.find_agent = AsyncMock()
         manager = SubnetManager(
-            registry=mock_registry,
+            agent_service=mock_agent_service,
             redis_client=fake_redis,
             policy_service=policy_service,
         )
@@ -421,4 +422,4 @@ class TestPreconditionsFireBeforePolicyCheck:
                 from_agent="agent-a",
             )
 
-        mock_registry.get_agent.assert_not_called()
+        mock_agent_service.find_agent.assert_not_called()
