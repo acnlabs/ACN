@@ -4,20 +4,39 @@ Business logic for subnet management.
 """
 
 import dataclasses
+import uuid
+from datetime import UTC, datetime
 from typing import Literal
 
 import structlog  # type: ignore[import-untyped]
 
-from ..core.entities import Subnet
-from ..core.exceptions import SubnetNotFoundException
+from ..core.entities import Subnet, SubnetAllowlist, SubnetJoinRequest
+from ..core.entities.subnet_join_request import SYSTEM_ALLOWLIST_ACTOR
+from ..core.exceptions import (
+    AllowlistEntryExistsError,
+    AlreadyMemberError,
+    InvitationAlreadyDecidedError,
+    InvitationNotFoundError,
+    JoinRequestAlreadyDecidedError,
+    JoinRequestNotFoundError,
+    SubnetNotFoundException,
+)
 from ..core.interfaces import (
     IAgentRepository,
+    IJoinFlowEventPublisher,
     ISubnetAllowlistRepository,
     ISubnetJoinRequestRepository,
     ISubnetRepository,
     IUnitOfWork,
+    JoinFlowEventType,
 )
 from ..core.interfaces.task_repository import ITaskRepository
+from ._join_flow_result import (
+    InviteAgentMergedToApprovedJoinRequestResult,
+    InviteAgentResult,
+    InviteAgentSentResult,
+)
+from ._no_op_join_flow_event_publisher import NoOpJoinFlowEventPublisher
 
 logger = structlog.get_logger()
 
@@ -140,6 +159,7 @@ class SubnetService:
         subnet_join_request_repository: ISubnetJoinRequestRepository | None = None,
         subnet_allowlist_repository: ISubnetAllowlistRepository | None = None,
         unit_of_work: IUnitOfWork | None = None,
+        join_flow_event_publisher: IJoinFlowEventPublisher | None = None,
     ):
         """
         Initialize Subnet Service
@@ -158,17 +178,21 @@ class SubnetService:
             subnet_join_request_repository: Optional — used by
                 ``delete_subnet`` to cascade-delete pending and
                 terminal join-requests / invitations when a subnet
-                is dissolved (ADR-0004 §"Cascade deletion"). Omit
-                for legacy fixtures that predate Slice 2.1; the
-                cascade silently skips when absent, leaving the
-                join_requests rows as dust against a no-longer-
-                existing subnet (cleaned by a future ops sweep).
-                Production composition must wire it once Slice 2.2
-                lands the route surface that actually creates rows.
+                is dissolved (ADR-0004 §"Cascade deletion"). Slice
+                2.2 onward this repo also backs the ten new
+                join-flow methods (approve / reject / withdraw /
+                invite / accept / cancel / list_join_requests /
+                list_pending_invitations_for_agent); calling those
+                methods on a service constructed without this repo
+                raises ``RuntimeError`` early (Slice 2.2 hard
+                requirement, distinct from the cascade's opt-in
+                pattern).
             subnet_allowlist_repository: Optional — used by
-                ``delete_subnet`` to cascade-delete admission
-                allowlist entries. Same opt-in pattern as
-                ``subnet_join_request_repository``.
+                ``delete_subnet`` for cascade AND by Slice 2.2's
+                three allowlist methods (add_allowlist /
+                remove_allowlist / list_allowlist). Same hard
+                requirement: methods raise ``RuntimeError`` if
+                called without this repo wired.
             unit_of_work: Optional — when present, ``delete_subnet``
                 runs the three cascade DELETEs (join_requests,
                 allowlist, subnet) inside a single
@@ -178,6 +202,14 @@ class SubnetService:
                 the Slice-2.1 sequential-commit shape (each repo
                 commits independently — see class docstring for the
                 acceptable use cases of that fallback).
+            join_flow_event_publisher: Optional — the
+                :class:`IJoinFlowEventPublisher` Slice 2.2's eight
+                join-flow methods publish lifecycle events to. When
+                omitted, the service installs the
+                :class:`NoOpJoinFlowEventPublisher` stub so call
+                sites stay free of ``if publisher is not None``
+                guards. Slice 2.4 will wire the real publisher
+                that adapts into ``WebhookService.send_to``.
         """
         self.repository = subnet_repository
         self.task_repository = task_repository
@@ -185,6 +217,12 @@ class SubnetService:
         self.join_request_repository = subnet_join_request_repository
         self.allowlist_repository = subnet_allowlist_repository
         self.unit_of_work = unit_of_work
+        # Default to the in-house no-op so Slice 2.2's call sites
+        # can always assume a live publisher. Slice 2.4 swaps in the
+        # real webhook adapter via the constructor kwarg.
+        self.event_publisher: IJoinFlowEventPublisher = (
+            join_flow_event_publisher or NoOpJoinFlowEventPublisher()
+        )
 
     async def create_subnet(
         self,
@@ -473,10 +511,7 @@ class SubnetService:
                 return True
             if requester_id is None:
                 return False
-            return (
-                subnet.owner == requester_id
-                or requester_id in subnet.member_agent_ids
-            )
+            return subnet.owner == requester_id or requester_id in subnet.member_agent_ids
 
         return [c for c in children if _visible(c)]
 
@@ -581,12 +616,8 @@ class SubnetService:
                 # Stays outside the UoW transaction by design — see
                 # method docstring §"Agent back-reference cleanup".
                 for child in children:
-                    await self._clear_agent_back_references(
-                        child.subnet_id, child.member_agent_ids
-                    )
-                await self._clear_agent_back_references(
-                    subnet_id, subnet.member_agent_ids
-                )
+                    await self._clear_agent_back_references(child.subnet_id, child.member_agent_ids)
+                await self._clear_agent_back_references(subnet_id, subnet.member_agent_ids)
                 child_ids = [c.subnet_id for c in children]
                 logger.info(
                     "delete_subnet_cascade",
@@ -594,16 +625,12 @@ class SubnetService:
                     child_subnet_ids=child_ids,
                     child_count=len(child_ids),
                 )
-                return await self._run_cascade_delete(
-                    subnet_id, subnet_to_delete_with=children
-                )
+                return await self._run_cascade_delete(subnet_id, subnet_to_delete_with=children)
 
         # No-cascade path: child subnet direct-delete OR top-level
         # subnet with zero children. Either way, clean up this one
         # subnet's back-references then drop the record.
-        await self._clear_agent_back_references(
-            subnet_id, subnet.member_agent_ids
-        )
+        await self._clear_agent_back_references(subnet_id, subnet.member_agent_ids)
         logger.info("delete_subnet", subnet_id=subnet_id)
         return await self._run_cascade_delete(subnet_id, subnet_to_delete_with=None)
 
@@ -647,9 +674,7 @@ class SubnetService:
                 return await self._cascade_delete_body(
                     subnet_id, subnet_to_delete_with, session=session
                 )
-        return await self._cascade_delete_body(
-            subnet_id, subnet_to_delete_with, session=None
-        )
+        return await self._cascade_delete_body(subnet_id, subnet_to_delete_with, session=None)
 
     async def _cascade_delete_body(
         self,
@@ -672,13 +697,9 @@ class SubnetService:
             children = subnet_to_delete_with
             child_ids = [c.subnet_id for c in children]
             for child in children:
-                await self._cascade_join_policy_artifacts(
-                    child.subnet_id, session=session
-                )
+                await self._cascade_join_policy_artifacts(child.subnet_id, session=session)
             await self._cascade_join_policy_artifacts(subnet_id, session=session)
-            return await self.repository.delete_with_children(
-                subnet_id, child_ids, session=session
-            )
+            return await self.repository.delete_with_children(subnet_id, child_ids, session=session)
         await self._cascade_join_policy_artifacts(subnet_id, session=session)
         return await self.repository.delete(subnet_id, session=session)
 
@@ -728,9 +749,7 @@ class SubnetService:
                     deleted_count=deleted,
                 )
         if self.allowlist_repository is not None:
-            deleted = await self.allowlist_repository.delete_for_subnet(
-                subnet_id, session=session
-            )
+            deleted = await self.allowlist_repository.delete_for_subnet(subnet_id, session=session)
             if deleted:
                 logger.info(
                     "delete_subnet_cascade_allowlist",
@@ -999,3 +1018,656 @@ class SubnetService:
             owner=owner,
         )
         return promoted
+
+    # ------------------------------------------------------------------
+    # ADR-0004 Phase 2 Slice 2.2 — admission-allowlist + join-flow methods
+    # ------------------------------------------------------------------
+    #
+    # Ten thin methods cover every owner / invitee / applicant verb on the
+    # ``subnet_join_requests`` and ``subnet_allowlist`` tables. Each one
+    # follows the same shape:
+    #
+    #   1. Load the subnet (404 if missing — bubbles SubnetNotFoundException).
+    #   2. Load + validate the target row (one of the JoinFlowError 404 / 409
+    #      subclasses on mismatch — kind / status / namespace / membership).
+    #   3. CAS the transition by constructing a *new* SubnetJoinRequest with
+    #      the target (status, decided_by, decided_at) and saving over the
+    #      existing row. Entity-layer __post_init__ re-validates every
+    #      invariant so a malformed transition can never reach storage.
+    #   4. Apply the membership side-effect (add_member on approval paths;
+    #      no-op on reject / withdraw / cancel) — ALWAYS after the CAS so a
+    #      service-layer crash can't leak a half-joined member.
+    #   5. Emit the matching JoinFlowEventType via self.event_publisher —
+    #      best-effort, never blocks the transition.
+    #
+    # Authorisation is intentionally NOT enforced here; ADR §"Authorization
+    # matrix" puts it in the route layer's _require_owner / _require_invitee
+    # / _require_self helpers. Keeping authz at the boundary lets internal
+    # callers (the JoinFlowService merge paths, the cascade hook, future
+    # ops tools) bypass owner checks without going through a backdoor.
+
+    def _require_join_repo(self) -> ISubnetJoinRequestRepository:
+        """Raise loudly when Slice 2.2 methods are called without the
+        join-request repo wired. Mirrors the explicit fail-fast pattern
+        already used by ``allowlist_service`` — production composition
+        always supplies these; legacy fixtures that don't exercise the
+        join flow simply don't call these methods."""
+        if self.join_request_repository is None:
+            raise RuntimeError(
+                "SubnetService.join_request_repository is required for "
+                "ADR-0004 join-flow methods; wire it in api.py"
+            )
+        return self.join_request_repository
+
+    def _require_allowlist_repo(self) -> ISubnetAllowlistRepository:
+        """Symmetric partner of :meth:`_require_join_repo` for allowlist
+        methods. See that method's docstring."""
+        if self.allowlist_repository is None:
+            raise RuntimeError(
+                "SubnetService.allowlist_repository is required for "
+                "ADR-0004 join-flow methods; wire it in api.py"
+            )
+        return self.allowlist_repository
+
+    @staticmethod
+    def _new_request_id() -> str:
+        """Server-generated UUID per ADR §SubnetJoinRequest schema."""
+        return str(uuid.uuid4())
+
+    async def _load_join_request_or_404(
+        self,
+        request_id: str,
+        *,
+        expected_kind: Literal["join_request", "invitation"],
+        expected_subnet_id: str | None = None,
+    ) -> SubnetJoinRequest:
+        """Look up a single request row + enforce kind / subnet binding.
+
+        Implements ADR §"URL alias routing rules": a request_id used
+        against the wrong path namespace returns the namespace-specific
+        404 (``JOIN_REQUEST_NOT_FOUND`` vs ``INVITATION_NOT_FOUND``).
+        This blocks cross-namespace mistakes without leaking the
+        existence of the row in the other namespace.
+
+        The optional ``expected_subnet_id`` adds an extra binding check
+        — Slice 2.3's route layer extracts the subnet from the URL,
+        and a request_id that exists but belongs to a different subnet
+        MUST return the same 404 (same anti-existence-leak reason).
+        """
+        repo = self._require_join_repo()
+        row = await repo.find_by_id(request_id)
+
+        # Single 404 surface for "doesn't exist" AND "wrong kind" AND
+        # "wrong subnet" — see method docstring for the reasoning.
+        if (
+            row is None
+            or row.kind != expected_kind
+            or (expected_subnet_id is not None and row.subnet_id != expected_subnet_id)
+        ):
+            if expected_kind == "invitation":
+                raise InvitationNotFoundError(request_id)
+            raise JoinRequestNotFoundError(request_id)
+        return row
+
+    async def _save_decided_transition(
+        self,
+        pending: SubnetJoinRequest,
+        *,
+        new_status: Literal["approved", "rejected", "withdrawn"],
+        decided_by: str,
+        note: str | None,
+    ) -> SubnetJoinRequest:
+        """Construct + persist the post-CAS row.
+
+        Building a fresh entity via ``dataclasses.replace`` re-runs
+        ``SubnetJoinRequest.__post_init__``, which verifies the full
+        invariant set (decided_by / decided_at / status coherence,
+        note length cap, etc.). A direct field flip + save would
+        silently bypass that check and let a future bug persist a
+        structurally-impossible row.
+
+        Caller is responsible for raising the ``*AlreadyDecided``
+        error when ``pending.is_pending`` is false — this helper
+        assumes the CAS pre-check already passed.
+        """
+        decided = dataclasses.replace(
+            pending,
+            status=new_status,
+            decided_by=decided_by,
+            decided_at=datetime.now(UTC),
+            note=note if note is not None else pending.note,
+        )
+        repo = self._require_join_repo()
+        await repo.save(decided)
+        return decided
+
+    # ---- allowlist (no webhook — config, not lifecycle) --------------
+
+    async def add_allowlist(
+        self, subnet_id: str, agent_id: str, *, added_by: str
+    ) -> SubnetAllowlist:
+        """Pre-authorise ``agent_id`` for ``subnet_id``'s admission allowlist.
+
+        Idempotency: ``IRepo.add`` returns ``False`` on a duplicate
+        pair; we surface this as :class:`AllowlistEntryExistsError`
+        (409 ``ALREADY_ON_ALLOWLIST``) so the route layer can return
+        409 on duplicate vs 201 on fresh insert per ADR §"Allowlist
+        endpoints". The legacy "silently no-op on duplicate" shape is
+        deliberately NOT used — duplicate adds are likely a UI bug
+        worth surfacing.
+
+        No webhook fired (ADR §"Webhook event catalogue": allowlist
+        configuration changes do not emit webhooks).
+
+        Args:
+            subnet_id: Target subnet identifier (must exist).
+            agent_id: Agent to pre-authorise (route layer has already
+                verified the agent_id exists in the registry per ADR
+                §"SubnetAllowlist schema").
+            added_by: Owner agent_id performing the add — recorded in
+                the audit field of the new row.
+
+        Raises:
+            SubnetNotFoundException: Target subnet missing.
+            AllowlistEntryExistsError: Pair already on the allowlist.
+        """
+        await self.get_subnet(subnet_id)
+        repo = self._require_allowlist_repo()
+        entry = SubnetAllowlist(
+            subnet_id=subnet_id,
+            agent_id=agent_id,
+            added_by=added_by,
+            added_at=datetime.now(UTC),
+        )
+        inserted = await repo.add(entry)
+        if not inserted:
+            raise AllowlistEntryExistsError(subnet_id, agent_id)
+        logger.info(
+            "subnet_allowlist_added",
+            subnet_id=subnet_id,
+            agent_id=agent_id,
+            added_by=added_by,
+        )
+        return entry
+
+    async def remove_allowlist(self, subnet_id: str, agent_id: str, *, remover: str) -> bool:
+        """Remove ``(subnet_id, agent_id)`` from the admission allowlist.
+
+        Idempotent per ADR §"Allowlist endpoints" — removing an absent
+        pair returns ``False`` (the route layer still returns 204).
+        Does NOT evict an already-joined member (ADR §"State machine
+        edges": "Allowlist removal does not evict members"). The
+        ``remover`` arg is kept for audit log symmetry with
+        :meth:`add_allowlist`; no rows reference it (the removed row
+        is, by definition, gone).
+        """
+        await self.get_subnet(subnet_id)
+        repo = self._require_allowlist_repo()
+        removed = await repo.remove(subnet_id, agent_id)
+        logger.info(
+            "subnet_allowlist_removed",
+            subnet_id=subnet_id,
+            agent_id=agent_id,
+            remover=remover,
+            existed=removed,
+        )
+        return removed
+
+    async def list_allowlist(
+        self,
+        subnet_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[SubnetAllowlist]:
+        """List allowlist entries for a subnet (owner-only at route layer).
+
+        ADR §"Authorization matrix" makes the read owner-only by
+        design (privacy: leaks pre-authorised relationships). This
+        service method is authz-agnostic — the route layer's
+        ``_require_owner`` enforces the policy; internal callers
+        (e.g. the cascade pre-flight) read without restriction.
+        """
+        await self.get_subnet(subnet_id)
+        repo = self._require_allowlist_repo()
+        return await repo.list_for_subnet(subnet_id, limit=limit, offset=offset)
+
+    # ---- join_request lifecycle (owner approve / reject; applicant withdraw)
+
+    async def approve_join_request(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        owner_id: str,
+        trigger: Literal["explicit", "auto_on_invite"] = "explicit",
+    ) -> SubnetJoinRequest:
+        """CAS pending ``join_request`` → ``approved``; ``add_member`` the agent.
+
+        ``trigger`` defaults to ``"explicit"`` (direct owner approve).
+        :class:`JoinFlowService` and :meth:`invite_agent`'s merge path
+        pass ``"auto_on_invite"`` so the emitted ``JOIN_APPROVED``
+        webhook carries the right ``trigger`` field for ADR
+        §"Merge-path event mapping".
+
+        ``add_member`` runs AFTER the CAS save, inside the same
+        try/finally as the event emission. A failure between save and
+        add_member would leak an approved-but-not-joined row; we
+        accept that risk for Slice 2.2 because the ``add_member``
+        path is in-process and the alternative (wrapping both into
+        the cascade-style UoW) requires PG-only deployments. Issue
+        captured separately if it surfaces in production.
+        """
+        await self.get_subnet(subnet_id)
+        row = await self._load_join_request_or_404(
+            request_id,
+            expected_kind="join_request",
+            expected_subnet_id=subnet_id,
+        )
+        if not row.is_pending:
+            raise JoinRequestAlreadyDecidedError(request_id, row.status)
+
+        approved = await self._save_decided_transition(
+            row,
+            new_status="approved",
+            decided_by=owner_id,
+            note=row.note,
+        )
+        # ``add_member`` returns the post-mutation Subnet entity so
+        # the webhook ``parent_subnet_id`` / ``harness_url`` snapshot
+        # is consistent with the just-applied membership change. No
+        # need for a second ``get_subnet`` round-trip.
+        subnet = await self.add_member(subnet_id, row.agent_id)
+        await self.event_publisher.publish(
+            JoinFlowEventType.JOIN_APPROVED,
+            subnet=subnet,
+            request=approved,
+            trigger=trigger,
+        )
+        logger.info(
+            "subnet_join_request_approved",
+            subnet_id=subnet_id,
+            request_id=request_id,
+            agent_id=row.agent_id,
+            owner_id=owner_id,
+            trigger=trigger,
+        )
+        return approved
+
+    async def reject_join_request(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        owner_id: str,
+        note: str | None = None,
+    ) -> SubnetJoinRequest:
+        """CAS pending ``join_request`` → ``rejected``; emit ``JOIN_REJECTED``.
+
+        No membership side-effect. ``note`` is optional per ADR
+        §"Application-side endpoints" (≤500 chars, enforced by
+        :class:`SubnetJoinRequest.__post_init__`).
+        """
+        await self.get_subnet(subnet_id)
+        row = await self._load_join_request_or_404(
+            request_id,
+            expected_kind="join_request",
+            expected_subnet_id=subnet_id,
+        )
+        if not row.is_pending:
+            raise JoinRequestAlreadyDecidedError(request_id, row.status)
+
+        rejected = await self._save_decided_transition(
+            row, new_status="rejected", decided_by=owner_id, note=note
+        )
+        subnet = await self.get_subnet(subnet_id)
+        await self.event_publisher.publish(
+            JoinFlowEventType.JOIN_REJECTED,
+            subnet=subnet,
+            request=rejected,
+        )
+        logger.info(
+            "subnet_join_request_rejected",
+            subnet_id=subnet_id,
+            request_id=request_id,
+            owner_id=owner_id,
+        )
+        return rejected
+
+    async def withdraw_join_request(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        applicant_id: str,
+        note: str | None = None,
+    ) -> SubnetJoinRequest:
+        """CAS pending ``join_request`` → ``withdrawn`` (applicant-initiated).
+
+        Owner-side cancel does not exist for ``join_request`` rows —
+        ADR §"Application-side endpoints" gives the owner only the
+        approve / reject verbs. Applicant withdraw is its own path
+        (DELETE /join-requests/{rid}) and emits ``JOIN_WITHDRAWN``.
+        """
+        await self.get_subnet(subnet_id)
+        row = await self._load_join_request_or_404(
+            request_id,
+            expected_kind="join_request",
+            expected_subnet_id=subnet_id,
+        )
+        if not row.is_pending:
+            raise JoinRequestAlreadyDecidedError(request_id, row.status)
+
+        withdrawn = await self._save_decided_transition(
+            row,
+            new_status="withdrawn",
+            decided_by=applicant_id,
+            note=note,
+        )
+        subnet = await self.get_subnet(subnet_id)
+        await self.event_publisher.publish(
+            JoinFlowEventType.JOIN_WITHDRAWN,
+            subnet=subnet,
+            request=withdrawn,
+        )
+        logger.info(
+            "subnet_join_request_withdrawn",
+            subnet_id=subnet_id,
+            request_id=request_id,
+            applicant_id=applicant_id,
+        )
+        return withdrawn
+
+    # ---- invitation lifecycle (owner invite / cancel; invitee accept / reject)
+
+    async def invite_agent(
+        self,
+        subnet_id: str,
+        target_agent_id: str,
+        *,
+        owner_id: str,
+        note: str | None = None,
+    ) -> InviteAgentResult:
+        """Send an invitation, or merge-approve a target's pending join_request.
+
+        Per ADR §"POST /invitations" the call has two outcomes:
+
+        - **Normal path** — no membership / pending row collision. A
+          fresh ``kind='invitation', status='pending'`` row is created
+          and ``INVITATION_SENT`` fires. Result variant
+          :class:`InviteAgentSentResult`.
+        - **Merge path** — the target agent already has a pending
+          ``kind='join_request'`` row. The invite is semantically an
+          owner "yes" to the agent's pending ask: the existing row is
+          CAS'd to ``approved`` (``decided_by=owner_id``,
+          ``trigger=auto_on_invite``), the agent is added as a member,
+          ``JOIN_APPROVED`` fires (NOT ``INVITATION_SENT`` — no new
+          row exists). Result variant
+          :class:`InviteAgentMergedToApprovedJoinRequestResult`.
+
+        Pre-checks (ADR §State machine edges):
+
+        - Target is already a subnet member → 409 ``ALREADY_MEMBER``.
+        - Target already has a pending invitation → 409
+          ``INVITATION_PENDING`` with the existing ``invitation_id``.
+
+        The pending-join-request collision is the merge path above,
+        NOT a 409 — that's the asymmetry ADR §"Merge path" pins.
+        """
+        from ..core.exceptions import InvitationPendingError
+
+        subnet = await self.get_subnet(subnet_id)
+        if target_agent_id in subnet.member_agent_ids:
+            raise AlreadyMemberError(subnet_id, target_agent_id)
+
+        repo = self._require_join_repo()
+        existing = await repo.find_pending_for(subnet_id, target_agent_id)
+        if existing is not None:
+            if existing.kind == "invitation":
+                # Duplicate invitation — ADR §State machine edges
+                # "Duplicate invitation": 409 + echo existing id.
+                raise InvitationPendingError(existing.request_id)
+            if existing.kind == "join_request":
+                # Merge path — invite collapses into auto-approval
+                # of the agent's pending ask.
+                approved = await self.approve_join_request(
+                    subnet_id,
+                    existing.request_id,
+                    owner_id=owner_id,
+                    trigger="auto_on_invite",
+                )
+                logger.info(
+                    "subnet_invitation_merged_into_join_request",
+                    subnet_id=subnet_id,
+                    request_id=approved.request_id,
+                    agent_id=target_agent_id,
+                    owner_id=owner_id,
+                )
+                return InviteAgentMergedToApprovedJoinRequestResult(
+                    subnet_id=subnet_id,
+                    agent_id=target_agent_id,
+                    request=approved,
+                )
+            # ``allowlist_auto`` rows are never pending (born
+            # approved); reaching this branch means data corruption,
+            # not a state-machine edge. Fail loud.
+            raise RuntimeError(
+                f"pending row for ({subnet_id}, {target_agent_id}) has "
+                f"unexpected kind={existing.kind!r}"
+            )
+
+        invitation = SubnetJoinRequest(
+            request_id=self._new_request_id(),
+            subnet_id=subnet_id,
+            agent_id=target_agent_id,
+            kind="invitation",
+            status="pending",
+            initiated_by=owner_id,
+            note=note,
+        )
+        await repo.save(invitation)
+        await self.event_publisher.publish(
+            JoinFlowEventType.INVITATION_SENT,
+            subnet=subnet,
+            request=invitation,
+        )
+        logger.info(
+            "subnet_invitation_sent",
+            subnet_id=subnet_id,
+            invitation_id=invitation.request_id,
+            target_agent_id=target_agent_id,
+            owner_id=owner_id,
+        )
+        return InviteAgentSentResult(
+            subnet_id=subnet_id,
+            agent_id=target_agent_id,
+            invitation=invitation,
+        )
+
+    async def accept_invitation(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        invitee_id: str,
+        trigger: Literal["explicit", "auto_on_join"] = "explicit",
+        via: Literal["self_join", "allowlist"] | None = None,
+    ) -> SubnetJoinRequest:
+        """CAS pending ``invitation`` → ``approved``; ``add_member`` the invitee.
+
+        ``trigger`` / ``via`` are the merge-path hooks
+        :class:`JoinFlowService` uses (branches 3 and 4 in ADR
+        §join). Direct invitee accept uses the defaults; ``via=None``
+        on explicit accepts matches ADR §"Payload shape".
+
+        Note: ``decided_by=invitee_id`` for direct accept and
+        ``decided_by=SYSTEM_ALLOWLIST_ACTOR`` only when the caller
+        explicitly passes it (branch 4 — allowlist merge). The
+        webhook publisher reads the row's ``decided_by`` field, so
+        passing the right value here is what makes the
+        ``"system:allowlist"`` token surface in the payload.
+        """
+        await self.get_subnet(subnet_id)
+        row = await self._load_join_request_or_404(
+            request_id,
+            expected_kind="invitation",
+            expected_subnet_id=subnet_id,
+        )
+        if not row.is_pending:
+            raise InvitationAlreadyDecidedError(request_id, row.status)
+
+        decided_by = SYSTEM_ALLOWLIST_ACTOR if via == "allowlist" else invitee_id
+        accepted = await self._save_decided_transition(
+            row, new_status="approved", decided_by=decided_by, note=row.note
+        )
+        # See ``approve_join_request`` for the same add_member →
+        # webhook ordering reasoning.
+        subnet = await self.add_member(subnet_id, row.agent_id)
+        await self.event_publisher.publish(
+            JoinFlowEventType.INVITATION_ACCEPTED,
+            subnet=subnet,
+            request=accepted,
+            trigger=trigger,
+            via=via,
+        )
+        logger.info(
+            "subnet_invitation_accepted",
+            subnet_id=subnet_id,
+            invitation_id=request_id,
+            invitee_id=invitee_id,
+            trigger=trigger,
+            via=via,
+        )
+        return accepted
+
+    async def reject_invitation(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        invitee_id: str,
+        note: str | None = None,
+    ) -> SubnetJoinRequest:
+        """CAS pending ``invitation`` → ``rejected`` (invitee-initiated).
+
+        ``INVITATION_REJECTED`` fires; no membership change.
+        """
+        await self.get_subnet(subnet_id)
+        row = await self._load_join_request_or_404(
+            request_id,
+            expected_kind="invitation",
+            expected_subnet_id=subnet_id,
+        )
+        if not row.is_pending:
+            raise InvitationAlreadyDecidedError(request_id, row.status)
+
+        rejected = await self._save_decided_transition(
+            row, new_status="rejected", decided_by=invitee_id, note=note
+        )
+        subnet = await self.get_subnet(subnet_id)
+        await self.event_publisher.publish(
+            JoinFlowEventType.INVITATION_REJECTED,
+            subnet=subnet,
+            request=rejected,
+        )
+        logger.info(
+            "subnet_invitation_rejected",
+            subnet_id=subnet_id,
+            invitation_id=request_id,
+            invitee_id=invitee_id,
+        )
+        return rejected
+
+    async def cancel_invitation(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        owner_id: str,
+        note: str | None = None,
+    ) -> SubnetJoinRequest:
+        """CAS pending ``invitation`` → ``withdrawn`` (owner-initiated cancel).
+
+        Owner-side counterpart of :meth:`withdraw_join_request`.
+        Emits ``INVITATION_CANCELED`` per ADR §"Webhook event
+        catalogue".
+        """
+        await self.get_subnet(subnet_id)
+        row = await self._load_join_request_or_404(
+            request_id,
+            expected_kind="invitation",
+            expected_subnet_id=subnet_id,
+        )
+        if not row.is_pending:
+            raise InvitationAlreadyDecidedError(request_id, row.status)
+
+        canceled = await self._save_decided_transition(
+            row, new_status="withdrawn", decided_by=owner_id, note=note
+        )
+        subnet = await self.get_subnet(subnet_id)
+        await self.event_publisher.publish(
+            JoinFlowEventType.INVITATION_CANCELED,
+            subnet=subnet,
+            request=canceled,
+        )
+        logger.info(
+            "subnet_invitation_canceled",
+            subnet_id=subnet_id,
+            invitation_id=request_id,
+            owner_id=owner_id,
+        )
+        return canceled
+
+    # ---- read paths (Slice 2.3 routes wrap these) --------------------
+
+    async def list_join_requests(
+        self,
+        subnet_id: str,
+        *,
+        kind: Literal["join_request", "allowlist_auto"] = "join_request",
+        status: Literal["pending", "approved", "rejected", "withdrawn"] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[SubnetJoinRequest]:
+        """List join_request / allowlist_auto rows for a subnet.
+
+        ADR §"Application-side endpoints" forbids ``kind='invitation'``
+        on this path; we DO NOT enforce that here so internal callers
+        can list everything if they need to. Slice 2.3's route layer
+        rejects ``kind=invitation`` at the request-parse boundary
+        with ``400 INVALID_KIND_FILTER``.
+        """
+        await self.get_subnet(subnet_id)
+        repo = self._require_join_repo()
+        return await repo.list_by_subnet(
+            subnet_id, kind=kind, status=status, limit=limit, offset=offset
+        )
+
+    async def list_invitations(
+        self,
+        subnet_id: str,
+        *,
+        status: Literal["pending", "approved", "rejected", "withdrawn"] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[SubnetJoinRequest]:
+        """List invitation rows for a subnet (owner-only at route layer)."""
+        await self.get_subnet(subnet_id)
+        repo = self._require_join_repo()
+        return await repo.list_by_subnet(
+            subnet_id,
+            kind="invitation",
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def list_pending_invitations_for_agent(self, agent_id: str) -> list[SubnetJoinRequest]:
+        """Cross-subnet view: the agent's pending invitations.
+
+        Powers the invitee-facing
+        ``GET /agents/{a}/subnet-invitations`` per ADR
+        §"Invitation-side endpoints".
+        """
+        repo = self._require_join_repo()
+        return await repo.list_pending_invitations_for_agent(agent_id)

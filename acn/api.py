@@ -57,6 +57,8 @@ from .infrastructure.persistence.postgres import (
     PostgresBillingRepository,
     PostgresReputationRepository,
     PostgresSettlementOutboxRepository,
+    PostgresSubnetAllowlistRepository,
+    PostgresSubnetJoinRequestRepository,
     PostgresSubnetRepository,
     PostgresTaskRepository,
     PostgresUnitOfWork,
@@ -68,6 +70,16 @@ from .infrastructure.persistence.redis import (
     RedisAllowlistRepository,
     RedisFollowRepository,
     RedisSubnetRepository,
+)
+
+# See note in acn/infrastructure/persistence/redis/__init__.py — these
+# two are imported via their submodules to keep the package-level
+# import graph cycle-free.
+from .infrastructure.persistence.redis.subnet_allowlist_repository import (
+    RedisSubnetAllowlistRepository,
+)
+from .infrastructure.persistence.redis.subnet_join_request_repository import (
+    RedisSubnetJoinRequestRepository,
 )
 from .infrastructure.persistence.redis.task_repository import RedisTaskRepository
 from .infrastructure.task_pool import TaskPool
@@ -119,6 +131,7 @@ from .services.activity_service import ActivityService
 from .services.auth0_client import Auth0CredentialClient
 from .services.erc8004_client import ERC8004Client
 from .services.escrow_client import AgentPlanetEscrowProvider
+from .services.join_flow_service import JoinFlowService
 from .services.reputation_query_service import ReputationQueryService
 from .services.reputation_service import ReputationService
 from .services.settlement_worker import SettlementWorker
@@ -132,6 +145,7 @@ def _redact_db_url(url: str) -> str:
     """Return database URL with password replaced by *** for safe logging."""
     try:
         from urllib.parse import urlparse, urlunparse
+
         parsed = urlparse(url)
         if parsed.password:
             safe_netloc = parsed.netloc.replace(f":{parsed.password}@", ":***@")
@@ -317,22 +331,53 @@ async def lifespan(app: FastAPI):
     # subnets) inside one transaction. In Redis-only mode
     # ``_unit_of_work`` is None and the service falls back to the
     # sequential-commit path, matching ADR §"Cascade deletion: Redis".
-    # The cascade ``subnet_join_request_repository`` and
-    # ``subnet_allowlist_repository`` themselves are deliberately
-    # NOT wired here yet — Slice 2.2 will land them together with
-    # the route handlers that actually create rows. Until then the
-    # join-policy cascade sweeps short-circuit over those absent
-    # repos (Slice 2.1 behaviour preserved); the subnet DELETE
-    # still runs inside the UoW transaction, which is a one-statement
-    # batch but exercises the IUnitOfWork wiring path end-to-end so
-    # Slice 2.2 can plug cascade repos in without re-touching this
-    # composition.
+    #
+    # ADR-0004 Slice 2.2 — wire the two cascade repositories so the
+    # ten new join-flow methods (add_allowlist / approve / invite /
+    # accept / reject / withdraw / cancel + reads) have real
+    # backends. Slice 2.4 will wire the real
+    # ``WebhookJoinFlowEventPublisher`` here; until then the service
+    # defaults to the in-house :class:`NoOpJoinFlowEventPublisher`
+    # so the eight join-flow webhooks are silently dropped at debug
+    # log level (call sites stay publisher-aware regardless).
+    if settings.database_url:
+        subnet_join_request_repository = PostgresSubnetJoinRequestRepository(_pg_session)
+        subnet_admission_allowlist_repository = PostgresSubnetAllowlistRepository(_pg_session)
+    else:
+        subnet_join_request_repository = RedisSubnetJoinRequestRepository(redis_client)
+        subnet_admission_allowlist_repository = RedisSubnetAllowlistRepository(redis_client)
+
     subnet_service_instance = SubnetService(
         subnet_repository,
         task_repository=task_repository,
         agent_repository=agent_repository,
+        subnet_join_request_repository=subnet_join_request_repository,
+        subnet_allowlist_repository=subnet_admission_allowlist_repository,
         unit_of_work=_unit_of_work,
+        # ``join_flow_event_publisher`` deliberately left at default
+        # (NoOpJoinFlowEventPublisher). Slice 2.4 will swap in the
+        # WebhookService-backed adapter once ``WebhookEventType`` is
+        # extended with the eight new join-flow events.
     )
+
+    # ADR-0004 Slice 2.2 — JoinFlowService implements §join's
+    # six-branch decision tree (open / owner / invitation_self /
+    # invitation_allowlist / allowlist_auto / pending_join_request).
+    # Slice 2.3 wires the HTTP routes that call it; until then this
+    # instance is held on ``app.state`` so smoke tests and ad-hoc
+    # admin tooling can reach it (matches the existing ``limiter``
+    # state-stash pattern down below). The Slice 2.3 router-factory
+    # call will read it back via ``app.state.join_flow_service`` so
+    # this composition root doesn't need re-touching when the routes
+    # land.
+    join_flow_service_instance = JoinFlowService(
+        subnet_service=subnet_service_instance,
+        join_request_repository=subnet_join_request_repository,
+        allowlist_repository=subnet_admission_allowlist_repository,
+        # Default no-op publisher matches subnet_service_instance
+        # above; same Slice-2.4 swap point.
+    )
+    app.state.join_flow_service = join_flow_service_instance
 
     # Phase 1 communication_policy gateway: a single PolicyCheckService
     # instance is shared by both the HTTP-side MessageRouter and the

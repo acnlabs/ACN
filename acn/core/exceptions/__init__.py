@@ -85,3 +85,155 @@ class AllowlistCapacityExceededError(ACNException):
     The route layer surfaces this as 429 with a "remove some entries
     first" hint.
     """
+
+
+# ---------------------------------------------------------------------------
+# ADR-0004 join-flow domain exceptions (Phase 2 Slice 2.2)
+# ---------------------------------------------------------------------------
+#
+# All eight surface as 4xx HTTP statuses through Slice 2.3's route layer.
+# Each carries a stable ``reason`` string so the route layer's
+# ``_join_flow_error_to_acn`` mapper can pin the ``ErrorCode`` /
+# ``details.reason`` payload without depending on (English) message text,
+# mirroring the ``SubnetInvariantError`` pattern from ADR-0003 / ADR-0004
+# Phase 1.
+class JoinFlowError(ACNException):
+    """Base class for ADR-0004 join-flow rejections.
+
+    Carries a stable ``reason`` slug (one of the ``REASON_*``
+    constants exposed by the subclasses' module). The route layer
+    catches the base and dispatches on ``isinstance`` to pick the
+    right HTTP status, so out-of-tree subclasses participate in
+    the same exception flow without re-listing themselves anywhere.
+    """
+
+    def __init__(self, reason: str, message: str | None = None) -> None:
+        self.reason = reason
+        super().__init__(message or reason)
+
+
+class JoinRequestPendingError(JoinFlowError):
+    """409 ``JOIN_REQUEST_PENDING`` — agent already has a pending join_request.
+
+    Carries the existing ``request_id`` so the route layer can echo
+    it back in the response per ADR §State machine edges
+    "Duplicate join request".
+    """
+
+    def __init__(self, existing_request_id: str) -> None:
+        self.existing_request_id = existing_request_id
+        super().__init__(
+            "join_request_pending",
+            f"pending join_request {existing_request_id} already exists",
+        )
+
+
+class InvitationPendingError(JoinFlowError):
+    """409 ``INVITATION_PENDING`` — owner already invited this agent.
+
+    Symmetric partner of :class:`JoinRequestPendingError` for the
+    push direction (ADR §State machine edges "Duplicate invitation").
+    """
+
+    def __init__(self, existing_invitation_id: str) -> None:
+        self.existing_invitation_id = existing_invitation_id
+        super().__init__(
+            "invitation_pending",
+            f"pending invitation {existing_invitation_id} already exists",
+        )
+
+
+class JoinRequestAlreadyDecidedError(JoinFlowError):
+    """409 ``JOIN_REQUEST_ALREADY_DECIDED`` — CAS race lost on transition.
+
+    Both owner-side approve / reject and applicant-side withdraw
+    raise this when the row has already moved off ``status='pending'``
+    by the time the second caller arrives. See ADR §State machine
+    edges "Concurrent decision".
+    """
+
+    def __init__(self, request_id: str, current_status: str) -> None:
+        self.request_id = request_id
+        self.current_status = current_status
+        super().__init__(
+            "join_request_already_decided",
+            f"join_request {request_id} is already {current_status}",
+        )
+
+
+class InvitationAlreadyDecidedError(JoinFlowError):
+    """409 ``INVITATION_ALREADY_DECIDED`` — symmetric partner for invitations.
+
+    Raised by accept / reject / cancel when the invitation row has
+    already moved off ``status='pending'``.
+    """
+
+    def __init__(self, invitation_id: str, current_status: str) -> None:
+        self.invitation_id = invitation_id
+        self.current_status = current_status
+        super().__init__(
+            "invitation_already_decided",
+            f"invitation {invitation_id} is already {current_status}",
+        )
+
+
+class AlreadyMemberError(JoinFlowError):
+    """409 ``ALREADY_MEMBER`` — target agent is already a subnet member.
+
+    Raised on the invite path ("Invite an existing member") and the
+    self-join path ("Agent self-join a subnet they are already in").
+    See ADR §State machine edges for both cases.
+    """
+
+    def __init__(self, subnet_id: str, agent_id: str) -> None:
+        self.subnet_id = subnet_id
+        self.agent_id = agent_id
+        super().__init__(
+            "already_member",
+            f"agent {agent_id} is already a member of subnet {subnet_id}",
+        )
+
+
+class AllowlistEntryExistsError(JoinFlowError):
+    """409 ``ALREADY_ON_ALLOWLIST`` — duplicate ``POST /allowlist``.
+
+    Idempotent removal stays a 200 / 204 (no exception). Only the
+    add path raises; ADR §"Allowlist endpoints" pins the 409 here.
+    """
+
+    def __init__(self, subnet_id: str, agent_id: str) -> None:
+        self.subnet_id = subnet_id
+        self.agent_id = agent_id
+        super().__init__(
+            "already_on_allowlist",
+            f"agent {agent_id} is already on subnet {subnet_id}'s allowlist",
+        )
+
+
+class JoinRequestNotFoundError(JoinFlowError):
+    """404 ``JOIN_REQUEST_NOT_FOUND`` — id missing, or wrong namespace.
+
+    Raised both when ``request_id`` does not exist and when it
+    exists but ``row.kind != 'join_request'`` (e.g. the caller hit
+    ``/join-requests/{id}`` with an invitation id). ADR §URL alias
+    routing rules pins the latter to the same 404 so the two-name
+    space split doesn't leak existence of cross-kind ids.
+    """
+
+    def __init__(self, request_id: str) -> None:
+        self.request_id = request_id
+        super().__init__(
+            "join_request_not_found",
+            f"join_request {request_id} not found",
+        )
+
+
+class InvitationNotFoundError(JoinFlowError):
+    """404 ``INVITATION_NOT_FOUND`` — symmetric partner for invitations."""
+
+    def __init__(self, invitation_id: str) -> None:
+        self.invitation_id = invitation_id
+        super().__init__(
+            "invitation_not_found",
+            f"invitation {invitation_id} not found",
+        )
