@@ -14,9 +14,11 @@ Pins the entity-layer invariants introduced by ADR-0004:
   the Redis backfill script runs).
 
 Service-layer invariants (the actual admission state machine that
-reads ``join_policy``) ship in Phase 2; that file is
-``tests/services/test_subnet_join_request_service.py`` and is out
-of scope here.
+reads ``join_policy``) live in
+``tests/services/test_join_flow_service.py`` (one ``TestBranch{N}``
+class per branch of the six-branch decision tree, plus
+``TestStateMachineEdges`` and ``TestBranchOrderNormativity`` for
+the cross-branch precedence rules) and are out of scope here.
 """
 
 import pytest

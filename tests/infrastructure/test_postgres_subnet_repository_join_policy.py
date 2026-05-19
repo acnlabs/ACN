@@ -15,9 +15,11 @@ Three contracts pinned here:
    trip the ``_JOIN_POLICY_VALUES`` invariant and refuse to
    reconstruct, breaking every read of an affected row.
 4. ``save()`` 's UPDATE branch carries ``join_policy`` so subsequent
-   mutations (Phase 2 promote-to-approval, future ``rotate_policy``
-   flows) actually persist a changed value rather than silently
-   no-op'ing on existing rows.
+   mutations (any future ``promote-to-approval`` / ``rotate_policy``
+   flow — neither shipped yet, but Phase 2's admission gate already
+   reads the field and a future toggle endpoint must round-trip it)
+   actually persist a changed value rather than silently no-op'ing
+   on existing rows.
 
 Exercised against a mock session — schema correctness lives in
 ``test_alembic_subnet_join_policy_migration.py``.
@@ -180,7 +182,7 @@ class TestModelToSubnetNullJoinPolicyAutoUpgrade:
 async def test_save_update_path_includes_join_policy():
     """When ``session.get`` finds an existing row, ``save()`` issues
     an ``UPDATE`` rather than ``session.add``. The UPDATE's value
-    bag MUST include ``join_policy`` — otherwise a Phase 2
+    bag MUST include ``join_policy`` — otherwise a future
     policy-rotation flow (or any caller that just wants to flip
     ``open`` → ``approval``) would silently no-op on rows that
     already exist in the DB."""
