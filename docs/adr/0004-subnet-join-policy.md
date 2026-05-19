@@ -1,7 +1,8 @@
 # ADR-0004: Subnet join policy
 
-- **Status**: Proposed
+- **Status**: Implemented (Phase 1 + Phase 2 complete, 2026-05-19)
 - **Date**: 2026-05-18
+- **Implemented**: 2026-05-19 (see §Implementation evidence at the bottom of this file)
 - **Decision drivers**: real access control for "private" subnets,
   minimal new surface area, three approval-entry paths unified into
   one auditable primitive, compatibility with ADR-0003 single-layer
@@ -1661,3 +1662,47 @@ sequenceDiagram
   §Error codes.
 - `acn/AGENTS.md` — "Agent IDs are ACN-managed" (L224) governs
   the allowlist-of-unregistered-agent rejection.
+
+## Implementation evidence
+
+This ADR shipped in eight merged PRs across two phases. The slicing
+matches §Decision: Implementation slicing earlier in this document;
+each PR was independently CI-green and reviewable. Listed in merge
+order.
+
+### Phase 1 — data layer + create-path wiring
+
+| PR | Title | What landed |
+|----|-------|-------------|
+| [#67](https://github.com/acnlabs/ACN/pull/67) | feat(adr-0004): subnet join policy — ADR + Phase 1 | The ADR itself + `Subnet.join_policy` column / entity field, `visibility_policy_conflict` invariant, create-path inference (`is_private=True` ⇒ `approval`), backward-compat for existing callers. No admission behaviour yet. |
+
+### Phase 2 — admission state machine + surface
+
+| PR | Title | What landed |
+|----|-------|-------------|
+| [#72](https://github.com/acnlabs/ACN/pull/72) | docs(adr-0004): add Phase 2 implementation plan | Per-slice plan + acceptance criteria for Phase 2 (#74-#80). |
+| [#74](https://github.com/acnlabs/ACN/pull/74) | feat(adr-0004): Phase 2 Slice 2.1 — schema, entities, repos, cascade | `subnet_join_requests` + `subnet_allowlist` tables, dual repos (PG canonical + Redis hot-cache), ADR-0003 cascade reuse, idempotent re-runs. |
+| [#76](https://github.com/acnlabs/ACN/pull/76) | fix(adr-0004): atomic cascade deletion via `IUnitOfWork` (closes #75) | Tightens Slice 2.1 cascade to a single transaction so a mid-cascade crash cannot leave orphan join-request rows. |
+| [#77](https://github.com/acnlabs/ACN/pull/77) | feat(adr-0004): Phase 2 Slice 2.2 — join flow + 10 thin service methods | `JoinFlowService` six-branch decision tree, `JoinFlowEventType` enum, `IJoinFlowEventPublisher` port with no-op default, ten thin service methods on `SubnetService` (allowlist add/remove/list, request approve/reject/withdraw/list, invitation send/list). |
+| [#78](https://github.com/acnlabs/ACN/pull/78) | feat(api): ADR-0004 Slice 2.3 PR A — subnet admission HTTP routes | 14 new HTTP endpoints under `/api/v1/subnets/{id}/allowlist`, `/join-requests`, `/invitations` + canonical agent-side join path now branches on `join_policy`. Shared `_subnet_admission.py` helper for owner / invitee authorization + `JoinFlowError → ACNHTTPError` mapping. |
+| [#79](https://github.com/acnlabs/ACN/pull/79) | feat(cli): ADR-0004 Slice 2.3 PR B — subnet admission CLI verbs | `acn subnet create --join-policy`, branched `subnet join` output for the 6 ADR scenarios, three new sub-command groups (`subnet requests`, `subnet invitations`, `subnet allowlist`). |
+| [#80](https://github.com/acnlabs/ACN/pull/80) | feat(adr-0004): Slice 2.4 PR C — wire real join-flow webhooks | 8 new `WebhookEventType` enum members, `WebhookJoinFlowEventPublisher` adapter with no-harness gate / 1-1 enum mapping / payload shape / never-raise / URL-secret pass-through, post-construction injection at composition root. |
+
+### Acceptance evidence
+
+The ADR §Cross-slice acceptance checklist is satisfied as follows:
+
+- **State machine convergence** — pinned by `tests/services/test_join_flow_service.py` (60+ tests across the six branches, all approval-entry paths, and the `Invited?` ⊳ `Allow?` ordering invariant).
+- **No double-membership** — pinned by `tests/services/test_subnet_service_allowlist.py` and the invitation-folds-into-allowlist tests in `test_join_flow_service.py`.
+- **ADR-0003 cascade preserved** — `tests/services/test_subnet_service_cascade.py` + `tests/infrastructure/test_unit_of_work_cascade.py` (#76).
+- **Webhook lifecycle invariant** — `tests/services/test_join_flow_webhook_composition.py` pins that webhook transport failure (exception or `return False`) does **not** roll back the underlying state transition.
+- **No-drift enum contract** — `tests/services/test_webhook_join_flow_event_publisher.py::TestEnumMapping` asserts `_EVENT_MAP` is exhaustive over `JoinFlowEventType` and every pair shares the same string value.
+- **Backward compatibility** — `tests/test_openapi_acn_error_response.py` + `tests/test_error_code_details_consistency.py` keep the error-shape contract stable across the 11 new `ErrorCode`s; existing `is_private` + `POST /agents/{id}/subnets/{id}` callers behave identically when they omit the new fields.
+
+### What is NOT in this ADR
+
+Pure read-side ACL on `GET /api/v1/subnets/{id}` was found to be a
+separate gap (acnlabs/ACN#68 — anonymous callers could read private
+subnet metadata) and is being fixed in its own PR. The `is_private`
+axis governs visibility; the `join_policy` axis governs admission;
+the two are intentionally orthogonal — see the §Field model table.
