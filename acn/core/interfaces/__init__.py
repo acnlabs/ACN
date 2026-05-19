@@ -17,6 +17,8 @@ from .settlement_outbox_repository import (
     ISettlementOutboxRepository,
     SettlementEvent,
 )
+from .subnet_allowlist_repository import ISubnetAllowlistRepository
+from .subnet_join_request_repository import ISubnetJoinRequestRepository
 from .subnet_repository import ISubnetRepository
 from .task_repository import ITaskRepository
 from .unit_of_work import IUnitOfWork
@@ -30,6 +32,8 @@ __all__ = [
     "IFollowRepository",
     "ISettlementOutboxRepository",
     "SettlementEvent",
+    "ISubnetAllowlistRepository",
+    "ISubnetJoinRequestRepository",
     "ISubnetRepository",
     "ITaskRepository",
     "IUnitOfWork",
