@@ -338,6 +338,7 @@ class MessageRouter:
         content_hash: str | None = None,
         message_type: str | None = None,
         ttl_seconds: int | None = None,
+        sender_subnet_ids: set[str] | None = None,
     ) -> Any:
         """
         Route an A2A message to a specific agent
@@ -355,6 +356,11 @@ class MessageRouter:
                 so the caller cannot accidentally lock funds the
                 recipient will never see (open/closed mode never
                 triggers the ack flow).
+            sender_subnet_ids: Pre-fetched subnet IDs of the sender.
+                Used to compute subnet co-membership with the
+                recipient for implicit trust bypass of manifest/
+                allowlist modes. ``None`` skips the check (e.g.
+                system callers).
 
         Returns:
             A2A response (Message or Task)
@@ -406,11 +412,25 @@ class MessageRouter:
                 if self.allowlist_service is not None
                 else None
             )
+            # Compute subnet co-membership for implicit trust.
+            # Reserved subnets ("public", "system") are excluded — they
+            # contain all agents and would make the check meaningless.
+            shared_subnets: set[str] | None = None
+            if sender_subnet_ids is not None:
+                recipient_subnets = set(
+                    getattr(agent_info, "subnet_ids", None) or []
+                )
+                reserved = {"public", "system"}
+                shared_subnets = (
+                    (sender_subnet_ids - reserved) & (recipient_subnets - reserved)
+                ) or None
+
             decision = await self.policy_service.check_inbound(
                 sender_id=from_agent,
                 recipient_id=to_agent,
                 recipient_policy=agent_info.communication_policy,
                 is_in_allowlist=is_in_allowlist,
+                shared_subnet_ids=shared_subnets,
             )
             if not decision.allow:
                 # Same surface as the Phase 1 ``check_inbound_or_raise``

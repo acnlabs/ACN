@@ -877,11 +877,16 @@ class SubnetManager:
                 if self.allowlist_service is not None
                 else None
             )
+            # Subnet-internal forward: sender and recipient share this
+            # subnet by definition. Pass it as shared_subnet_ids so the
+            # policy service can bypass manifest for subnet peers.
+            _shared = {subnet_id} - {"public", "system"}
             decision = await self.policy_service.check_inbound(
                 sender_id=from_agent or "unknown",
                 recipient_id=agent_id,
                 recipient_policy=policy,
                 is_in_allowlist=is_in_allowlist,
+                shared_subnet_ids=_shared or None,
             )
             if not decision.allow:
                 # Mirror ``check_inbound_or_raise`` semantics — the
