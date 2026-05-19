@@ -23,7 +23,7 @@ Architecture:
                         ▼
 ┌─────────────────────────────────────────────────────────┐
 │  Layer 1: Registry & Discovery                          │
-│  - AgentRegistry: Agent registration and discovery      │
+│  - AgentService: Agent registration and discovery       │
 │  - AgentCard: A2A-compliant agent metadata             │
 └─────────────────────────────────────────────────────────┘
 
@@ -59,7 +59,6 @@ from .infrastructure.messaging import (
 )
 
 # Layer 3: Monitoring & Analytics
-from .infrastructure.persistence.redis.registry import AgentRegistry
 from .models import AgentCard, AgentInfo, AgentRegisterRequest, AgentRegisterResponse
 from .monitoring import Analytics, AuditLogger, MetricsCollector
 
@@ -74,8 +73,6 @@ __all__ = [
     "AgentInfo",
     "AgentRegisterRequest",
     "AgentRegisterResponse",
-    # Layer 1: Registry
-    "AgentRegistry",
     # Layer 2: Communication
     "MessageRouter",
     "BroadcastService",

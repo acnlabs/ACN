@@ -69,7 +69,6 @@ from .infrastructure.persistence.redis import (
     RedisFollowRepository,
     RedisSubnetRepository,
 )
-from .infrastructure.persistence.redis.registry import AgentRegistry
 from .infrastructure.persistence.redis.task_repository import RedisTaskRepository
 from .infrastructure.task_pool import TaskPool
 from .middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
@@ -252,8 +251,13 @@ async def lifespan(app: FastAPI):
     # See ``acn.security.tls_check`` for the rationale.
     check_tls_config(settings, logger)
 
-    # Initialize core services
-    registry_instance = AgentRegistry(settings.redis_url)
+    # Shared Redis client (decode_responses=True matches the legacy
+    # ``AgentRegistry.__init__`` setting; downstream callers all
+    # assume str values, not bytes). Replaces the
+    # ``redis_client`` access pattern that previously
+    # piggybacked on ``AgentRegistry`` as a redis-client holder —
+    # see audit report §AgentRegistry-parallel-implementation.
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
 
     # Initialize Auth0 Credential Client (for Agent M2M credentials)
     auth0_credential_client = Auth0CredentialClient(
@@ -279,9 +283,9 @@ async def lifespan(app: FastAPI):
         logger.info("persistence_postgres", database_url=_redact_db_url(settings.database_url))
         _pg_engine = get_engine(settings.database_url)
         _pg_session = get_session_factory(_pg_engine)
-        agent_repository = PostgresAgentRepository(_pg_session, registry_instance.redis)
+        agent_repository = PostgresAgentRepository(_pg_session, redis_client)
         subnet_repository = PostgresSubnetRepository(_pg_session)
-        task_repository = PostgresTaskRepository(_pg_session, registry_instance.redis)
+        task_repository = PostgresTaskRepository(_pg_session, redis_client)
         _billing_repository = PostgresBillingRepository(_pg_session)
         _activity_repository = PostgresActivityRepository(_pg_session)
         _settlement_outbox_repository = PostgresSettlementOutboxRepository(_pg_session)
@@ -289,9 +293,9 @@ async def lifespan(app: FastAPI):
         _reputation_repository = PostgresReputationRepository(_pg_session)
     else:
         logger.info("persistence_redis", reason="DATABASE_URL not set, using Redis fallback")
-        agent_repository = RedisAgentRepository(registry_instance.redis)
-        subnet_repository = RedisSubnetRepository(registry_instance.redis)
-        task_repository = RedisTaskRepository(registry_instance.redis)
+        agent_repository = RedisAgentRepository(redis_client)
+        subnet_repository = RedisSubnetRepository(redis_client)
+        task_repository = RedisTaskRepository(redis_client)
 
     agent_service_instance = AgentService(
         agent_repository,
@@ -344,8 +348,8 @@ async def lifespan(app: FastAPI):
     # the router/dispatcher block (Phase 2 PR #1 review fix P0-A1) so
     # the manifest dispatcher can take a metrics handle for the
     # ``messages_diverted_to_manifest_total`` counter.
-    metrics_instance = MetricsCollector(registry_instance.redis)
-    audit_instance = AuditLogger(registry_instance.redis)
+    metrics_instance = MetricsCollector(redis_client)
+    audit_instance = AuditLogger(redis_client)
 
     # Phase 2 PR #1: ManifestService is owned alongside the policy
     # service. Both are stateless thin wrappers over Redis, so they
@@ -353,10 +357,10 @@ async def lifespan(app: FastAPI):
     # WebSocketManager is constructed before the router so the
     # manifest dispatcher can hold a reference for the
     # ``manifest_notification`` push.
-    manifest_service_instance = ManifestService(registry_instance.redis)
-    session_service_instance = SessionService(registry_instance.redis)
+    manifest_service_instance = ManifestService(redis_client)
+    session_service_instance = SessionService(redis_client)
     ws_manager_instance = WebSocketManager(
-        registry_instance.redis,
+        redis_client,
         max_connections=settings.max_websocket_connections,
     )
 
@@ -414,7 +418,7 @@ async def lifespan(app: FastAPI):
     if _pg_engine is not None:
         pg_allowlist_repo = PostgresAllowlistRepository(_pg_session)
         redis_allowlist_repo = RedisAllowlistRepository(
-            registry_instance.redis,
+            redis_client,
             pg_loader=pg_allowlist_repo.list_target_ids,
         )
         allowlist_service_instance = AllowlistService(
@@ -440,8 +444,8 @@ async def lifespan(app: FastAPI):
         )
 
     router_instance = MessageRouter(
-        registry_instance,
-        registry_instance.redis,
+        agent_service_instance,
+        redis_client,
         policy_service=policy_service_instance,
         manifest_dispatcher=manifest_dispatcher_instance,
         allowlist_service=allowlist_service_instance,
@@ -453,39 +457,38 @@ async def lifespan(app: FastAPI):
     # repository previously hit by ``MessageService.broadcast_message``.
     broadcast_instance = BroadcastService(
         router_instance,
-        registry_instance.redis,
+        redis_client,
         agent_repository=agent_repository,
     )
+    # Implicit heartbeat: every inbound WS HEARTBEAT frame fires
+    # ``AgentService.touch_alive(agent_id)`` as a detached task, so a
+    # WS-connected agent that sends nothing but heartbeats still keeps
+    # the Redis ``alive`` TTL refreshed — symmetric with the
+    # HTTP-side hook in ``routes/dependencies.py``.
     subnet_manager_instance = SubnetManager(
-        registry=registry_instance,
-        redis_client=registry_instance.redis,
+        agent_service=agent_service_instance,
+        redis_client=redis_client,
         gateway_base_url=settings.gateway_base_url,
         policy_service=policy_service_instance,
         manifest_dispatcher=manifest_dispatcher_instance,
         allowlist_service=allowlist_service_instance,
-        # Implicit heartbeat: every inbound WS HEARTBEAT frame fires
-        # AgentService.touch_alive(agent_id) as a detached task, so a
-        # WS-connected agent that sends nothing but heartbeats still
-        # keeps Redis ``alive`` TTL refreshed — symmetric with the
-        # HTTP-side hook in routes/dependencies.py.
-        agent_service=agent_service_instance,
     )
 
     # Initialize payment services
     webhook_config = create_webhook_config_from_settings(settings)
-    webhook_service_instance = WebhookService(registry_instance.redis, webhook_config)
-    payment_discovery_instance = PaymentDiscoveryService(registry_instance.redis)
+    webhook_service_instance = WebhookService(redis_client, webhook_config)
+    payment_discovery_instance = PaymentDiscoveryService(redis_client)
     # Inject payment_discovery into AgentService so registration auto-syncs the index
     agent_service_instance.payment_discovery = payment_discovery_instance
     payment_tasks_instance = PaymentTaskManager(
-        redis=registry_instance.redis,
+        redis=redis_client,
         discovery=payment_discovery_instance,
         webhook_service=webhook_service_instance,
     )
 
     # Initialize billing service
     billing_service_instance = BillingService(
-        redis=registry_instance.redis,
+        redis=redis_client,
         agent_service=agent_service_instance,
         webhook_url=settings.billing_webhook_url,
         repository=_billing_repository,
@@ -502,7 +505,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize Activity Service
     activity_service_instance = ActivityService(
-        redis=registry_instance.redis,
+        redis=redis_client,
         repository=_activity_repository,
     )
 
@@ -511,7 +514,7 @@ async def lifespan(app: FastAPI):
     # (mirrors how heartbeat ``alive`` keys stay in Redis even when
     # agents themselves are stored in PostgreSQL — both are ephemeral
     # social-graph signals that don't need transactional durability).
-    follow_repository = RedisFollowRepository(registry_instance.redis)
+    follow_repository = RedisFollowRepository(redis_client)
     follow_service_instance = FollowService(
         follow_repository=follow_repository,
         agent_repository=agent_repository,
@@ -522,7 +525,7 @@ async def lifespan(app: FastAPI):
     # Analytics is constructed here (after ActivityService) so it can receive
     # activity_service via the constructor rather than a post-hoc attribute set.
     analytics_instance = Analytics(
-        redis=registry_instance.redis,
+        redis=redis_client,
         activity_service=activity_service_instance,
         agent_repo=agent_repository,
         subnet_repo=subnet_repository,
@@ -585,7 +588,6 @@ async def lifespan(app: FastAPI):
 
     # Initialize dependencies
     dependencies.init_services(
-        registry=registry_instance,
         agent_service=agent_service_instance,
         message_service=message_service_instance,
         subnet_service=subnet_service_instance,
@@ -648,7 +650,7 @@ async def lifespan(app: FastAPI):
             router=router_instance,
             broadcast=broadcast_instance,
             subnet_manager=subnet_manager_instance,
-            redis=registry_instance.redis,
+            redis=redis_client,
             metrics=metrics_instance,
         )
 
@@ -798,7 +800,7 @@ async def lifespan(app: FastAPI):
                 await asyncio.sleep(300)
                 try:
                     counts = await _run_refund_once(
-                        registry_instance.redis,
+                        redis_client,
                         escrow_client_instance,
                     )
                     if counts["refunded"] or counts["errors"]:
@@ -946,7 +948,7 @@ async def lifespan(app: FastAPI):
     await router_instance.close()
     # redis-py 5.0.1+ deprecated Redis.close() in favor of aclose() for the
     # async client (https://github.com/redis/redis-py/pull/2745).
-    await registry_instance.redis.aclose()
+    await redis_client.aclose()
     if _pg_engine is not None:
         await _pg_engine.dispose()
     logger.info("acn_stopped")

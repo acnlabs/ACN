@@ -22,7 +22,6 @@ from ..infrastructure.messaging import (
     SubnetManager,
     WebSocketManager,
 )
-from ..infrastructure.persistence.redis.registry import AgentRegistry
 from ..monitoring import (
     Analytics,
     AuditLogger,
@@ -262,7 +261,6 @@ limiter = Limiter(key_func=_rate_limit_key, storage_uri=settings.redis_url)
 WALLET_RATE_LIMIT = "600/minute"
 
 # Global service instances (initialized in lifespan)
-_registry: AgentRegistry | None = None
 _agent_service: AgentService | None = None
 _message_service: MessageService | None = None
 _subnet_service: SubnetService | None = None
@@ -324,7 +322,6 @@ _reputation_query_service: ReputationQueryService | None = None
 
 
 def init_services(
-    registry: AgentRegistry,
     agent_service: AgentService,
     message_service: MessageService,
     subnet_service: SubnetService,
@@ -351,7 +348,6 @@ def init_services(
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
-        _registry, \
         _agent_service, \
         _message_service, \
         _subnet_service, \
@@ -365,7 +361,6 @@ def init_services(
     global _allowlist_service, _escrow_provider, _session_service
     global _reputation_service, _reputation_query_service
 
-    _registry = registry
     _agent_service = agent_service
     _message_service = message_service
     _subnet_service = subnet_service
@@ -393,13 +388,6 @@ def init_services(
 
 
 # Dependency functions
-def get_registry() -> AgentRegistry:
-    """Get AgentRegistry instance"""
-    if _registry is None:
-        raise RuntimeError("AgentRegistry not initialized")
-    return _registry
-
-
 def get_agent_service() -> AgentService:
     """Get AgentService instance"""
     if _agent_service is None:
@@ -650,7 +638,6 @@ def get_reputation_query_service() -> ReputationQueryService | None:
 
 
 # Type aliases for cleaner dependency injection
-RegistryDep = Annotated[AgentRegistry, Depends(get_registry)]
 AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
 MessageServiceDep = Annotated[MessageService, Depends(get_message_service)]
 SubnetServiceDep = Annotated[SubnetService, Depends(get_subnet_service)]

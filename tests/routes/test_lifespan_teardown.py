@@ -26,7 +26,6 @@ from acn import api as api_module
 # Names in `acn.api` whose construction we neutralize. Anything that
 # opens a socket / file / child process lives in here.
 _HEAVY_DEP_NAMES = (
-    "AgentRegistry",
     "MessageRouter",
     "BroadcastService",
     "SubnetManager",
@@ -63,17 +62,9 @@ def _enter_common_patches(stack: ExitStack, ws_stub, webhook_stub):
         m.close = AsyncMock()
         return m
 
-    def _registry() -> AsyncMock:
-        # AgentRegistry exposes `.redis` — lifespan passes it around,
-        # and the teardown path calls `.redis.close()`.
-        r = AsyncMock()
-        r.redis = AsyncMock()
-        return r
-
     specials = {
         "WebSocketManager": ws_stub,
         "WebhookService": webhook_stub,
-        "AgentRegistry": _registry(),
         "MessageRouter": _closeable(),
     }
 
@@ -85,6 +76,12 @@ def _enter_common_patches(stack: ExitStack, ws_stub, webhook_stub):
             continue
         stack.enter_context(patch.object(api_module, name, return_value=AsyncMock()))
 
+    # ``redis_client`` replaces the legacy ``registry_instance.redis``;
+    # ``aioredis.from_url`` is the constructor lifespan uses, so patch
+    # it to return an AsyncMock whose ``aclose()`` is awaitable.
+    stack.enter_context(
+        patch.object(api_module.aioredis, "from_url", return_value=AsyncMock())
+    )
     # Module-level helpers that would otherwise fan out further.
     stack.enter_context(patch.object(api_module, "create_a2a_app", return_value=AsyncMock()))
     stack.enter_context(

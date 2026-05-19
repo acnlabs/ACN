@@ -59,7 +59,6 @@ from acn.routes.dependencies import (
     get_billing_service,
     get_payment_discovery,
     get_payment_tasks,
-    get_registry,
     verify_agent_api_key,
     verify_internal_token,
 )
@@ -100,10 +99,18 @@ def stub_payment_tasks():
 
 
 @pytest.fixture
-def stub_registry():
-    reg = AsyncMock()
-    reg.get_agent = AsyncMock(return_value=None)
-    return reg
+def stub_agent_service_missing_agent():
+    """AgentService whose ``find_agent`` always returns ``None``.
+
+    Replaces the legacy ``stub_registry`` (AgentRegistry-shaped) fixture
+    after the AgentRegistry → AgentService migration. ``set_token_pricing``
+    now reaches for ``AgentServiceDep.find_agent`` instead of
+    ``RegistryDep.get_agent``; this stub pins the 404 branch for those
+    routes.
+    """
+    svc = AsyncMock()
+    svc.find_agent = AsyncMock(return_value=None)
+    return svc
 
 
 @pytest.fixture
@@ -226,9 +233,11 @@ class TestAgentNotFoundFlatShape:
         assert body["error_code"] == "agent_not_found"
         assert body["details"] == {"agent_id": "agent-x"}
 
-    def test_set_token_pricing_404_flat_shape(self, stub_registry):
+    def test_set_token_pricing_404_flat_shape(self, stub_agent_service_missing_agent):
         _wire_self_authed("agent-x")
-        app.dependency_overrides[get_registry] = lambda: stub_registry
+        app.dependency_overrides[get_agent_service] = (
+            lambda: stub_agent_service_missing_agent
+        )
         with TestClient(app) as client:
             r = client.post(
                 "/api/v1/payments/agent-x/token-pricing",
