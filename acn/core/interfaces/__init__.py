@@ -13,6 +13,12 @@ from .escrow_provider import (
     ReleaseResult,
 )
 from .follow_repository import IFollowRepository
+from .join_flow_event_publisher import (
+    IJoinFlowEventPublisher,
+    JoinFlowEventTrigger,
+    JoinFlowEventType,
+    JoinFlowEventVia,
+)
 from .settlement_outbox_repository import (
     ISettlementOutboxRepository,
     SettlementEvent,
@@ -30,6 +36,10 @@ __all__ = [
     "IAllowlistRepository",
     "AllowlistEntry",
     "IFollowRepository",
+    "IJoinFlowEventPublisher",
+    "JoinFlowEventTrigger",
+    "JoinFlowEventType",
+    "JoinFlowEventVia",
     "ISettlementOutboxRepository",
     "SettlementEvent",
     "ISubnetAllowlistRepository",
