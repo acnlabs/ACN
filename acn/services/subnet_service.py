@@ -17,6 +17,7 @@ from ..core.exceptions import (
     AlreadyMemberError,
     InvitationAlreadyDecidedError,
     InvitationNotFoundError,
+    InvitationPendingError,
     JoinRequestAlreadyDecidedError,
     JoinRequestNotFoundError,
     SubnetNotFoundException,
@@ -1308,7 +1309,10 @@ class SubnetService:
         §"Application-side endpoints" (≤500 chars, enforced by
         :class:`SubnetJoinRequest.__post_init__`).
         """
-        await self.get_subnet(subnet_id)
+        # Single ``get_subnet`` covers the 404 pre-check AND the
+        # webhook payload — reject doesn't mutate subnet membership,
+        # so the entity snapshot stays valid for the event emit.
+        subnet = await self.get_subnet(subnet_id)
         row = await self._load_join_request_or_404(
             request_id,
             expected_kind="join_request",
@@ -1320,7 +1324,6 @@ class SubnetService:
         rejected = await self._save_decided_transition(
             row, new_status="rejected", decided_by=owner_id, note=note
         )
-        subnet = await self.get_subnet(subnet_id)
         await self.event_publisher.publish(
             JoinFlowEventType.JOIN_REJECTED,
             subnet=subnet,
@@ -1349,7 +1352,8 @@ class SubnetService:
         approve / reject verbs. Applicant withdraw is its own path
         (DELETE /join-requests/{rid}) and emits ``JOIN_WITHDRAWN``.
         """
-        await self.get_subnet(subnet_id)
+        # See ``reject_join_request`` for the single-fetch reasoning.
+        subnet = await self.get_subnet(subnet_id)
         row = await self._load_join_request_or_404(
             request_id,
             expected_kind="join_request",
@@ -1364,7 +1368,6 @@ class SubnetService:
             decided_by=applicant_id,
             note=note,
         )
-        subnet = await self.get_subnet(subnet_id)
         await self.event_publisher.publish(
             JoinFlowEventType.JOIN_WITHDRAWN,
             subnet=subnet,
@@ -1414,8 +1417,6 @@ class SubnetService:
         The pending-join-request collision is the merge path above,
         NOT a 409 — that's the asymmetry ADR §"Merge path" pins.
         """
-        from ..core.exceptions import InvitationPendingError
-
         subnet = await self.get_subnet(subnet_id)
         if target_agent_id in subnet.member_agent_ids:
             raise AlreadyMemberError(subnet_id, target_agent_id)
@@ -1552,7 +1553,8 @@ class SubnetService:
 
         ``INVITATION_REJECTED`` fires; no membership change.
         """
-        await self.get_subnet(subnet_id)
+        # See ``reject_join_request`` for the single-fetch reasoning.
+        subnet = await self.get_subnet(subnet_id)
         row = await self._load_join_request_or_404(
             request_id,
             expected_kind="invitation",
@@ -1564,7 +1566,6 @@ class SubnetService:
         rejected = await self._save_decided_transition(
             row, new_status="rejected", decided_by=invitee_id, note=note
         )
-        subnet = await self.get_subnet(subnet_id)
         await self.event_publisher.publish(
             JoinFlowEventType.INVITATION_REJECTED,
             subnet=subnet,
@@ -1592,7 +1593,8 @@ class SubnetService:
         Emits ``INVITATION_CANCELED`` per ADR §"Webhook event
         catalogue".
         """
-        await self.get_subnet(subnet_id)
+        # See ``reject_join_request`` for the single-fetch reasoning.
+        subnet = await self.get_subnet(subnet_id)
         row = await self._load_join_request_or_404(
             request_id,
             expected_kind="invitation",
@@ -1604,7 +1606,6 @@ class SubnetService:
         canceled = await self._save_decided_transition(
             row, new_status="withdrawn", decided_by=owner_id, note=note
         )
-        subnet = await self.get_subnet(subnet_id)
         await self.event_publisher.publish(
             JoinFlowEventType.INVITATION_CANCELED,
             subnet=subnet,
