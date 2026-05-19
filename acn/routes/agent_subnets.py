@@ -27,6 +27,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     AgentIdPath,
     AgentServiceDep,
+    JoinFlowServiceDep,
     SubnetIdPath,
     SubnetServiceDep,
     WebhookServiceDep,
@@ -49,12 +50,17 @@ async def join_subnet(
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
     webhook_service: WebhookServiceDep = None,
+    join_flow_service: JoinFlowServiceDep = None,
 ):
     """Agent joins a subnet (requires Agent API Key).
 
-    The authenticated agent must match the path `agent_id`. On success the
-    subnet's `member_agent_ids` is updated and (if configured) the subnet's
-    Org Harness receives an `agent.joined_subnet` webhook.
+    ADR-0004 Phase 2 Slice 2.3 — behaviour now branches on
+    ``subnet.join_policy`` and the caller's relationship to the
+    subnet (member, owner, pending invitation, allowlist hit, or
+    fresh applicant). Response status varies per branch (200 for
+    immediate admission, 202 for pending join_request) — see
+    ``acn/routes/_subnet_admission.py::join_flow_result_to_response``
+    for the per-branch shape table.
     """
     return await do_join_subnet(
         agent_id=agent_id,
@@ -63,6 +69,7 @@ async def join_subnet(
         subnet_service=subnet_service,
         agent_service=agent_service,
         webhook_service=webhook_service,
+        join_flow_service=join_flow_service,
     )
 
 

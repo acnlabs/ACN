@@ -27,6 +27,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     AgentIdPath,
     AgentServiceDep,
+    JoinFlowServiceDep,
     SubnetIdPath,
     SubnetServiceDep,
     WebhookServiceDep,
@@ -581,6 +582,7 @@ async def join_subnet(
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
     webhook_service: WebhookServiceDep = None,
+    join_flow_service: JoinFlowServiceDep = None,
 ):
     """[Deprecated] Use POST /api/v1/agents/{agent_id}/subnets/{subnet_id}."""
     logger.warning(
@@ -596,6 +598,7 @@ async def join_subnet(
         subnet_service=subnet_service,
         agent_service=agent_service,
         webhook_service=webhook_service,
+        join_flow_service=join_flow_service,
     )
 
 

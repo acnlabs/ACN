@@ -47,6 +47,7 @@ from ..services import (
 )
 from ..services.activity_service import ActivityService
 from ..services.agent_service import hash_api_key
+from ..services.join_flow_service import JoinFlowService
 from ..services.reputation_query_service import ReputationQueryService
 from ..services.reputation_service import ReputationService
 
@@ -79,6 +80,10 @@ MAX_SUBNET_ID_LEN: int = 100  # matches Postgres String(100) on tasks.subnet_id
 MAX_AGENT_ID_LEN: int = 128
 MAX_TASK_ID_LEN: int = 128
 MAX_PARTICIPATION_ID_LEN: int = 128
+# ADR-0004 §SubnetJoinRequest schema fixes ``request_id`` at UUID4
+# shape (36 chars). Cap at 64 chars for forward compatibility with
+# any future longer encoding (matches the AGENT_ID cap pattern).
+MAX_REQUEST_ID_LEN: int = 64
 
 SubnetIdPath = Annotated[
     str,
@@ -95,6 +100,13 @@ TaskIdPath = Annotated[
 ParticipationIdPath = Annotated[
     str,
     Path(max_length=MAX_PARTICIPATION_ID_LEN, description="Participation identifier"),
+]
+RequestIdPath = Annotated[
+    str,
+    Path(
+        max_length=MAX_REQUEST_ID_LEN,
+        description="SubnetJoinRequest identifier (join-request or invitation row id)",
+    ),
 ]
 
 
@@ -319,6 +331,14 @@ _session_service: SessionService | None = None
 # the per-request fallback construction up to lifespan time.
 _reputation_service: ReputationService | None = None
 _reputation_query_service: ReputationQueryService | None = None
+# ADR-0004 Slice 2.3 join flow. Composes SubnetService + the two
+# admission-related repositories; routes layer holds it so the 14
+# new admission endpoints (POST /agents/{a}/subnets/{s} entry,
+# allowlist / join_request / invitation verbs) can dispatch the
+# six-branch decision tree without re-wiring on every request.
+# ``None`` default mirrors the SubnetService pattern: legacy test
+# fixtures that don't exercise admission can still bring the app up.
+_join_flow_service: JoinFlowService | None = None
 
 
 def init_services(
@@ -345,6 +365,7 @@ def init_services(
     session_service: SessionService | None = None,
     reputation_service: ReputationService | None = None,
     reputation_query_service: ReputationQueryService | None = None,
+    join_flow_service: JoinFlowService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -360,6 +381,7 @@ def init_services(
     global _activity_service, _follow_service, _policy_service, _manifest_service
     global _allowlist_service, _escrow_provider, _session_service
     global _reputation_service, _reputation_query_service
+    global _join_flow_service
 
     _agent_service = agent_service
     _message_service = message_service
@@ -385,6 +407,7 @@ def init_services(
     _session_service = session_service
     _reputation_service = reputation_service
     _reputation_query_service = reputation_query_service
+    _join_flow_service = join_flow_service
 
 
 # Dependency functions
@@ -625,6 +648,20 @@ def get_reputation_service() -> ReputationService | None:
     return _reputation_service
 
 
+def get_join_flow_service() -> JoinFlowService:
+    """Get the JoinFlowService instance.
+
+    Required for the 14 admission endpoints introduced by ADR-0004
+    Slice 2.3 (``POST /agents/{a}/subnets/{s}`` join entry, allowlist /
+    join_request / invitation verbs). Raises loudly when not wired —
+    production lifespan always installs it; legacy test fixtures that
+    bring up the app without admission must stub these routes.
+    """
+    if _join_flow_service is None:
+        raise RuntimeError("JoinFlowService not initialized")
+    return _join_flow_service
+
+
 def get_reputation_query_service() -> ReputationQueryService | None:
     """Get the ReputationQueryService instance.
 
@@ -668,6 +705,7 @@ ReputationServiceDep = Annotated[
 ReputationQueryServiceDep = Annotated[
     "ReputationQueryService | None", Depends(get_reputation_query_service)
 ]
+JoinFlowServiceDep = Annotated[JoinFlowService, Depends(get_join_flow_service)]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]

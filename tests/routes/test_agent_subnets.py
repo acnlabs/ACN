@@ -25,9 +25,11 @@ from acn.core.exceptions import AgentNotFoundException, SubnetNotFoundException
 from acn.protocols.ap2.webhook import WebhookEventType
 from acn.routes.dependencies import (
     get_agent_service,
+    get_join_flow_service,
     get_subnet_service,
     get_webhook_service,
 )
+from acn.services._join_flow_result import JoinFlowJoinedOpenResult
 from tests.routes.conftest import _assert_flat_shape
 
 # ---------------------------------------------------------------------------
@@ -98,6 +100,40 @@ def stub_webhook_service():
     svc.send_to = AsyncMock(return_value=True)
     svc.send_event = AsyncMock(return_value=True)
     return svc
+
+
+@pytest.fixture(autouse=True)
+def stub_join_flow_service(stub_subnet_service):
+    """JoinFlowService stub: delegates to the subnet_service mock.
+
+    Auto-applied to every test in this module because the canonical
+    ``POST /api/v1/agents/{a}/subnets/{s}`` route now depends on
+    ``JoinFlowService`` (ADR-0004 Slice 2.3 rewrote
+    ``do_join_subnet`` to use the six-branch decision tree). Tests
+    that don't exercise join still pick this fixture up — it is a
+    no-op for leave / list paths because the routes never call
+    ``join_flow_service.join_subnet`` outside the join handler.
+
+    The stub mirrors the open-branch behaviour of the real service:
+    it validates the subnet exists (via the underlying subnet
+    service stub) and calls ``add_member``, then returns a
+    ``JoinFlowJoinedOpenResult``. Pre-existing assertions on
+    ``stub_subnet_service.add_member.assert_awaited_once_with(...)``
+    continue to hold because the forwarding preserves the call.
+    """
+    svc = AsyncMock()
+
+    async def _join_subnet(subnet_id: str, agent_id: str):
+        await stub_subnet_service.get_subnet(subnet_id)
+        await stub_subnet_service.add_member(subnet_id, agent_id)
+        return JoinFlowJoinedOpenResult(subnet_id=subnet_id, agent_id=agent_id)
+
+    svc.join_subnet = AsyncMock(side_effect=_join_subnet)
+    app.dependency_overrides[get_join_flow_service] = lambda: svc
+    try:
+        yield svc
+    finally:
+        app.dependency_overrides.pop(get_join_flow_service, None)
 
 
 def _wire(agent_svc, subnet_svc, webhook_svc=None) -> None:
