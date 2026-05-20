@@ -4,6 +4,29 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+### Fixed — re-export gap on public types
+
+- `index.ts` now re-exports the ten ADR-0004 admission types
+  alongside the methods that were already public:
+  `SubnetJoinPolicy`, `SubnetAllowlistEntry`,
+  `SubnetAllowlistListResponse`, `SubnetJoinRequestRow`,
+  `SubnetJoinRequestListResponse`,
+  `SubnetJoinRequestListOptions`,
+  `SubnetInvitationListResponse`,
+  `SubnetInvitationListOptions`,
+  `SubnetInvitationSendResponse`,
+  `AgentSubnetInvitationsResponse`. Pre-this-PR, callers had to
+  reach into `'acn-client/dist/types'` (deep import) or fall back
+  to `Parameters<typeof client.subnetAllowlistAdd>[…]` gymnastics
+  to type a variable holding e.g. an invitation row. Now a clean
+  top-level `import type { SubnetInvitationSendResponse } from 'acn-client'`
+  works as expected. Wire / runtime behaviour unchanged.
+- Same fix for `CommunicationProfile` (the typed return of
+  `getCommunicationProfile`) — also missing from the top-level
+  re-exports despite being a long-standing public type, and
+  newly carrying the `unread_manifest_count: number` field from
+  the previous PR.
+
 ### Added — manifest-mode reachability (mirrors server PR #87)
 
 - `CommunicationProfile.unread_manifest_count: number` — surfaces
