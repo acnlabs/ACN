@@ -54,6 +54,8 @@ Publish by tagging `v0.11.0` on `main` (triggers `.github/workflows/release.yml`
 
 - **Agent status is binary** (`online` / `offline`) — Redis TTL is the
   single source of truth; legacy `busy` collapsed into `offline`.
+- **`AgentStatus.BUSY` removed** from Python SDK (was deprecated in the
+  lead-up cycle). Replace with `AgentStatus.OFFLINE`.
 - **Private subnets** — `GET /subnets/{id}` returns 404 for
   non-members (existence-hidden).
 
