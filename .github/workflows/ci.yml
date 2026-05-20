@@ -325,8 +325,22 @@ jobs:
           # Expose the installed SDK on the PATH-visible venv for the smoke step
           echo "CONSUMER_VENV=$(pwd)/.venv" >> $GITHUB_ENV
 
+      # Detect whether the PAT is configured. Secrets cannot be compared
+      # directly in step `if:` expressions; we expose it via a step output
+      # instead.
+      - name: Detect CONSUMER_REPOS_PAT availability
+        id: pat-check
+        run: |
+          if [ -n "$PAT" ]; then
+            echo "available=true"  >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          PAT: ${{ secrets.CONSUMER_REPOS_PAT }}
+
       - name: Fetch Agentplanet-backend SDK wrapper
-        if: ${{ secrets.CONSUMER_REPOS_PAT != '' }}
+        if: steps.pat-check.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ secrets.CONSUMER_REPOS_PAT }}
         run: |
@@ -339,7 +353,7 @@ jobs:
           echo "✅ Fetched Agentplanet-backend/app/services/acn_client.py"
 
       - name: Smoke test — Agentplanet-backend (Python)
-        if: ${{ secrets.CONSUMER_REPOS_PAT != '' }}
+        if: steps.pat-check.outputs.available == 'true'
         run: |
           $CONSUMER_VENV/bin/python3 - <<'PYEOF'
           import ast, sys
@@ -380,7 +394,7 @@ jobs:
           PYEOF
 
       - name: Skip notice — CONSUMER_REPOS_PAT not configured
-        if: ${{ secrets.CONSUMER_REPOS_PAT == '' }}
+        if: steps.pat-check.outputs.available != 'true'
         run: |
           echo "⚠️  CONSUMER_REPOS_PAT secret is not set."
           echo "   Consumer-compat checks were skipped. To enable full coverage:"
