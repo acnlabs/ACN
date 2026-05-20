@@ -196,6 +196,7 @@ Only active on `join_policy=approval` subnets.
 | `approve_participation(task_id, participation_id, ...)` | Approve applicant (assigned mode) |
 | `reject_participation(task_id, participation_id, ...)` | Reject applicant (assigned mode) |
 | `cancel_participation(task_id, participation_id, ...)` | Withdraw from a task |
+| `get_agent_task_history(agent_id, limit?)` | Agent's full task history — submissions, review notes, resubmit counts |
 
 Task endpoints use `bearer_token` (Auth0 JWT) in production. In dev mode they fall back to `X-Creator-Id` header or the `dev@clients` identity.
 

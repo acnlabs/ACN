@@ -690,7 +690,7 @@ async with ACNClient("http://localhost:8000") as client:
 ### TypeScript
 
 ```typescript
-import { ACNClient } from '@acn/client';
+import { ACNClient } from 'acn-client';
 
 const client = new ACNClient('http://localhost:8000');
 
