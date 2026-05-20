@@ -4,6 +4,14 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+### Added — H1 (pre-launch security audit)
+- Regression tests for `rotate_api_key` (the SDK method itself shipped
+  in 0.10.0 alongside the server-side endpoint, but had no test
+  coverage). `tests/test_rotate_api_key.py` pins the wire shape
+  (`POST /api/v1/agents/{id}/rotate-key` with no body / params),
+  the raw-`dict` return contract (forward-compatible with future
+  server fields), and path-encoded `agent_id` handling.
+
 ### Deprecated (alive-as-SSOT follow-up)
 
 - **`AgentStatus.BUSY` is deprecated and will be removed in 0.11.**

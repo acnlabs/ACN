@@ -4,6 +4,20 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+### Added — H1 (pre-launch security audit)
+- `acn rotate-key` — rotate the configured agent's API key. The
+  previous key is invalidated on the server immediately, so by
+  default the command prints the new key plus a follow-up hint
+  (`acn config set api_key <new>`); pass `--save` to persist the
+  new key into `~/.acn/config.json` in one step. `--agent-id <id>`
+  overrides the configured agent id; `--json` emits the raw server
+  payload. The CLI authenticates with the agent's current key (the
+  scheduled-rotation path); recovery via Auth0 JWT goes through the
+  Labs web UI — the CLI fails fast with that hint instead of issuing
+  a guaranteed-401 request when the local config has no `api_key`.
+  Closes the H1 gap previously left by the TypeScript SDK 0.12.0
+  shipping `rotateApiKey()` while the CLI did not expose the route.
+
 ### Added — ADR-0004 Slice 2.3 PR B (subnet admission verbs)
 - `acn subnet create --join-policy <open|approval>` — opt the new
   subnet into the approval gate. `--private` continues to imply

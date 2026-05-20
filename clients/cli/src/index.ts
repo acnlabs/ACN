@@ -3,6 +3,7 @@ import { setJsonMode } from './output.js';
 import { configCommand } from './commands/config.js';
 import { joinCommand } from './commands/join.js';
 import { heartbeatCommand } from './commands/heartbeat.js';
+import { rotateKeyCommand } from './commands/rotate-key.js';
 import { agentsCommand } from './commands/agents.js';
 import { tasksCommand } from './commands/tasks.js';
 import { messageCommand } from './commands/message.js';
@@ -29,6 +30,7 @@ program
 program.addCommand(configCommand());
 program.addCommand(joinCommand());
 program.addCommand(heartbeatCommand());
+program.addCommand(rotateKeyCommand());
 program.addCommand(agentsCommand());
 program.addCommand(tasksCommand());
 program.addCommand(messageCommand());
