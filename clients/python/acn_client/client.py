@@ -549,6 +549,335 @@ class ACNClient:
         return subnets
 
     # ============================================
+    # ADR-0004 Subnet Admission
+    # ============================================
+    #
+    # Three resource families gated by ``subnet.join_policy ==
+    # "approval"``: allowlist (owner pre-authorisation), join_requests
+    # (applicant-initiated), invitations (owner-initiated).
+    #
+    # The plain :meth:`join_subnet` verb dispatches the six-branch
+    # decision tree on the server side — these methods are the
+    # admin-side controls used by subnet owners and the per-row
+    # decisions used by applicants and invitees.
+    #
+    # All methods return raw ``dict[str, Any]`` (matching server's
+    # un-typed JSON responses); list endpoints return paginated
+    # ``{ subnet_id|agent_id, items|entries }`` envelopes.
+
+    # ----- Allowlist (owner-only, 3 verbs) ---------------------------------
+
+    async def subnet_allowlist_add(
+        self,
+        subnet_id: str,
+        agent_id: str,
+    ) -> dict[str, Any]:
+        """Pre-authorise ``agent_id`` on ``subnet_id``'s allowlist (owner only).
+
+        Allowlisted agents skip the approval queue: their next
+        ``join_subnet`` call lands in branch 4 (allowlist hit) and
+        becomes an immediate member with an ``allowlist_auto`` audit
+        row.
+
+        Server returns 201 with the persisted entry; duplicate adds
+        return 409 ``ALREADY_ON_ALLOWLIST`` (raised as an HTTP error
+        by ``_request`` rather than being silently no-op'd).
+        """
+        return await self._request(
+            "POST",
+            f"/api/v1/subnets/{subnet_id}/allowlist",
+            json={"agent_id": agent_id},
+        )
+
+    async def subnet_allowlist_remove(
+        self,
+        subnet_id: str,
+        agent_id: str,
+    ) -> None:
+        """Remove ``agent_id`` from ``subnet_id``'s allowlist (owner only).
+
+        Idempotent — removing an entry that doesn't exist still
+        returns 204. Per ADR-0004 §"Allowlist mutation does not
+        affect agents who already joined", this does NOT revoke
+        membership for agents who already used the allowlist to
+        join; use :meth:`leave_subnet` (as the agent) or a future
+        eviction verb to remove members.
+        """
+        await self._request(
+            "DELETE",
+            f"/api/v1/subnets/{subnet_id}/allowlist/{agent_id}",
+        )
+        return None
+
+    async def subnet_allowlist_list(
+        self,
+        subnet_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List ``subnet_id``'s allowlist entries (owner only).
+
+        Owner-only by design — the allowlist is a privacy-sensitive
+        trust signal. Returns ``{ subnet_id, entries: [...] }``;
+        each entry carries ``agent_id``, ``added_by``, ``added_at``.
+        """
+        return await self._request(
+            "GET",
+            f"/api/v1/subnets/{subnet_id}/allowlist",
+            params={"limit": limit, "offset": offset},
+        )
+
+    # ----- Join requests (4 verbs: 3 owner-side + 1 applicant-side) --------
+
+    async def subnet_join_request_approve(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Owner approves a pending join_request (CAS pending → approved).
+
+        Side effects: applicant added to ``subnet.member_agent_ids``
+        and the ``subnet.join_approved`` webhook fires. The applicant
+        is still expected to call :meth:`join_subnet` to register the
+        ``agent.subnet_ids`` back-reference (per ADR-0004 §"State
+        machine edges").
+
+        Optional ``note`` (≤500 chars) is recorded on the audit row.
+        """
+        body: dict[str, Any] = {}
+        if note is not None:
+            body["note"] = note
+        return await self._request(
+            "POST",
+            f"/api/v1/subnets/{subnet_id}/join-requests/{request_id}/approve",
+            json=body or None,
+        )
+
+    async def subnet_join_request_reject(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Owner rejects a pending join_request (CAS pending → rejected).
+
+        No membership change. ``subnet.join_rejected`` webhook fires.
+        Optional ``note`` lets the owner record a human-readable
+        reason in the audit trail.
+        """
+        body: dict[str, Any] = {}
+        if note is not None:
+            body["note"] = note
+        return await self._request(
+            "POST",
+            f"/api/v1/subnets/{subnet_id}/join-requests/{request_id}/reject",
+            json=body or None,
+        )
+
+    async def subnet_join_request_withdraw(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Applicant withdraws their own pending join_request.
+
+        Self-only — caller must be the agent who originally created
+        the request (NOT the subnet owner; owner rejection is a
+        different verb). ``subnet.join_withdrawn`` webhook fires.
+        """
+        body: dict[str, Any] = {}
+        if note is not None:
+            body["note"] = note
+        return await self._request(
+            "DELETE",
+            f"/api/v1/subnets/{subnet_id}/join-requests/{request_id}",
+            json=body or None,
+        )
+
+    async def subnet_join_request_list(
+        self,
+        subnet_id: str,
+        *,
+        kind: str = "join_request",
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Owner lists join_request / allowlist_auto rows for ``subnet_id``.
+
+        ``kind`` defaults to ``"join_request"``; pass
+        ``"allowlist_auto"`` to inspect the audit rows synthesised
+        for allowlist-hit joins. ``kind="invitation"`` is rejected
+        with 400 ``INVALID_KIND_FILTER`` per ADR-0004 — invitations
+        are queryable through :meth:`subnet_invitation_list` only.
+        """
+        params: dict[str, Any] = {
+            "kind": kind,
+            "limit": limit,
+            "offset": offset,
+        }
+        if status is not None:
+            params["status"] = status
+        return await self._request(
+            "GET",
+            f"/api/v1/subnets/{subnet_id}/join-requests",
+            params=params,
+        )
+
+    # ----- Invitations (5 verbs on subnet path + 1 on agent path) ----------
+
+    async def subnet_invitation_send(
+        self,
+        subnet_id: str,
+        agent_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Owner sends an invitation to ``agent_id`` (or merges a pending request).
+
+        Two response shapes per ADR-0004 §"Invitation merge path":
+
+        - **Normal path** (server returns 202)::
+
+              { "invitation_id": "...", "status": "pending" }
+
+        - **Merge path** (target already had a pending join_request,
+          server returns 200, request auto-approved)::
+
+              {
+                  "auto_resolved": True,
+                  "resolved_kind": "join_request",
+                  "request_id": "...",
+              }
+
+        Pre-checks raise: target missing → 404 ``AGENT_NOT_FOUND``;
+        already a member → 409 ``ALREADY_MEMBER``; pending invitation
+        for the same target → 409 ``INVITATION_PENDING``.
+        """
+        body: dict[str, Any] = {"agent_id": agent_id}
+        if note is not None:
+            body["note"] = note
+        return await self._request(
+            "POST",
+            f"/api/v1/subnets/{subnet_id}/invitations",
+            json=body,
+        )
+
+    async def subnet_invitation_accept(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Invitee accepts a pending invitation (CAS pending → approved).
+
+        Self-only against ``row.agent_id`` (the invitee). Side
+        effects: invitee added to ``subnet.member_agent_ids``, the
+        agent's ``subnet_ids`` gains the back-reference, and
+        ``subnet.invitation_accepted`` webhook fires.
+        """
+        body: dict[str, Any] = {}
+        if note is not None:
+            body["note"] = note
+        return await self._request(
+            "POST",
+            f"/api/v1/subnets/{subnet_id}/invitations/{request_id}/accept",
+            json=body or None,
+        )
+
+    async def subnet_invitation_reject(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Invitee rejects a pending invitation (CAS pending → rejected).
+
+        Self-only against ``row.agent_id``. No membership change.
+        ``subnet.invitation_rejected`` webhook fires. Optional
+        ``note`` (≤500 chars) is recorded on the audit row.
+        """
+        body: dict[str, Any] = {}
+        if note is not None:
+            body["note"] = note
+        return await self._request(
+            "POST",
+            f"/api/v1/subnets/{subnet_id}/invitations/{request_id}/reject",
+            json=body or None,
+        )
+
+    async def subnet_invitation_cancel(
+        self,
+        subnet_id: str,
+        request_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Owner cancels a pending invitation (CAS pending → withdrawn).
+
+        Owner-only counterpart to applicant withdraw. The row
+        transitions to ``withdrawn`` (not ``rejected``) — distinct
+        audit token so consumers can tell "owner gave up" from
+        "invitee said no". ``subnet.invitation_canceled`` webhook
+        fires.
+        """
+        body: dict[str, Any] = {}
+        if note is not None:
+            body["note"] = note
+        return await self._request(
+            "DELETE",
+            f"/api/v1/subnets/{subnet_id}/invitations/{request_id}",
+            json=body or None,
+        )
+
+    async def subnet_invitation_list(
+        self,
+        subnet_id: str,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Owner lists invitation rows for ``subnet_id``.
+
+        Owner-only — invitees use :meth:`agent_subnet_invitations`
+        for their own cross-subnet view. Returns ``{ subnet_id,
+        items: [...] }``.
+        """
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if status is not None:
+            params["status"] = status
+        return await self._request(
+            "GET",
+            f"/api/v1/subnets/{subnet_id}/invitations",
+            params=params,
+        )
+
+    async def agent_subnet_invitations(
+        self,
+        agent_id: str,
+    ) -> dict[str, Any]:
+        """Invitee's cross-subnet pending-invitation list (self-only).
+
+        Returns only ``status=pending`` rows — the assumption is
+        that an invitee cares about "what's waiting on me to
+        decide". Historical decisions are queryable per-subnet
+        through the owner-only :meth:`subnet_invitation_list`.
+        """
+        return await self._request(
+            "GET",
+            f"/api/v1/agents/{agent_id}/subnet-invitations",
+        )
+
+    # ============================================
     # Communication
     # ============================================
 

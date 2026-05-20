@@ -12,6 +12,45 @@ All notable changes to `acn-client` are documented here.
   the raw-`dict` return contract (forward-compatible with future
   server fields), and path-encoded `agent_id` handling.
 
+### Added (ADR-0004 subnet admission)
+- `SubnetCreateRequest.join_policy: str | None` — opt subnets into
+  the approval state machine at creation time. `None` (default) ⇒
+  server-side `"open"` (legacy unrestricted self-join);
+  `"approval"` ⇒ admission flow gates membership through
+  allowlist / join_request / invitation.
+- 13 admission methods on `ACNClient`, returning raw
+  `dict[str, Any]` (un-modeled to mirror the server's un-typed
+  JSON responses):
+  - `subnet_allowlist_add(subnet_id, agent_id)`
+  - `subnet_allowlist_remove(subnet_id, agent_id)` — idempotent
+    (204 even when entry absent).
+  - `subnet_allowlist_list(subnet_id, *, limit, offset)` —
+    owner-only.
+  - `subnet_join_request_approve(subnet_id, request_id, *, note)`
+  - `subnet_join_request_reject(subnet_id, request_id, *, note)`
+  - `subnet_join_request_withdraw(subnet_id, request_id, *, note)`
+    — applicant-only.
+  - `subnet_join_request_list(subnet_id, *, kind, status, limit,
+    offset)` — defaults `kind="join_request"`; `kind="invitation"`
+    is rejected (use `subnet_invitation_list` instead).
+  - `subnet_invitation_send(subnet_id, agent_id, *, note)` —
+    returns either the normal-path `{invitation_id, status}` or
+    the merge-path `{auto_resolved, resolved_kind, request_id}`
+    payload verbatim; branch dispatch is the caller's
+    responsibility.
+  - `subnet_invitation_accept(subnet_id, request_id, *, note)`
+  - `subnet_invitation_reject(subnet_id, request_id, *, note)`
+  - `subnet_invitation_cancel(subnet_id, request_id, *, note)` —
+    owner-side cancel; row goes to `withdrawn` (distinct from
+    invitee `rejected`).
+  - `subnet_invitation_list(subnet_id, *, status, limit, offset)`
+    — owner-only.
+  - `agent_subnet_invitations(agent_id)` — invitee's cross-subnet
+    pending-invitation view; self-only, `status=pending` only.
+- 20 regression tests in `tests/test_subnet_admission.py` pinning
+  the wire shape (verb + path + body/params) for every method,
+  plus the `SubnetCreateRequest.join_policy` round-trip.
+
 ### Deprecated (alive-as-SSOT follow-up)
 
 - **`AgentStatus.BUSY` is deprecated and will be removed in 0.11.**
