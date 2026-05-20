@@ -154,12 +154,10 @@ KNOWN_PAYMENT_TASK_STATUSES: tuple[str, ...] = (
 class AgentInfo(BaseModel):
     """Agent information"""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str = Field(alias="agent_id")
     name: str
-
-    class Config:
-        populate_by_name = True
-
     description: str | None = None
     skills: list[str] = Field(default_factory=list)
     status: AgentStatus = AgentStatus.OFFLINE
@@ -193,6 +191,8 @@ class AgentRegisterRequest(BaseModel):
     and ``ACNClient.join_acn()``.
     """
 
+    model_config = ConfigDict(populate_by_name=True)
+
     owner: str = Field(..., description="Agent owner (system/user-{id}/provider-{id})")
     name: str = Field(..., description="Agent name")
     tags: list[str] = Field(default_factory=list, description="Capability tags for discoverability")
@@ -212,9 +212,6 @@ class AgentRegisterRequest(BaseModel):
             "Defaults to 'manifest' for new agents."
         ),
     )
-
-    class Config:
-        populate_by_name = True
 
 
 class AgentJoinRequest(BaseModel):
@@ -287,12 +284,10 @@ class AgentSearchOptions(BaseModel):
 class SubnetInfo(BaseModel):
     """Subnet information"""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str = Field(alias="subnet_id")
     name: str
-
-    class Config:
-        populate_by_name = True
-
     # Owner agent_id of the subnet. Defaults to ``""`` so older clients
     # talking to a server that does not yet expose ``owner`` still parse
     # cleanly. Per ADR-0002 the server rejects ``backend@internal`` on

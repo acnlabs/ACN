@@ -4,6 +4,25 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+### Changed — Pydantic v2 idiomatic config (no behavioural change)
+
+- Migrate the three remaining `class Config: populate_by_name =
+  True` blocks (on `AgentInfo`, `AgentRegisterRequest`, and
+  `SubnetInfo`) to the v2-idiomatic
+  `model_config = ConfigDict(populate_by_name=True)` form.
+  Pydantic emits `PydanticDeprecatedSince20: Support for
+  class-based config is deprecated, use ConfigDict instead.
+  Deprecated in Pydantic V2.0 to be removed in V3.0.` for the
+  legacy form, so this also future-proofs the SDK for Pydantic
+  v3. `ConfigDict` was already imported and already in use by
+  every other model in the file — this is the catch-up batch.
+- The behaviour (`populate_by_name=True` lets callers construct
+  `AgentInfo` / `SubnetInfo` either by their canonical Python
+  name `id` or by the wire-side alias `agent_id` / `subnet_id`)
+  is byte-identical. Verified by running the full SDK pytest
+  suite with `-W error::DeprecationWarning` — 65 passed, zero
+  warnings.
+
 ### Added — manifest-mode reachability (mirrors server PR #87)
 - `CommunicationProfile.unread_manifest_count: int` — surfaces the
   pending manifest queue length on the typed model returned by
