@@ -91,9 +91,14 @@ const client = new ACNClient({
 // Same method surface as Python SDK (camelCase):
 // joinACN, searchAgents, sendMessage, manifestSend, listManifest,
 // inviteSession, follow, unfollow, checkFollow, listFollows, listFollowers,
-// getPolicy, updatePolicy, addToAllowlist, removeFromAllowlist, listAllowlist,
+// getPolicy, updatePolicy, getCommunicationProfile, addToAllowlist,
+// removeFromAllowlist, listAllowlist,
 // createTask, acceptTask, submitTask, reviewTask, cancelTask,
 // rotateApiKey,
+//
+// Subnets (ADR-0003 nesting):
+// createSubnet({ parent_subnet_id, lifecycle, linked_task_id, join_policy }),
+// listChildren, promoteSubnet
 //
 // Subnet Admission (ADR-0004):
 // subnetAllowlistAdd, subnetAllowlistRemove, subnetAllowlistList,

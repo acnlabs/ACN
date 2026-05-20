@@ -19,6 +19,8 @@
  *   (`parent_subnet_id`, `lifecycle`, `linked_task_id`)
  *   round-trip through `createSubnet` and are all omitted when
  *   not set (back-compat for legacy callers).
+ * - `listChildren` / `promoteSubnet` issue the ADR-0003
+ *   dedicated endpoints and parse the wire payloads.
  *
  * Implementation strategy: stub `globalThis.fetch` per test and
  * assert on the (url, init) tuple. We avoid mocking the
@@ -142,6 +144,58 @@ describe('SubnetCreateRequest ADR-0003 nesting', () => {
     expect(body).not.toHaveProperty('parent_subnet_id');
     expect(body).not.toHaveProperty('lifecycle');
     expect(body).not.toHaveProperty('linked_task_id');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR-0003 nesting operations (listChildren / promoteSubnet)
+// ---------------------------------------------------------------------------
+
+function serverSubnetPayload(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    subnet_id: 'squad-1',
+    name: 'Squad 1',
+    owner: 'alice',
+    parent_subnet_id: 'parent-1',
+    lifecycle: 'task_scoped',
+    linked_task_id: 'task-42',
+    ...overrides,
+  };
+}
+
+describe('ADR-0003 listChildren / promoteSubnet', () => {
+  it('listChildren GETs /subnets/{parent}/children and returns subnets array', async () => {
+    const child = serverSubnetPayload({ subnet_id: 'child-1' });
+    const { client, calls } = setupFetchStub(200, {
+      count: 1,
+      subnets: [child],
+    });
+
+    const children = await client.listChildren('parent-1');
+
+    expect(children).toHaveLength(1);
+    expect(children[0].subnet_id).toBe('child-1');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.method).toBe('GET');
+    expect(calls[0].url.pathname).toBe('/api/v1/subnets/parent-1/children');
+  });
+
+  it('promoteSubnet POSTs /subnets/{id}/promote and returns SubnetInfo', async () => {
+    const promoted = serverSubnetPayload({
+      lifecycle: 'persistent',
+      linked_task_id: null,
+    });
+    const { client, calls } = setupFetchStub(200, promoted);
+
+    const info = await client.promoteSubnet('squad-1');
+
+    expect(info.lifecycle).toBe('persistent');
+    expect(info.linked_task_id).toBeNull();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].init.method).toBe('POST');
+    expect(calls[0].url.pathname).toBe('/api/v1/subnets/squad-1/promote');
   });
 });
 

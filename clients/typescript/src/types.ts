@@ -133,12 +133,35 @@ export interface AgentSearchOptions {
 
 /** Subnet information */
 export interface SubnetInfo {
+  /**
+   * Subnet identifier. The server wire field is `subnet_id`; some
+   * older responses may also surface `id`. Prefer `subnet_id` when
+   * present, falling back to `id`.
+   */
   id: string;
+  /** Wire-side identifier (ADR-0003+ servers always emit this). */
+  subnet_id?: string;
   name: string;
   description?: string;
-  created_at: string;
-  agent_count: number;
+  created_at?: string;
+  agent_count?: number;
   metadata?: Record<string, unknown>;
+  owner?: string;
+  harness_url?: string;
+  harness_registered?: boolean;
+  /** ADR-0003 — parent subnet when this is a nested child. */
+  parent_subnet_id?: string | null;
+  /** ADR-0003 — defaults to `'persistent'` on the server. */
+  lifecycle?: SubnetLifecycle;
+  /** ADR-0003 — bound task when `lifecycle === 'task_scoped'`. */
+  linked_task_id?: string | null;
+  [key: string]: unknown;
+}
+
+/** Response from `GET /api/v1/subnets/{id}/children` (ADR-0003). */
+export interface SubnetChildrenListResponse {
+  count: number;
+  subnets: SubnetInfo[];
 }
 
 /**
