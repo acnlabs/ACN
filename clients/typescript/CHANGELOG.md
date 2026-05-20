@@ -73,6 +73,23 @@ Wire / runtime behaviour unchanged. Verified locally:
 
 ### Added (ADR-0003 nested subnets)
 
+- `listChildren(parentSubnetId)` — `GET
+  /api/v1/subnets/{parentSubnetId}/children`; returns the
+  `subnets` array from `{ count, subnets }`. Parity with Python
+  SDK `list_children` and CLI `acn subnet list --parent`.
+- `promoteSubnet(subnetId)` — `POST /api/v1/subnets/{subnetId}/promote`;
+  promotes a `task_scoped` subnet to `persistent` (owner-only,
+  idempotent). Parity with Python SDK `promote_subnet` and CLI
+  `acn subnet promote`.
+- `SubnetInfo` extended with optional ADR-0003 / harness fields
+  (`subnet_id`, `parent_subnet_id`, `lifecycle`, `linked_task_id`,
+  …) plus an index signature so future server fields do not
+  break callers — matches the Python SDK's forward-compat posture.
+- New `SubnetChildrenListResponse` type for the children-list
+  envelope.
+- 2 vitest cases in `src/admission.test.ts` pinning verb + path
+  for `listChildren` and `promoteSubnet`.
+
 - `SubnetCreateRequest` now exposes the three ADR-0003 nesting
   fields, bringing the TypeScript SDK to parity with the Python
   SDK (which has carried these since the original ADR-0003 work):

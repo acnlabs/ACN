@@ -55,6 +55,7 @@ import type {
   AgentSubnetInvitationsResponse,
   SubnetAllowlistEntry,
   SubnetAllowlistListResponse,
+  SubnetChildrenListResponse,
   SubnetCreateRequest,
   SubnetCreateResponse,
   SubnetInfo,
@@ -343,6 +344,31 @@ export class ACNClient {
   /** Get subnet by ID */
   async getSubnet(subnetId: string): Promise<SubnetInfo> {
     return this.get(`/api/v1/subnets/${subnetId}`);
+  }
+
+  /**
+   * List immediate children of a subnet (ADR-0003).
+   *
+   * Wraps `GET /api/v1/subnets/{parentSubnetId}/children`. Returns
+   * `SUBNET_NOT_FOUND` when the parent does not exist. Visibility
+   * matches `listSubnets` — private children you cannot see are
+   * omitted from the result set.
+   */
+  async listChildren(parentSubnetId: string): Promise<SubnetInfo[]> {
+    const data = await this.get<SubnetChildrenListResponse>(
+      `/api/v1/subnets/${parentSubnetId}/children`,
+    );
+    return data.subnets;
+  }
+
+  /**
+   * Promote a `task_scoped` subnet to `persistent` (ADR-0003).
+   *
+   * Owner-only. Idempotent — promoting an already-persistent subnet
+   * returns its current state unchanged.
+   */
+  async promoteSubnet(subnetId: string): Promise<SubnetInfo> {
+    return this.post(`/api/v1/subnets/${subnetId}/promote`);
   }
 
   /** Delete a subnet you own (requires Agent API Key — only the owning agent can delete) */

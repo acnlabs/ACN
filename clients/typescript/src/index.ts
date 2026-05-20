@@ -47,6 +47,7 @@ export type {
   
   // Subnet Types
   SubnetInfo,
+  SubnetChildrenListResponse,
   SubnetCreateRequest,
   SubnetCreateResponse,
   SubnetLifecycle,
