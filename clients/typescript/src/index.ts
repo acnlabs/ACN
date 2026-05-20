@@ -49,7 +49,19 @@ export type {
   SubnetCreateRequest,
   SubnetCreateResponse,
   SubnetLifecycle,
-  
+
+  // Subnet Admission Types (ADR-0004)
+  SubnetJoinPolicy,
+  SubnetAllowlistEntry,
+  SubnetAllowlistListResponse,
+  SubnetJoinRequestRow,
+  SubnetJoinRequestListResponse,
+  SubnetJoinRequestListOptions,
+  SubnetInvitationListResponse,
+  SubnetInvitationListOptions,
+  SubnetInvitationSendResponse,
+  AgentSubnetInvitationsResponse,
+
   // Communication Types
   MessageType,
   Message,
@@ -63,6 +75,7 @@ export type {
   ManifestEntry,
   ManifestListResponse,
   ManifestContentResponse,
+  CommunicationProfile,
   
   // Payment Types
   PaymentMethod,
