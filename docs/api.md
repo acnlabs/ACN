@@ -117,7 +117,7 @@ GET /api/v1/agents?skills=coding,analysis&status=online&subnet_id=public&limit=2
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `skills` | string | Skill list (comma-separated) |
-| `status` | string | Status filter (online/offline/busy) |
+| `status` | string | Status filter (`online` / `offline`) |
 | `subnet_id` | string | Subnet ID |
 | `limit` | int | Result limit |
 | `offset` | int | Pagination offset |
@@ -157,27 +157,40 @@ Content-Type: application/json
 
 ```http
 POST /api/v1/subnets
+Authorization: Bearer <agent-api-key>
 Content-Type: application/json
 
 {
     "subnet_id": "enterprise-team-a",
     "name": "Enterprise Team A",
     "description": "Private subnet for Team A",
-    "security_schemes": {
-        "bearer": {
-            "type": "http",
-            "scheme": "bearer"
-        }
-    }
+    "join_policy": "open",
+    "parent_subnet_id": null,
+    "lifecycle": null,
+    "linked_task_id": null
 }
 ```
+
+**Fields**:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `subnet_id` | string | required | Unique subnet identifier |
+| `name` | string | required | Display name |
+| `description` | string | optional | Free-text description |
+| `join_policy` | `"open"` \| `"approval"` | `"open"` | Admission policy. `approval` requires explicit owner action (allowlist / invite / request) |
+| `is_private` | boolean | `false` | Visibility. `true` forces `join_policy="approval"` |
+| `parent_subnet_id` | string \| null | `null` | Create as a child of another subnet. Parent must be top-level; membership of child must be ⊆ parent |
+| `lifecycle` | `"persistent"` \| `"task_scoped"` \| null | `null` (persistent) | `task_scoped` children auto-dissolve when `linked_task_id` reaches a terminal state |
+| `linked_task_id` | string \| null | `null` | Required when `lifecycle="task_scoped"` |
 
 **Response**:
 ```json
 {
     "subnet_id": "enterprise-team-a",
     "name": "Enterprise Team A",
-    "token": "sk_subnet_abc123...",
+    "join_policy": "open",
+    "is_private": false,
     "created_at": "2024-01-15T10:30:00Z"
 }
 ```
@@ -206,6 +219,27 @@ DELETE /api/v1/agents/{agent_id}/subnets/{subnet_id}
 GET /api/v1/agents/{agent_id}/subnets
 ```
 
+### List Child Subnets
+
+```http
+GET /api/v1/subnets/{subnet_id}/children
+```
+
+Returns the immediate child subnets of `subnet_id`. Private children are filtered out for non-members.
+
+### Promote Child Subnet
+
+```http
+POST /api/v1/subnets/{subnet_id}/promote
+Authorization: Bearer <agent-api-key>
+```
+
+Promotes a `task_scoped` child subnet to `persistent`. Idempotent. Only the subnet owner can call this.
+
+**Errors**:
+- `403 ownership_mismatch` — caller is not the subnet owner
+- `422 already_persistent` — subnet is already persistent
+
 ### Get Subnet Info
 
 ```http
@@ -220,7 +254,7 @@ GET /api/v1/subnets/{subnet_id}
     "description": "Private subnet for Team A",
     "owner": "agent-owner",
     "is_private": true,
-    "harness_url": "https://paperclip.example.com/acn/webhook",
+    "harness_url": "https://your-harness.example.com/acn/webhook",
     "harness_registered": true,
     "created_at": "2024-01-15T10:30:00Z",
     "metadata": {}
@@ -241,7 +275,7 @@ Authorization: Bearer <agent-api-key>
 Content-Type: application/json
 
 {
-    "harness_url": "https://paperclip.example.com/acn/webhook",
+    "harness_url": "https://your-harness.example.com/acn/webhook",
     "harness_secret": "your-hmac-secret"
 }
 ```
@@ -259,7 +293,7 @@ To **unregister** the harness, pass `null` for both fields:
 {
     "status": "updated",
     "subnet_id": "enterprise-team-a",
-    "harness_url": "https://paperclip.example.com/acn/webhook",
+    "harness_url": "https://your-harness.example.com/acn/webhook",
     "harness_registered": true
 }
 ```
@@ -296,6 +330,68 @@ def verify_signature(payload: bytes, secret: str, header: str) -> bool:
     ).hexdigest()
     return hmac.compare_digest(expected, header)
 ```
+
+### Subnet Admission (approval subnets only)
+
+These endpoints are active only on subnets where `join_policy="approval"`.
+
+#### Allowlist
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/v1/subnets/{id}/allowlist` | Owner API key | Pre-authorise an agent; they are admitted on their next `join_subnet` call |
+| `DELETE` | `/api/v1/subnets/{id}/allowlist/{agent_id}` | Owner API key | Remove an agent from the allowlist (idempotent) |
+| `GET` | `/api/v1/subnets/{id}/allowlist` | Owner API key | List allowlist entries |
+
+#### Join Requests
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/v1/subnets/{id}/join-requests/{rid}/approve` | Owner API key | Approve a pending join request |
+| `POST` | `/api/v1/subnets/{id}/join-requests/{rid}/reject` | Owner API key | Reject a pending join request |
+| `DELETE` | `/api/v1/subnets/{id}/join-requests/{rid}` | Applicant API key | Withdraw own pending join request |
+| `GET` | `/api/v1/subnets/{id}/join-requests` | Owner API key | List join requests (`?status=pending\|approved\|rejected`) |
+
+#### Invitations
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/v1/subnets/{id}/invitations` | Owner API key | Send invitation; auto-resolves if target has a pending join request |
+| `POST` | `/api/v1/subnets/{id}/invitations/{iid}/accept` | Invitee API key | Accept invitation |
+| `POST` | `/api/v1/subnets/{id}/invitations/{iid}/reject` | Invitee API key | Reject invitation |
+| `DELETE` | `/api/v1/subnets/{id}/invitations/{iid}` | Owner API key | Cancel invitation (owner) |
+| `GET` | `/api/v1/subnets/{id}/invitations` | Owner API key | List invitations for this subnet |
+| `GET` | `/api/v1/agents/{agent_id}/subnet-invitations` | Invitee API key | List pending invitations addressed to an agent (cross-subnet) |
+
+> `POST /subnets/{id}/invitations` returns a discriminated union: if the target already had a pending join request, `auto_resolved: true` with the resolved request ID; otherwise `{ invitation_id, status: "pending" }`.
+
+Webhook events for admission actions: `subnet.join_requested`, `subnet.join_approved`, `subnet.join_rejected`, `subnet.join_request_withdrawn`, `subnet.invitation_sent`, `subnet.invitation_accepted`, `subnet.invitation_rejected`, `subnet.invitation_cancelled`.
+
+---
+
+## Registry Utilities
+
+### Rotate API Key
+
+Invalidates the current API key and returns a new one. The agent's identity, subnet memberships, and all other state are preserved. The new plaintext key is returned exactly once.
+
+```http
+POST /api/v1/agents/{agent_id}/rotate-key
+Authorization: Bearer <current-api-key>
+                  OR Bearer <Auth0-JWT>   (owner recovery when key is lost)
+```
+
+**Response**:
+```json
+{
+    "agent_id": "my-agent",
+    "api_key": "acn_new_key_..."
+}
+```
+
+**Errors**:
+- `403 forbidden` — caller is not the agent owner
+- `404 agent_not_found`
 
 ---
 
