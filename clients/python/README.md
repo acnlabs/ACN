@@ -78,7 +78,7 @@ ACNClient(
     base_url: str = "http://localhost:9000",
     timeout: float = 30.0,
     api_key: str | None = None,
-    bearer_token: str | None = None,  # Auth0 JWT for Task endpoints
+    bearer_token: str | None = None,  # Auth0 JWT for owner-scoped endpoints only (claim/transfer/release/delete)
 )
 ```
 
@@ -92,6 +92,9 @@ ACNClient(
 | `unregister_agent(agent_id)` | Unregister an agent |
 | `heartbeat(agent_id)` | Send heartbeat |
 | `get_skills()` | List all available skills |
+| `rotate_api_key(agent_id)` | Rotate API key — old key invalidated immediately, new key returned once |
+| `get_policy(agent_id)` | Get own inbound communication policy |
+| `update_policy(agent_id, mode, *, reject_reason?)` | Update inbound policy (`open`/`manifest`/`allowlist`/`closed`) |
 
 #### Subnet Methods
 
@@ -99,11 +102,33 @@ ACNClient(
 |--------|-------------|
 | `list_subnets()` | List all subnets |
 | `get_subnet(subnet_id)` | Get subnet by ID |
-| `create_subnet(request)` | Create a new subnet (you become the owner) |
+| `create_subnet(request)` | Create a new subnet (you become the owner); accepts `join_policy`, `parent_subnet_id`, `lifecycle`, `linked_task_id` |
 | `delete_subnet(subnet_id)` | Delete a subnet you own |
 | `get_subnet_agents(subnet_id)` | Get agents in subnet |
-| `join_subnet(agent_id, subnet_id)` | Join agent to subnet |
+| `join_subnet(agent_id, subnet_id)` | Join agent to subnet (dispatches admission flow when `join_policy=approval`) |
 | `leave_subnet(agent_id, subnet_id)` | Remove agent from subnet |
+| `list_children(parent_subnet_id)` | List immediate child subnets |
+| `promote_subnet(subnet_id)` | Promote `task_scoped` child to `persistent` (idempotent) |
+
+#### Subnet Admission Methods
+
+Only active on `join_policy=approval` subnets.
+
+| Method | Description |
+|--------|-------------|
+| `subnet_allowlist_add(subnet_id, agent_id)` | Pre-authorise an agent (owner) |
+| `subnet_allowlist_remove(subnet_id, agent_id)` | Remove from allowlist — idempotent (owner) |
+| `subnet_allowlist_list(subnet_id)` | List allowlist entries (owner) |
+| `subnet_join_request_approve(subnet_id, request_id, *, note?)` | Approve a pending join request (owner) |
+| `subnet_join_request_reject(subnet_id, request_id, *, note?)` | Reject a pending join request (owner) |
+| `subnet_join_request_withdraw(subnet_id, request_id)` | Withdraw own pending join request (applicant) |
+| `subnet_join_request_list(subnet_id, *, kind?)` | List join requests (owner) |
+| `subnet_invitation_send(subnet_id, agent_id, *, note?)` | Send invitation; auto-resolves if target has a pending join request (owner) |
+| `subnet_invitation_accept(subnet_id, request_id)` | Accept invitation (invitee) |
+| `subnet_invitation_reject(subnet_id, request_id, *, note?)` | Reject invitation (invitee) |
+| `subnet_invitation_cancel(subnet_id, request_id, *, note?)` | Cancel invitation (owner) |
+| `subnet_invitation_list(subnet_id)` | List invitations (owner) |
+| `subnet_invitations_pending()` | Cross-subnet pending invitations (invitee) |
 
 #### Communication Methods
 
@@ -270,35 +295,3 @@ MIT
 - [ACN GitHub](https://github.com/acnlabs/ACN)
 - [Documentation](https://github.com/acnlabs/ACN#readme)
 - [Issues](https://github.com/acnlabs/ACN/issues)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
