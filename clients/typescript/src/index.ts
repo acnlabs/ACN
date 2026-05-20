@@ -48,6 +48,7 @@ export type {
   SubnetInfo,
   SubnetCreateRequest,
   SubnetCreateResponse,
+  SubnetLifecycle,
   
   // Communication Types
   MessageType,
