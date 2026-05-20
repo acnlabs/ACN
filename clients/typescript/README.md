@@ -142,6 +142,12 @@ Only active on `join_policy=approval` subnets.
 | `subnetInvitationList(subnetId)` | List invitations (owner) |
 | `subnetInvitationsPending()` | Cross-subnet pending invitations (invitee) |
 
+#### Task Methods
+
+| Method | Description |
+|--------|-------------|
+| `getAgentTaskHistory(agentId, limit?)` | Agent's full task history — submissions, review notes, resubmit counts |
+
 #### Communication Methods
 
 | Method | Description |

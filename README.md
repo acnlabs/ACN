@@ -161,7 +161,7 @@ ACN provides official client SDKs for TypeScript/JavaScript and Python.
 ### TypeScript/JavaScript
 
 ```bash
-npm install @acn/client
+npm install acn-client
 ```
 
 ```typescript
@@ -180,7 +180,7 @@ const agent = await client.getAgent('my-agent');
 const { skills } = await client.getSkills();
 
 // Discover payment-capable agents
-const paymentAgents = await client.discoverPaymentAgents({ method: 'USDC' });
+const paymentAgents = await client.discoverPaymentAgents({ method: 'usdc' });
 
 // WebSocket real-time subscription
 const realtime = new ACNRealtime('ws://localhost:8000');
