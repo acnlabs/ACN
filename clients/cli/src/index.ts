@@ -1,4 +1,6 @@
 import { Command } from 'commander';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { version } = require('../package.json') as { version: string };
 import { setJsonMode } from './output.js';
 import { configCommand } from './commands/config.js';
 import { joinCommand } from './commands/join.js';
@@ -20,7 +22,7 @@ const program = new Command();
 program
   .name('acn')
   .description('ACN CLI — Agent Collaboration Network command-line interface')
-  .version('0.1.0')
+  .version(version)
   .option('--json', 'Output raw JSON (useful for agent parsing)')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.opts() as { json?: boolean };
