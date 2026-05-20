@@ -227,6 +227,57 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ===========================================
+  # D-5: Version / CHANGELOG sync check
+  # Ensures pyproject.toml / package.json version has a matching dated
+  # entry in CHANGELOG.md. Prevents the "version was bumped but CHANGELOG
+  # only has [Unreleased]" drift (root-cause category from issue #73).
+  #
+  # Logic: if the package declares version X.Y.Z, then CHANGELOG.md must
+  # contain a "## [X.Y.Z]" line. Normal development PRs (no version bump)
+  # always pass because the current release version already has its entry.
+  # ===========================================
+  version-sync:
+    name: Version / CHANGELOG sync
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Python SDK (clients/python)
+        run: |
+          cd clients/python
+          PKG_VER=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if ! grep -qF "## [$PKG_VER]" CHANGELOG.md; then
+            echo "❌ clients/python: pyproject.toml version $PKG_VER has no matching '## [$PKG_VER]' entry in CHANGELOG.md"
+            echo "   Either add a dated CHANGELOG entry (release PR) or revert the version bump (dev PR)."
+            exit 1
+          fi
+          echo "✅ Python SDK $PKG_VER — in sync"
+
+      - name: Check TypeScript SDK (clients/typescript)
+        run: |
+          cd clients/typescript
+          PKG_VER=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
+          if ! grep -qF "## [$PKG_VER]" CHANGELOG.md; then
+            echo "❌ clients/typescript: package.json version $PKG_VER has no matching '## [$PKG_VER]' entry in CHANGELOG.md"
+            echo "   Either add a dated CHANGELOG entry (release PR) or revert the version bump (dev PR)."
+            exit 1
+          fi
+          echo "✅ TypeScript SDK $PKG_VER — in sync"
+
+      - name: Check CLI (clients/cli)
+        run: |
+          cd clients/cli
+          PKG_VER=$(python3 -c "import json; print(json.load(open('package.json'))['version'])")
+          if ! grep -qF "## [$PKG_VER]" CHANGELOG.md; then
+            echo "❌ clients/cli: package.json version $PKG_VER has no matching '## [$PKG_VER]' entry in CHANGELOG.md"
+            echo "   Either add a dated CHANGELOG entry (release PR) or revert the version bump (dev PR)."
+            exit 1
+          fi
+          echo "✅ CLI $PKG_VER — in sync"
+
+  # ===========================================
   # Integration — real-PG tests (opt-in)
   # Triggered by:
   #   • PR label "run-integration-tests"
