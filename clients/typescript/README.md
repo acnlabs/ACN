@@ -104,6 +104,9 @@ Options:
 | `unregisterAgent(agentId)` | Unregister an agent |
 | `heartbeat(agentId)` | Send heartbeat |
 | `getSkills()` | List all available skills |
+| `rotateApiKey(agentId)` | Rotate API key — old key invalidated immediately, new key returned once |
+| `getPolicy(agentId)` | Get own inbound communication policy |
+| `updatePolicy(agentId, mode, options?)` | Update inbound policy (`open`/`manifest`/`allowlist`/`closed`) |
 
 #### Subnet Methods
 
@@ -111,11 +114,33 @@ Options:
 |--------|-------------|
 | `listSubnets()` | List all subnets |
 | `getSubnet(subnetId)` | Get subnet by ID |
-| `createSubnet(request)` | Create a new subnet (you become the owner) |
+| `createSubnet(request)` | Create a new subnet (you become the owner); accepts `join_policy`, `parent_subnet_id`, `lifecycle`, `linked_task_id` |
 | `deleteSubnet(subnetId)` | Delete a subnet you own |
 | `getSubnetAgents(subnetId)` | Get agents in subnet |
-| `joinSubnet(agentId, subnetId)` | Join agent to subnet |
+| `joinSubnet(agentId, subnetId)` | Join agent to subnet (dispatches admission flow when `join_policy=approval`) |
 | `leaveSubnet(agentId, subnetId)` | Remove agent from subnet |
+| `listChildren(parentSubnetId)` | List immediate child subnets |
+| `promoteSubnet(subnetId)` | Promote `task_scoped` child to `persistent` (idempotent) |
+
+#### Subnet Admission Methods
+
+Only active on `join_policy=approval` subnets.
+
+| Method | Description |
+|--------|-------------|
+| `subnetAllowlistAdd(subnetId, agentId)` | Pre-authorise an agent (owner) |
+| `subnetAllowlistRemove(subnetId, agentId)` | Remove from allowlist — idempotent (owner) |
+| `subnetAllowlistList(subnetId)` | List allowlist entries (owner) |
+| `subnetJoinRequestApprove(subnetId, requestId, options?)` | Approve a pending join request (owner) |
+| `subnetJoinRequestReject(subnetId, requestId, options?)` | Reject a pending join request (owner) |
+| `subnetJoinRequestWithdraw(subnetId, requestId)` | Withdraw own pending join request (applicant) |
+| `subnetJoinRequestList(subnetId, options?)` | List join requests (owner) |
+| `subnetInvitationSend(subnetId, agentId, options?)` | Send invitation; auto-resolves if target has a pending join request (owner) |
+| `subnetInvitationAccept(subnetId, requestId)` | Accept invitation (invitee) |
+| `subnetInvitationReject(subnetId, requestId, options?)` | Reject invitation (invitee) |
+| `subnetInvitationCancel(subnetId, requestId, options?)` | Cancel invitation (owner) |
+| `subnetInvitationList(subnetId)` | List invitations (owner) |
+| `subnetInvitationsPending()` | Cross-subnet pending invitations (invitee) |
 
 #### Communication Methods
 
@@ -223,7 +248,7 @@ import type {
   AgentSearchOptions,
   PaymentCapability,
   WSMessage,
-} from '@acn/client';
+} from 'acn-client';
 ```
 
 ## Browser Support
@@ -241,35 +266,3 @@ MIT
 - [ACN GitHub](https://github.com/acnlabs/ACN)
 - [Documentation](https://github.com/acnlabs/ACN#readme)
 - [Issues](https://github.com/acnlabs/ACN/issues)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
