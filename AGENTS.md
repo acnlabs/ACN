@@ -236,3 +236,19 @@ python3 scripts/smoke_backend_integration.py
 - **History API auth is strict** — agent API key may only fetch its own history; JWT callers must own the queried agent; internal token is unrestricted
 - **External URLs must be stable custom domains** — `GATEWAY_BASE_URL` and `FRONTEND_BASE_URL` are embedded in agent-card `url` fields, claim links, referral URLs, and every public callback hint. Never set them to PaaS-issued temporary hostnames (`*.up.railway.app`, `*.fly.dev`, `*.vercel.app`) — those rotate when you migrate hosting providers and kill every cached agent card and claim link in flight. Set them to your custom domain (e.g. `https://api.acnlabs.dev`) and put a 301 on the PaaS hostname so direct hits funnel through the canonical host. `GATEWAY_BASE_URL` is the API host; `FRONTEND_BASE_URL` is the Labs frontend host (the one serving `/claim/[id]`) — don't swap them, and don't point either at the marketing site
 - **Probing production must not pollute the `real` agent list** — any end-to-end verification that joins a prod agent must (a) use `POST /agents/join/internal` with `X-Internal-Token` so the server stamps `metadata.visibility="test"` and the row is filtered out of public listings, (b) name the agent with the `probe-` prefix so `scripts/cleanup_test_agents.py` can sweep it as a safety net, and (c) self-clean before exiting (`DELETE /agents/{id}` with `X-Internal-Token`). The public `POST /agents/join` defaults to `visibility=real` for back-compat — using it from a script ships your probe into `/agents` and onto `agentplanet.org/world`
+
+---
+
+## Public SDK Discipline
+
+`acn-client` (Python + TypeScript) is a **public SDK** published to PyPI and npm, intended for external developers integrating ACN. The following rules are **mandatory** for any change touching `clients/`. Full rationale and deprecation protocol: see `docs/adr/0005-sdk-governance.md`.
+
+1. **No server-side state-machine enums in the SDK.** Any field whose valid values are defined by server protocol (e.g. payment task statuses, task states) must be typed as `str` in Python and `string` in TypeScript, with a companion `KNOWN_*` constant tuple/array for known values. Pinning an enum forces an SDK release every time the server adds a state and will eventually cause a hard `ImportError` in downstream consumers (see [#73](https://github.com/acnlabs/ACN/issues/73)).
+
+2. **Deprecation before removal.** Removing or renaming any public symbol (function, class, field, type alias) requires one prior minor version with a `DeprecationWarning` (Python) or `@deprecated` JSDoc (TypeScript). Hard removal in the same release as the deprecation announcement is prohibited. After 1.0.0, breaking changes may only appear in a new major version.
+
+3. **Three-place version sync in one commit.** Every release commit must update `pyproject.toml` (or `package.json`), the in-package `__version__` / exported `VERSION` constant, and `CHANGELOG.md` atomically. CI will reject PRs where these three are out of sync. (`__version__` in the Python SDK is already sourced from `importlib.metadata` to eliminate drift — keep it that way.)
+
+4. **Maintain a compat matrix.** The top-level `README.md` carries a "Server ↔ SDK compatibility" table. Update it on every release. The matrix must cover at minimum the current release and the immediately prior minor of each client.
+
+5. **Breaking change PRs must list downstream impact.** The PR description for any change that removes or renames a public symbol must include output from the `consumer-compat` CI job (see `.github/workflows/ci.yml`) confirming which first-party consumers are affected and that they have been updated or notified.
