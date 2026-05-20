@@ -4,6 +4,12 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-20
+
+> Coordinated release with ACN server `0.11.0`, `@acnlabs/acn-cli` `0.11.0`,
+> and `acn-client` (TypeScript) `0.13.0`. See repository root `CHANGELOG.md`
+> for the full cross-package summary.
+
 ### Changed — Pydantic v2 idiomatic config (no behavioural change)
 
 - Migrate the three remaining `class Config: populate_by_name =
