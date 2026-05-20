@@ -52,9 +52,18 @@ import type {
   SendMessageResponse,
   SessionEntry,
   SessionInviteRequest,
+  AgentSubnetInvitationsResponse,
+  SubnetAllowlistEntry,
+  SubnetAllowlistListResponse,
   SubnetCreateRequest,
   SubnetCreateResponse,
   SubnetInfo,
+  SubnetInvitationListOptions,
+  SubnetInvitationListResponse,
+  SubnetInvitationSendResponse,
+  SubnetJoinRequestListOptions,
+  SubnetJoinRequestListResponse,
+  SubnetJoinRequestRow,
   SystemHealth,
 } from './types';
 
@@ -372,6 +381,269 @@ export class ACNClient {
   /** Get agent's subnets */
   async getAgentSubnets(agentId: string): Promise<{ subnets: string[] }> {
     return this.get(`/api/v1/agents/${agentId}/subnets`);
+  }
+
+  // ============================================
+  // ADR-0004 Subnet Admission
+  // ============================================
+  //
+  // 13 verbs gated by `subnet.join_policy === 'approval'`:
+  //   - Allowlist (3): owner pre-authorisation.
+  //   - Join requests (4): applicant-initiated path.
+  //   - Invitations (5): owner-initiated path.
+  //   - Agent-side (1): invitee's cross-subnet pending view.
+  //
+  // The plain `joinSubnet` verb dispatches the six-branch decision
+  // tree on the server side — these methods are the admin-side
+  // controls used by subnet owners and the per-row decisions used
+  // by applicants and invitees.
+  //
+  // Method names use the `subnet*` prefix to avoid colliding with
+  // the existing inbox `addToAllowlist` surface (which lives at
+  // `/api/v1/agents/{a}/allowlist/{target}` and is unrelated).
+
+  // ----- Allowlist (owner-only, 3 verbs) ---------------------------------
+
+  /**
+   * Pre-authorise `agentId` on `subnetId`'s allowlist (owner only).
+   *
+   * Allowlisted agents skip the approval queue: their next
+   * `joinSubnet` lands in branch 4 (allowlist hit) and becomes an
+   * immediate member with an `allowlist_auto` audit row.
+   *
+   * Server returns 201 with the persisted entry; duplicate adds
+   * return 409 ALREADY_ON_ALLOWLIST (raised as an error, never
+   * silently no-op'd).
+   */
+  async subnetAllowlistAdd(
+    subnetId: string,
+    agentId: string,
+  ): Promise<SubnetAllowlistEntry> {
+    return this.post(`/api/v1/subnets/${subnetId}/allowlist`, {
+      agent_id: agentId,
+    });
+  }
+
+  /**
+   * Remove `agentId` from `subnetId`'s allowlist (owner only).
+   *
+   * Idempotent — removing an entry that doesn't exist still
+   * returns 204. Per ADR-0004 §"Allowlist mutation does not
+   * affect agents who already joined", this does NOT revoke
+   * membership for agents already admitted via the allowlist.
+   */
+  async subnetAllowlistRemove(
+    subnetId: string,
+    agentId: string,
+  ): Promise<void> {
+    await this.delete(`/api/v1/subnets/${subnetId}/allowlist/${agentId}`);
+  }
+
+  /**
+   * List `subnetId`'s allowlist entries (owner only).
+   *
+   * Owner-only by design — the allowlist is a privacy-sensitive
+   * trust signal and exposing it publicly would leak relationship
+   * metadata.
+   */
+  async subnetAllowlistList(
+    subnetId: string,
+    options?: { limit?: number; offset?: number },
+  ): Promise<SubnetAllowlistListResponse> {
+    const params: Record<string, number> = {
+      limit: options?.limit ?? 100,
+      offset: options?.offset ?? 0,
+    };
+    return this.get(`/api/v1/subnets/${subnetId}/allowlist`, params);
+  }
+
+  // ----- Join requests (4 verbs: 3 owner-side + 1 applicant-side) --------
+
+  /**
+   * Owner approves a pending join_request (CAS pending → approved).
+   *
+   * Side effects: applicant added to `subnet.member_agent_ids` and
+   * the `subnet.join_approved` webhook fires. The applicant is
+   * still expected to call `joinSubnet` to register the
+   * `agent.subnet_ids` back-reference (per ADR-0004 §"State
+   * machine edges").
+   *
+   * Optional `note` (≤500 chars) is recorded on the audit row.
+   */
+  async subnetJoinRequestApprove(
+    subnetId: string,
+    requestId: string,
+    options?: { note?: string },
+  ): Promise<SubnetJoinRequestRow> {
+    return this.post(
+      `/api/v1/subnets/${subnetId}/join-requests/${requestId}/approve`,
+      options?.note !== undefined ? { note: options.note } : undefined,
+    );
+  }
+
+  /**
+   * Owner rejects a pending join_request (CAS pending → rejected).
+   *
+   * No membership change. `subnet.join_rejected` webhook fires.
+   */
+  async subnetJoinRequestReject(
+    subnetId: string,
+    requestId: string,
+    options?: { note?: string },
+  ): Promise<SubnetJoinRequestRow> {
+    return this.post(
+      `/api/v1/subnets/${subnetId}/join-requests/${requestId}/reject`,
+      options?.note !== undefined ? { note: options.note } : undefined,
+    );
+  }
+
+  /**
+   * Applicant withdraws their own pending join_request.
+   *
+   * Self-only — caller must be the agent who originally created
+   * the request. `subnet.join_withdrawn` webhook fires.
+   */
+  async subnetJoinRequestWithdraw(
+    subnetId: string,
+    requestId: string,
+    options?: { note?: string },
+  ): Promise<SubnetJoinRequestRow> {
+    return this.request(
+      'DELETE',
+      `/api/v1/subnets/${subnetId}/join-requests/${requestId}`,
+      options?.note !== undefined ? { body: { note: options.note } } : undefined,
+    );
+  }
+
+  /**
+   * Owner lists join_request / allowlist_auto rows for `subnetId`.
+   *
+   * `kind` defaults to `'join_request'`; pass `'allowlist_auto'`
+   * to inspect synthesised allowlist-hit audit rows. Server
+   * rejects `kind='invitation'` with 400 INVALID_KIND_FILTER —
+   * use `subnetInvitationList` instead.
+   */
+  async subnetJoinRequestList(
+    subnetId: string,
+    options?: SubnetJoinRequestListOptions,
+  ): Promise<SubnetJoinRequestListResponse> {
+    const params: Record<string, string | number> = {
+      kind: options?.kind ?? 'join_request',
+      limit: options?.limit ?? 100,
+      offset: options?.offset ?? 0,
+    };
+    if (options?.status !== undefined) params.status = options.status;
+    return this.get(`/api/v1/subnets/${subnetId}/join-requests`, params);
+  }
+
+  // ----- Invitations (5 + 1 verbs) ---------------------------------------
+
+  /**
+   * Owner sends an invitation to `agentId` (or merges into a
+   * pending join_request from the same target).
+   *
+   * Two response shapes per ADR-0004 §"Invitation merge path":
+   *
+   *   - **Normal path** (server returns 202): `{ invitation_id, status: 'pending' }`.
+   *   - **Merge path**  (server returns 200, request auto-approved):
+   *     `{ auto_resolved: true, resolved_kind: 'join_request', request_id }`.
+   *
+   * Discriminate on `auto_resolved` to dispatch.
+   */
+  async subnetInvitationSend(
+    subnetId: string,
+    agentId: string,
+    options?: { note?: string },
+  ): Promise<SubnetInvitationSendResponse> {
+    const body: Record<string, string> = { agent_id: agentId };
+    if (options?.note !== undefined) body.note = options.note;
+    return this.post(`/api/v1/subnets/${subnetId}/invitations`, body);
+  }
+
+  /**
+   * Invitee accepts a pending invitation (CAS pending → approved).
+   *
+   * Self-only against the row's `agent_id`. Side effects: invitee
+   * added to `subnet.member_agent_ids`, the agent's `subnet_ids`
+   * gains the back-reference, and `subnet.invitation_accepted`
+   * webhook fires.
+   */
+  async subnetInvitationAccept(
+    subnetId: string,
+    requestId: string,
+    options?: { note?: string },
+  ): Promise<SubnetJoinRequestRow> {
+    return this.post(
+      `/api/v1/subnets/${subnetId}/invitations/${requestId}/accept`,
+      options?.note !== undefined ? { note: options.note } : undefined,
+    );
+  }
+
+  /**
+   * Invitee rejects a pending invitation (CAS pending → rejected).
+   *
+   * No membership change. `subnet.invitation_rejected` webhook
+   * fires.
+   */
+  async subnetInvitationReject(
+    subnetId: string,
+    requestId: string,
+    options?: { note?: string },
+  ): Promise<SubnetJoinRequestRow> {
+    return this.post(
+      `/api/v1/subnets/${subnetId}/invitations/${requestId}/reject`,
+      options?.note !== undefined ? { note: options.note } : undefined,
+    );
+  }
+
+  /**
+   * Owner cancels a pending invitation (CAS pending → withdrawn).
+   *
+   * Owner-only counterpart to applicant withdraw. The row goes to
+   * `withdrawn` (not `rejected`) — distinct audit token so
+   * consumers can tell "owner gave up" from "invitee said no".
+   */
+  async subnetInvitationCancel(
+    subnetId: string,
+    requestId: string,
+    options?: { note?: string },
+  ): Promise<SubnetJoinRequestRow> {
+    return this.request(
+      'DELETE',
+      `/api/v1/subnets/${subnetId}/invitations/${requestId}`,
+      options?.note !== undefined ? { body: { note: options.note } } : undefined,
+    );
+  }
+
+  /**
+   * Owner lists invitation rows for `subnetId`.
+   *
+   * Owner-only — invitees use `agentSubnetInvitations` for their
+   * own cross-subnet view.
+   */
+  async subnetInvitationList(
+    subnetId: string,
+    options?: SubnetInvitationListOptions,
+  ): Promise<SubnetInvitationListResponse> {
+    const params: Record<string, string | number> = {
+      limit: options?.limit ?? 100,
+      offset: options?.offset ?? 0,
+    };
+    if (options?.status !== undefined) params.status = options.status;
+    return this.get(`/api/v1/subnets/${subnetId}/invitations`, params);
+  }
+
+  /**
+   * Invitee's cross-subnet pending-invitation list (self only).
+   *
+   * Returns only `status='pending'` rows. Historical decisions
+   * are queryable per-subnet through the owner-only
+   * `subnetInvitationList`.
+   */
+  async agentSubnetInvitations(
+    agentId: string,
+  ): Promise<AgentSubnetInvitationsResponse> {
+    return this.get(`/api/v1/agents/${agentId}/subnet-invitations`);
   }
 
   // ============================================
