@@ -4,6 +4,30 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+### Fixed — re-export gap on session / manifest / search types
+
+- `index.ts` now also re-exports the seven public types in this
+  group that had been quietly missing for longer than the recent
+  feature work — same fix shape as the previous PR (PR-H), just
+  for older surfaces:
+  - `AgentSearchStatus` — the `'online' | 'offline' | 'all'`
+    literal used by `AgentSearchOptions.status`.
+  - `ManifestMessageType` / `ManifestSendRequest` — the input
+    type for `manifestSend` and the literal used by
+    `manifestList({ messageType })`.
+  - `SessionStatus` / `SessionEntry` / `SessionInviteRequest` /
+    `PendingSessionsResponse` — return / argument types for
+    `inviteSession`, `acceptSession`, `rejectSession`,
+    `closeSession`, and `listPendingSessions`.
+- All seven types were already public (used in `client.ts`
+  method signatures), so callers reaching them through the
+  inferred return type kept working — but there was no clean
+  way to spell e.g. `function handle(s: SessionEntry)` without
+  the deep import workaround. This closes that gap.
+
+Wire / runtime behaviour unchanged. Verified locally:
+`npx tsc --noEmit` clean, all 27 vitest cases still pass.
+
 ### Fixed — re-export gap on public types
 
 - `index.ts` now re-exports the ten ADR-0004 admission types

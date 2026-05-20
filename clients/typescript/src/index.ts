@@ -36,6 +36,7 @@ export type {
   
   // Agent Types
   AgentStatus,
+  AgentSearchStatus,
   AgentInfo,
   AgentJoinRequest,
   AgentJoinResponse,
@@ -75,8 +76,16 @@ export type {
   ManifestEntry,
   ManifestListResponse,
   ManifestContentResponse,
+  ManifestMessageType,
+  ManifestSendRequest,
   CommunicationProfile,
-  
+
+  // Session Types
+  SessionStatus,
+  SessionEntry,
+  SessionInviteRequest,
+  PendingSessionsResponse,
+
   // Payment Types
   PaymentMethod,
   PaymentNetwork,
