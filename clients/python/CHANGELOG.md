@@ -89,22 +89,15 @@ All notable changes to `acn-client` are documented here.
   the wire shape (verb + path + body/params) for every method,
   plus the `SubnetCreateRequest.join_policy` round-trip.
 
-### Deprecated (alive-as-SSOT follow-up)
+### Removed (alive-as-SSOT follow-up)
 
-- **`AgentStatus.BUSY` is deprecated and will be removed in 0.11.**
-  The ACN server stopped emitting `"busy"` as an agent status during
-  the 2026-05 alive-as-single-source-of-truth refactor (see ACN
-  `docs/agent-registry-removal.md`). Agent liveness is now derived
-  from a Redis TTL key, which is inherently binary
-  (`AgentStatus.ONLINE` / `AgentStatus.OFFLINE`). Accessing
-  `AgentStatus.BUSY` now emits a `DeprecationWarning`. The member
-  itself is kept until 0.11 so importing code does not crash with
-  `AttributeError` before users have a chance to migrate.
+- **`AgentStatus.BUSY` removed** (was deprecated since the previous
+  unreleased cycle). The ACN server stopped emitting `"busy"` during
+  the 2026-05 alive-as-SSOT refactor — liveness is a binary Redis
+  TTL key (`ONLINE` / `OFFLINE`). The deprecation warning shim and
+  the `_AgentStatusMeta` metaclass are gone.
 
-  Migration: replace any `== AgentStatus.BUSY` check with
-  `== AgentStatus.OFFLINE` — the server's collapse of "busy" into
-  "offline" already happened on the wire, so an agent that would
-  historically have been "busy" reaches the SDK as "offline".
+  **Migration:** replace `AgentStatus.BUSY` with `AgentStatus.OFFLINE`.
 
 ### Changed
 - `__version__` is now read at import time from installed package metadata
