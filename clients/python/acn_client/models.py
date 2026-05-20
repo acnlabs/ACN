@@ -4,9 +4,8 @@ ACN Client Models
 Type definitions synced with ACN API models.
 """
 
-import warnings
 from datetime import datetime
-from enum import EnumType, StrEnum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -16,45 +15,18 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 # ============================================
 
 
-class _AgentStatusMeta(EnumType):
-    """Metaclass that emits a ``DeprecationWarning`` on access to
-    ``AgentStatus.BUSY``.
-
-    Background: the ACN server stopped emitting ``"busy"`` as an agent
-    status during the 2026-05 alive-as-single-source-of-truth refactor
-    (see ACN ``docs/agent-registry-removal.md``). Liveness is now
-    derived from a Redis TTL key, which is inherently binary
-    (``"online"`` / ``"offline"``). The ``BUSY`` member is unreachable
-    code — kept here only to avoid an ``AttributeError`` for any
-    downstream user still importing the symbol, with a runtime warning
-    so the surface can be cleanly removed in 0.11.
-    """
-
-    def __getattribute__(cls, name: str):  # noqa: N805 — metaclass convention
-        if name == "BUSY":
-            warnings.warn(
-                "AgentStatus.BUSY is deprecated and will be removed in "
-                "acn-client 0.11. The ACN server has not emitted 'busy' "
-                "since the 2026-05 alive-as-SSOT refactor (liveness is "
-                "now a binary Redis TTL key). Use AgentStatus.ONLINE or "
-                "AgentStatus.OFFLINE.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        return super().__getattribute__(name)
-
-
-class AgentStatus(StrEnum, metaclass=_AgentStatusMeta):
+class AgentStatus(StrEnum):
     """Agent status.
 
-    The server emits exactly ``ONLINE`` or ``OFFLINE``. ``BUSY`` is
-    retained for backward compatibility but is **deprecated** — see
-    the metaclass docstring above for the removal timeline.
+    The server emits exactly ``ONLINE`` or ``OFFLINE``. ``BUSY`` was
+    removed in 0.11 — the ACN server stopped emitting ``"busy"`` during
+    the 2026-05 alive-as-SSOT refactor (liveness is a binary Redis TTL
+    key). Replace any ``AgentStatus.BUSY`` checks with
+    ``AgentStatus.OFFLINE``.
     """
 
     ONLINE = "online"
     OFFLINE = "offline"
-    BUSY = "busy"  # deprecated — see _AgentStatusMeta
 
 
 class MessageType(StrEnum):
