@@ -4,6 +4,26 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+### Added — manifest-mode reachability (mirrors server PR #87)
+
+- `CommunicationProfile.unread_manifest_count: number` — surfaces
+  the pending manifest queue length on the typed interface
+  returned by `getCommunicationProfile`. Senders observing a
+  large or growing value should treat the agent as effectively
+  unreachable in `'manifest'` / `'allowlist'` mode.
+- `CommunicationPolicyResponse.warning?: string` — conditional
+  field that the server emits only when the post-update mode is
+  `'manifest'` or `'allowlist'`. Carries a human-readable
+  reminder that messages from non-trusted senders divert to the
+  manifest queue and require active polling. CLIs / dashboards
+  should surface this verbatim so operators don't silently lock
+  themselves out.
+- `src/communication.test.ts` (new) — 5 vitest cases pinning:
+  unread-count round-trip on `'manifest'` mode and the
+  `0` steady-state on `'open'` mode; `warning` passthrough on
+  both gated modes (`'manifest'` and `'allowlist'`); and
+  `warning` absence on `'open'` mode.
+
 ### Added (ADR-0003 nested subnets)
 
 - `SubnetCreateRequest` now exposes the three ADR-0003 nesting

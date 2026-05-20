@@ -4,6 +4,25 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+### Added — manifest-mode reachability (mirrors server PR #87)
+- `CommunicationProfile.unread_manifest_count: int` — surfaces the
+  pending manifest queue length on the typed model returned by
+  `get_communication_profile`. Defaults to `0` for back-compat with
+  servers older than PR #87 (or test harnesses that ship the legacy
+  three-field payload). Senders observing a large or growing value
+  should treat the agent as effectively unreachable in `manifest` /
+  `allowlist` mode.
+- `update_policy` docstring now documents the conditional `warning`
+  field that the server emits when the post-update mode is
+  `'manifest'` or `'allowlist'`. The SDK keeps the raw-`dict`
+  return contract (consistent with `rotate_api_key` and the 13
+  admission verbs) so callers can surface the warning verbatim in
+  CLIs / dashboards without a SDK-layer schema gate.
+- `tests/test_communication_profile.py` (new) — 4 regression tests
+  pinning the unread-count round-trip, the legacy-payload default,
+  the conditional `warning` passthrough on `manifest` mode, and the
+  warning's absence on `open` mode.
+
 ### Added — H1 (pre-launch security audit)
 - Regression tests for `rotate_api_key` (the SDK method itself shipped
   in 0.10.0 alongside the server-side endpoint, but had no test

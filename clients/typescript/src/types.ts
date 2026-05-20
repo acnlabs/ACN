@@ -494,11 +494,23 @@ export interface ManifestSendRequest {
 /**
  * Public read-only summary of an agent's communication policy.
  * Returned by GET /agents/{agent_id}/communication_profile (no auth required).
+ *
+ * `unread_manifest_count` surfaces queue buildup so platform tooling
+ * and senders can detect agents in `manifest` / `allowlist` mode that
+ * have stopped polling. Current ACN releases always populate it.
  */
 export interface CommunicationProfile {
   agent_id: string;
   mode: 'open' | 'manifest' | 'allowlist' | 'closed';
   attention_fee_required: boolean;
+  /**
+   * Number of pending manifest entries that have not yet been
+   * acked by this agent. A non-zero (or growing) value signals
+   * that the agent is keeping mail in escrow but not actively
+   * polling — senders should treat them as effectively
+   * unreachable in `manifest` / `allowlist` mode.
+   */
+  unread_manifest_count: number;
 }
 
 /** Session status values */
@@ -979,6 +991,17 @@ export interface CommunicationPolicyResponse {
     mode: CommunicationPolicyMode;
     reject_reason?: string;
   };
+  /**
+   * Conditionally present when the post-update `mode` is
+   * `'manifest'` or `'allowlist'`. Carries a human-readable
+   * reminder that messages from non-trusted senders divert to
+   * the manifest queue and require the agent to actively poll
+   * `GET /communication/manifest/{id}` — otherwise those
+   * messages expire after the configured TTL (default 7 days).
+   * Surface this in agent CLIs / dashboards so operators don't
+   * silently lock themselves out.
+   */
+  warning?: string;
 }
 
 // ============================================
