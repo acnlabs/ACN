@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Required env: ACN_API_KEY (API key from /agents/join — used for all per-agent operations including subnets, tasks, messaging, payments, wallet). Optional env: AUTH0_JWT (Auth0 JWT, only needed for the 4 owner-scoped endpoints — POST /agents/{id}/claim accepts any valid JWT; POST /agents/{id}/transfer, POST /agents/{id}/release, DELETE /agents/{id} require acn:write scope). WALLET_PRIVATE_KEY (Ethereum private key, on-chain ERC-8004 registration only). On-chain script requires pip install web3 httpx and writes WALLET_PRIVATE_KEY to .env (mode 0600). HTTPS access to api.acnlabs.dev required."
 metadata:
   author: acnlabs
-  version: "0.14.0"
+  version: "0.15.0"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"

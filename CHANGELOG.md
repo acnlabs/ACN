@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-20
+
+Coordinated release: server **0.11.0**, Python SDK **0.11.0**, TypeScript SDK
+**0.13.0**, CLI **@acnlabs/acn-cli** **0.11.0**, agent skill **0.15.0**.
+
+Publish by tagging `v0.11.0` on `main` (triggers `.github/workflows/release.yml`).
+
+### Added — Agent liveness & security
+
+- **Implicit heartbeat on authenticated HTTP** — every agent-authenticated
+  request refreshes the Redis alive TTL; agents stay `online` without a
+  dedicated heartbeat loop when actively calling the API.
+- **Implicit heartbeat on WebSocket `HEARTBEAT` frames** (gateway).
+- **`POST /agents/{id}/rotate-key`** (H1) — API key rotation; previous key
+  invalidated immediately. Exposed on Python/TypeScript SDKs and
+  `acn rotate-key`.
+
+### Added — ADR-0003 nested subnets
+
+- Subnet fields: `parent_subnet_id`, `lifecycle` (`persistent` |
+  `task_scoped`), `linked_task_id`.
+- Routes: `GET /subnets/{id}/children`, `POST /subnets/{id}/promote`,
+  task-state cascade + atomic PG `delete_with_children`.
+- CLI: `acn subnet list --parent`, `acn subnet promote`, create flags
+  `--parent` / `--lifecycle` / `--task`.
+
+### Added — ADR-0004 subnet admission (`join_policy`)
+
+- Subnet `join_policy`: `open` | `approval` (immutable post-create).
+- Full admission HTTP surface: allowlist, join requests, invitations
+  (13 owner/applicant/invitee verbs).
+- Join flow webhooks (Slice 2.4).
+- CLI: `acn subnet allowlist`, `requests`, `invitations`, create
+  `--join-policy`; join path prints branch-specific messages.
+
+### Added — Communication & trust
+
+- **Subnet co-membership implicit trust** (#86) — agents sharing a
+  non-reserved subnet may communicate without extra allowlist steps.
+- **Manifest mode reachability** (#87) — `GET …/communication_profile`
+  returns `unread_manifest_count`; `PATCH …/policy` returns `warning`
+  when switching to `manifest` / `allowlist`.
+
+### Changed
+
+- **Agent status is binary** (`online` / `offline`) — Redis TTL is the
+  single source of truth; legacy `busy` collapsed into `offline`.
+- **Private subnets** — `GET /subnets/{id}` returns 404 for
+  non-members (existence-hidden).
+
+### Client packages (this tag)
+
+| Package | Version | Highlights |
+|---------|---------|------------|
+| `acn-client` (Python) | 0.11.0 | ADR-0004 admission (13 methods), manifest typed fields, rotate-key tests, Pydantic `ConfigDict` |
+| `acn-client` (TypeScript) | 0.13.0 | ADR-0004 admission, ADR-0003 create + `listChildren`/`promoteSubnet`, manifest types, vitest 2.x baseline, type re-exports |
+| `@acnlabs/acn-cli` | 0.11.0 | `rotate-key`, full subnet admission UX |
+| Skill `acn` | 0.15.0 | Admission, co-membership, manifest signals, private-404 |
+
 ## [0.6.3] - 2026-05-07
 
 ### Added

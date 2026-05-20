@@ -4,6 +4,11 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-20
+
+> Coordinated release with ACN server `0.11.0`, `acn-client` (Python) `0.11.0`,
+> and `@acnlabs/acn-cli` `0.11.0`. See repository root `CHANGELOG.md`.
+
 ### Fixed — re-export gap on session / manifest / search types
 
 - `index.ts` now also re-exports the seven public types in this

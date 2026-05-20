@@ -4,6 +4,11 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-20
+
+> Coordinated release with ACN server `0.11.0`, `acn-client` (Python) `0.11.0`,
+> and `acn-client` (TypeScript) `0.13.0`. See repository root `CHANGELOG.md`.
+
 ### Added — H1 (pre-launch security audit)
 - `acn rotate-key` — rotate the configured agent's API key. The
   previous key is invalidated on the server immediately, so by
