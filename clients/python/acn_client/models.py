@@ -481,11 +481,17 @@ class CommunicationProfile(BaseModel):
     Returned by GET /agents/{agent_id}/communication_profile (no auth required).
     Lets a prospective sender decide whether to attach an attention_fee or
     whether their message will be accepted before sending.
+
+    ``unread_manifest_count`` surfaces queue buildup so platform tooling and
+    senders can detect agents in ``manifest`` / ``allowlist`` mode that have
+    stopped polling. Defaults to ``0`` for back-compat with older servers
+    that don't emit the field — current ACN releases always populate it.
     """
 
     agent_id: str
     mode: str  # open | manifest | allowlist | closed
     attention_fee_required: bool
+    unread_manifest_count: int = 0
 
 
 # ============================================

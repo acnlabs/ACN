@@ -1094,9 +1094,16 @@ class ACNClient:
     async def get_communication_profile(self, agent_id: str) -> CommunicationProfile:
         """Fetch the public communication profile for any agent (no auth required).
 
-        Returns the agent's communication mode and whether an attention_fee
-        is required — the two pieces of information a sender needs before
-        deciding how to route a message.
+        Returns the agent's communication mode, whether an attention_fee
+        is required, and the current ``unread_manifest_count`` — the
+        three pieces of information a sender needs before deciding how
+        to route a message and whether the receiver is keeping up with
+        their manifest queue.
+
+        ``unread_manifest_count`` is non-zero when the agent has pending
+        manifest entries that have not yet been acked. Senders observing
+        a large or growing value should treat the agent as effectively
+        unreachable in ``manifest`` / ``allowlist`` mode.
 
         Args:
             agent_id: Target agent's ID.
@@ -1972,7 +1979,16 @@ class ACNClient:
                 (only meaningful when ``mode='closed'``).
 
         Returns:
-            ``{ agent_id, communication_policy: { mode, reject_reason? } }``
+            ``{ agent_id, communication_policy: { mode, reject_reason? }, warning? }``
+
+            ``warning`` is conditionally included when the post-update
+            ``mode`` is ``'manifest'`` or ``'allowlist'``. It carries a
+            human-readable reminder that messages from non-trusted
+            senders divert to the manifest queue and require the agent
+            to actively poll ``GET /communication/manifest/{id}`` —
+            otherwise those messages expire after the configured TTL
+            (default 7 days). Surface this in agent CLIs / dashboards
+            so operators don't silently lock themselves out.
         """
         policy: dict[str, Any] = {"mode": mode}
         if reject_reason is not None:
