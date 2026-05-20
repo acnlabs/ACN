@@ -141,11 +141,36 @@ export interface SubnetInfo {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Subnet lifecycle (ADR-0003). `'persistent'` is the legacy default —
+ * the subnet survives until manually deleted. `'task_scoped'` binds
+ * the subnet to a task: the server auto-dissolves it when that task
+ * reaches a terminal state. Only valid together with `linked_task_id`.
+ */
+export type SubnetLifecycle = 'persistent' | 'task_scoped';
+
 /** Subnet creation request */
 export interface SubnetCreateRequest {
   name: string;
   description?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * ADR-0003 nested-subnet parent. When set, the new subnet becomes a
+   * child of `parent_subnet_id`. Single-layer cap: the parent itself
+   * must be top-level. Immutable after creation.
+   */
+  parent_subnet_id?: string;
+  /**
+   * ADR-0003 lifecycle. Defaults to `'persistent'` when omitted.
+   * `'task_scoped'` requires `linked_task_id` and the subnet
+   * auto-dissolves when that task terminates.
+   */
+  lifecycle?: SubnetLifecycle;
+  /**
+   * ADR-0003 task binding. Required when `lifecycle === 'task_scoped'`,
+   * ignored otherwise.
+   */
+  linked_task_id?: string;
   /**
    * ADR-0004 admission policy. When omitted the server defaults to
    * `'open'` (legacy unrestricted self-join). `'approval'` opts the

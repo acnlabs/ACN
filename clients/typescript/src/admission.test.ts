@@ -15,6 +15,10 @@
  * - `SubnetCreateRequest.join_policy` round-trips through
  *   `createSubnet` and is omitted when not set (back-compat for
  *   legacy callers).
+ * - `SubnetCreateRequest` ADR-0003 nesting fields
+ *   (`parent_subnet_id`, `lifecycle`, `linked_task_id`)
+ *   round-trip through `createSubnet` and are all omitted when
+ *   not set (back-compat for legacy callers).
  *
  * Implementation strategy: stub `globalThis.fetch` per test and
  * assert on the (url, init) tuple. We avoid mocking the
@@ -88,6 +92,56 @@ describe('SubnetCreateRequest.join_policy', () => {
     const body = readBody(calls[0].init) as Record<string, unknown>;
     expect(body).toStrictEqual({ name: 'Open' });
     expect(body).not.toHaveProperty('join_policy');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SubnetCreateRequest ADR-0003 nesting fields round-trip
+// ---------------------------------------------------------------------------
+
+describe('SubnetCreateRequest ADR-0003 nesting', () => {
+  it('serialises parent_subnet_id for nested subnets', async () => {
+    const { client, calls } = setupFetchStub(201, {
+      success: true,
+      subnet_id: 'child',
+      message: 'ok',
+    });
+    await client.createSubnet({
+      name: 'Child',
+      parent_subnet_id: 'top-level',
+    });
+    const body = readBody(calls[0].init) as Record<string, unknown>;
+    expect(body.parent_subnet_id).toBe('top-level');
+  });
+
+  it('serialises lifecycle + linked_task_id together for task-scoped subnets', async () => {
+    const { client, calls } = setupFetchStub(201, {
+      success: true,
+      subnet_id: 'scoped',
+      message: 'ok',
+    });
+    await client.createSubnet({
+      name: 'Scoped',
+      lifecycle: 'task_scoped',
+      linked_task_id: 'task-42',
+    });
+    const body = readBody(calls[0].init) as Record<string, unknown>;
+    expect(body.lifecycle).toBe('task_scoped');
+    expect(body.linked_task_id).toBe('task-42');
+  });
+
+  it('omits all nesting fields from body when not set (back-compat)', async () => {
+    const { client, calls } = setupFetchStub(201, {
+      success: true,
+      subnet_id: 'flat',
+      message: 'ok',
+    });
+    await client.createSubnet({ name: 'Flat' });
+    const body = readBody(calls[0].init) as Record<string, unknown>;
+    expect(body).toStrictEqual({ name: 'Flat' });
+    expect(body).not.toHaveProperty('parent_subnet_id');
+    expect(body).not.toHaveProperty('lifecycle');
+    expect(body).not.toHaveProperty('linked_task_id');
   });
 });
 

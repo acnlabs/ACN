@@ -4,6 +4,26 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+### Added (ADR-0003 nested subnets)
+
+- `SubnetCreateRequest` now exposes the three ADR-0003 nesting
+  fields, bringing the TypeScript SDK to parity with the Python
+  SDK (which has carried these since the original ADR-0003 work):
+  - `parent_subnet_id?: string` — promote a new subnet to a child
+    of an existing top-level subnet. Single-layer cap; immutable
+    after creation.
+  - `lifecycle?: SubnetLifecycle` (`'persistent' | 'task_scoped'`)
+    — defaults to `'persistent'` when omitted, preserving the
+    legacy "flat top-level persistent subnet" shape.
+  - `linked_task_id?: string` — bind a `'task_scoped'` subnet to
+    a task; the server auto-dissolves the subnet when that task
+    reaches a terminal state.
+- New `SubnetLifecycle` type alias re-exported from `index.ts`.
+- 3 vitest tests in `src/admission.test.ts` pinning round-trip
+  serialisation: `parent_subnet_id`, `lifecycle + linked_task_id`
+  pair, and the back-compat case where all three fields are
+  absent from the wire body when not set by the caller.
+
 ### Added (ADR-0004 subnet admission)
 
 - `SubnetCreateRequest.join_policy?: SubnetJoinPolicy` — opt
