@@ -278,6 +278,117 @@ jobs:
           echo "✅ CLI $PKG_VER — in sync"
 
   # ===========================================
+  # B: Consumer-compat (dogfood smoke test)
+  #
+  # Purpose: catch "public SDK symbol removed but still imported by a
+  # first-party consumer" BEFORE merge — the root-cause class of the
+  # 2026-05-16 backend 502 incident (issue #73).
+  #
+  # Mechanism:
+  #   1. Installs the Python SDK from the local checkout (not PyPI) so the
+  #      test exercises exactly what this PR would ship.
+  #   2. Fetches each known consumer's SDK-wrapper file via the GitHub API
+  #      (read-only access; no need to checkout the full consumer repo).
+  #   3. Parses the `from acn_client import ...` statements with the AST
+  #      module and verifies every named symbol resolves.
+  #
+  # Secret required: CONSUMER_REPOS_PAT
+  #   A GitHub PAT with `contents:read` on the private consumer repos.
+  #   If the secret is absent (e.g. forks), the consumer steps are skipped
+  #   with a visible warning — the other SDK checks (typecheck, build) still
+  #   run normally.
+  #
+  # Consumer list (update when a new first-party consumer adopts acn-client):
+  #   - acnlabs/Agentplanet-backend  → app/services/acn_client.py  (Python)
+  #   - acnlabs/paperclip-acn-plugin → src/acn/client.ts            (TypeScript, TODO)
+  # ===========================================
+  consumer-compat:
+    name: Consumer-compat (dogfood smoke)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install Python SDK from local source
+        run: |
+          cd clients/python
+          uv sync
+          # Expose the installed SDK on the PATH-visible venv for the smoke step
+          echo "CONSUMER_VENV=$(pwd)/.venv" >> $GITHUB_ENV
+
+      - name: Fetch Agentplanet-backend SDK wrapper
+        if: ${{ secrets.CONSUMER_REPOS_PAT != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.CONSUMER_REPOS_PAT }}
+        run: |
+          gh api repos/acnlabs/Agentplanet-backend/contents/app/services/acn_client.py \
+            | python3 -c "
+          import json, sys, base64
+          d = json.load(sys.stdin)
+          print(base64.b64decode(d['content']).decode())
+          " > /tmp/consumer_backend_acn.py
+          echo "✅ Fetched Agentplanet-backend/app/services/acn_client.py"
+
+      - name: Smoke test — Agentplanet-backend (Python)
+        if: ${{ secrets.CONSUMER_REPOS_PAT != '' }}
+        run: |
+          $CONSUMER_VENV/bin/python3 - <<'PYEOF'
+          import ast, sys
+
+          with open("/tmp/consumer_backend_acn.py") as f:
+              source = f.read()
+
+          tree = ast.parse(source)
+          to_check = []
+          for node in ast.walk(tree):
+              if isinstance(node, ast.ImportFrom) and node.module == "acn_client":
+                  to_check.extend(alias.name for alias in node.names)
+
+          if not to_check:
+              print("No acn_client imports found — nothing to check")
+              sys.exit(0)
+
+          print(f"Checking {len(to_check)} symbol(s): {to_check}")
+          failed = []
+          for name in to_check:
+              try:
+                  exec(f"from acn_client import {name}")
+              except ImportError as e:
+                  failed.append(f"  ❌ {name}: {e}")
+
+          if failed:
+              print("\nFailed imports from Agentplanet-backend:")
+              for msg in failed:
+                  print(msg)
+              print(
+                  "\nFix: either restore/deprecate the removed symbol in the SDK "
+                  "or update Agentplanet-backend to use the replacement "
+                  "before merging this PR."
+              )
+              sys.exit(1)
+          else:
+              print(f"✅ Agentplanet-backend: all {len(to_check)} acn_client imports OK")
+          PYEOF
+
+      - name: Skip notice — CONSUMER_REPOS_PAT not configured
+        if: ${{ secrets.CONSUMER_REPOS_PAT == '' }}
+        run: |
+          echo "⚠️  CONSUMER_REPOS_PAT secret is not set."
+          echo "   Consumer-compat checks were skipped. To enable full coverage:"
+          echo "   1. Create a GitHub PAT with contents:read on acnlabs private repos."
+          echo "   2. Add it as a repo secret named CONSUMER_REPOS_PAT."
+          echo "   See docs/adr/0005-sdk-governance.md for details."
+
+  # ===========================================
   # Integration — real-PG tests (opt-in)
   # Triggered by:
   #   • PR label "run-integration-tests"
