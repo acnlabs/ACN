@@ -37,7 +37,7 @@ Idempotency / safety
   that hasn't started persisting them.
 
 Revision ID: 2b3c4d5e6f7a
-Revises: f6a7b8c9d0e1
+Revises: a3b5c7d9e1f2
 Create Date: 2026-05-21 12:40:00.000000
 
 """
@@ -49,7 +49,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
 revision: str = "2b3c4d5e6f7a"
-down_revision: str | None = "f6a7b8c9d0e1"
+down_revision: str | None = "a3b5c7d9e1f2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

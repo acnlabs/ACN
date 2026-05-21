@@ -7,6 +7,7 @@ Pydantic models for ACN service
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal
+from uuid import uuid4
 
 from a2a.compat.v0_3.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
 from a2a.compat.v0_3.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
@@ -347,12 +348,19 @@ class SubnetInfo(BaseModel):
     """
 
     subnet_id: str = Field(..., description="Canonical subnet identifier (human-readable, used in API paths and references)")
+    # Opaque UUID identifier. Surfaced for use cases where the human-
+    # readable subnet_id should not appear (e.g. anonymous SubnetStub
+    # responses for private subnets). Defaults to a fresh ``uuid4()`` so
+    # in-memory / synthetic constructions (subnet_manager bootstrap, test
+    # fixtures, manifest snapshots) don't have to plumb an ID through —
+    # the persistence layer always supplies the real DB-stored UUID via
+    # ``_subnet_entity_to_info``.
     id: str = Field(
-        ...,
+        default_factory=lambda: str(uuid4()),
         description=(
-            "Opaque UUID identifier. Stable, server-generated. Surfaced for "
-            "use cases where the human-readable subnet_id should not appear "
-            "(e.g. anonymous SubnetStub responses for private subnets)."
+            "Opaque UUID identifier. Stable per-subnet when sourced from "
+            "the persistence layer; in-memory constructions get a fresh "
+            "UUID per instance."
         ),
     )
     name: str = Field(..., description="Subnet name")

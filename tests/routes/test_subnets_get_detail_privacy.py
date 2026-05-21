@@ -275,15 +275,22 @@ class TestPrivateSubnetDiscoverable:
 
     def test_stub_and_missing_are_distinguishable(self):
         """Discoverable-private returns 200 (stub); genuinely missing
-        returns 404.  Callers can tell the difference — that is now
-        intentional, since the subnet_id was never secret."""
+        returns 404.  Callers can tell the difference via status_code —
+        the *body* of the stub deliberately does NOT echo back the
+        requested ``subnet_id`` (that slug carries organisational
+        semantics for private subnets).  Instead the stub carries an
+        opaque ``id`` (UUID) which is safe to expose.
+        """
         with TestClient(app) as client:
             stub_resp = client.get("/api/v1/subnets/subnet-private")
             missing_resp = client.get("/api/v1/subnets/never-existed")
 
         assert stub_resp.status_code == 200
         assert missing_resp.status_code == 404
-        assert stub_resp.json()["subnet_id"] == "subnet-private"
+        body = stub_resp.json()
+        assert body["is_private"] is True
+        assert body.get("id"), "stub must carry the opaque UUID"
+        assert "subnet_id" not in body, "stub must not echo back the slug"
         assert missing_resp.json()["error_code"] == "subnet_not_found"
 
 
