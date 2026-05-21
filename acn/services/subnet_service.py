@@ -228,6 +228,7 @@ class SubnetService:
     async def create_subnet(
         self,
         subnet_id: str,
+        slug: str,
         name: str,
         owner: str,
         description: str | None = None,
@@ -310,7 +311,7 @@ class SubnetService:
                 "that agent's api key."
             )
 
-        # Check if subnet already exists
+        # Check if subnet (by UUID) already exists
         if await self.repository.exists(subnet_id):
             raise ValueError(f"Subnet {subnet_id} already exists")
 
@@ -337,10 +338,9 @@ class SubnetService:
                     f"Parent subnet '{parent_subnet_id}' does not exist",
                 )
             # ADR-0003 §A invariant 5 — reserved subnets cannot be
-            # parents. Catch by ID *and* (defensively) by owner: the
-            # ``system`` owner literal is the platform escape hatch
-            # and any subnet under it is treated as platform-owned.
-            if parent_subnet_id in {"public", "system"} or parent.owner == "system":
+            # parents. Check by slug (reserved slugs are "public"/"system")
+            # and defensively by owner (system owner = platform-owned).
+            if getattr(parent, "slug", None) in {"public", "system"} or parent.owner == "system":
                 raise SubnetInvariantError(
                     REASON_PARENT_IS_RESERVED,
                     f"Parent subnet '{parent_subnet_id}' is reserved",
@@ -394,6 +394,7 @@ class SubnetService:
 
         subnet = Subnet(
             subnet_id=subnet_id,
+            slug=slug,
             name=name,
             owner=owner,
             description=description,
@@ -428,6 +429,7 @@ class SubnetService:
         logger.info(
             "create_subnet",
             subnet_id=subnet_id,
+            slug=slug,
             name=name,
             owner=owner,
             parent_subnet_id=parent_subnet_id,

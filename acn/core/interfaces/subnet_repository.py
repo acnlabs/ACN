@@ -28,16 +28,28 @@ class ISubnetRepository(ABC):
 
     @abstractmethod
     async def find_by_id(self, subnet_id: str) -> Subnet | None:
-        """
-        Find subnet by ID
+        """Find subnet by UUID or slug (dual-resolution).
+
+        Accepts both the opaque UUID (``f47ac10b-...``) and the
+        human-readable slug (``acnlabs-core``).  UUID lookup is O(1)
+        via the primary-key index; slug lookup hits the unique slug
+        index (also O(1)).
 
         Args:
-            subnet_id: Subnet identifier
+            subnet_id: Subnet UUID or slug
 
         Returns:
             Subnet entity or None if not found
         """
         pass
+
+    async def find_by_slug(self, slug: str) -> Subnet | None:
+        """Find subnet by human-readable slug (alias for find_by_id with slug).
+
+        Default implementation delegates to ``find_by_id`` which handles
+        slug resolution. Override for backends that need a separate path.
+        """
+        return await self.find_by_id(slug)
 
     @abstractmethod
     async def find_all(self) -> list[Subnet]:

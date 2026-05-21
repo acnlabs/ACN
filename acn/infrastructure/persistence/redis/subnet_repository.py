@@ -91,6 +91,8 @@ class RedisSubnetRepository(ISubnetRepository):
         await self.redis.hset(subnet_key, mapping=subnet_dict)  # type: ignore[arg-type]
 
         async with self.redis.pipeline(transaction=False) as pipe:
+            # Maintain slug → UUID lookup index so find_by_id(slug) works.
+            pipe.set(f"acn:subnets:slug:{subnet.slug}", subnet.subnet_id)
             pipe.sadd(f"acn:subnets:by_owner:{subnet.owner}", subnet.subnet_id)
             # Maintain children index: SREM old → SADD new when changed.
             old_parent = old_subnet.parent_subnet_id if old_subnet else None
@@ -116,15 +118,48 @@ class RedisSubnetRepository(ISubnetRepository):
                 )
             await pipe.execute()
 
+    async def _resolve_uuid(self, subnet_id: str) -> str:
+        """Return the UUID for ``subnet_id``.
+
+        If ``subnet_id`` is already a UUID it is returned unchanged.
+        Otherwise it is treated as a slug and resolved via the
+        ``acn:subnets:slug:{slug}`` index.  Returns the input as-is
+        if no mapping exists (allows graceful miss handling upstream).
+        """
+        import re as _re
+        _UUID_RE = _re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            _re.IGNORECASE,
+        )
+        if _UUID_RE.match(subnet_id):
+            return subnet_id
+        resolved = await self.redis.get(f"acn:subnets:slug:{subnet_id}")
+        if resolved is None:
+            return subnet_id  # let caller handle miss
+        return resolved if isinstance(resolved, str) else resolved.decode()
+
     async def find_by_id(self, subnet_id: str) -> Subnet | None:
-        """Find subnet by ID"""
-        subnet_key = f"acn:subnets:info:{subnet_id}"
+        """Find subnet by UUID or slug.
+
+        Accepts both UUID (``f47ac10b-...``) and human-readable slug
+        (``acnlabs-core``).  Slug resolution goes through the
+        ``acn:subnets:slug:{slug}`` string key written by :meth:`save`.
+        Legacy rows pre-migration are keyed by slug and will be found
+        only if the Redis migration script has not yet run — after the
+        script, all rows are keyed by UUID.
+        """
+        uuid = await self._resolve_uuid(subnet_id)
+        subnet_key = f"acn:subnets:info:{uuid}"
         subnet_dict = await self.redis.hgetall(subnet_key)
 
         if not subnet_dict:
             return None
 
         return self._dict_to_subnet(subnet_dict)
+
+    async def find_by_slug(self, slug: str) -> "Subnet | None":
+        """Find subnet by human-readable slug (alias for find_by_id with slug)."""
+        return await self.find_by_id(slug)
 
     async def find_all(self) -> list[Subnet]:
         """Find all subnets"""
@@ -173,17 +208,19 @@ class RedisSubnetRepository(ISubnetRepository):
         if not subnet:
             return False
 
-        subnet_key = f"acn:subnets:info:{subnet_id}"
+        uuid = subnet.subnet_id
+        subnet_key = f"acn:subnets:info:{uuid}"
         async with self.redis.pipeline(transaction=False) as pipe:
             pipe.delete(subnet_key)
-            pipe.srem(f"acn:subnets:by_owner:{subnet.owner}", subnet_id)
+            pipe.delete(f"acn:subnets:slug:{subnet.slug}")
+            pipe.srem(f"acn:subnets:by_owner:{subnet.owner}", uuid)
             if subnet.parent_subnet_id:
                 pipe.srem(
-                    f"acn:subnets:children:{subnet.parent_subnet_id}", subnet_id
+                    f"acn:subnets:children:{subnet.parent_subnet_id}", uuid
                 )
             if subnet.linked_task_id:
                 pipe.srem(
-                    f"acn:subnets:by_linked_task:{subnet.linked_task_id}", subnet_id
+                    f"acn:subnets:by_linked_task:{subnet.linked_task_id}", uuid
                 )
             await pipe.execute()
 
@@ -237,8 +274,9 @@ class RedisSubnetRepository(ISubnetRepository):
         return await self.delete(parent_id)
 
     async def exists(self, subnet_id: str) -> bool:
-        """Check if subnet exists"""
-        return await self.redis.exists(f"acn:subnets:info:{subnet_id}") > 0
+        """Check if subnet exists (accepts UUID or slug)."""
+        uuid = await self._resolve_uuid(subnet_id)
+        return await self.redis.exists(f"acn:subnets:info:{uuid}") > 0
 
     async def find_by_parent(self, parent_subnet_id: str) -> list[Subnet]:
         """Return all child subnets of a given parent.
@@ -376,6 +414,9 @@ class RedisSubnetRepository(ISubnetRepository):
         else:
             join_policy = "open"
 
+        # ``slug`` may be absent on pre-migration rows (legacy keys stored
+        # the human-readable slug as ``subnet_id``).  ``Subnet.from_dict``
+        # handles this via the UUID backward-compat path.
         data = {
             "subnet_id": subnet_dict["subnet_id"],
             "name": subnet_dict["name"],
@@ -397,5 +438,9 @@ class RedisSubnetRepository(ISubnetRepository):
             "linked_task_id": linked_task_id,
             "join_policy": join_policy,
         }
+        # Include slug when present (post-migration rows)
+        slug_raw = subnet_dict.get("slug") or ""
+        if slug_raw:
+            data["slug"] = slug_raw
 
-        return Subnet(**data)
+        return Subnet.from_dict(data)

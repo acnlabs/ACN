@@ -177,7 +177,12 @@ class AgentModel(Base):
 class SubnetModel(Base):
     __tablename__ = "subnets"
 
-    subnet_id: Mapped[str] = mapped_column(String, primary_key=True)
+    # ``subnet_id`` Python attribute maps to DB column ``id`` (UUID PK).
+    # Using a column alias keeps the rest of the codebase (services,
+    # repos, routes) unchanged — they still write ``model.subnet_id``.
+    subnet_id: Mapped[str] = mapped_column("id", UUID(as_uuid=False), primary_key=True)
+    # ``slug`` is the human-readable alias (was the old ``subnet_id`` value).
+    slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     owner: Mapped[str] = mapped_column(String, nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -187,11 +192,11 @@ class SubnetModel(Base):
     subnet_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     harness_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     harness_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Nesting fields (ADR-0003). Both ``default`` (Python / ORM path)
-    # and ``server_default`` (DDL path) are set on ``lifecycle`` so a
-    # fresh INSERT through the ORM matches a backfilled row inserted
-    # via Alembic — avoids the "ORM default ≠ DB default" drift trap.
-    parent_subnet_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Nesting fields (ADR-0003). ``parent_subnet_id`` Python attribute maps to
+    # DB column ``parent_id`` (UUID); the alias keeps service/route code stable.
+    parent_subnet_id: Mapped[str | None] = mapped_column(
+        "parent_id", UUID(as_uuid=False), nullable=True
+    )
     lifecycle: Mapped[str] = mapped_column(
         String,
         nullable=False,
@@ -201,12 +206,7 @@ class SubnetModel(Base):
     linked_task_id: Mapped[str | None] = mapped_column(String, nullable=True)
     # Join admission policy (ADR-0004). Same ``default`` + ``server_default``
     # discipline as ``lifecycle`` — keeps ORM INSERTs and Alembic
-    # backfills converging on the same default. The Alembic migration
-    # (``f0a1b2c3d4e5_add_subnet_join_policy_field``) flips existing
-    # ``is_private=true`` rows from this ``'open'`` default to
-    # ``'approval'`` in the same DDL event. ``length=16`` mirrors the
-    # ADR data-model table and blocks free-form strings if a future
-    # caller bypasses the entity-layer ``Literal`` check.
+    # backfills converging on the same default.
     join_policy: Mapped[str] = mapped_column(
         String(16),
         nullable=False,
@@ -218,13 +218,12 @@ class SubnetModel(Base):
     )
 
     __table_args__ = (
-        # Partial indexes for nesting lookups (ADR-0003). ``WHERE ...
-        # IS NOT NULL`` keeps the index small — top-level subnets
-        # without a parent / linked task don't contribute rows.
+        # Partial indexes for nesting lookups (ADR-0003). Column aliases
+        # are not valid in ``postgresql_where`` — use the DB column names.
         Index(
             "subnets_parent_idx",
-            "parent_subnet_id",
-            postgresql_where=text("parent_subnet_id IS NOT NULL"),
+            "parent_id",
+            postgresql_where=text("parent_id IS NOT NULL"),
         ),
         Index(
             "subnets_linked_task_idx",
