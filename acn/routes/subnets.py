@@ -92,6 +92,12 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
     """
     return SubnetInfo(
         subnet_id=subnet.subnet_id,
+        # Defensive ``getattr``: legacy ``MagicMock`` test stubs that
+        # predate the ``id`` field would otherwise return a fresh mock
+        # object instead of a string. Falls back to ``subnet.subnet_id``
+        # so the response is always well-formed; production entities
+        # always carry the real UUID.
+        id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.subnet_id,
         name=subnet.name,
         owner=subnet.owner,
         description=subnet.description,
@@ -397,23 +403,34 @@ async def get_subnet(
 
     # Private subnet — check authorisation.
     # Unauthenticated or unauthorised callers receive a SubnetStub
-    # (structural metadata only) rather than 404.  The subnet_id is
-    # already discoverable through public agent ``subnet_ids``, so
-    # existence-hiding provides no real security; surfacing the
-    # hierarchy fields (parent_subnet_id, lifecycle) lets graph clients
-    # draw correct topology without leaking sensitive details.
+    # carrying only the **opaque UUID** plus structural metadata.
+    # The human-readable subnet_id slug is intentionally NOT exposed:
+    # naming patterns like ``acnlabs-core`` would otherwise leak
+    # organisational structure to anyone who happens to know an
+    # agent_id that's a member.
+    #
+    # ``parent_id`` is the parent subnet's UUID (resolved from
+    # ``subnet.parent_subnet_id`` slug). Frontend graph clients
+    # join hierarchy edges on the UUID across SubnetInfo / SubnetStub.
+    parent_slug = _coerce_optional_str(
+        getattr(subnet, "parent_subnet_id", None)
+    )
+    parent_uuid: str | None = None
+    if parent_slug:
+        try:
+            parent_entity = await subnet_service.get_subnet(parent_slug)
+            parent_uuid = _coerce_optional_str(getattr(parent_entity, "id", None))
+        except SubnetNotFoundException:
+            # Orphaned reference — surface as if top-level rather than
+            # leaking a 500 to anonymous callers.
+            parent_uuid = None
+
     def _stub() -> SubnetStub:
         return SubnetStub(
-            subnet_id=subnet.subnet_id,
-            name=subnet.name,
+            id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.subnet_id,
             is_private=True,
-            parent_subnet_id=_coerce_optional_str(
-                getattr(subnet, "parent_subnet_id", None)
-            ),
+            parent_id=parent_uuid,
             lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
-            linked_task_id=_coerce_optional_str(
-                getattr(subnet, "linked_task_id", None)
-            ),
         )
 
     if not credentials:

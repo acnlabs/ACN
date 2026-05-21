@@ -178,6 +178,17 @@ class SubnetModel(Base):
     __tablename__ = "subnets"
 
     subnet_id: Mapped[str] = mapped_column(String, primary_key=True)
+    # Opaque UUID — secondary identifier for SubnetStub privacy.
+    # Server-default ``gen_random_uuid()`` fills the column on INSERT
+    # so existing call sites that don't set ``id`` keep working.
+    # See ``acn/core/entities/subnet.py`` §Identifiers and
+    # ``alembic/versions/2b3c4d5e6f7a_add_subnet_uuid.py``.
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        nullable=False,
+        unique=True,
+        server_default=text("gen_random_uuid()"),
+    )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     owner: Mapped[str] = mapped_column(String, nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

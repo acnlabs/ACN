@@ -46,9 +46,14 @@ def _make_subnet(
     is_private: bool,
     member_agent_ids: set[str] | None = None,
     name: str = "Test Subnet",
+    opaque_id: str | None = None,
+    parent_subnet_id: str | None = None,
 ) -> MagicMock:
     sn = MagicMock()
     sn.subnet_id = subnet_id
+    # Opaque UUID — defaults to a deterministic-per-slug value so test
+    # assertions can predict which UUID a stub will surface.
+    sn.id = opaque_id or f"00000000-0000-0000-0000-{subnet_id.replace('-', '')[:12]:0<12}"
     sn.name = name
     sn.owner = owner
     sn.description = None
@@ -58,6 +63,9 @@ def _make_subnet(
     sn.harness_url = "https://harness.example.org" if is_private else None
     sn.created_at = datetime(2026, 5, 18, tzinfo=UTC)
     sn.member_agent_ids = set(member_agent_ids or ())
+    sn.parent_subnet_id = parent_subnet_id
+    sn.lifecycle = "persistent"
+    sn.linked_task_id = None
     return sn
 
 
@@ -107,14 +115,19 @@ def _fake_verify_token(
 
 
 def _assert_stub(body: dict) -> None:
-    """Discoverable-private callers must get a SubnetStub — structural
-    metadata only.  Sensitive fields must be absent."""
-    assert body["subnet_id"] == "subnet-private"
-    assert body["name"] == "Test Subnet"
+    """Discoverable-private callers must get a SubnetStub — opaque UUID
+    plus minimal structural metadata. The human-readable ``subnet_id``
+    slug, ``name``, and all sensitive fields must be absent."""
+    # Opaque UUID is the only identifier surfaced.
+    assert "id" in body and body["id"], "stub must carry the opaque UUID"
     assert body["is_private"] is True
-    # Sensitive fields must not appear in the stub
+    # Privacy contract: human-readable identifiers must be absent.
+    for leak in ("subnet_id", "name", "slug"):
+        assert leak not in body, f"stub must not leak {leak!r} (organisational naming)"
+    # Other sensitive fields must also be absent.
     for sensitive in ("owner", "description", "harness_url", "metadata",
-                      "security_schemes", "default_security"):
+                      "security_schemes", "default_security",
+                      "parent_subnet_id"):
         assert sensitive not in body, f"stub must not leak {sensitive!r}"
 
 

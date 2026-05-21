@@ -346,7 +346,15 @@ class SubnetInfo(BaseModel):
     - If no security_schemes: subnet is public (no auth required)
     """
 
-    subnet_id: str = Field(..., description="Unique subnet identifier")
+    subnet_id: str = Field(..., description="Canonical subnet identifier (human-readable, used in API paths and references)")
+    id: str = Field(
+        ...,
+        description=(
+            "Opaque UUID identifier. Stable, server-generated. Surfaced for "
+            "use cases where the human-readable subnet_id should not appear "
+            "(e.g. anonymous SubnetStub responses for private subnets)."
+        ),
+    )
     name: str = Field(..., description="Subnet name")
     owner: str = Field(
         ...,
@@ -405,22 +413,38 @@ class SubnetInfo(BaseModel):
 
 
 class SubnetStub(BaseModel):
-    """Minimal public metadata for a *discoverable* private subnet.
+    """Minimal, privacy-preserving metadata for a private subnet.
 
-    A private subnet is "discoverable" when its ``subnet_id`` already
-    appears in at least one public agent's ``subnet_ids`` list — the ID
-    is therefore not a secret.  Returning this stub (instead of 404)
-    lets graph clients render hierarchy edges (``parent_subnet_id``) and
-    member counts without leaking sensitive fields such as ``owner``,
-    ``description``, ``harness_url``, or ``security_schemes``.
+    Returned in place of ``SubnetInfo`` from ``GET /subnets/{subnet_id}``
+    when the caller is anonymous or otherwise unauthorised. Surfacing
+    structural metadata (parent linkage, lifecycle) lets graph clients
+    render hierarchy edges without leaking the human-readable
+    ``subnet_id``, ``name``, ``owner``, ``description``, ``harness_url``,
+    or ``security_schemes``.
+
+    Identifiers
+    -----------
+    Only the **opaque UUID** is surfaced. The canonical ``subnet_id``
+    slug is intentionally omitted so anonymous callers cannot derive
+    organisational naming conventions (e.g. ``acnlabs-core``,
+    ``acn-project-dev``) from the response. Authorised callers receive
+    a full ``SubnetInfo`` which carries both identifiers.
+
+    Hierarchy
+    ---------
+    ``parent_id`` is the parent subnet's opaque UUID — same privacy
+    treatment as the top-level ``id``. Frontend graph clients match
+    children to parents by joining on the UUID across the
+    ``SubnetInfo.id`` / ``SubnetStub.id`` field.
     """
 
-    subnet_id: str
-    name: str
+    id: str = Field(..., description="Opaque UUID identifier for this subnet")
     is_private: bool = True
-    parent_subnet_id: str | None = None
+    parent_id: str | None = Field(
+        None,
+        description="Parent subnet's opaque UUID. None for top-level subnets.",
+    )
     lifecycle: Literal["persistent", "task_scoped"] = "persistent"
-    linked_task_id: str | None = None
 
 
 class SubnetCreateRequest(BaseModel):
