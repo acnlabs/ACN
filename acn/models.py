@@ -404,6 +404,25 @@ class SubnetInfo(BaseModel):
     )
 
 
+class SubnetStub(BaseModel):
+    """Minimal public metadata for a *discoverable* private subnet.
+
+    A private subnet is "discoverable" when its ``subnet_id`` already
+    appears in at least one public agent's ``subnet_ids`` list — the ID
+    is therefore not a secret.  Returning this stub (instead of 404)
+    lets graph clients render hierarchy edges (``parent_subnet_id``) and
+    member counts without leaking sensitive fields such as ``owner``,
+    ``description``, ``harness_url``, or ``security_schemes``.
+    """
+
+    subnet_id: str
+    name: str
+    is_private: bool = True
+    parent_subnet_id: str | None = None
+    lifecycle: Literal["persistent", "task_scoped"] = "persistent"
+    linked_task_id: str | None = None
+
+
 class SubnetCreateRequest(BaseModel):
     """
     Request to create a subnet

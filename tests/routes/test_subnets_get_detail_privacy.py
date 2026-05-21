@@ -1,29 +1,19 @@
 """Route-level tests for ``GET /api/v1/subnets/{subnet_id}`` privacy
-contract — acnlabs/ACN#68.
+contract.
 
-The pre-fix handler had no ACL: anonymous callers could pull the full
-``SubnetInfo`` payload (name, owner, description, ``harness_url``,
-metadata) of any private subnet they could guess or learn the id of.
-That contradicted the privacy contract implied by ``is_private=True``,
-which is honoured everywhere else:
-
-- ``GET /api/v1/subnets``           — private subnets filtered out
-- ``GET /api/v1/subnets/{id}/agents`` — owner / admin only (401/403)
-- ``GET /api/v1/subnets/{id}/children`` — caller's view filtered
-
-This file pins the post-fix contract:
+Contract:
 
 1. **Public subnets** — fully visible to anyone, no auth required.
 2. **Private subnets — owner, member, and ``acn:admin``** see the
-   full payload (200).
-3. **Private subnets — anon, authed non-member, and any other
-   caller** receive ``SUBNET_NOT_FOUND`` (404) with **byte-identical
-   shape** to a genuinely missing subnet. The status-code, error
-   code, and ``details`` body must not differ between
-   "exists-but-hidden" and "does-not-exist", or the leak the issue
-   asked us to plug is re-introduced.
-4. **Genuinely missing subnets** still 404 with the same shape (no
-   privacy logic should regress the not-found path).
+   full ``SubnetInfo`` payload (200).
+3. **Private subnets — anon or authed non-member** receive a
+   ``SubnetStub`` (200) — structural metadata only (subnet_id, name,
+   is_private, parent_subnet_id, lifecycle).  Sensitive fields such as
+   owner, description, harness_url, and security_schemes are omitted.
+   Rationale: the subnet_id is already discoverable via public agent
+   subnet_ids, so existence-hiding provides no real security; surfacing
+   hierarchy metadata lets graph clients render correct topology.
+4. **Genuinely missing subnets** still 404 with ``SUBNET_NOT_FOUND``.
 
 The membership check reads ``subnet.member_agent_ids`` directly off
 the loaded entity — no extra DB call — so the test fixture exposes
@@ -116,12 +106,16 @@ def _fake_verify_token(
     return _impl
 
 
-def _assert_hidden_404(body: dict) -> None:
-    """Hidden-private and genuinely-missing must look identical on the
-    wire. Any divergence (extra detail key, distinct ``message``,
-    distinct ``error_code``) re-introduces the existence leak."""
-    assert body["error_code"] == "subnet_not_found"
-    assert body["details"] == {"subnet_id": "subnet-private"}
+def _assert_stub(body: dict) -> None:
+    """Discoverable-private callers must get a SubnetStub — structural
+    metadata only.  Sensitive fields must be absent."""
+    assert body["subnet_id"] == "subnet-private"
+    assert body["name"] == "Test Subnet"
+    assert body["is_private"] is True
+    # Sensitive fields must not appear in the stub
+    for sensitive in ("owner", "description", "harness_url", "metadata",
+                      "security_schemes", "default_security"):
+        assert sensitive not in body, f"stub must not leak {sensitive!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -217,19 +211,23 @@ class TestPrivateSubnetAuthorisedCallers:
 
 
 # ---------------------------------------------------------------------------
-# 3. Private subnets — unauthorised callers hidden as 404
+# 3. Private subnets — unauthorised callers receive SubnetStub (200)
 # ---------------------------------------------------------------------------
 
 
-class TestPrivateSubnetHidden:
-    def test_anon_gets_subnet_not_found(self):
+class TestPrivateSubnetDiscoverable:
+    """Anon and non-member callers now get structural metadata (SubnetStub)
+    instead of 404.  The subnet_id is already discoverable via public
+    agent subnet_ids, so existence-hiding provides no real security."""
+
+    def test_anon_gets_stub(self):
         with TestClient(app) as client:
             r = client.get("/api/v1/subnets/subnet-private")
 
-        assert r.status_code == 404
-        _assert_hidden_404(r.json())
+        assert r.status_code == 200, r.text
+        _assert_stub(r.json())
 
-    def test_authed_non_member_gets_subnet_not_found(self, monkeypatch):
+    def test_authed_non_member_gets_stub(self, monkeypatch):
         monkeypatch.setattr(
             "acn.routes.subnets.verify_token",
             _fake_verify_token(sub="agent-outsider"),
@@ -240,16 +238,12 @@ class TestPrivateSubnetHidden:
                 headers={"Authorization": "Bearer outsider-token"},
             )
 
-        assert r.status_code == 404
-        _assert_hidden_404(r.json())
+        assert r.status_code == 200, r.text
+        _assert_stub(r.json())
 
-    def test_authed_read_only_permission_does_not_grant_admin_access(
-        self, monkeypatch
-    ):
-        """Only the explicit ``acn:admin`` permission overrides the
-        membership gate. ``acn:read`` / ``acn:write`` / any other
-        scope must still 404, otherwise a generic agent token
-        accidentally becomes a probe oracle."""
+    def test_authed_non_admin_scope_gets_stub(self, monkeypatch):
+        """``acn:read`` / ``acn:write`` do not elevate to full payload;
+        only explicit membership or ``acn:admin`` does."""
         monkeypatch.setattr(
             "acn.routes.subnets.verify_token",
             _fake_verify_token(
@@ -263,32 +257,21 @@ class TestPrivateSubnetHidden:
                 headers={"Authorization": "Bearer reader-token"},
             )
 
-        assert r.status_code == 404
-        _assert_hidden_404(r.json())
+        assert r.status_code == 200, r.text
+        _assert_stub(r.json())
 
-    def test_hidden_and_missing_are_byte_identical(self, monkeypatch):
-        """The whole point of #68: an anonymous caller cannot
-        differentiate "this private subnet exists but I can't see it"
-        from "this id never existed" by inspecting the response.
-
-        We assert byte-identical status code, ``error_code``, and
-        ``details`` shape across both branches.
-        """
+    def test_stub_and_missing_are_distinguishable(self):
+        """Discoverable-private returns 200 (stub); genuinely missing
+        returns 404.  Callers can tell the difference — that is now
+        intentional, since the subnet_id was never secret."""
         with TestClient(app) as client:
-            hidden = client.get("/api/v1/subnets/subnet-private")
-            missing = client.get("/api/v1/subnets/never-existed")
+            stub_resp = client.get("/api/v1/subnets/subnet-private")
+            missing_resp = client.get("/api/v1/subnets/never-existed")
 
-        assert hidden.status_code == missing.status_code == 404
-        # Mirror the same id into both detail payloads before
-        # comparing — the only legitimate difference is the path
-        # parameter echo, which would itself leak nothing.
-        hidden_body = hidden.json()
-        missing_body = missing.json()
-        assert hidden_body["error_code"] == missing_body["error_code"]
-        assert set(hidden_body["details"].keys()) == set(missing_body["details"].keys())
-        # The shape is identical; only the subnet_id echoed back differs.
-        assert hidden_body["details"] == {"subnet_id": "subnet-private"}
-        assert missing_body["details"] == {"subnet_id": "never-existed"}
+        assert stub_resp.status_code == 200
+        assert missing_resp.status_code == 404
+        assert stub_resp.json()["subnet_id"] == "subnet-private"
+        assert missing_resp.json()["error_code"] == "subnet_not_found"
 
 
 # ---------------------------------------------------------------------------

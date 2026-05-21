@@ -16,7 +16,7 @@ from ..auth.middleware import require_internal_or_permission, verify_token
 from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import SubnetNotFoundException
-from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
+from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo, SubnetStub
 from ..services.subnet_service import SubnetInvariantError
 from ._subnet_membership import (
     do_get_agent_subnets,
@@ -361,28 +361,27 @@ async def get_subnet(
 
     Clean Architecture: Route → SubnetService → Repository.
 
-    Privacy contract (acnlabs/ACN#68)
-        ``is_private=True`` subnets hide their existence from callers
-        without rights. Anonymous callers, JWT callers for a non-owner /
-        non-member / non-``acn:admin`` agent — all receive
-        ``SUBNET_NOT_FOUND`` (404), the same status returned for a
-        truly missing subnet. This matches the list endpoint
-        (``GET /api/v1/subnets`` filters private subnets out entirely)
-        so an outsider cannot probe whether a private subnet exists by
-        status-code differential.
+    Privacy contract
+        Public subnets are fully visible to anyone.
 
-        Owners, current members, and ``acn:admin`` callers see the
-        full ``SubnetInfo`` payload — including ``harness_url`` and
-        ``metadata`` which were the highest-sensitivity leaks in #68.
+        Private subnets use a two-tier response:
 
-    Why 404 here but 401/403 on ``GET /subnets/{id}/agents``
-        Sibling endpoint ``get_subnet_agents`` leaks existence by
-        design (it returns 401 with ``WWW-Authenticate`` for anon and
-        403 ``NOT_SUBNET_MEMBER`` for authed non-members). That makes
-        sense for the **members roster**, where the caller already
-        committed to "I'm trying to do something with this subnet" by
-        hitting the sub-resource. The detail endpoint is the primary
-        probe vector, so existence-hiding is the right trade here.
+        * **Authorised callers** (owner, current member, ``acn:admin``)
+          receive the full ``SubnetInfo`` payload including ``harness_url``
+          and ``metadata``.
+
+        * **Everyone else** (anonymous or authenticated non-member)
+          receives a ``SubnetStub`` — structural metadata only
+          (``subnet_id``, ``name``, ``is_private``, ``parent_subnet_id``,
+          ``lifecycle``).  Sensitive fields (``owner``, ``description``,
+          ``harness_url``, ``security_schemes``, ``metadata``) are omitted.
+
+        Rationale: a private subnet's ``subnet_id`` is already discoverable
+        through any public agent's ``subnet_ids`` field, so existence-hiding
+        provides no real security.  Surfacing hierarchy metadata lets graph
+        clients draw correct topology without leaking sensitive details.
+
+        Genuinely missing subnets still return ``SUBNET_NOT_FOUND`` (404).
     """
     try:
         subnet = await subnet_service.get_subnet(subnet_id)
@@ -396,20 +395,29 @@ async def get_subnet(
     if not getattr(subnet, "is_private", False):
         return _subnet_entity_to_info(subnet)
 
-    # Private branch. We use a single ``_deny`` closure so every
-    # negative return is byte-identical to the genuine 404 above —
-    # any divergence (extra detail key, distinct message, distinct
-    # error_code) would re-introduce the existence-leak the issue
-    # asked us to plug.
-    def _deny() -> ACNHTTPError:
-        return ACNHTTPError(
-            ErrorCode.SUBNET_NOT_FOUND,
-            404,
-            details={"subnet_id": subnet_id},
+    # Private subnet — check authorisation.
+    # Unauthenticated or unauthorised callers receive a SubnetStub
+    # (structural metadata only) rather than 404.  The subnet_id is
+    # already discoverable through public agent ``subnet_ids``, so
+    # existence-hiding provides no real security; surfacing the
+    # hierarchy fields (parent_subnet_id, lifecycle) lets graph clients
+    # draw correct topology without leaking sensitive details.
+    def _stub() -> SubnetStub:
+        return SubnetStub(
+            subnet_id=subnet.subnet_id,
+            name=subnet.name,
+            is_private=True,
+            parent_subnet_id=_coerce_optional_str(
+                getattr(subnet, "parent_subnet_id", None)
+            ),
+            lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
+            linked_task_id=_coerce_optional_str(
+                getattr(subnet, "linked_task_id", None)
+            ),
         )
 
     if not credentials:
-        raise _deny()
+        return _stub()
 
     payload = await verify_token(request, credentials)
     requester = payload.get("sub", "")
@@ -420,7 +428,7 @@ async def get_subnet(
     is_member = requester in (getattr(subnet, "member_agent_ids", None) or set())
 
     if not (is_owner or is_admin or is_member):
-        raise _deny()
+        return _stub()
 
     return _subnet_entity_to_info(subnet)
 
