@@ -45,8 +45,9 @@ Create Date: 2026-05-21 12:40:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 revision: str = "2b3c4d5e6f7a"
 down_revision: str | None = "a3b5c7d9e1f2"
