@@ -5,10 +5,11 @@ Pins the six subnet-create invariant rejection variants on
 filter, the new ``GET /api/v1/subnets/{id}/children`` endpoint, and
 the new ``POST /api/v1/subnets/{id}/promote`` endpoint.
 
-Each rejection variant pins ``error_code = "invalid_request"`` AND a
-stable ``details.reason`` string that the CLI / SDK error parsers
-match against — these names are part of the public contract and
-shouldn't drift.
+Each rejection variant pins its expected ``error_code`` (mostly
+``invalid_request``, with ``not_parent_member`` mapped to
+``not_subnet_member``) AND a stable ``details.reason`` string that
+the CLI / SDK error parsers match against — these names are part of
+the public contract and shouldn't drift.
 """
 
 from __future__ import annotations
