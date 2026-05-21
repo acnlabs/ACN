@@ -346,8 +346,7 @@ class SubnetInfo(BaseModel):
     - If no security_schemes: subnet is public (no auth required)
     """
 
-    subnet_id: str = Field(..., description="Opaque UUID — the canonical machine identifier")
-    slug: str = Field(..., description="Human-readable alias (e.g. 'acnlabs-core'). Unique. Used in CLI / human-facing URLs.")
+    subnet_id: str = Field(..., description="Unique subnet identifier")
     name: str = Field(..., description="Subnet name")
     owner: str = Field(
         ...,
@@ -391,11 +390,9 @@ class SubnetInfo(BaseModel):
     # surfaced so consumers can render "auto-dissolving" UX hints
     # and so prospective joiners can avoid task_scoped squads
     # they'd rather not be auto-removed from.
-    # Note: ``parent_subnet_id`` now holds the parent subnet's UUID
-    # (was slug before the UUID migration).
     parent_subnet_id: str | None = Field(
         None,
-        description="Parent subnet UUID for a child subnet (ADR-0003). None for top-level subnets.",
+        description="Parent subnet ID for a child subnet (ADR-0003). None for top-level subnets.",
     )
     lifecycle: Literal["persistent", "task_scoped"] = Field(
         "persistent",
@@ -410,24 +407,18 @@ class SubnetInfo(BaseModel):
 class SubnetStub(BaseModel):
     """Minimal public metadata for a *discoverable* private subnet.
 
-    A private subnet is "discoverable" when its UUID already
-    appears in at least one public agent's ``subnet_ids`` list.
-    Returning this stub (instead of 404) lets graph clients render
-    hierarchy edges (``parent_subnet_id``) without leaking sensitive
-    fields such as ``owner``, ``name``, ``description``, ``harness_url``,
-    or ``security_schemes``.
-
-    Privacy design: the stub intentionally exposes only the opaque UUID
-    and structural metadata — no human-readable slug or name, which
-    would reveal organizational naming conventions.
+    A private subnet is "discoverable" when its ``subnet_id`` already
+    appears in at least one public agent's ``subnet_ids`` list — the ID
+    is therefore not a secret.  Returning this stub (instead of 404)
+    lets graph clients render hierarchy edges (``parent_subnet_id``) and
+    member counts without leaking sensitive fields such as ``owner``,
+    ``description``, ``harness_url``, or ``security_schemes``.
     """
 
-    subnet_id: str = Field(..., description="Opaque UUID — the only identifier safe to expose for private subnets")
+    subnet_id: str
+    name: str
     is_private: bool = True
-    parent_subnet_id: str | None = Field(
-        None,
-        description="Parent subnet UUID for hierarchy rendering. None for top-level subnets.",
-    )
+    parent_subnet_id: str | None = None
     lifecycle: Literal["persistent", "task_scoped"] = "persistent"
     linked_task_id: str | None = None
 
@@ -441,16 +432,14 @@ class SubnetCreateRequest(BaseModel):
     2. Bearer token = Simple token auth
     3. API Key = Key-based auth
 
-    Note: the ``subnet_id`` request field has been renamed to ``slug`` — the
-    API still accepts ``subnet_id`` as an alias for backward compatibility.
     Note: openIdConnect / oauth2 types are not yet supported and will be rejected.
     See https://github.com/acnlabs/ACN/issues/9 for implementation plan.
 
     Examples:
         # Public subnet (no auth)
-        {"slug": "public-demo", "name": "Public Demo"}
+        {"subnet_id": "public-demo", "name": "Public Demo"}
 
-        # Bearer token auth (using legacy subnet_id alias)
+        # Bearer token auth
         {
             "subnet_id": "team-a",
             "name": "Team A",
@@ -461,7 +450,7 @@ class SubnetCreateRequest(BaseModel):
 
         # API Key auth
         {
-            "slug": "team-b",
+            "subnet_id": "team-b",
             "name": "Team B",
             "security_schemes": {
                 "key": {"type": "apiKey", "in": "header", "name": "X-Subnet-Key"}
@@ -469,19 +458,11 @@ class SubnetCreateRequest(BaseModel):
         }
     """
 
-    model_config = ConfigDict(populate_by_name=True)
-
-    slug: str | None = Field(
+    subnet_id: str | None = Field(
         None,
         min_length=1,
         max_length=64,
-        description=(
-            "Human-readable slug for the subnet (e.g. 'team-alpha'). "
-            "Optional — ACN auto-generates `subnet-{slug}-{rand6}` when omitted. "
-            "Must be unique across all subnets. "
-            "Formerly called ``subnet_id`` in the API."
-        ),
-        alias="subnet_id",  # backward-compat: clients sending ``subnet_id`` still work
+        description="Unique subnet identifier. Optional — ACN auto-generates `subnet-{slug}-{rand6}` when omitted.",
     )
     name: str = Field(..., min_length=1, max_length=128, description="Subnet name")
     description: str | None = Field(None, max_length=500, description="Subnet description")
@@ -500,11 +481,10 @@ class SubnetCreateRequest(BaseModel):
     parent_subnet_id: str | None = Field(
         None,
         min_length=1,
-        max_length=100,
+        max_length=64,
         description=(
-            "Parent subnet UUID or slug for nested subnets (ADR-0003). "
-            "Single-layer cap: the parent itself must be top-level. "
-            "Immutable after creation. Route resolver converts slug to UUID."
+            "Parent subnet ID for nested subnets (ADR-0003). Single-layer cap: "
+            "the parent itself must be top-level. Immutable after creation."
         ),
     )
     lifecycle: Literal["persistent", "task_scoped"] = Field(
@@ -564,8 +544,7 @@ class SubnetCreateResponse(BaseModel):
     """Response after creating a subnet"""
 
     status: str = Field(..., description="Creation status")
-    subnet_id: str = Field(..., description="Opaque UUID — the canonical machine identifier")
-    slug: str = Field(..., description="Human-readable alias for the subnet")
+    subnet_id: str = Field(..., description="Subnet ID")
     is_public: bool = Field(..., description="Whether subnet is public (no auth required)")
     security_schemes: dict | None = Field(None, description="Configured security schemes")
     gateway_ws_url: str = Field(..., description="WebSocket URL for agents to connect")

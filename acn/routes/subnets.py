@@ -91,8 +91,7 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
     through this conversion.
     """
     return SubnetInfo(
-        subnet_id=subnet.subnet_id,   # UUID
-        slug=getattr(subnet, "slug", subnet.subnet_id),
+        subnet_id=subnet.subnet_id,
         name=subnet.name,
         owner=subnet.owner,
         description=subnet.description,
@@ -143,16 +142,16 @@ def _invariant_error_to_acn(
 _nesting_error_to_acn = _invariant_error_to_acn
 
 
-def _generate_subnet_slug(name: str) -> str:
-    """Generate a compact, unique slug from a human-readable name.
+def _generate_subnet_id(name: str) -> str:
+    """Generate a compact, unique subnet_id from a human-readable name.
 
     Format: ``subnet-{slug}-{rand6}`` where slug is a lowercased, hyphen-
     delimited form of ``name`` truncated to 32 chars. Total length is
     bounded by ``len("subnet-") + 32 + 1 + 6 = 46`` — comfortably inside
-    ``SubnetCreateRequest.slug``'s ``max_length=64``.
+    ``SubnetCreateRequest.subnet_id``'s ``max_length=64``.
     """
-    slug_part = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:32] or "subnet"
-    return f"subnet-{slug_part}-{secrets.token_hex(3)}"
+    slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:32] or "subnet"
+    return f"subnet-{slug}-{secrets.token_hex(3)}"
 
 
 @router.post("", response_model=SubnetCreateResponse)
@@ -180,31 +179,12 @@ async def create_subnet(
     owner = agent_info["agent_id"]
 
     try:
-        from uuid import uuid4
         security_cfg = body.security_config or (
             dict(body.security_schemes) if body.security_schemes else {}
         )
-        # ``body.slug`` is the human-readable alias (backward-compat alias
-        # ``subnet_id`` in the request body also maps here via Pydantic alias).
-        # The UUID is always server-generated.
-        slug = body.slug or _generate_subnet_slug(body.name)
-        subnet_uuid = str(uuid4())
-
-        # Resolve parent_subnet_id: accept UUID or slug, normalise to UUID.
-        resolved_parent_id: str | None = None
-        if body.parent_subnet_id:
-            parent = await subnet_service.get_subnet(body.parent_subnet_id)
-            if parent is None:
-                raise ACNHTTPError(
-                    ErrorCode.SUBNET_NOT_FOUND,
-                    404,
-                    details={"subnet_id": body.parent_subnet_id},
-                )
-            resolved_parent_id = parent.subnet_id  # UUID
-
+        subnet_id = body.subnet_id or _generate_subnet_id(body.name)
         subnet = await subnet_service.create_subnet(
-            subnet_id=subnet_uuid,
-            slug=slug,
+            subnet_id=subnet_id,
             name=body.name,
             owner=owner,
             description=body.description,
@@ -214,7 +194,7 @@ async def create_subnet(
             # ADR-0003 nesting fields — service-layer validates the
             # five invariant variants and raises ``SubnetInvariantError``
             # with a stable ``reason`` string.
-            parent_subnet_id=resolved_parent_id,
+            parent_subnet_id=body.parent_subnet_id,
             lifecycle=body.lifecycle,
             linked_task_id=body.linked_task_id,
             # ADR-0004 admission policy. ``None`` (the default) lets
@@ -235,7 +215,6 @@ async def create_subnet(
             logger.error(
                 "subnet_owner_join_failed_rolling_back",
                 subnet_id=subnet.subnet_id,
-                slug=subnet.slug,
                 owner=owner,
                 error=str(join_error),
                 exc_info=True,
@@ -254,17 +233,16 @@ async def create_subnet(
                 detail="Failed to create subnet",
             ) from join_error
 
-        # Generate gateway URLs using UUID for machine paths
+        # Generate gateway URLs
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
         gateway_a2a_url = f"{base_url}/gateway/a2a/{subnet.subnet_id}"
         gateway_ws_url = f"{base_url}/gateway/ws/{subnet.subnet_id}"
 
-        logger.info("subnet_created", subnet_id=subnet.subnet_id, slug=subnet.slug, owner=owner)
+        logger.info("subnet_created", subnet_id=subnet.subnet_id, owner=owner)
 
         return SubnetCreateResponse(
             status="created",
             subnet_id=subnet.subnet_id,
-            slug=subnet.slug,
             is_public=not subnet.is_private,
             gateway_ws_url=gateway_ws_url,
             gateway_a2a_url=gateway_a2a_url,
@@ -426,7 +404,8 @@ async def get_subnet(
     # draw correct topology without leaking sensitive details.
     def _stub() -> SubnetStub:
         return SubnetStub(
-            subnet_id=subnet.subnet_id,   # UUID only — slug/name deliberately omitted
+            subnet_id=subnet.subnet_id,
+            name=subnet.name,
             is_private=True,
             parent_subnet_id=_coerce_optional_str(
                 getattr(subnet, "parent_subnet_id", None)

@@ -1,6 +1,5 @@
 """PostgreSQL Implementation of ISubnetRepository"""
 
-import re
 from contextlib import asynccontextmanager
 
 from sqlalchemy import delete, select, update
@@ -9,15 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ....core.entities.subnet import Subnet
 from ....core.interfaces import ISubnetRepository
 from .models import SubnetModel
-
-_UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-    re.IGNORECASE,
-)
-
-
-def _is_uuid(value: str) -> bool:
-    return bool(_UUID_RE.match(value))
 
 
 class PostgresSubnetRepository(ISubnetRepository):
@@ -71,8 +61,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             "approval" if row.is_private else "open"
         )
         return Subnet(
-            subnet_id=row.subnet_id,   # UUID from DB column ``id``
-            slug=row.slug,
+            subnet_id=row.subnet_id,
             name=row.name,
             owner=row.owner,
             description=row.description,
@@ -83,7 +72,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             metadata=meta,
             harness_url=row.harness_url,
             harness_secret=row.harness_secret,
-            parent_subnet_id=row.parent_subnet_id,   # UUID from DB column ``parent_id``
+            parent_subnet_id=row.parent_subnet_id,
             lifecycle=row.lifecycle,
             linked_task_id=row.linked_task_id,
             join_policy=join_policy,
@@ -95,8 +84,7 @@ class PostgresSubnetRepository(ISubnetRepository):
         if created and not created.tzinfo:
             created = created.replace(tzinfo=UTC)
         return SubnetModel(
-            subnet_id=subnet.subnet_id,   # UUID → DB column ``id``
-            slug=subnet.slug,
+            subnet_id=subnet.subnet_id,
             name=subnet.name,
             owner=subnet.owner,
             description=subnet.description,
@@ -106,7 +94,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             subnet_metadata=subnet.metadata or None,
             harness_url=subnet.harness_url,
             harness_secret=subnet.harness_secret,
-            parent_subnet_id=subnet.parent_subnet_id,   # UUID → DB column ``parent_id``
+            parent_subnet_id=subnet.parent_subnet_id,
             lifecycle=subnet.lifecycle,
             linked_task_id=subnet.linked_task_id,
             join_policy=subnet.join_policy,
@@ -131,7 +119,6 @@ class PostgresSubnetRepository(ISubnetRepository):
                     update(SubnetModel)
                     .where(SubnetModel.subnet_id == subnet.subnet_id)
                     .values(
-                        slug=model.slug,
                         name=model.name,
                         owner=model.owner,
                         description=model.description,
@@ -152,30 +139,8 @@ class PostgresSubnetRepository(ISubnetRepository):
             await session.commit()
 
     async def find_by_id(self, subnet_id: str) -> Subnet | None:
-        """Look up a subnet by UUID or slug.
-
-        Accepts both UUID (``f47ac10b-...``) and human-readable slug
-        (``acnlabs-core``) so CLI callers and the resolver can use either
-        form.  UUID lookup uses the PK index (O(1)); slug lookup hits the
-        ``uq_subnets_slug`` unique index (also O(1)).
-        """
         async with self._session_factory() as session:
-            if _is_uuid(subnet_id):
-                row = await session.get(SubnetModel, subnet_id)
-            else:
-                result = await session.execute(
-                    select(SubnetModel).where(SubnetModel.slug == subnet_id)
-                )
-                row = result.scalar_one_or_none()
-            return self._model_to_subnet(row) if row else None
-
-    async def find_by_slug(self, slug: str) -> Subnet | None:
-        """Look up a subnet by its human-readable slug."""
-        async with self._session_factory() as session:
-            result = await session.execute(
-                select(SubnetModel).where(SubnetModel.slug == slug)
-            )
-            row = result.scalar_one_or_none()
+            row = await session.get(SubnetModel, subnet_id)
             return self._model_to_subnet(row) if row else None
 
     async def find_all(self) -> list[Subnet]:
@@ -294,26 +259,14 @@ class PostgresSubnetRepository(ISubnetRepository):
     async def find_by_parent(self, parent_subnet_id: str) -> list[Subnet]:
         """Return all child subnets nested under a given parent.
 
-        Accepts the parent's UUID (canonical) or slug (legacy / CLI).
         Hits the ``subnets_parent_idx`` partial index for an O(k)
         lookup (k = number of children). Returns the empty list when
         no children exist or the parent itself is unknown.
         """
         async with self._session_factory() as session:
-            # Resolve slug → UUID if needed so the index is always hit.
-            parent_uuid = parent_subnet_id
-            if not _is_uuid(parent_subnet_id):
-                slug_result = await session.execute(
-                    select(SubnetModel.subnet_id).where(
-                        SubnetModel.slug == parent_subnet_id
-                    )
-                )
-                parent_uuid = slug_result.scalar_one_or_none()
-                if parent_uuid is None:
-                    return []
             result = await session.execute(
                 select(SubnetModel).where(
-                    SubnetModel.parent_subnet_id == parent_uuid
+                    SubnetModel.parent_subnet_id == parent_subnet_id
                 )
             )
             return [self._model_to_subnet(r) for r in result.scalars().all()]

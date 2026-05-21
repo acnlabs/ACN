@@ -16,9 +16,7 @@ _LIFECYCLE_VALUES: frozenset[str] = frozenset({"persistent", "task_scoped"})
 # future third mode (e.g. "invite_only", "paid") extends this set and the
 # ``__post_init__`` validator picks it up automatically.
 _JOIN_POLICY_VALUES: frozenset[str] = frozenset({"open", "approval"})
-# Reserved subnet slugs (human-readable aliases). UUIDs are stable and
-# auto-generated; the *slug* is what carries the reserved semantic.
-_RESERVED_SUBNET_SLUGS: frozenset[str] = frozenset({"public", "system"})
+_RESERVED_SUBNET_IDS: frozenset[str] = frozenset({"public", "system"})
 
 
 @dataclass
@@ -30,24 +28,12 @@ class Subnet:
     optionally nest one level deep — see ADR-0003. The three nesting
     fields default to "top-level persistent subnet" so legacy callers
     that don't touch them behave exactly as before.
-
-    Identifier fields
-    -----------------
-    ``subnet_id``  — opaque UUID, the canonical machine identifier.
-                     Never changes; safe to embed in foreign-key columns.
-    ``slug``       — human-readable alias (e.g. ``acnlabs-core``).
-                     Unique, stable, used in CLI / human-facing URLs.
-                     API routes accept both forms via ``resolve_subnet_ref``.
     """
 
-    subnet_id: str          # UUID — machine-facing primary key
+    subnet_id: str
     name: str
     owner: str
     description: str | None = None
-    # human-readable alias (e.g. "acnlabs-core"); auto-filled from
-    # subnet_id in __post_init__ when not provided so legacy callers
-    # that only set subnet_id keep working unchanged.
-    slug: str = ""
     is_private: bool = False
     security_config: dict = field(default_factory=dict)
     member_agent_ids: set[str] = field(default_factory=set)
@@ -57,8 +43,6 @@ class Subnet:
     harness_secret: str | None = None
     # Nesting fields (ADR-0003). All optional; defaults preserve legacy
     # "flat top-level subnet" semantics.
-    # ``parent_subnet_id`` stores the UUID of the parent subnet (was slug
-    # before this migration).
     parent_subnet_id: str | None = None
     lifecycle: Literal["persistent", "task_scoped"] = "persistent"
     linked_task_id: str | None = None
@@ -80,20 +64,14 @@ class Subnet:
         """Validate invariants"""
         if not self.subnet_id:
             raise ValueError("subnet_id cannot be empty")
-        # Auto-fill slug from subnet_id when not explicitly set.
-        # This keeps legacy tests/callers that only pass subnet_id working.
-        if not self.slug:
-            self.slug = self.subnet_id
         if not self.name:
             raise ValueError("name cannot be empty")
         if not self.owner:
             raise ValueError("owner cannot be empty")
-        # Reserved slugs ("public", "system") carry platform-level semantics.
-        # The check is on ``slug`` not ``subnet_id`` because the UUID is always
-        # opaque — the reserved *name* is what matters.
-        if self.slug in _RESERVED_SUBNET_SLUGS:
+        # Reserved subnet IDs
+        if self.subnet_id in _RESERVED_SUBNET_IDS:
             if self.owner != "system":
-                raise ValueError(f"Subnet slug '{self.slug}' is reserved for system use")
+                raise ValueError(f"Subnet '{self.subnet_id}' is reserved for system use")
             # Reserved subnets can never participate in nesting — neither
             # as a child (would let attackers slot platform-owned IDs into
             # a hierarchy) nor with a task-bound lifecycle (would let a
@@ -102,11 +80,11 @@ class Subnet:
             # depend on for `public`).
             if self.parent_subnet_id is not None:
                 raise ValueError(
-                    f"Reserved subnet slug '{self.slug}' cannot have a parent_subnet_id"
+                    f"Reserved subnet '{self.subnet_id}' cannot have a parent_subnet_id"
                 )
             if self.lifecycle == "task_scoped":
                 raise ValueError(
-                    f"Reserved subnet slug '{self.slug}' cannot be task_scoped"
+                    f"Reserved subnet '{self.subnet_id}' cannot be task_scoped"
                 )
 
         # ADR-0003 entity-layer invariants.
@@ -140,7 +118,7 @@ class Subnet:
         # ``details.reason="visibility_policy_conflict"``.
         if self.is_private and self.join_policy == "open":
             raise ValueError(
-                f"subnet slug '{self.slug}' configuration invalid: "
+                f"subnet '{self.subnet_id}' configuration invalid: "
                 f"is_private=True requires join_policy='approval' "
                 f"(reason=visibility_policy_conflict)"
             )
@@ -164,10 +142,6 @@ class Subnet:
     def is_public(self) -> bool:
         """Check if subnet is public"""
         return not self.is_private
-
-    def is_reserved(self) -> bool:
-        """Check if this is a platform-reserved subnet (public / system)."""
-        return self.slug in _RESERVED_SUBNET_SLUGS
 
     def requires_authentication(self) -> bool:
         """Check if subnet requires authentication.
@@ -194,7 +168,6 @@ class Subnet:
         """
         out = {
             "subnet_id": self.subnet_id,
-            "slug": self.slug,
             "name": self.name,
             "owner": self.owner,
             "description": self.description,
@@ -244,18 +217,7 @@ class Subnet:
         The auto-upgrade only fires when the key is **absent**. If the
         caller explicitly passes ``join_policy=...`` we honour it as-is
         and let ``__post_init__`` validate.
-
-        UUID migration compatibility
-        ----------------------------
-        Pre-migration rows stored in Redis have ``subnet_id`` as a slug
-        and no ``slug`` key.  We detect this by checking if ``subnet_id``
-        looks like a UUID; if not, we treat it as a legacy slug-based row
-        and set ``slug = subnet_id`` as a provisional value so the entity
-        can be constructed.  The service layer that calls ``from_dict``
-        should schedule a re-save to persist the proper UUID + slug split.
         """
-        import re as _re
-
         data = data.copy()
         if isinstance(data.get("created_at"), str):
             try:
@@ -267,24 +229,4 @@ class Subnet:
         # ADR-0004 legacy auto-upgrade — see docstring above.
         if "join_policy" not in data and data.get("is_private") is True:
             data["join_policy"] = "approval"
-
-        # UUID migration backward-compat: if ``slug`` is absent the row was
-        # written before this migration.  Use ``subnet_id`` (the old slug
-        # value) as a provisional slug so construction succeeds.
-        _UUID_RE = _re.compile(
-            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-            _re.IGNORECASE,
-        )
-        if "slug" not in data:
-            existing_id = data.get("subnet_id", "")
-            if _UUID_RE.match(existing_id):
-                # Post-migration row missing slug (shouldn't happen but be safe)
-                data.setdefault("slug", existing_id)
-            else:
-                # Pre-migration row: subnet_id IS the slug; assign a placeholder
-                # UUID so construction doesn't fail on missing subnet_id.
-                from uuid import uuid4
-                data["slug"] = existing_id
-                data["subnet_id"] = str(uuid4())
-
         return cls(**data)
