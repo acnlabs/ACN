@@ -279,7 +279,13 @@ class SubnetInfo(BaseModel):
 
     # ADR-0003 nesting fields — optional + defaulted so older
     # servers that don't yet emit them still parse cleanly.
+    #
+    # ACL V6 B6: the server no longer emits ``parent_subnet_id`` (slug)
+    # in ``SubnetInfo`` responses — use ``parent_id`` (UUID) instead.
+    # ``parent_subnet_id`` is kept here for backward-compat parsing of
+    # responses from older server versions.
     parent_subnet_id: str | None = None
+    parent_id: str | None = None
     lifecycle: str = "persistent"
     linked_task_id: str | None = None
 

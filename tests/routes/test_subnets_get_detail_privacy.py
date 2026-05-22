@@ -1,24 +1,20 @@
 """Route-level tests for ``GET /api/v1/subnets/{subnet_id}`` privacy
-contract.
+contract (ACL V6 / issue #114).
 
 Contract:
 
 1. **Public subnets** — fully visible to anyone, no auth required.
-2. **Private subnets — owner, member, and ``acn:admin``** see the
-   full ``SubnetInfo`` payload (200).
+2. **Private subnets — owner agent (API key), member agent (API key),
+   user JWT with ownership-chain access to the owning agent, or
+   ``acn:admin``** see the full ``SubnetInfo`` payload (200).
 3. **Private subnets — anon or authed non-member** receive a
-   ``SubnetStub`` (200) — structural metadata only (subnet_id, name,
-   is_private, parent_subnet_id, lifecycle).  Sensitive fields such as
-   owner, description, harness_url, and security_schemes are omitted.
-   Rationale: the subnet_id is already discoverable via public agent
-   subnet_ids, so existence-hiding provides no real security; surfacing
-   hierarchy metadata lets graph clients render correct topology.
+   ``SubnetStub`` (200) — opaque UUID plus minimal structural metadata.
+   Sensitive fields (slug, name, owner, description, harness_url,
+   security_schemes, parent_subnet_id) are omitted.
 4. **Genuinely missing subnets** still 404 with ``SUBNET_NOT_FOUND``.
-
-The membership check reads ``subnet.member_agent_ids`` directly off
-the loaded entity — no extra DB call — so the test fixture exposes
-it as a real attribute (not a ``MagicMock`` autospec) and asserts
-the route does not invent a separate roster lookup.
+5. **``SubnetInfo`` no longer leaks ``parent_subnet_id`` slug** (B6) —
+   the field is always ``None`` in responses; ``parent_id`` UUID is
+   used instead.
 """
 
 from __future__ import annotations
@@ -32,7 +28,7 @@ from fastapi.testclient import TestClient
 
 from acn.api import app
 from acn.core.exceptions import SubnetNotFoundException
-from acn.routes.dependencies import get_subnet_service
+from acn.routes.dependencies import get_agent_service, get_subnet_service
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -69,6 +65,13 @@ def _make_subnet(
     return sn
 
 
+def _make_agent(agent_id: str, owner: str) -> MagicMock:
+    a = MagicMock()
+    a.agent_id = agent_id
+    a.owner = owner
+    return a
+
+
 @pytest.fixture
 def public_subnet() -> MagicMock:
     return _make_subnet("subnet-public", owner="agent-owner", is_private=False)
@@ -98,18 +101,55 @@ def stub_subnet_service(public_subnet, private_subnet):
     return svc
 
 
+@pytest.fixture
+def stub_agent_service():
+    """Agent service stub for ownership-chain tests.
+
+    ``find_by_owner("user-owns-owner")`` returns the agent whose
+    ``agent_id == "agent-owner"``, modelling a user who owns the subnet's
+    owning agent (V6 ownership-chain bridge).
+
+    All other owners return an empty list.
+    """
+    svc = AsyncMock()
+
+    async def _find_by_owner(owner_sub: str):
+        if owner_sub == "user-owns-owner":
+            return [_make_agent("agent-owner", owner_sub)]
+        if owner_sub == "user-owns-member":
+            return [_make_agent("agent-member", owner_sub)]
+        return []
+
+    svc.find_by_owner = AsyncMock(side_effect=_find_by_owner)
+    return svc
+
+
 @pytest.fixture(autouse=True)
-def wire(stub_subnet_service):
+def wire(stub_subnet_service, stub_agent_service):
     app.dependency_overrides[get_subnet_service] = lambda: stub_subnet_service
+    app.dependency_overrides[get_agent_service] = lambda: stub_agent_service
     yield
     app.dependency_overrides.pop(get_subnet_service, None)
+    app.dependency_overrides.pop(get_agent_service, None)
 
 
 def _fake_verify_token(
-    *, sub: str, permissions: list[str] | None = None
+    *,
+    sub: str,
+    caller_type: str = "agent",
+    permissions: list[str] | None = None,
 ) -> Any:
+    """Return a fake ``verify_token`` dependency.
+
+    ``caller_type`` defaults to ``"agent"`` for owner/member test cases
+    (API key callers).  Pass ``caller_type="user"`` for user JWT tests.
+    """
     async def _impl(*args, **kwargs):
-        return {"sub": sub, "permissions": permissions or []}
+        return {
+            "sub": sub,
+            "type": caller_type,
+            "permissions": permissions or [],
+        }
 
     return _impl
 
@@ -163,6 +203,16 @@ class TestPublicSubnetUnchanged:
 
         assert r.status_code == 200, r.text
 
+    def test_public_subnet_parent_subnet_id_suppressed(self):
+        """B6: SubnetInfo must never expose parent_subnet_id slug."""
+        with TestClient(app) as client:
+            r = client.get("/api/v1/subnets/subnet-public")
+
+        assert r.status_code == 200
+        body = r.json()
+        # parent_subnet_id slug is always None; parent_id UUID is the new field.
+        assert body.get("parent_subnet_id") is None
+
 
 # ---------------------------------------------------------------------------
 # 2. Private subnets — authorised callers see full payload
@@ -170,10 +220,11 @@ class TestPublicSubnetUnchanged:
 
 
 class TestPrivateSubnetAuthorisedCallers:
-    def test_owner_sees_full_payload(self, monkeypatch):
+    def test_owner_agent_apikey_sees_full_payload(self, monkeypatch):
+        """API key caller whose agent_id == subnet.owner gets full access."""
         monkeypatch.setattr(
             "acn.routes.subnets.verify_token",
-            _fake_verify_token(sub="agent-owner"),
+            _fake_verify_token(sub="agent-owner", caller_type="agent"),
         )
         with TestClient(app) as client:
             r = client.get(
@@ -187,10 +238,11 @@ class TestPrivateSubnetAuthorisedCallers:
         assert body["owner"] == "agent-owner"
         assert body["harness_url"] == "https://harness.example.org"
 
-    def test_member_sees_full_payload(self, monkeypatch):
+    def test_member_agent_apikey_sees_full_payload(self, monkeypatch):
+        """API key caller in member_agent_ids gets full access."""
         monkeypatch.setattr(
             "acn.routes.subnets.verify_token",
-            _fake_verify_token(sub="agent-member"),
+            _fake_verify_token(sub="agent-member", caller_type="agent"),
         )
         with TestClient(app) as client:
             r = client.get(
@@ -210,6 +262,7 @@ class TestPrivateSubnetAuthorisedCallers:
             "acn.routes.subnets.verify_token",
             _fake_verify_token(
                 sub="agent-support",
+                caller_type="user",
                 permissions=["acn:admin"],
             ),
         )
@@ -221,6 +274,40 @@ class TestPrivateSubnetAuthorisedCallers:
 
         assert r.status_code == 200, r.text
         assert r.json()["owner"] == "agent-owner"
+
+    def test_user_jwt_owning_owner_agent_gets_full_payload(self, monkeypatch):
+        """V6 ownership-chain bridge: user JWT whose owned agents include
+        subnet.owner gets full SubnetInfo (read-knowledge via ownership edge).
+        """
+        monkeypatch.setattr(
+            "acn.routes.subnets.verify_token",
+            _fake_verify_token(sub="user-owns-owner", caller_type="user"),
+        )
+        with TestClient(app) as client:
+            r = client.get(
+                "/api/v1/subnets/subnet-private",
+                headers={"Authorization": "Bearer user-token"},
+            )
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["subnet_id"] == "subnet-private"
+        assert body["owner"] == "agent-owner"
+
+    def test_full_payload_parent_subnet_id_suppressed(self, monkeypatch):
+        """B6: even authorised callers must not receive parent_subnet_id slug."""
+        monkeypatch.setattr(
+            "acn.routes.subnets.verify_token",
+            _fake_verify_token(sub="agent-owner", caller_type="agent"),
+        )
+        with TestClient(app) as client:
+            r = client.get(
+                "/api/v1/subnets/subnet-private",
+                headers={"Authorization": "Bearer owner-token"},
+            )
+
+        assert r.status_code == 200, r.text
+        assert r.json().get("parent_subnet_id") is None
 
 
 # ---------------------------------------------------------------------------
@@ -240,15 +327,50 @@ class TestPrivateSubnetDiscoverable:
         assert r.status_code == 200, r.text
         _assert_stub(r.json())
 
-    def test_authed_non_member_gets_stub(self, monkeypatch):
+    def test_authed_non_member_agent_gets_stub(self, monkeypatch):
+        """API key caller not in member_agent_ids gets SubnetStub."""
         monkeypatch.setattr(
             "acn.routes.subnets.verify_token",
-            _fake_verify_token(sub="agent-outsider"),
+            _fake_verify_token(sub="agent-outsider", caller_type="agent"),
         )
         with TestClient(app) as client:
             r = client.get(
                 "/api/v1/subnets/subnet-private",
                 headers={"Authorization": "Bearer outsider-token"},
+            )
+
+        assert r.status_code == 200, r.text
+        _assert_stub(r.json())
+
+    def test_user_jwt_owning_only_member_agent_gets_stub(self, monkeypatch):
+        """User who owns a member agent (not the owner agent) gets SubnetStub.
+
+        Membership is an employment relationship — read trust does NOT
+        flow upward from member → member's owner (V6 ownership-edge contract).
+        """
+        monkeypatch.setattr(
+            "acn.routes.subnets.verify_token",
+            _fake_verify_token(sub="user-owns-member", caller_type="user"),
+        )
+        with TestClient(app) as client:
+            r = client.get(
+                "/api/v1/subnets/subnet-private",
+                headers={"Authorization": "Bearer user-token"},
+            )
+
+        assert r.status_code == 200, r.text
+        _assert_stub(r.json())
+
+    def test_user_jwt_unrelated_gets_stub(self, monkeypatch):
+        """User JWT with no ownership relationship gets SubnetStub."""
+        monkeypatch.setattr(
+            "acn.routes.subnets.verify_token",
+            _fake_verify_token(sub="user-unrelated", caller_type="user"),
+        )
+        with TestClient(app) as client:
+            r = client.get(
+                "/api/v1/subnets/subnet-private",
+                headers={"Authorization": "Bearer user-token"},
             )
 
         assert r.status_code == 200, r.text
@@ -261,6 +383,7 @@ class TestPrivateSubnetDiscoverable:
             "acn.routes.subnets.verify_token",
             _fake_verify_token(
                 sub="agent-reader",
+                caller_type="agent",
                 permissions=["acn:read", "acn:write"],
             ),
         )
