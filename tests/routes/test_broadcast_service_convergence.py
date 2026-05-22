@@ -255,6 +255,9 @@ class TestBroadcastRouteUsesBroadcastService:
                             "from_agent": "agent-a",
                             "message": {"text": "x"},
                             "strategy": strategy_input,
+                            # Provide a selector so the broadcast guard passes;
+                            # the stub service never actually fans out.
+                            "target_tags": ["test"],
                         },
                     )
                     assert r.status_code == 200, (
