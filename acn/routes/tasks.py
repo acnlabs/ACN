@@ -503,8 +503,16 @@ class TaskReviewRequest(BaseModel):
     agent_id: str | None = Field(None, max_length=128, description="Agent ID (alternative to participation_id)")
 
 
-def _task_to_response(task) -> TaskResponse:
-    """Convert Task entity to response model."""
+def _task_to_response(task, *, expose_submission: bool = False) -> TaskResponse:
+    """Convert Task entity to response model.
+
+    ``expose_submission`` controls whether the work-product fields
+    (``submission``, ``submission_artifacts``) are included in the response.
+    They should only be set to True when the caller is the task creator,
+    the task assignee, a confirmed participant, ``acn:admin``, or an
+    internal backend token. Anonymous and unrelated callers receive ``None``
+    to avoid leaking sensitive deliverable content (ACL V6 Scope B).
+    """
     return TaskResponse(
         task_id=task.task_id,
         status=task.status.value,
@@ -537,11 +545,41 @@ def _task_to_response(task) -> TaskResponse:
         group_id=task.group_id,
         metadata=task.metadata or {},
         ui_spec=(task.metadata or {}).get("ui_spec"),
-        submission=task.submission,
-        submission_artifacts=task.submission_artifacts or [],
+        submission=task.submission if expose_submission else None,
+        submission_artifacts=task.submission_artifacts or [] if expose_submission else [],
         subnet_id=task.subnet_id,
         max_resubmit_attempts=task.max_resubmit_attempts,
     )
+
+
+def _caller_can_see_submission(task, caller_id: str | None, payload: dict | None) -> bool:
+    """Return True when the caller is entitled to see work-product fields.
+
+    Entitled callers:
+    - task creator (creator_id match)
+    - task assignee (assignee_id match)
+    - acn:admin permission holders
+    - internal / dev token types (payload.type in {"internal", "dev"})
+
+    Note: multi-participant membership is not checked here — callers who
+    accepted a task will either have creator_id == caller_id (if they're the
+    task agent), or will see submission through the /participations endpoint
+    which already gates by creator/participant.  This function is a
+    belt-and-braces safeguard against leaking submitted deliverables to
+    unrelated parties on task-detail and task-list endpoints.
+    """
+    if caller_id is None:
+        return False
+    if payload is not None:
+        ptype = payload.get("type", "")
+        perms = payload.get("permissions", [])
+        if ptype in ("internal", "dev") or "acn:admin" in perms:
+            return True
+    if task.creator_id and caller_id == task.creator_id:
+        return True
+    if task.assignee_id and caller_id == task.assignee_id:
+        return True
+    return False
 
 
 def _participation_to_response(p) -> ParticipationResponse:
@@ -715,9 +753,28 @@ async def list_tasks(
     if has_more:
         tasks = tasks[:limit]
 
+    # Resolve full payload once for acn:admin / internal check (best-effort).
+    # We already resolved requesting_agent_id above; now resolve the payload
+    # so _caller_can_see_submission can check admin permissions.
+    list_payload: dict | None = None
+    if credentials:
+        try:
+            token = credentials.credentials
+            if not token.startswith("acn_"):
+                list_payload = await verify_token(request, credentials)
+            else:
+                list_payload = {"type": "agent", "sub": requesting_agent_id, "permissions": []}
+        except Exception:  # noqa: BLE001
+            pass
+
+    task_responses = []
+    for t in tasks:
+        expose = _caller_can_see_submission(t, requesting_agent_id, list_payload)
+        task_responses.append(_task_to_response(t, expose_submission=expose))
+
     return TaskListResponse(
-        tasks=[_task_to_response(t) for t in tasks],
-        total=len(tasks),
+        tasks=task_responses,
+        total=len(task_responses),
         has_more=has_more,
     )
 
@@ -769,6 +826,12 @@ async def get_task(
     consequence was an agent could see a private task in ``GET /tasks`` but
     receive 403 when fetching its detail. Both endpoints now share
     ``_resolve_caller_identity``.
+
+    ACL V6 Scope B — submission redaction: work-product fields
+    (``submission``, ``submission_artifacts``) are only exposed to the task
+    creator, the assignee, ``acn:admin``, and internal callers.  All other
+    callers (anonymous or unrelated agents/users) receive ``null`` so
+    sensitive deliverable content is not leaked on the public detail endpoint.
     """
     try:
         task = await task_service.get_task(task_id)
@@ -779,9 +842,12 @@ async def get_task(
             details={"task_id": task_id},
         ) from None
 
+    # Resolve caller once — used for both subnet-membership gate and
+    # submission-visibility decision.
+    caller_id = await _resolve_caller_identity(request, credentials)
+
     if task.subnet_id:
-        requesting_agent_id = await _resolve_caller_identity(request, credentials)
-        if not requesting_agent_id:
+        if not caller_id:
             raise ACNHTTPError(
                 ErrorCode.NOT_SUBNET_MEMBER,
                 403,
@@ -792,7 +858,7 @@ async def get_task(
                     "reason": "anonymous_caller",
                 },
             )
-        is_member = await task_service.is_subnet_member(task.subnet_id, requesting_agent_id)
+        is_member = await task_service.is_subnet_member(task.subnet_id, caller_id)
         if not is_member:
             raise ACNHTTPError(
                 ErrorCode.NOT_SUBNET_MEMBER,
@@ -800,12 +866,25 @@ async def get_task(
                 details={
                     "task_id": task_id,
                     "subnet_id": task.subnet_id,
-                    "agent_id": requesting_agent_id,
+                    "agent_id": caller_id,
                     "reason": "not_member",
                 },
             )
 
-    return _task_to_response(task)
+    # Resolve full payload for acn:admin / internal check (best-effort).
+    caller_payload: dict | None = None
+    if credentials:
+        try:
+            token = credentials.credentials
+            if not token.startswith("acn_"):
+                caller_payload = await verify_token(request, credentials)
+            else:
+                caller_payload = {"type": "agent", "sub": caller_id, "permissions": []}
+        except Exception:  # noqa: BLE001
+            pass
+
+    expose = _caller_can_see_submission(task, caller_id, caller_payload)
+    return _task_to_response(task, expose_submission=expose)
 
 
 # ========== Authenticated Endpoints ==========
@@ -843,6 +922,23 @@ async def create_task(
         # Internal/dev: allow X-Creator-Id override
         token_owner = creator_id_header
 
+    # ACL V6 Scope B — subnet membership gate on creation.
+    # If the caller specifies a subnet_id, they must be a member of that subnet.
+    # internal / admin callers are exempt (they act on behalf of others).
+    if body.subnet_id and auth_type not in ("internal", "dev"):
+        if "acn:admin" not in payload.get("permissions", []):
+            is_creator_member = await task_service.is_subnet_member(body.subnet_id, token_owner)
+            if not is_creator_member:
+                raise ACNHTTPError(
+                    ErrorCode.NOT_SUBNET_MEMBER,
+                    403,
+                    message="You must be a member of the subnet to create a task within it.",
+                    details={
+                        "subnet_id": body.subnet_id,
+                        "reason": "creator_not_subnet_member",
+                    },
+                )
+
     # Merge ui_spec into metadata so it's stored and returned transparently
     merged_metadata = dict(body.metadata)
     if body.ui_spec is not None:
@@ -879,7 +975,8 @@ async def create_task(
             creator=token_owner,
             auto_approve=body.auto_approve,
         )
-        return _task_to_response(task)
+        # Creator always sees their own submission on the creation response.
+        return _task_to_response(task, expose_submission=True)
 
     except ACNHTTPError:
         # P3 cross-module catch-all defence: ``ACNHTTPError`` is
@@ -905,8 +1002,37 @@ async def accept_task(
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
-    """Accept/join a task. Returns participation_id for multi-participant tasks."""
+    """Accept/join a task. Returns participation_id for multi-participant tasks.
+
+    ACL V6 Scope B — subnet membership gate: if the task is restricted to a
+    subnet (``subnet_id`` is set) the caller must be a member of that subnet.
+    Non-members receive ``403 NOT_SUBNET_MEMBER`` with existence-hiding
+    semantics (same shape as the already-implemented gate on ``GET /tasks/{id}``).
+    """
     agent_id, agent_name, agent_type = _resolve_actor(payload, request)
+
+    try:
+        task = await task_service.get_task(task_id)
+    except TaskNotFoundException:
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
+
+    # Gate: private subnet task — caller must be a subnet member.
+    if task.subnet_id and "acn:admin" not in payload.get("permissions", []):
+        is_member = await task_service.is_subnet_member(task.subnet_id, agent_id)
+        if not is_member:
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                details={
+                    "task_id": task_id,
+                    "subnet_id": task.subnet_id,
+                    "reason": "not_subnet_member",
+                },
+            )
 
     try:
         task, participation_id = await task_service.accept_task(
@@ -915,8 +1041,9 @@ async def accept_task(
             agent_name=agent_name,
             agent_type=agent_type,
         )
+        expose = _caller_can_see_submission(task, agent_id, payload)
         return TaskAcceptResponse(
-            task=_task_to_response(task),
+            task=_task_to_response(task, expose_submission=expose),
             participation_id=participation_id,
         )
 
@@ -962,7 +1089,8 @@ async def invite_solver(
             invitee_id=body.agent_id,
             invitee_name=body.agent_name,
         )
-        return _task_to_response(task)
+        expose = _caller_can_see_submission(task, inviter_id, payload)
+        return _task_to_response(task, expose_submission=expose)
 
     except TaskNotFoundException:
         raise ACNHTTPError(
@@ -1004,7 +1132,9 @@ async def submit_task(
             artifacts=body.artifacts,
             participation_id=body.participation_id,
         )
-        return _task_to_response(task)
+        # Submitter always sees their own submission in the confirmation response.
+        expose = _caller_can_see_submission(task, agent_id, payload)
+        return _task_to_response(task, expose_submission=expose)
 
     except TaskNotFoundException:
         raise ACNHTTPError(
@@ -1061,7 +1191,8 @@ async def review_task(
                 reviewer_id=reviewer_id,
                 notes=body.notes,
             )
-        return _task_to_response(task)
+        reviewer_expose = _caller_can_see_submission(task, reviewer_id, payload)
+        return _task_to_response(task, expose_submission=reviewer_expose)
 
     except TaskNotFoundException:
         raise ACNHTTPError(
@@ -1099,7 +1230,8 @@ async def cancel_task(
             task_id=task_id,
             canceller_id=canceller_id,
         )
-        return _task_to_response(task)
+        expose = _caller_can_see_submission(task, canceller_id, payload)
+        return _task_to_response(task, expose_submission=expose)
 
     except TaskNotFoundException:
         raise ACNHTTPError(
@@ -1365,6 +1497,22 @@ async def agent_create_task(
     if body.ui_spec is not None:
         merged_metadata["ui_spec"] = body.ui_spec
 
+    # Subnet membership gate for agent/create (same as POST /tasks).
+    if body.subnet_id:
+        is_creator_member = await task_service.is_subnet_member(
+            body.subnet_id, agent_info["agent_id"]
+        )
+        if not is_creator_member:
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                message="Agent must be a member of the subnet to create a task within it.",
+                details={
+                    "subnet_id": body.subnet_id,
+                    "reason": "creator_not_subnet_member",
+                },
+            )
+
     task = await task_service.create_task(
         creator_type="agent",
         creator_id=agent_info["agent_id"],
@@ -1387,7 +1535,7 @@ async def agent_create_task(
         metadata=merged_metadata,
     )
 
-    return _task_to_response(task)
+    return _task_to_response(task, expose_submission=True)
 
 
 @router.post("/agent/{task_id}/accept", response_model=TaskResponse)
@@ -1400,13 +1548,38 @@ async def agent_accept_task(
 ):
     """Accept a task (Agent API Key auth)"""
 
+    # Fetch task first to check subnet membership gate.
+    try:
+        task_entity = await task_service.get_task(task_id)
+    except TaskNotFoundException:
+        raise ACNHTTPError(
+            ErrorCode.TASK_NOT_FOUND,
+            404,
+            details={"task_id": task_id},
+        ) from None
+
+    if task_entity.subnet_id:
+        is_member = await task_service.is_subnet_member(
+            task_entity.subnet_id, agent_info["agent_id"]
+        )
+        if not is_member:
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                details={
+                    "task_id": task_id,
+                    "subnet_id": task_entity.subnet_id,
+                    "reason": "not_subnet_member",
+                },
+            )
+
     try:
         task, _participation_id = await task_service.accept_task(
             task_id=task_id,
             agent_id=agent_info["agent_id"],
             agent_name=agent_info.get("name", "Agent"),
         )
-        return _task_to_response(task)
+        return _task_to_response(task, expose_submission=True)
 
     except TaskNotFoundException:
         raise ACNHTTPError(
@@ -1447,7 +1620,8 @@ async def agent_submit_task(
             artifacts=body.artifacts,
             participation_id=body.participation_id,
         )
-        return _task_to_response(task)
+        # Agent submitter always sees their own submission in the confirmation.
+        return _task_to_response(task, expose_submission=True)
 
     except TaskNotFoundException:
         raise ACNHTTPError(
