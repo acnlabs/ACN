@@ -418,10 +418,6 @@ jobs:
       (github.event_name == 'pull_request' &&
        contains(github.event.pull_request.labels.*.name, 'run-integration-tests'))
 
-    defaults:
-      run:
-        working-directory: acn
-
     services:
       postgres:
         image: postgres:16-alpine
@@ -457,5 +453,5 @@ jobs:
           INTERNAL_API_TOKEN: test-internal-token-must-be-at-least-32-characters-long
           DEV_MODE: "true"
           HOST: "127.0.0.1"
-        run: uv run pytest -m integration -v --tb=short
+        run: uv run pytest tests/integration -m integration -v --tb=short --no-cov
 
