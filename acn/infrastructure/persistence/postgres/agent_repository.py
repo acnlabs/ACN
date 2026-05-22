@@ -231,11 +231,33 @@ class PostgresAgentRepository(IAgentRepository):
 
     async def delete(self, agent_id: str) -> bool:
         async with self._session_factory() as session:
+            # Load before delete so we can clear Redis indexes that key on
+            # the agent's api_key hash and other fields.
+            row = await session.get(AgentModel, agent_id)
             result = await session.execute(
                 delete(AgentModel).where(AgentModel.agent_id == agent_id)
             )
             await session.commit()
-            return result.rowcount > 0
+            deleted = result.rowcount > 0
+
+        if deleted:
+            # Mirror the Redis cleanup performed by RedisAgentRepository.delete
+            # so that alive checks, inbox, and API-key lookups all invalidate
+            # immediately rather than waiting for TTL expiry.
+            await self._redis.delete(f"acn:agents:{agent_id}:alive")
+            await self._redis.delete(f"acn:inbox:{agent_id}")
+            if row is not None:
+                meta = row.agent_metadata or {}
+                api_key_hash = meta.get("api_key_hash") or (row.agent_metadata or {}).get("api_key")
+                if api_key_hash:
+                    await self._redis.delete(f"acn:agents:by_api_key:{api_key_hash}")
+                if row.owner:
+                    await self._redis.srem(f"acn:agents:by_owner:{row.owner}", agent_id)
+                await self._redis.srem("acn:agents:unclaimed", agent_id)
+                for subnet_id in (row.subnet_ids or []):
+                    await self._redis.srem(f"acn:subnets:{subnet_id}:agents", agent_id)
+
+        return deleted
 
     async def exists(self, agent_id: str) -> bool:
         async with self._session_factory() as session:

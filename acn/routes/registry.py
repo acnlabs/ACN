@@ -297,7 +297,10 @@ def _validate_resolved_a2a_endpoint(endpoint: str) -> None:
     try:
         validate_endpoint_url(endpoint, allow_loopback=settings.dev_mode)
     except SSRFViolation as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.warning("endpoint_validation_rejected", endpoint=endpoint, reason=str(e))
+        raise HTTPException(
+            status_code=400, detail="The provided endpoint URL is not allowed."
+        ) from e
 
 
 async def _resolve_registration_endpoint(
@@ -330,9 +333,10 @@ async def _resolve_registration_endpoint(
             response.raise_for_status()
             fetched_card = response.json()
     except (httpx.HTTPError, ValueError, SSRFViolation) as e:
+        logger.warning("agent_card_fetch_failed", url=agent_card_url, reason=str(e))
         raise HTTPException(
             status_code=400,
-            detail=f"Unable to fetch A2A Agent Card: {e}",
+            detail="Unable to fetch the A2A Agent Card from the provided URL.",
         ) from e
 
     direct_endpoint = _extract_jsonrpc_endpoint_from_agent_card(fetched_card)
@@ -1587,7 +1591,9 @@ async def get_agent_card(
 
 
 @router.get("/{agent_id}/.well-known/agent-registration.json")
+@limiter.limit("60/minute")
 async def get_agent_registration_file(
+    request: Request,
     agent_id: AgentIdPath,
     agent_service: AgentServiceDep = None,
     cfg: Settings = Depends(get_settings),
@@ -2338,7 +2344,7 @@ async def unregister_agent(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"agent_id": agent_id, "reason": str(e)},
+            details={"agent_id": agent_id, "reason": "owner_mismatch"},
         ) from e
 
 
