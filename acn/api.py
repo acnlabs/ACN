@@ -837,6 +837,23 @@ async def lifespan(app: FastAPI):
     # event so we can see the boundary in the audit stream.
     await audit_instance.start()
 
+    # Hydrate SubnetManager from the authoritative PostgreSQL SubnetRepository.
+    # Without this, only the hardcoded "public" subnet is visible to the WebSocket
+    # gateway at startup, so WS connections to any subnet created via REST API
+    # would be rejected with "Subnet not found" after a restart.
+    try:
+        from .routes.subnets import _subnet_entity_to_info as _entity_to_info
+
+        _all_subnets = await subnet_service_instance.list_subnets()
+        _subnet_infos = [_entity_to_info(s) for s in _all_subnets]
+        _added = subnet_manager_instance.hydrate_from_subnet_infos(_subnet_infos)
+        logger.info("subnet_manager_startup_hydration_done", total=len(_subnet_infos), added=_added)
+    except Exception as _hydration_exc:
+        logger.warning(
+            "subnet_manager_startup_hydration_failed",
+            error=str(_hydration_exc),
+        )
+
     logger.info("acn_started")
 
     # The legacy ``_heartbeat_watchdog`` was removed alongside the
