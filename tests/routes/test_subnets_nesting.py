@@ -282,7 +282,10 @@ class TestGetSubnetChildren:
         body = r.json()
         assert body["count"] == 1
         assert body["subnets"][0]["subnet_id"] == "child-A"
-        assert body["subnets"][0]["parent_subnet_id"] == "parent-1"
+        # ACL V6 B6: parent_subnet_id slug is always suppressed in responses.
+        assert body["subnets"][0].get("parent_subnet_id") is None
+        # parent_id (UUID) is the new field — non-None for child subnets.
+        assert body["subnets"][0].get("parent_id") is not None
 
     def test_children_endpoint_404_for_missing_parent(self, stub_agent_service):
         subnet_svc = AsyncMock()
