@@ -445,9 +445,7 @@ jobs:
         uses: astral-sh/setup-uv@v3
 
       - name: Install dependencies
-        run: |
-          cd acn
-          uv sync --all-extras
+        run: uv sync --all-extras
 
       - name: Run real-PG integration tests
         env:
@@ -455,7 +453,5 @@ jobs:
           INTERNAL_API_TOKEN: test-internal-token-must-be-at-least-32-characters-long
           DEV_MODE: "true"
           HOST: "127.0.0.1"
-        run: |
-          cd acn
-          uv run pytest -m integration -v --tb=short
+        run: uv run pytest tests/integration -m integration -v --tb=short --no-cov
 
