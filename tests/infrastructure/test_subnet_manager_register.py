@@ -89,6 +89,12 @@ def _make_manager() -> tuple[SubnetManager, AsyncMock]:
     # ``.save(Agent(...))``; the AsyncMock attribute access auto-creates
     # ``.repository.save`` as another AsyncMock, which is exactly what
     # the assertions below want.
+    #
+    # ``find_by_id`` must return ``None`` to model a brand-new agent that
+    # does not yet exist in the registry. The impersonation guard added in
+    # ``_handle_registration`` checks the repository before writing; a
+    # truthy AsyncMock default would trip it for every new registration.
+    agent_service.repository.find_by_id = AsyncMock(return_value=None)
     manager = SubnetManager(
         agent_service=agent_service,
         redis_client=AsyncMock(),

@@ -27,6 +27,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError
 
+from ..core.errors import ACNHTTPError, ErrorCode
 from ..monitoring import record_auth_failure
 
 logger = structlog.get_logger()
@@ -265,9 +266,11 @@ async def _verify_jwt(token: str, request: Request | None = None) -> dict:
                 path=path,
                 method=method,
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unable to find appropriate signing key.",
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
+                401,
+                message="Unable to find appropriate signing key.",
+                headers={"WWW-Authenticate": "Bearer"},
             )
 
         bare_domain = settings.auth0_domain.removeprefix("https://").removeprefix("http://").rstrip("/")
@@ -288,9 +291,11 @@ async def _verify_jwt(token: str, request: Request | None = None) -> dict:
             path=path,
             method=method,
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired.",
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Token has expired.",
+            headers={"WWW-Authenticate": "Bearer"},
         ) from None
     except JWTError as e:
         logger.warning("jwt_verification_failed", error=str(e))
@@ -301,10 +306,14 @@ async def _verify_jwt(token: str, request: Request | None = None) -> dict:
             method=method,
             extra={"jwt_error": type(e).__name__},
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token.",
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Invalid token.",
+            headers={"WWW-Authenticate": "Bearer"},
         ) from e
+    except ACNHTTPError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
@@ -374,9 +383,10 @@ async def verify_token(
             path=path,
             method=method,
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authorization header required.",
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Authorization header required.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -405,9 +415,10 @@ async def verify_token(
             path=path,
             method=method,
         )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key.",
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Invalid API key.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -441,9 +452,10 @@ def require_permission(permission: str):
                 method=method,
                 extra={"permission": permission},
             )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Missing required permission: {permission}",
+            raise ACNHTTPError(
+                ErrorCode.MISSING_PERMISSION,
+                403,
+                message=f"Missing required permission: {permission}",
             )
         return payload
 
@@ -512,9 +524,10 @@ def require_internal_or_permission(permission: str):
                 method=method,
                 extra={"permission": permission},
             )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Missing required permission: {permission}",
+            raise ACNHTTPError(
+                ErrorCode.MISSING_PERMISSION,
+                403,
+                message=f"Missing required permission: {permission}",
             )
         return payload
 

@@ -338,6 +338,7 @@ class ErrorCode(StrEnum):
     # in section 4 of ``docs/features/acn-error-schema.md``.
     INSUFFICIENT_BALANCE = "insufficient_balance"
     RESOURCE_CONFLICT = "resource_conflict"
+    AGENT_HAS_OWNED_SUBNETS = "agent_has_owned_subnets"
 
 
 _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -482,6 +483,10 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.RESOURCE_CONFLICT: (
         "The request conflicts with the current state of the resource."
+    ),
+    ErrorCode.AGENT_HAS_OWNED_SUBNETS: (
+        "The agent cannot be deleted because it still owns one or more subnets. "
+        "Transfer ownership or delete the subnets first."
     ),
     # ===== ADR-0004 Slice 2.3 — subnet admission =====
     ErrorCode.SUBNET_NOT_OWNER: (

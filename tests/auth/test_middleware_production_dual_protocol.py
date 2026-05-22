@@ -33,6 +33,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from acn.auth import middleware as mw
 from acn.core.entities import Agent
+from acn.core.errors import ACNHTTPError, ErrorCode
 
 
 def _make_agent(agent_id: str = "agent-uuid-prod") -> Agent:
@@ -133,11 +134,12 @@ class TestVerifyTokenApiKeyPath:
         revoked API key)."""
         _patch_agent_service(monkeypatch, returns=None)
 
-        with pytest.raises(HTTPException) as excinfo:
+        with pytest.raises(ACNHTTPError) as excinfo:
             await mw.verify_token(_stub_request(), _bearer("acn_revoked"))
 
         assert excinfo.value.status_code == 401
-        assert "Invalid API key" in excinfo.value.detail
+        assert excinfo.value.code == ErrorCode.AUTHENTICATION_REQUIRED
+        assert "Invalid API key" in excinfo.value.message
 
     @pytest.mark.asyncio
     async def test_api_key_path_does_not_invoke_jwt_verification(
@@ -217,11 +219,12 @@ class TestVerifyTokenJwtPath:
 class TestVerifyTokenMissingCredentials:
     @pytest.mark.asyncio
     async def test_no_credentials_raises_401_bearer_missing(self):
-        with pytest.raises(HTTPException) as excinfo:
+        with pytest.raises(ACNHTTPError) as excinfo:
             await mw.verify_token(_stub_request(), None)
 
         assert excinfo.value.status_code == 401
-        assert "Authorization header required" in excinfo.value.detail
+        assert excinfo.value.code == ErrorCode.AUTHENTICATION_REQUIRED
+        assert "Authorization header required" in excinfo.value.message
         assert excinfo.value.headers == {"WWW-Authenticate": "Bearer"}
 
 
@@ -266,10 +269,11 @@ class TestRequireInternalOrPermissionProduction:
         )
         checker = mw.require_internal_or_permission("acn:write")
 
-        with pytest.raises(HTTPException) as excinfo:
+        with pytest.raises(ACNHTTPError) as excinfo:
             await checker(_stub_request(), _bearer("eyJ.fake"), None)
 
         assert excinfo.value.status_code == 403
+        assert excinfo.value.code == ErrorCode.MISSING_PERMISSION
 
     @pytest.mark.asyncio
     async def test_api_key_propagates_through_verify_token(self, monkeypatch):
@@ -295,7 +299,8 @@ class TestRequireInternalOrPermissionProduction:
         _patch_agent_service(monkeypatch, returns=_make_agent("agent-rip-admin"))
         checker = mw.require_internal_or_permission("acn:admin")
 
-        with pytest.raises(HTTPException) as excinfo:
+        with pytest.raises(ACNHTTPError) as excinfo:
             await checker(_stub_request(), _bearer("acn_x"), None)
 
         assert excinfo.value.status_code == 403
+        assert excinfo.value.code == ErrorCode.MISSING_PERMISSION

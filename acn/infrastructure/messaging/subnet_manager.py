@@ -576,6 +576,22 @@ class SubnetManager:
         if data.get("type") != GatewayMessageType.REGISTER:
             raise ValueError(f"Expected REGISTER, got {data.get('type')}")
 
+        # Impersonation guard: if an agent with this ID already exists in the
+        # registry and was NOT registered via the gateway protocol, reject the
+        # connection. This prevents a WS client from clobbering a REST-registered
+        # agent's record by connecting with the same agent_id over the public
+        # WebSocket endpoint.  Gateway reconnections (same agent reconnecting
+        # after a disconnect) are allowed: their metadata carries
+        # ``"connection_type": "gateway"``.
+        existing = await self.agent_service.repository.find_by_id(connection.agent_id)
+        if existing is not None:
+            existing_conn_type = (existing.metadata or {}).get("connection_type")
+            if existing_conn_type != "gateway":
+                raise ValueError(
+                    f"agent_id '{connection.agent_id}' is already registered via "
+                    f"a non-gateway protocol; choose a different agent_id"
+                )
+
         # Build agent info with gateway endpoint
         agent_data = data.get("agent_info", {})
         gateway_endpoint = (

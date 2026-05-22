@@ -2235,6 +2235,7 @@ async def unregister_agent(
     agent_id: AgentIdPath,
     payload: dict = Depends(require_permission("acn:write")),
     agent_service: AgentServiceDep = None,
+    subnet_service: SubnetServiceDep = None,
     confirm: bool = Query(
         default=False,
         description=(
@@ -2247,6 +2248,9 @@ async def unregister_agent(
     """Unregister an agent.
 
     **Destructive operation** — requires ``?confirm=true``.
+
+    ADR-0006: rejected when the agent still owns one or more subnets —
+    transfer or delete the subnets first (``reason="has-owned-subnets"``).
 
     Clean Architecture: Route → AgentService → Repository
     """
@@ -2261,6 +2265,22 @@ async def unregister_agent(
         )
 
     token_owner: str = payload.get("sub", "")
+
+    # ADR-0006 invariant: an agent that still owns subnets cannot be deleted.
+    # Transfer or delete the subnets first so the registry never holds
+    # subnets with no reachable owner.
+    if subnet_service is not None:
+        owned = await subnet_service.list_subnets(owner=agent_id)
+        if owned:
+            raise ACNHTTPError(
+                ErrorCode.AGENT_HAS_OWNED_SUBNETS,
+                409,
+                details={
+                    "agent_id": agent_id,
+                    "owned_subnet_ids": [s.subnet_id for s in owned],
+                    "hint": "Delete or transfer ownership of these subnets before removing the agent.",
+                },
+            )
 
     try:
         # AgentService handles authorization check
