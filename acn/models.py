@@ -302,6 +302,8 @@ class AgentSearchResponse(BaseModel):
 
     agents: list[AgentInfo]
     total: int
+    limit: int | None = None
+    offset: int | None = None
 
 
 # =============================================================================

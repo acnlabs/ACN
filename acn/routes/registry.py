@@ -501,7 +501,7 @@ async def dev_register_agent(
         raise
     except Exception as e:
         logger.error("Dev registration failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Agent registration failed") from e
 
 
 def _agent_entity_to_info(
@@ -708,7 +708,7 @@ async def register_agent(
         raise
     except Exception as e:
         logger.error("agent_registration_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Agent registration failed") from e
 
 
 @router.get("/me", response_model=AgentMeResponse)
@@ -1200,7 +1200,7 @@ async def _join_agent_impl(
         raise
     except Exception as e:
         logger.error("agent_join_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Agent join failed") from e
 
 
 @router.post("/join/internal", response_model=AgentJoinResponse, include_in_schema=False)
@@ -1341,6 +1341,9 @@ async def proxy_patch(
 _VISIBILITY_VALUES = frozenset({"real", "hidden", "spam", "archived", "all"})
 
 
+_AGENTS_MAX_LIMIT = 500
+
+
 @router.get("", response_model=AgentSearchResponse)
 @limiter.limit("60/minute")
 async def search_agents(
@@ -1363,6 +1366,17 @@ async def search_agents(
     ),
     owner: str | None = None,
     name: str | None = None,
+    limit: int = Query(
+        default=200,
+        ge=1,
+        le=_AGENTS_MAX_LIMIT,
+        description=f"Maximum number of agents to return (1–{_AGENTS_MAX_LIMIT}).",
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+        description="Zero-based offset for pagination.",
+    ),
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     agent_service: AgentServiceDep = None,
     subnet_service: SubnetServiceDep = None,
@@ -1424,6 +1438,13 @@ async def search_agents(
     if name:
         agents = [a for a in agents if name.lower() in a.name.lower()]
 
+    total_matched = len(agents)
+
+    # Apply pagination window before the expensive per-agent alive check +
+    # model serialization. This bounds peak memory to O(limit) regardless of
+    # total corpus size.
+    agents = agents[offset : offset + limit]
+
     agent_infos = await _agent_entities_to_infos(
         agents,
         agent_service=agent_service,
@@ -1433,7 +1454,9 @@ async def search_agents(
 
     return AgentSearchResponse(
         agents=agent_infos,
-        total=len(agent_infos),
+        total=total_matched,
+        limit=limit,
+        offset=offset,
     )
 
 

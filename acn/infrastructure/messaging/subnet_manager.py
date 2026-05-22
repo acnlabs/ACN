@@ -1117,6 +1117,25 @@ class SubnetManager:
         await self.redis.delete(f"acn:subnet:{subnet_id}")
         await self.redis.delete(f"acn:subnet:{subnet_id}:token")
 
+    def hydrate_from_subnet_infos(self, subnet_infos: list["SubnetInfo"]) -> int:
+        """Populate the in-memory subnet registry from a list of SubnetInfo objects.
+
+        Called at lifespan startup after SubnetService loads all subnets from
+        the authoritative PostgreSQL SubnetRepository. Subnets that already
+        exist in ``_subnets`` (e.g. the hardcoded "public" default) are
+        skipped to preserve any state already held (connected agents, tokens).
+
+        Returns the number of subnets added.
+        """
+        added = 0
+        for info in subnet_infos:
+            if info.subnet_id not in self._subnets:
+                self._subnets[info.subnet_id] = Subnet(info=info)
+                added += 1
+        if added:
+            logger.info("subnet_manager_hydrated", subnets_added=added)
+        return added
+
     async def load_subnets_from_redis(self):
         """Load persisted subnets from Redis on startup"""
         import json

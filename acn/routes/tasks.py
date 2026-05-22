@@ -990,7 +990,7 @@ async def create_task(
         raise
     except Exception as e:
         logger.error("task_creation_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Task creation failed") from e
 
 
 @router.post("/{task_id}/accept", response_model=TaskAcceptResponse)

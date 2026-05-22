@@ -439,7 +439,17 @@ class TaskService:
                 raise ValueError("You have already completed this task")
 
         task.accept(agent_id, agent_name)
-        await self.repository.save(task)
+        # CAS: only persist if the task was still OPEN in the DB at the time
+        # of this write. Two concurrent accept requests will both transition
+        # the in-memory entity to IN_PROGRESS, but exactly one will land its
+        # UPDATE (the one whose WHERE clause matches status='open'). The other
+        # sees rowcount==0 and gets a clear ValueError rather than silently
+        # double-assigning the task.
+        accepted = await self.repository.compare_and_save(
+            task, expected_status=TaskStatus.OPEN
+        )
+        if not accepted:
+            raise ValueError("Task has already been accepted by another agent")
 
         # Update escrow: set assignee + IN_PROGRESS
         if self.escrow and task.reward_currency.lower() in PLATFORM_CURRENCIES:
