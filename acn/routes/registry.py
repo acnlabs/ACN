@@ -2235,11 +2235,31 @@ async def unregister_agent(
     agent_id: AgentIdPath,
     payload: dict = Depends(require_permission("acn:write")),
     agent_service: AgentServiceDep = None,
+    confirm: bool = Query(
+        default=False,
+        description=(
+            "Safety guard (ACL V6 B8): must be `true` to execute this "
+            "destructive operation. Omitting it or passing `false` returns "
+            "a 400 so accidental calls cannot silently unregister agents."
+        ),
+    ),
 ):
-    """Unregister an agent
+    """Unregister an agent.
+
+    **Destructive operation** — requires ``?confirm=true``.
 
     Clean Architecture: Route → AgentService → Repository
     """
+    if not confirm:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={
+                "agent_id": agent_id,
+                "hint": "Add ?confirm=true to confirm this destructive operation.",
+            },
+        )
+
     token_owner: str = payload.get("sub", "")
 
     try:
@@ -2248,7 +2268,16 @@ async def unregister_agent(
 
         if success:
             evict_agent_from_cache(agent_id)  # M3: immediate cache invalidation
-            logger.info("agent_unregistered", agent_id=agent_id)
+            logger.info("agent_unregistered", agent_id=agent_id, actor=token_owner)
+            fire_and_forget_event(
+                get_audit_singleton(),
+                event_type=AuditEventType.AGENT_UNREGISTERED,
+                actor_id=token_owner,
+                actor_type=payload.get("type", "user"),
+                target_id=agent_id,
+                target_type="agent",
+                details={"confirmed": True},
+            )
             return {"status": "unregistered", "agent_id": agent_id}
         else:
             raise ACNHTTPError(
