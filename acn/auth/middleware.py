@@ -324,7 +324,24 @@ async def verify_token(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
 ) -> dict:
-    """FastAPI dependency: verify Bearer token and return JWT payload."""
+    """FastAPI dependency: verify Bearer token and return a payload.
+
+    Production traffic is dual-protocol:
+
+    - ``Authorization: Bearer <jwt>`` — auth0-issued user JWT, verified
+      against the JWKS, returns ``{"sub": user_sub, "type": "user", ...}``.
+    - ``Authorization: Bearer acn_<api_key>`` — agent API key, resolved
+      to the owning agent's UUID, returns
+      ``{"sub": agent_id, "type": "agent", "permissions": ["acn:read", "acn:write"]}``.
+
+    The ``acn_`` prefix is the protocol discriminator: prefix-dispatch
+    keeps API-key traffic from polluting JWT failure audit logs and
+    avoids paying a Redis lookup on every JWT request. API-key callers
+    do **not** receive ``acn:admin`` — that permission is auth0 / user-
+    domain only by design (issue #114 §3.2 admin row).
+
+    See ADR-0006 (issue #114) for the V6 ACL contract this enables.
+    """
     settings = _get_settings()
 
     if settings.dev_mode:
@@ -343,7 +360,11 @@ async def verify_token(
                 "permissions": ["acn:read", "acn:write", "acn:admin"],
             }
         sub = credentials.credentials if credentials is not None else "dev@clients"
-        return {"sub": sub, "permissions": ["acn:read", "acn:write", "acn:admin"]}
+        return {
+            "sub": sub,
+            "type": "user",
+            "permissions": ["acn:read", "acn:write", "acn:admin"],
+        }
 
     if credentials is None:
         path, method = _request_path(request)
@@ -359,7 +380,43 @@ async def verify_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return await _verify_jwt(credentials.credentials, request=request)
+    token = credentials.credentials
+
+    # Production dual-protocol dispatch: ``acn_*`` prefix → API-key path,
+    # everything else → JWT path. Prefix dispatch (rather than try-JWT-
+    # then-fallback) keeps API-key traffic out of the JWT failure audit
+    # log and surfaces precise error reasons per protocol.
+    if token.startswith("acn_"):
+        resolved = await _resolve_agent_id_from_api_key(token)
+        if resolved is not None:
+            return {
+                "sub": resolved,
+                "type": "agent",
+                # API key callers never receive ``acn:admin``. Admin is
+                # an auth0 / user-domain permission (ops, SRE) that
+                # transcends the marketplace. Agents requiring elevated
+                # ops access must go through a human admin's JWT.
+                "permissions": ["acn:read", "acn:write"],
+            }
+        path, method = _request_path(request)
+        record_auth_failure(
+            reason="api_key_invalid",
+            source_ip=_peer_ip(request),
+            path=path,
+            method=method,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = await _verify_jwt(token, request=request)
+    # Standardise payload schema: every successful auth returns ``type``
+    # so downstream ACL code can branch user-bridge vs agent-direct
+    # without re-sniffing the token format.
+    payload.setdefault("type", "user")
+    return payload
 
 
 def require_permission(permission: str):
@@ -423,7 +480,11 @@ def require_internal_or_permission(permission: str):
                     "permissions": ["acn:read", "acn:write", "acn:admin"],
                 }
             sub = credentials.credentials if credentials is not None else "dev@clients"
-            return {"sub": sub, "permissions": ["acn:read", "acn:write", "acn:admin"]}
+            return {
+                "sub": sub,
+                "type": "user",
+                "permissions": ["acn:read", "acn:write", "acn:admin"],
+            }
 
         # Internal token: trusted backend service call. Use constant-time
         # comparison to avoid timing-side-channel leaks of token contents.
@@ -434,6 +495,7 @@ def require_internal_or_permission(permission: str):
         ):
             return {
                 "sub": "backend@internal",
+                "type": "internal",
                 "permissions": ["acn:read", "acn:write", "acn:admin"],
             }
 
