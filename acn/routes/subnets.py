@@ -358,6 +358,7 @@ async def list_subnets(
     request: Request,
     owner: str = None,
     parent: str | None = None,
+    owned_by_user: str | None = None,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
@@ -367,8 +368,15 @@ async def list_subnets(
     Clean Architecture: Route → SubnetService → Repository.
 
     Filters:
-    - ``?owner=`` filters by ownership. Requires authentication; the
-      caller must be that owner (or hold ``acn:admin``).
+    - ``?owner=`` filters by ownership (agent-id semantics). Requires
+      authentication; the caller must be that owner (or hold
+      ``acn:admin``).
+    - ``?owned_by_user=<user_sub>`` filters to subnets owned by any
+      agent that the specified user owns (ACL V6 B7). Requires
+      authentication; ``payload["sub"]`` must equal the supplied
+      ``user_sub`` (or caller holds ``acn:admin``). Mismatch → 403.
+      All returned rows are full ``SubnetInfo`` — the ownership filter
+      already implies full access via the ownership-chain bridge.
     - ``?parent=`` filters to immediate children of the given parent
       subnet (ADR-0003). Visibility is **aligned with the rest of
       this endpoint** — anonymous callers see only public children,
@@ -382,7 +390,8 @@ async def list_subnets(
     set is independently graded by the V6 privacy matrix. Public subnets
     return full ``SubnetInfo``; private subnets return ``SubnetStub``
     unless the caller is authorised (owner agent, member agent, user JWT
-    holding ownership-chain access to the owning agent, or admin).
+    holding ownership-chain access via the ownership-chain bridge, or
+    admin).
     """
     try:
         # Resolve caller payload once for per-row ACL.
@@ -403,6 +412,35 @@ async def list_subnets(
                 parent_subnet_id=parent,
                 requester_id=requester_id,
             )
+        elif owned_by_user is not None:
+            # ACL V6 B7 — user-centric ownership filter.
+            # Requires auth; caller's sub must match the supplied user_sub
+            # (or caller holds acn:admin) to prevent cross-tenant probing.
+            if not credentials or caller_payload is None:
+                raise ACNHTTPError(
+                    ErrorCode.AUTHENTICATION_REQUIRED,
+                    401,
+                    message="Authentication required when filtering by owned_by_user.",
+                    details={"reason": "owned_by_user_requires_auth"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            caller_sub = caller_payload.get("sub", "")
+            permissions = caller_payload.get("permissions", [])
+            if caller_sub != owned_by_user and "acn:admin" not in permissions:
+                raise ACNHTTPError(
+                    ErrorCode.OWNERSHIP_MISMATCH,
+                    403,
+                    message="Cannot list subnets owned by another user.",
+                    details={
+                        "requested_user": owned_by_user,
+                        "token_sub": caller_sub,
+                    },
+                )
+            # Resolve the user's owned agents, then filter subnets by owner.
+            owned_agents = await agent_service.find_by_owner(owned_by_user)
+            owned_agent_ids = {a.agent_id for a in owned_agents}
+            all_subnets = await subnet_service.list_subnets(owner=None)
+            subnets = [s for s in all_subnets if s.owner in owned_agent_ids]
         elif owner:
             # Require auth when filtering by owner to prevent private subnet enumeration
             if not credentials or caller_payload is None:
@@ -427,22 +465,21 @@ async def list_subnets(
             subnets = await subnet_service.list_public_subnets()
 
         # Per-row caller-aware rendering (ACL V6 B5).
+        # Exception: when ?owned_by_user= is set, all rows are already
+        # confirmed as owned-by-user-via-agent (ownership-chain bridge)
+        # so they always receive full SubnetInfo regardless of is_private.
+        full_access_all_rows = owned_by_user is not None
         subnet_infos: list = []
         for s in subnets:
-            if not getattr(s, "is_private", False):
-                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+            parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+            if full_access_all_rows or not getattr(s, "is_private", False):
                 subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
             elif caller_payload and await _resolve_caller_access(
                 caller_payload, s, agent_service
             ):
-                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
                 subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
             else:
                 # Private subnet the caller cannot see in full → SubnetStub.
-                # ``_resolve_parent_uuid`` is intentionally called here too
-                # so graph clients can trace the hierarchy edge even for
-                # stubs they are not authorised to expand.
-                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
                 subnet_infos.append(
                     SubnetStub(
                         id=_coerce_optional_str(getattr(s, "id", None)) or s.subnet_id,
@@ -498,12 +535,15 @@ async def get_subnet(
         graph clients draw correct topology without leaking sensitive
         details.
 
-        Ownership-chain bridge: a user JWT caller that owns the subnet's
-        owning agent gets full access (A2 principle — humans need
-        read-only knowledge of their agents' activities). Owning a
-        *member* agent only is not sufficient (membership is an
-        employment relationship and does not extend read trust upward to
-        the agent's human holder — V6 contract § 2 ownership edge).
+        Ownership-chain bridge (ACL V6 B11): a user JWT caller that owns
+        the subnet's **owner agent** gets full access (A2 principle —
+        humans need read-only knowledge of their agents' activities).
+        Owning only a *member* agent is **not** sufficient — membership
+        is a collaboration relationship that does not extend read trust
+        upward to the member agent's human holder (V6 contract § 2,
+        ownership edge vs. membership edge distinction). Humans wishing
+        to see subnets their agents are members of — but do not own —
+        must use their agent's own API key (``GET /agents/me`` pattern).
 
         Genuinely missing subnets still return ``SUBNET_NOT_FOUND``
         (404).
