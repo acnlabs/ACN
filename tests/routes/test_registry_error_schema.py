@@ -249,7 +249,7 @@ class TestRegistryFlatErrorSchemaUnregisterPath:
 
         with TestClient(app) as client:
             r = client.delete(
-                "/api/v1/agents/agent-target",
+                "/api/v1/agents/agent-target?confirm=true",
                 headers={"Authorization": "Bearer dev-mode-any-token"},
             )
 
@@ -408,7 +408,7 @@ class TestRegistryFlatErrorSchemaCrossModule:
 
         with TestClient(app) as client:
             r = client.delete(
-                "/api/v1/agents/agent-target",
+                "/api/v1/agents/agent-target?confirm=true",
                 headers={"Authorization": "Bearer dev-mode-any-token"},
             )
 

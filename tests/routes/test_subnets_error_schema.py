@@ -524,7 +524,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
 
         with TestClient(app) as client:
             r = client.delete(
-                "/api/v1/subnets/subnet-1",
+                "/api/v1/subnets/subnet-1?confirm=true",
                 headers={"Authorization": "Bearer owner-key"},
             )
 
@@ -585,7 +585,7 @@ class TestSubnetsCatchAllDefence:
 
         with TestClient(app) as client:
             r = client.delete(
-                "/api/v1/subnets/subnet-1",
+                "/api/v1/subnets/subnet-1?confirm=true",
                 headers={"Authorization": "Bearer owner-key"},
             )
 

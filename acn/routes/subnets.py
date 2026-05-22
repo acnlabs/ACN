@@ -8,7 +8,7 @@ import secrets
 from typing import Literal
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, Depends, HTTPException, Request, Security
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,7 @@ from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo, SubnetStub
+from ..monitoring import AuditEventType, fire_and_forget_event, get_audit_singleton
 from ..services.subnet_service import SubnetInvariantError
 from ._subnet_membership import (
     do_get_agent_subnets,
@@ -951,17 +952,46 @@ async def delete_subnet(
     subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
+    confirm: bool = Query(
+        default=False,
+        description=(
+            "Safety guard (ACL V6 B8): must be `true` to execute this "
+            "destructive operation. Omitting it or passing `false` returns "
+            "a 400 so accidental calls cannot silently delete subnets."
+        ),
+    ),
 ):
     """Delete a subnet (requires Agent API Key — only the owning agent can delete).
 
+    **Destructive operation** — requires ``?confirm=true``.
+
     Clean Architecture: Route → SubnetService → Repository
     """
+    if not confirm:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={
+                "subnet_id": subnet_id,
+                "hint": "Add ?confirm=true to confirm this destructive operation.",
+            },
+        )
+
     owner = agent_info["agent_id"]
 
     try:
         success = await subnet_service.delete_subnet(subnet_id, owner)
         if success:
             logger.info("subnet_deleted", subnet_id=subnet_id, owner=owner)
+            fire_and_forget_event(
+                get_audit_singleton(),
+                event_type=AuditEventType.SUBNET_DELETED,
+                actor_id=owner,
+                actor_type="agent",
+                target_id=subnet_id,
+                target_type="subnet",
+                details={"confirmed": True},
+            )
             return {"status": "deleted", "subnet_id": subnet_id}
         else:
             # This in-try raise is now correctly propagated thanks to the
