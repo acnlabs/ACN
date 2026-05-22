@@ -436,25 +436,23 @@ class TestSubnetsFlatErrorSchemaCrossModule:
             "token_owner": "user-1",
         }
 
-    def test_get_subnet_agents_private_no_auth_returns_authentication_required(
+    def test_get_subnet_agents_private_no_auth_returns_empty_list(
         self, stub_agent_service, stub_subnet_service
     ):
-        """``GET /api/v1/subnets/{id}/agents`` against a private
-        subnet without auth — pins ``AUTHENTICATION_REQUIRED`` with
-        the ``private_subnet`` reason and ``subnet_id`` in details.
+        """ACL V6 B12: ``GET /api/v1/subnets/{id}/agents`` against a
+        private subnet without auth returns ``200 {"agents": [], "count": 0}``
+        (existence-hiding — same shape as a legitimate empty subnet).
 
-        Distinct from the owner-filter ``AUTHENTICATION_REQUIRED``
-        test above: same ErrorCode but the SDK can branch on
-        ``details.reason`` to give a more specific UX (e.g. "join
-        this subnet" vs "log in to filter by owner").
+        Previous contract (pre-B12) returned 401 AUTHENTICATION_REQUIRED.
+        B12 changes this to a 200 empty response so unauthorised callers
+        cannot determine whether a private subnet has members.
         """
-        # Override stub to mark the subnet as private so the auth
-        # check fires.
         stub_subnet_service.get_subnet.side_effect = None
         target_subnet = MagicMock()
         target_subnet.subnet_id = "subnet-private"
         target_subnet.owner = "user-1"
         target_subnet.is_private = True
+        target_subnet.member_agent_ids = set()
         stub_subnet_service.get_subnet.return_value = target_subnet
 
         _wire(stub_agent_service, stub_subnet_service)
@@ -462,32 +460,33 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         with TestClient(app) as client:
             r = client.get("/api/v1/subnets/subnet-private/agents")
 
-        assert r.status_code == 401
+        assert r.status_code == 200, r.text
         body = r.json()
-        _assert_flat_shape(body)
-        assert body["error_code"] == "authentication_required"
-        assert body["details"] == {
-            "subnet_id": "subnet-private",
-            "reason": "private_subnet",
-        }
+        assert body["agents"] == []
+        assert body["count"] == 0
+        assert body["subnet_id"] == "subnet-private"
 
-    def test_get_subnet_agents_private_cross_tenant_returns_not_subnet_member(
+    def test_get_subnet_agents_private_cross_tenant_returns_empty_list(
         self, stub_agent_service, stub_subnet_service, monkeypatch
     ):
-        """``GET /api/v1/subnets/{id}/agents`` against a private
-        subnet with a non-owner non-admin token — pins
-        ``NOT_SUBNET_MEMBER``. Same monkeypatch pattern as the
-        cross-tenant list_subnets test above (``verify_token`` is
-        called directly, not via Depends)."""
+        """ACL V6 B12: ``GET /api/v1/subnets/{id}/agents`` against a
+        private subnet with a non-member token returns
+        ``200 {"agents": [], "count": 0}`` (existence-hiding).
+
+        Previous contract (pre-B12) returned 403 NOT_SUBNET_MEMBER.
+        B12 changes this so that the membership list is
+        indistinguishable from a legitimately empty subnet.
+        """
         stub_subnet_service.get_subnet.side_effect = None
         target_subnet = MagicMock()
         target_subnet.subnet_id = "subnet-private"
         target_subnet.owner = "user-1"
         target_subnet.is_private = True
+        target_subnet.member_agent_ids = set()
         stub_subnet_service.get_subnet.return_value = target_subnet
 
         async def _fake_verify_token(*args, **kwargs):
-            return {"sub": "user-2", "permissions": ["acn:read"]}
+            return {"sub": "user-2", "type": "agent", "permissions": ["acn:read"]}
 
         monkeypatch.setattr(
             "acn.routes.subnets.verify_token", _fake_verify_token
@@ -500,14 +499,11 @@ class TestSubnetsFlatErrorSchemaCrossModule:
                 headers={"Authorization": "Bearer non-member-token"},
             )
 
-        assert r.status_code == 403
+        assert r.status_code == 200, r.text
         body = r.json()
-        _assert_flat_shape(body)
-        assert body["error_code"] == "not_subnet_member"
-        assert body["details"] == {
-            "subnet_id": "subnet-private",
-            "agent_id": "user-2",
-        }
+        assert body["agents"] == []
+        assert body["count"] == 0
+        assert body["subnet_id"] == "subnet-private"
 
     def test_delete_subnet_permission_error_returns_ownership_mismatch(
         self, stub_agent_service, stub_subnet_service

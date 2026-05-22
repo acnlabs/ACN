@@ -149,8 +149,14 @@ export interface SubnetInfo {
   owner?: string;
   harness_url?: string;
   harness_registered?: boolean;
-  /** ADR-0003 — parent subnet when this is a nested child. */
+  /**
+   * Deprecated — ACL V6 B6: the server no longer emits the slug.
+   * Use `parent_id` (UUID) instead.  Kept for backward-compat parsing
+   * of responses from older server versions.
+   */
   parent_subnet_id?: string | null;
+  /** ACL V6 B6 — parent subnet's opaque UUID. */
+  parent_id?: string | null;
   /** ADR-0003 — defaults to `'persistent'` on the server. */
   lifecycle?: SubnetLifecycle;
   /** ADR-0003 — bound task when `lifecycle === 'task_scoped'`. */

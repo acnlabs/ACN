@@ -406,9 +406,30 @@ class SubnetInfo(BaseModel):
     # surfaced so consumers can render "auto-dissolving" UX hints
     # and so prospective joiners can avoid task_scoped squads
     # they'd rather not be auto-removed from.
+    #
+    # Privacy (ACL V6 / issue #114 B6): ``parent_subnet_id`` (the
+    # human-readable slug) is intentionally suppressed in API responses
+    # from ``_subnet_entity_to_info`` — the route always emits ``None``.
+    # Suppressing the slug prevents a public child subnet from leaking
+    # its private parent's naming convention to anonymous callers.
+    # Consumers needing the parent relationship use ``parent_id``
+    # (the opaque UUID below) and call ``GET /subnets/{parent_id}``
+    # to resolve the slug under their own access level.
     parent_subnet_id: str | None = Field(
         None,
-        description="Parent subnet ID for a child subnet (ADR-0003). None for top-level subnets.",
+        description=(
+            "Deprecated — always None in responses from the routes layer "
+            "(ACL V6 B6). Use parent_id (UUID) instead."
+        ),
+    )
+    parent_id: str | None = Field(
+        None,
+        description=(
+            "Parent subnet's opaque UUID (ACL V6 B6). "
+            "None for top-level subnets. "
+            "Mirrors SubnetStub.parent_id so graph clients can join "
+            "SubnetInfo and SubnetStub rows by a single stable key."
+        ),
     )
     lifecycle: Literal["persistent", "task_scoped"] = Field(
         "persistent",

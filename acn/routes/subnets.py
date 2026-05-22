@@ -82,13 +82,19 @@ def _coerce_lifecycle(value: object) -> Literal["persistent", "task_scoped"]:
     return "persistent"
 
 
-def _subnet_entity_to_info(subnet) -> SubnetInfo:
+def _subnet_entity_to_info(subnet, *, parent_uuid: str | None = None) -> SubnetInfo:
     """Convert Subnet entity to SubnetInfo model.
 
-    ADR-0003 surfaces ``parent_subnet_id`` / ``lifecycle`` /
-    ``linked_task_id`` so consumers can render hierarchy / lifecycle
-    UI hints. ``harness_secret`` stays write-only — never exposed
-    through this conversion.
+    ADR-0003 hierarchy fields:
+    - ``parent_id`` carries the parent subnet's **opaque UUID** (ACL V6
+      B6). The human-readable ``parent_subnet_id`` slug is intentionally
+      suppressed to prevent a public child subnet from leaking its
+      private parent's naming convention to anonymous callers. Callers
+      pass the resolved UUID via the ``parent_uuid`` keyword argument;
+      the route is responsible for resolving slug → UUID before calling
+      this function.
+    - ``lifecycle`` / ``linked_task_id`` are surfaced as-is.
+    - ``harness_secret`` stays write-only — never exposed.
     """
     return SubnetInfo(
         subnet_id=subnet.subnet_id,
@@ -107,14 +113,77 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
         metadata=subnet.metadata,
         harness_url=subnet.harness_url,
         harness_registered=subnet.harness_url is not None,
-        parent_subnet_id=_coerce_optional_str(
-            getattr(subnet, "parent_subnet_id", None)
-        ),
+        # parent_subnet_id (slug) is always None in API responses — ACL V6 B6.
+        parent_subnet_id=None,
+        parent_id=parent_uuid,
         lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
         linked_task_id=_coerce_optional_str(
             getattr(subnet, "linked_task_id", None)
         ),
     )
+
+
+async def _resolve_parent_uuid(
+    subnet,
+    subnet_service,
+) -> str | None:
+    """Return the parent subnet's opaque UUID, or None if top-level / orphaned.
+
+    Resolves the slug stored in ``subnet.parent_subnet_id`` to the stable
+    UUID needed by ``_subnet_entity_to_info`` (ACL V6 B6).  Silently
+    degrades to ``None`` on lookup failure so orphaned references don't
+    surface a 500 to callers.
+    """
+    parent_slug = _coerce_optional_str(getattr(subnet, "parent_subnet_id", None))
+    if not parent_slug:
+        return None
+    try:
+        parent_entity = await subnet_service.get_subnet(parent_slug)
+        return _coerce_optional_str(getattr(parent_entity, "id", None))
+    except Exception:  # noqa: BLE001  # SubnetNotFound or any infra error
+        return None
+
+
+async def _resolve_caller_access(
+    payload: dict,
+    subnet,
+    agent_service,
+) -> bool:
+    """Return True when the caller is entitled to see full SubnetInfo.
+
+    Implements the V6 ownership-chain bridge (ACL V6 / issue #114 B2):
+
+    - ``acn:admin`` always gets full access.
+    - Agent API key callers (``type == "agent"``): full access when
+      ``sub == subnet.owner`` OR ``sub ∈ subnet.member_agent_ids``.
+    - User JWT callers (``type == "user"``): full access when they own
+      the subnet's owning agent — i.e. when ``subnet.owner`` is in the
+      set of agent-ids owned by ``sub`` (the ownership-chain bridge).
+      Owning a *member* agent only is NOT sufficient; membership is an
+      employment relationship and does not extend read trust upward to
+      the agent's human holder (see V6 contract § 2 ownership edge).
+
+    Called ONLY for private subnets; public subnets short-circuit to
+    full SubnetInfo before this function is reached.
+    """
+    permissions = payload.get("permissions", [])
+    if "acn:admin" in permissions:
+        return True
+
+    sub = payload.get("sub", "")
+    caller_type = payload.get("type", "user")
+
+    if caller_type == "agent":
+        member_ids: set = getattr(subnet, "member_agent_ids", None) or set()
+        return sub == subnet.owner or sub in member_ids
+
+    # User JWT path — ownership-chain bridge.
+    try:
+        owned_agents = await agent_service.find_by_owner(sub)
+        owned_agent_ids = {a.agent_id for a in owned_agents}
+    except Exception:  # noqa: BLE001  # any infra failure → deny
+        return False
+    return subnet.owner in owned_agent_ids
 
 
 def _invariant_error_to_acn(
@@ -290,6 +359,7 @@ async def list_subnets(
     parent: str | None = None,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
+    agent_service: AgentServiceDep = None,
 ):
     """List all subnets.
 
@@ -306,22 +376,35 @@ async def list_subnets(
       parent is unknown or has no visible children — cross-tenant
       probes get the same shape as legitimate empty results
       (no existence leak).
+
+    Per-row caller-aware rendering (ACL V6 B5): each row in the result
+    set is independently graded by the V6 privacy matrix. Public subnets
+    return full ``SubnetInfo``; private subnets return ``SubnetStub``
+    unless the caller is authorised (owner agent, member agent, user JWT
+    holding ownership-chain access to the owning agent, or admin).
     """
     try:
+        # Resolve caller payload once for per-row ACL.
+        caller_payload: dict | None = None
+        if credentials:
+            try:
+                caller_payload = await verify_token(request, credentials)
+            except Exception:  # noqa: BLE001  # invalid token → treat as anon
+                caller_payload = None
+
         if parent is not None:
             # ``?parent=`` filter takes precedence and gates on the
             # same identity primitive used by ``list_children``.
-            requester_id: str | None = None
-            if credentials:
-                payload = await verify_token(request, credentials)
-                requester_id = payload.get("sub") or None
+            requester_id: str | None = (
+                caller_payload.get("sub") or None if caller_payload else None
+            )
             subnets = await subnet_service.list_children(
                 parent_subnet_id=parent,
                 requester_id=requester_id,
             )
         elif owner:
             # Require auth when filtering by owner to prevent private subnet enumeration
-            if not credentials:
+            if not credentials or caller_payload is None:
                 raise ACNHTTPError(
                     ErrorCode.AUTHENTICATION_REQUIRED,
                     401,
@@ -329,9 +412,8 @@ async def list_subnets(
                     details={"reason": "owner_filter_requires_auth"},
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            payload = await verify_token(request, credentials)
-            requester = payload.get("sub", "")
-            permissions = payload.get("permissions", [])
+            requester = caller_payload.get("sub", "")
+            permissions = caller_payload.get("permissions", [])
             if requester != owner and "acn:admin" not in permissions:
                 raise ACNHTTPError(
                     ErrorCode.OWNERSHIP_MISMATCH,
@@ -343,8 +425,33 @@ async def list_subnets(
         else:
             subnets = await subnet_service.list_public_subnets()
 
-        # Convert to SubnetInfo
-        subnet_infos = [_subnet_entity_to_info(s) for s in subnets]
+        # Per-row caller-aware rendering (ACL V6 B5).
+        subnet_infos: list = []
+        for s in subnets:
+            if not getattr(s, "is_private", False):
+                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+                subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
+            elif caller_payload and await _resolve_caller_access(
+                caller_payload, s, agent_service
+            ):
+                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+                subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
+            else:
+                # Private subnet the caller cannot see in full → SubnetStub.
+                # ``_resolve_parent_uuid`` is intentionally called here too
+                # so graph clients can trace the hierarchy edge even for
+                # stubs they are not authorised to expand.
+                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+                subnet_infos.append(
+                    SubnetStub(
+                        id=_coerce_optional_str(getattr(s, "id", None)) or s.subnet_id,
+                        is_private=True,
+                        parent_id=parent_uuid,
+                        lifecycle=_coerce_lifecycle(
+                            getattr(s, "lifecycle", "persistent")
+                        ),
+                    )
+                )
 
         return {"subnets": subnet_infos, "count": len(subnet_infos)}
     except ACNHTTPError:
@@ -362,32 +469,43 @@ async def get_subnet(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
+    agent_service: AgentServiceDep = None,
 ):
     """Get subnet details.
 
     Clean Architecture: Route → SubnetService → Repository.
 
-    Privacy contract
+    Privacy contract (ACL V6 / issue #114)
         Public subnets are fully visible to anyone.
 
         Private subnets use a two-tier response:
 
-        * **Authorised callers** (owner, current member, ``acn:admin``)
-          receive the full ``SubnetInfo`` payload including ``harness_url``
-          and ``metadata``.
+        * **Authorised callers** — owner agent (API key), member agent
+          (API key), the owner agent's human holder via ownership-chain
+          bridge (user JWT), or ``acn:admin`` — receive the full
+          ``SubnetInfo`` payload.
 
-        * **Everyone else** (anonymous or authenticated non-member)
-          receives a ``SubnetStub`` — structural metadata only
-          (``subnet_id``, ``name``, ``is_private``, ``parent_subnet_id``,
-          ``lifecycle``).  Sensitive fields (``owner``, ``description``,
-          ``harness_url``, ``security_schemes``, ``metadata``) are omitted.
+        * **Everyone else** (anonymous, or authenticated but unrelated)
+          receives a ``SubnetStub`` — opaque UUID + structural metadata
+          only.  The human-readable slug, ``name``, ``owner``,
+          ``description``, ``harness_url``, and ``security_schemes`` are
+          omitted.
 
-        Rationale: a private subnet's ``subnet_id`` is already discoverable
-        through any public agent's ``subnet_ids`` field, so existence-hiding
-        provides no real security.  Surfacing hierarchy metadata lets graph
-        clients draw correct topology without leaking sensitive details.
+        Rationale: a private subnet's ``subnet_id`` is already
+        discoverable through public agent listings, so existence-hiding
+        provides no real security.  Surfacing hierarchy metadata lets
+        graph clients draw correct topology without leaking sensitive
+        details.
 
-        Genuinely missing subnets still return ``SUBNET_NOT_FOUND`` (404).
+        Ownership-chain bridge: a user JWT caller that owns the subnet's
+        owning agent gets full access (A2 principle — humans need
+        read-only knowledge of their agents' activities). Owning a
+        *member* agent only is not sufficient (membership is an
+        employment relationship and does not extend read trust upward to
+        the agent's human holder — V6 contract § 2 ownership edge).
+
+        Genuinely missing subnets still return ``SUBNET_NOT_FOUND``
+        (404).
     """
     try:
         subnet = await subnet_service.get_subnet(subnet_id)
@@ -398,8 +516,12 @@ async def get_subnet(
             details={"subnet_id": subnet_id},
         ) from e
 
+    # Resolve parent UUID once — used by both SubnetStub and SubnetInfo
+    # (ACL V6 B6: slug is never exposed in API responses).
+    parent_uuid = await _resolve_parent_uuid(subnet, subnet_service)
+
     if not getattr(subnet, "is_private", False):
-        return _subnet_entity_to_info(subnet)
+        return _subnet_entity_to_info(subnet, parent_uuid=parent_uuid)
 
     # Private subnet — check authorisation.
     # Unauthenticated or unauthorised callers receive a SubnetStub
@@ -408,23 +530,6 @@ async def get_subnet(
     # naming patterns like ``acnlabs-core`` would otherwise leak
     # organisational structure to anyone who happens to know an
     # agent_id that's a member.
-    #
-    # ``parent_id`` is the parent subnet's UUID (resolved from
-    # ``subnet.parent_subnet_id`` slug). Frontend graph clients
-    # join hierarchy edges on the UUID across SubnetInfo / SubnetStub.
-    parent_slug = _coerce_optional_str(
-        getattr(subnet, "parent_subnet_id", None)
-    )
-    parent_uuid: str | None = None
-    if parent_slug:
-        try:
-            parent_entity = await subnet_service.get_subnet(parent_slug)
-            parent_uuid = _coerce_optional_str(getattr(parent_entity, "id", None))
-        except SubnetNotFoundException:
-            # Orphaned reference — surface as if top-level rather than
-            # leaking a 500 to anonymous callers.
-            parent_uuid = None
-
     def _stub() -> SubnetStub:
         return SubnetStub(
             id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.subnet_id,
@@ -437,17 +542,11 @@ async def get_subnet(
         return _stub()
 
     payload = await verify_token(request, credentials)
-    requester = payload.get("sub", "")
-    permissions = payload.get("permissions", [])
 
-    is_owner = requester == subnet.owner
-    is_admin = "acn:admin" in permissions
-    is_member = requester in (getattr(subnet, "member_agent_ids", None) or set())
-
-    if not (is_owner or is_admin or is_member):
+    if not await _resolve_caller_access(payload, subnet, agent_service):
         return _stub()
 
-    return _subnet_entity_to_info(subnet)
+    return _subnet_entity_to_info(subnet, parent_uuid=parent_uuid)
 
 
 @router.get("/{subnet_id}/children")
@@ -456,12 +555,14 @@ async def get_subnet_children(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
+    agent_service: AgentServiceDep = None,
 ):
     """List immediate children of a subnet (ADR-0003).
 
     Visibility matches ``GET /api/v1/subnets?parent=<id>``: anonymous
-    callers see only public children; authenticated callers
-    additionally see private children they own or are members of.
+    callers see public children in full; private children are returned
+    as ``SubnetStub`` unless the caller is authorised (V6 B5 per-row
+    caller-aware rendering, same logic as ``list_subnets``).
 
     Returns ``SUBNET_NOT_FOUND`` if the parent itself does not exist.
     Cross-tenant probes against an existing-but-not-visible parent
@@ -482,15 +583,45 @@ async def get_subnet_children(
         ) from e
 
     try:
-        requester_id: str | None = None
+        caller_payload: dict | None = None
         if credentials:
-            payload = await verify_token(request, credentials)
-            requester_id = payload.get("sub") or None
+            try:
+                caller_payload = await verify_token(request, credentials)
+            except Exception:  # noqa: BLE001  # invalid token → treat as anon
+                caller_payload = None
+
+        requester_id: str | None = (
+            caller_payload.get("sub") or None if caller_payload else None
+        )
         children = await subnet_service.list_children(
             parent_subnet_id=subnet_id,
             requester_id=requester_id,
         )
-        subnet_infos = [_subnet_entity_to_info(s) for s in children]
+
+        # Per-row caller-aware rendering (ACL V6 B5) — same logic as list_subnets.
+        subnet_infos: list = []
+        for s in children:
+            if not getattr(s, "is_private", False):
+                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+                subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
+            elif caller_payload and await _resolve_caller_access(
+                caller_payload, s, agent_service
+            ):
+                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+                subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
+            else:
+                parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+                subnet_infos.append(
+                    SubnetStub(
+                        id=_coerce_optional_str(getattr(s, "id", None)) or s.subnet_id,
+                        is_private=True,
+                        parent_id=parent_uuid,
+                        lifecycle=_coerce_lifecycle(
+                            getattr(s, "lifecycle", "persistent")
+                        ),
+                    )
+                )
+
         return {"count": len(subnet_infos), "subnets": subnet_infos}
     except ACNHTTPError:
         raise
@@ -570,13 +701,23 @@ async def get_subnet_agents(
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
 ):
-    """Get all agents in a subnet
+    """Get all agents in a subnet.
 
-    Clean Architecture: Route → Service → Repository
-    Private subnets require authentication; the caller must be the owner
-    or hold acn:admin permission.
+    Clean Architecture: Route → Service → Repository.
+
+    Privacy contract (ACL V6 / issue #114 B12):
+
+    * **Public subnets**: full member list for all callers.
+    * **Private subnets** — authorised callers (owner agent, member
+      agent, user JWT with ownership-chain access to the owning agent,
+      or ``acn:admin``) receive the full member list.
+    * **Everyone else** on a private subnet: ``200`` with an empty
+      ``agents`` list — identical in shape to a legitimate empty subnet
+      so that unauthorised callers cannot determine whether the subnet
+      has any members (existence-hiding contract, same approach as
+      ``list_children`` stubs).  No ``401`` / ``403`` is returned for
+      private-subnet membership queries.
     """
-    # Verify subnet exists and check privacy
     try:
         subnet = await subnet_service.get_subnet(subnet_id)
     except SubnetNotFoundException as e:
@@ -586,26 +727,18 @@ async def get_subnet_agents(
             details={"subnet_id": subnet_id},
         ) from e
 
-    # Enforce auth for private subnets
+    # For private subnets, check caller access.  For public subnets this
+    # block is skipped entirely — the member list is openly visible.
+    _empty_response = {"subnet_id": subnet_id, "agents": [], "count": 0}
     if getattr(subnet, "is_private", False):
         if not credentials:
-            raise ACNHTTPError(
-                ErrorCode.AUTHENTICATION_REQUIRED,
-                401,
-                message="Authentication required to view private subnet members.",
-                details={"subnet_id": subnet_id, "reason": "private_subnet"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        payload = await verify_token(request, credentials)
-        requester = payload.get("sub", "")
-        permissions = payload.get("permissions", [])
-        if requester != subnet.owner and "acn:admin" not in permissions:
-            raise ACNHTTPError(
-                ErrorCode.NOT_SUBNET_MEMBER,
-                403,
-                message="Access denied: private subnet.",
-                details={"subnet_id": subnet_id, "agent_id": requester},
-            )
+            return _empty_response
+        try:
+            payload = await verify_token(request, credentials)
+        except Exception:  # noqa: BLE001  # invalid token → empty list
+            return _empty_response
+        if not await _resolve_caller_access(payload, subnet, agent_service):
+            return _empty_response
 
     try:
         agents = await agent_service.search_agents(subnet_id=subnet_id)
