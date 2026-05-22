@@ -28,8 +28,10 @@ from fastapi import (
     Query,
     Request,
     Response,
+    Security,
 )
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..auth.middleware import require_permission, verify_token
@@ -53,6 +55,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     PolicyServiceDep,
     ProxyCallerDep,
     SubnetManagerDep,
+    SubnetServiceDep,
     # Underscore-prefixed crossing of module boundaries is intentional:
     # ``_get_real_ip`` is the canonical proxy-aware IP resolver and we
     # need the SSRF audit hook to attribute attacks to the real client,
@@ -78,6 +81,7 @@ router = APIRouter(
 )
 logger = structlog.get_logger()
 settings = get_settings()
+_optional_bearer = HTTPBearer(auto_error=False)
 
 
 # Phase 2 review v2 P1 #10 — modes that carry an implicit SDK-version
@@ -505,6 +509,7 @@ def _agent_entity_to_info(
     *,
     is_online: bool,
     strip_sensitive: bool = False,
+    public_subnet_slugs: set[str] | None = None,
 ) -> AgentInfo:
     """Convert Agent entity to AgentInfo model.
 
@@ -520,6 +525,12 @@ def _agent_entity_to_info(
     - raw endpoint is replaced with the ACN-unified communication address
       so callers are always routed through ACN instead of contacting agents
       directly.
+
+    ``public_subnet_slugs`` controls subnet_ids visibility (ACL V6 B3):
+    - ``None`` — full list (self API key or admin caller).
+    - ``set[str]`` — filter to only slugs present in this set (everyone
+      else). Prevents private subnet slugs from leaking to callers who
+      have no membership relationship with those subnets.
     """
     metadata = {
         **agent.metadata,
@@ -541,6 +552,13 @@ def _agent_entity_to_info(
         exposed_agent_card_url = getattr(agent, "agent_card_url", None)
         exposed_agent_card = agent.agent_card
 
+    # ACL V6 B3: filter subnet_ids to public slugs when the caller is not
+    # the agent itself (self API key) and does not hold acn:admin.
+    if public_subnet_slugs is None:
+        exposed_subnet_ids = agent.subnet_ids
+    else:
+        exposed_subnet_ids = [s for s in agent.subnet_ids if s in public_subnet_slugs]
+
     return AgentInfo(
         agent_id=agent.agent_id,
         owner=agent.owner or "unowned",
@@ -551,7 +569,7 @@ def _agent_entity_to_info(
         agent_card_url=exposed_agent_card_url,
         tags=agent.tags,
         status="online" if is_online else "offline",
-        subnet_ids=agent.subnet_ids,
+        subnet_ids=exposed_subnet_ids,
         agent_card=exposed_agent_card,
         metadata=metadata,
         registered_at=agent.registered_at,
@@ -569,11 +587,15 @@ async def _agent_entity_to_info_with_alive(
     *,
     agent_service,
     strip_sensitive: bool = False,
+    public_subnet_slugs: set[str] | None = None,
 ) -> AgentInfo:
     """Async wrapper that resolves ``is_online`` from Redis alive (single shot)."""
     is_online = await agent_service.is_alive(agent.agent_id)
     return _agent_entity_to_info(
-        agent, is_online=is_online, strip_sensitive=strip_sensitive
+        agent,
+        is_online=is_online,
+        strip_sensitive=strip_sensitive,
+        public_subnet_slugs=public_subnet_slugs,
     )
 
 
@@ -582,6 +604,7 @@ async def _agent_entities_to_infos(
     *,
     agent_service,
     strip_sensitive: bool = False,
+    public_subnet_slugs: set[str] | None = None,
 ) -> list[AgentInfo]:
     """Async batch variant — one Redis round-trip for the whole list.
 
@@ -597,6 +620,7 @@ async def _agent_entities_to_infos(
             a,
             is_online=a.agent_id in alive_ids,
             strip_sensitive=strip_sensitive,
+            public_subnet_slugs=public_subnet_slugs,
         )
         for a in agents
     ]
@@ -763,20 +787,81 @@ async def list_unclaimed_agents(
     )
 
 
+async def _get_public_subnet_slugs(subnet_service) -> set[str]:
+    """Return the set of public subnet slugs from the repository.
+
+    Called once per request on the agent-read paths; the result is used
+    to filter ``subnet_ids`` for non-self / non-admin callers (ACL V6 B3).
+    Degrades to the minimal ``{"public"}`` set on any lookup failure so
+    the read path never 500s due to a subnet-service error.
+    """
+    try:
+        public_subnets = await subnet_service.list_public_subnets()
+        return {s.subnet_id for s in public_subnets}
+    except Exception:  # noqa: BLE001
+        return {"public"}
+
+
+def _caller_gets_full_subnet_ids(payload: dict, agent_id: str) -> bool:
+    """Return True when the caller is entitled to the full subnet_ids list.
+
+    Full access is granted to:
+    - The agent itself (API key caller whose ``sub == agent_id``).
+    - ``acn:admin`` (platform ops).
+
+    Everyone else — including the agent's human owner — receives only
+    public subnet slugs (ACL V6 B3).  The human owner can inspect the
+    full list via ``GET /agents/me`` using the agent's own API key.
+    """
+    if "acn:admin" in payload.get("permissions", []):
+        return True
+    return payload.get("type") == "agent" and payload.get("sub") == agent_id
+
+
 @router.get("/{agent_id}", response_model=AgentInfo)
 @limiter.limit("120/minute")
-async def get_agent(request: Request, agent_id: AgentIdPath, agent_service: AgentServiceDep = None):
+async def get_agent(
+    request: Request,
+    agent_id: AgentIdPath,
+    credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
+    agent_service: AgentServiceDep = None,
+    subnet_service: SubnetServiceDep = None,
+):
     """Get agent information (public discovery; verification_code not included).
 
     Populates ``followers_count`` / ``follows_count`` from the follow
     graph (proposal §数据模型). Falls back to ``0`` if the follow
     subsystem is not wired or its lookup fails — a missing count must
     never block agent retrieval.
+
+    ``subnet_ids`` visibility (ACL V6 B3): the agent itself (self API
+    key) and ``acn:admin`` receive the full list. All other callers —
+    including the agent's human owner — see only public subnet slugs.
+    This prevents private subnet names from leaking to anyone who
+    queries a public agent endpoint.
     """
+    # Resolve optional caller payload for subnet_ids ACL.
+    caller_payload: dict | None = None
+    if credentials:
+        try:
+            caller_payload = await verify_token(request, credentials)
+        except Exception:  # noqa: BLE001 — invalid token → treat as anon
+            caller_payload = None
+
+    full_ids = caller_payload is not None and _caller_gets_full_subnet_ids(
+        caller_payload, agent_id
+    )
+    public_slugs: set[str] | None = None if full_ids else await _get_public_subnet_slugs(
+        subnet_service
+    )
+
     try:
         agent = await agent_service.get_agent(agent_id)
         info = await _agent_entity_to_info_with_alive(
-            agent, agent_service=agent_service, strip_sensitive=True
+            agent,
+            agent_service=agent_service,
+            strip_sensitive=True,
+            public_subnet_slugs=public_slugs,
         )
         try:
             from . import dependencies as _deps
@@ -1278,17 +1363,42 @@ async def search_agents(
     ),
     owner: str | None = None,
     name: str | None = None,
+    credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     agent_service: AgentServiceDep = None,
+    subnet_service: SubnetServiceDep = None,
 ):
     """Search agents.
 
     Clean Architecture: Route → AgentService → Repository
+
+    ``subnet_ids`` visibility (ACL V6 B3): admin callers receive the
+    full list per agent. All other callers (including unauthenticated)
+    see only public subnet slugs per row. Agent self-listing is not
+    applicable on the list endpoint — use ``GET /agents/me`` for full
+    self-view.
     """
     if visibility not in _VISIBILITY_VALUES:
         raise HTTPException(
             status_code=422,
             detail=f"visibility must be one of: {', '.join(sorted(_VISIBILITY_VALUES))}",
         )
+
+    # Resolve optional caller payload for subnet_ids ACL.
+    caller_payload: dict | None = None
+    if credentials:
+        try:
+            caller_payload = await verify_token(request, credentials)
+        except Exception:  # noqa: BLE001 — invalid token → treat as anon
+            caller_payload = None
+
+    # On the list endpoint "self" semantics don't apply — check admin only.
+    # Public slugs are fetched once and reused for every row.
+    is_admin = caller_payload is not None and "acn:admin" in caller_payload.get(
+        "permissions", []
+    )
+    public_slugs: set[str] | None = None if is_admin else await _get_public_subnet_slugs(
+        subnet_service
+    )
 
     tag_param = tag or skill  # accept both; `tag` takes precedence
     tag_list = tag_param.split(",") if tag_param else None
@@ -1315,7 +1425,10 @@ async def search_agents(
         agents = [a for a in agents if name.lower() in a.name.lower()]
 
     agent_infos = await _agent_entities_to_infos(
-        agents, agent_service=agent_service, strip_sensitive=True
+        agents,
+        agent_service=agent_service,
+        strip_sensitive=True,
+        public_subnet_slugs=public_slugs,
     )
 
     return AgentSearchResponse(
