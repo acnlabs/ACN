@@ -211,6 +211,7 @@ async def set_payment_capability(
 @router.get("/{agent_id}/payment-capability")
 async def get_payment_capability(
     agent_id: str,
+    _caller: AgentApiKeyDep,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """Get payment capability for agent"""
@@ -509,6 +510,7 @@ async def set_token_pricing(
 @router.get("/{agent_id}/token-pricing")
 async def get_token_pricing(
     agent_id: str,
+    _caller: AgentApiKeyDep,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """Get token-based pricing for an agent"""
@@ -537,6 +539,7 @@ async def get_token_pricing(
 async def estimate_cost(
     request: Request,
     body: EstimateCostRequest,
+    _caller: AgentApiKeyDep,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """

@@ -300,9 +300,13 @@ class TestResourceNotFoundFlatShape:
     converge on the same code; the others have a single site each."""
 
     def test_get_payment_capability_404_flat_shape(self, stub_payment_discovery):
+        _wire_self_authed()
         app.dependency_overrides[get_payment_discovery] = lambda: stub_payment_discovery
-        with TestClient(app) as client:
-            r = client.get("/api/v1/payments/agent-x/payment-capability")
+        try:
+            with TestClient(app) as client:
+                r = client.get("/api/v1/payments/agent-x/payment-capability")
+        finally:
+            app.dependency_overrides.pop(verify_agent_api_key, None)
         assert r.status_code == 404
         body = r.json()
         _assert_flat_shape(body)
@@ -321,9 +325,13 @@ class TestResourceNotFoundFlatShape:
         assert body["details"] == {"task_id": "task-ghost"}
 
     def test_get_token_pricing_404_flat_shape(self, stub_payment_discovery):
+        _wire_self_authed()
         app.dependency_overrides[get_payment_discovery] = lambda: stub_payment_discovery
-        with TestClient(app) as client:
-            r = client.get("/api/v1/payments/agent-x/token-pricing")
+        try:
+            with TestClient(app) as client:
+                r = client.get("/api/v1/payments/agent-x/token-pricing")
+        finally:
+            app.dependency_overrides.pop(verify_agent_api_key, None)
         assert r.status_code == 404
         body = r.json()
         _assert_flat_shape(body)
@@ -331,16 +339,20 @@ class TestResourceNotFoundFlatShape:
         assert body["details"] == {"agent_id": "agent-x"}
 
     def test_estimate_cost_404_flat_shape(self, stub_payment_discovery):
+        _wire_self_authed()
         app.dependency_overrides[get_payment_discovery] = lambda: stub_payment_discovery
-        with TestClient(app) as client:
-            r = client.post(
-                "/api/v1/payments/billing/estimate",
-                json={
-                    "agent_id": "agent-x",
-                    "estimated_input_tokens": 100,
-                    "estimated_output_tokens": 50,
-                },
-            )
+        try:
+            with TestClient(app) as client:
+                r = client.post(
+                    "/api/v1/payments/billing/estimate",
+                    json={
+                        "agent_id": "agent-x",
+                        "estimated_input_tokens": 100,
+                        "estimated_output_tokens": 50,
+                    },
+                )
+        finally:
+            app.dependency_overrides.pop(verify_agent_api_key, None)
         assert r.status_code == 404
         body = r.json()
         _assert_flat_shape(body)
