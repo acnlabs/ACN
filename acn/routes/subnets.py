@@ -16,7 +16,7 @@ from ..auth.middleware import require_internal_or_permission, verify_token
 from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import SubnetNotFoundException
-from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo
+from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo, SubnetStub
 from ..services.subnet_service import SubnetInvariantError
 from ._subnet_membership import (
     do_get_agent_subnets,
@@ -92,6 +92,12 @@ def _subnet_entity_to_info(subnet) -> SubnetInfo:
     """
     return SubnetInfo(
         subnet_id=subnet.subnet_id,
+        # Defensive ``getattr``: legacy ``MagicMock`` test stubs that
+        # predate the ``id`` field would otherwise return a fresh mock
+        # object instead of a string. Falls back to ``subnet.subnet_id``
+        # so the response is always well-formed; production entities
+        # always carry the real UUID.
+        id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.subnet_id,
         name=subnet.name,
         owner=subnet.owner,
         description=subnet.description,
@@ -361,28 +367,27 @@ async def get_subnet(
 
     Clean Architecture: Route → SubnetService → Repository.
 
-    Privacy contract (acnlabs/ACN#68)
-        ``is_private=True`` subnets hide their existence from callers
-        without rights. Anonymous callers, JWT callers for a non-owner /
-        non-member / non-``acn:admin`` agent — all receive
-        ``SUBNET_NOT_FOUND`` (404), the same status returned for a
-        truly missing subnet. This matches the list endpoint
-        (``GET /api/v1/subnets`` filters private subnets out entirely)
-        so an outsider cannot probe whether a private subnet exists by
-        status-code differential.
+    Privacy contract
+        Public subnets are fully visible to anyone.
 
-        Owners, current members, and ``acn:admin`` callers see the
-        full ``SubnetInfo`` payload — including ``harness_url`` and
-        ``metadata`` which were the highest-sensitivity leaks in #68.
+        Private subnets use a two-tier response:
 
-    Why 404 here but 401/403 on ``GET /subnets/{id}/agents``
-        Sibling endpoint ``get_subnet_agents`` leaks existence by
-        design (it returns 401 with ``WWW-Authenticate`` for anon and
-        403 ``NOT_SUBNET_MEMBER`` for authed non-members). That makes
-        sense for the **members roster**, where the caller already
-        committed to "I'm trying to do something with this subnet" by
-        hitting the sub-resource. The detail endpoint is the primary
-        probe vector, so existence-hiding is the right trade here.
+        * **Authorised callers** (owner, current member, ``acn:admin``)
+          receive the full ``SubnetInfo`` payload including ``harness_url``
+          and ``metadata``.
+
+        * **Everyone else** (anonymous or authenticated non-member)
+          receives a ``SubnetStub`` — structural metadata only
+          (``subnet_id``, ``name``, ``is_private``, ``parent_subnet_id``,
+          ``lifecycle``).  Sensitive fields (``owner``, ``description``,
+          ``harness_url``, ``security_schemes``, ``metadata``) are omitted.
+
+        Rationale: a private subnet's ``subnet_id`` is already discoverable
+        through any public agent's ``subnet_ids`` field, so existence-hiding
+        provides no real security.  Surfacing hierarchy metadata lets graph
+        clients draw correct topology without leaking sensitive details.
+
+        Genuinely missing subnets still return ``SUBNET_NOT_FOUND`` (404).
     """
     try:
         subnet = await subnet_service.get_subnet(subnet_id)
@@ -396,20 +401,40 @@ async def get_subnet(
     if not getattr(subnet, "is_private", False):
         return _subnet_entity_to_info(subnet)
 
-    # Private branch. We use a single ``_deny`` closure so every
-    # negative return is byte-identical to the genuine 404 above —
-    # any divergence (extra detail key, distinct message, distinct
-    # error_code) would re-introduce the existence-leak the issue
-    # asked us to plug.
-    def _deny() -> ACNHTTPError:
-        return ACNHTTPError(
-            ErrorCode.SUBNET_NOT_FOUND,
-            404,
-            details={"subnet_id": subnet_id},
+    # Private subnet — check authorisation.
+    # Unauthenticated or unauthorised callers receive a SubnetStub
+    # carrying only the **opaque UUID** plus structural metadata.
+    # The human-readable subnet_id slug is intentionally NOT exposed:
+    # naming patterns like ``acnlabs-core`` would otherwise leak
+    # organisational structure to anyone who happens to know an
+    # agent_id that's a member.
+    #
+    # ``parent_id`` is the parent subnet's UUID (resolved from
+    # ``subnet.parent_subnet_id`` slug). Frontend graph clients
+    # join hierarchy edges on the UUID across SubnetInfo / SubnetStub.
+    parent_slug = _coerce_optional_str(
+        getattr(subnet, "parent_subnet_id", None)
+    )
+    parent_uuid: str | None = None
+    if parent_slug:
+        try:
+            parent_entity = await subnet_service.get_subnet(parent_slug)
+            parent_uuid = _coerce_optional_str(getattr(parent_entity, "id", None))
+        except SubnetNotFoundException:
+            # Orphaned reference — surface as if top-level rather than
+            # leaking a 500 to anonymous callers.
+            parent_uuid = None
+
+    def _stub() -> SubnetStub:
+        return SubnetStub(
+            id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.subnet_id,
+            is_private=True,
+            parent_id=parent_uuid,
+            lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
         )
 
     if not credentials:
-        raise _deny()
+        return _stub()
 
     payload = await verify_token(request, credentials)
     requester = payload.get("sub", "")
@@ -420,7 +445,7 @@ async def get_subnet(
     is_member = requester in (getattr(subnet, "member_agent_ids", None) or set())
 
     if not (is_owner or is_admin or is_member):
-        raise _deny()
+        return _stub()
 
     return _subnet_entity_to_info(subnet)
 

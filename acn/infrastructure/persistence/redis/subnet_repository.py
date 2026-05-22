@@ -397,5 +397,16 @@ class RedisSubnetRepository(ISubnetRepository):
             "linked_task_id": linked_task_id,
             "join_policy": join_policy,
         }
+        # Forward the opaque UUID when present. Legacy rows that predate
+        # the privacy column don't carry it; the entity's
+        # ``id: str = field(default_factory=lambda: str(uuid4()))`` then
+        # generates a fresh one on entity construction. The next save()
+        # persists it back to Redis, so the ID stabilises after the first
+        # read-then-write cycle. (For Postgres the ``server_default``
+        # backfills on migration; this only matters for Redis-only
+        # deployments.)
+        opaque_id = subnet_dict.get("id")
+        if opaque_id:
+            data["id"] = opaque_id
 
         return Subnet(**data)

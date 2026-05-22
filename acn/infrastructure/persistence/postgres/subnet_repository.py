@@ -62,6 +62,7 @@ class PostgresSubnetRepository(ISubnetRepository):
         )
         return Subnet(
             subnet_id=row.subnet_id,
+            id=row.id,
             name=row.name,
             owner=row.owner,
             description=row.description,
@@ -85,6 +86,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             created = created.replace(tzinfo=UTC)
         return SubnetModel(
             subnet_id=subnet.subnet_id,
+            id=subnet.id,
             name=subnet.name,
             owner=subnet.owner,
             description=subnet.description,

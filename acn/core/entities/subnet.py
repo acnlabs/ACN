@@ -6,6 +6,7 @@ Pure business logic for Subnet.
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
+from uuid import uuid4
 
 # Valid values for the ``Subnet.lifecycle`` field. ``Literal`` type hints are
 # not validated at runtime on a dataclass, so we mirror the set here and
@@ -28,6 +29,19 @@ class Subnet:
     optionally nest one level deep — see ADR-0003. The three nesting
     fields default to "top-level persistent subnet" so legacy callers
     that don't touch them behave exactly as before.
+
+    Identifiers
+    -----------
+    ``subnet_id`` — the canonical, human-readable identifier. Stable
+        primary key in Postgres, used in every API path, agent
+        ``subnet_ids`` array, ``tasks.subnet_id`` reference, Redis index,
+        CLI, and SDK. Examples: ``"public"``, ``"acnlabs-core"``,
+        ``"subnet-team-alpha-7f3a9c"``.
+    ``id`` — opaque UUID, server-generated. Surfaced only in
+        ``SubnetInfo.id`` and ``SubnetStub.id`` so anonymous callers
+        receive a non-revealing identifier when they hit the discoverable-
+        private-subnet stub path. NOT used for lookups, foreign keys, or
+        membership arrays — those continue to key off ``subnet_id``.
     """
 
     subnet_id: str
@@ -41,6 +55,10 @@ class Subnet:
     metadata: dict = field(default_factory=dict)
     harness_url: str | None = None
     harness_secret: str | None = None
+    # Opaque UUID identifier — see class docstring §Identifiers.
+    # Default ``uuid4()`` covers entity-only construction in tests; the
+    # ORM layer's ``server_default=gen_random_uuid()`` covers DB inserts.
+    id: str = field(default_factory=lambda: str(uuid4()))
     # Nesting fields (ADR-0003). All optional; defaults preserve legacy
     # "flat top-level subnet" semantics.
     parent_subnet_id: str | None = None
@@ -168,6 +186,7 @@ class Subnet:
         """
         out = {
             "subnet_id": self.subnet_id,
+            "id": self.id,
             "name": self.name,
             "owner": self.owner,
             "description": self.description,
