@@ -84,6 +84,42 @@ def _coerce_lifecycle(value: object) -> Literal["persistent", "task_scoped"]:
     return "persistent"
 
 
+def _subnet_entity_to_stub(subnet, *, parent_uuid: str | None = None) -> SubnetStub:
+    """Convert a private Subnet entity to a SubnetStub.
+
+    Exposes only non-identifying fields:
+    - opaque UUID (no slug / name)
+    - structural metadata: parent UUID, lifecycle, linked_task_id
+    - aggregate counts: member_count (headcount, not identities)
+    - temporal context: created_year_month (YYYY-MM, not exact timestamp)
+    - infrastructure flag: harness_registered (bool only — harness_url hidden)
+    """
+    created_at = getattr(subnet, "created_at", None)
+    created_year_month: str | None = None
+    if created_at is not None:
+        try:
+            created_year_month = created_at.strftime("%Y-%m")
+        except AttributeError:
+            # Fallback for string-typed timestamps (test fixtures, legacy rows)
+            if isinstance(created_at, str) and len(created_at) >= 7:
+                created_year_month = created_at[:7]
+    member_count: int | None = None
+    try:
+        member_count = subnet.get_member_count()
+    except Exception:  # noqa: BLE001
+        pass
+    return SubnetStub(
+        id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.slug,
+        is_private=True,
+        parent_id=parent_uuid,
+        lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
+        member_count=member_count,
+        created_year_month=created_year_month,
+        harness_registered=bool(getattr(subnet, "harness_url", None)),
+        linked_task_id=_coerce_optional_str(getattr(subnet, "linked_task_id", None)),
+    )
+
+
 def _subnet_entity_to_info(subnet, *, parent_uuid: str | None = None) -> SubnetInfo:
     """Convert Subnet entity to SubnetInfo model.
 
@@ -510,16 +546,7 @@ async def list_subnets(
                 subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
             else:
                 # Private subnet the caller cannot see in full → SubnetStub.
-                subnet_infos.append(
-                    SubnetStub(
-                        id=_coerce_optional_str(getattr(s, "id", None)) or s.slug,
-                        is_private=True,
-                        parent_id=parent_uuid,
-                        lifecycle=_coerce_lifecycle(
-                            getattr(s, "lifecycle", "persistent")
-                        ),
-                    )
-                )
+                subnet_infos.append(_subnet_entity_to_stub(s, parent_uuid=parent_uuid))
 
         return {"subnets": subnet_infos, "count": len(subnet_infos), "total": total, "has_more": offset + limit < total}
     except ACNHTTPError:
@@ -602,12 +629,7 @@ async def get_subnet(
     # organisational structure to anyone who happens to know an
     # agent_id that's a member.
     def _stub() -> SubnetStub:
-        return SubnetStub(
-            id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.slug,
-            is_private=True,
-            parent_id=parent_uuid,
-            lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
-        )
+        return _subnet_entity_to_stub(subnet, parent_uuid=parent_uuid)
 
     if not credentials:
         return _stub()
@@ -686,16 +708,7 @@ async def get_subnet_children(
                 subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
             else:
                 parent_uuid = await _resolve_parent_uuid(s, subnet_service)
-                subnet_infos.append(
-                    SubnetStub(
-                        id=_coerce_optional_str(getattr(s, "id", None)) or s.slug,
-                        is_private=True,
-                        parent_id=parent_uuid,
-                        lifecycle=_coerce_lifecycle(
-                            getattr(s, "lifecycle", "persistent")
-                        ),
-                    )
-                )
+                subnet_infos.append(_subnet_entity_to_stub(s, parent_uuid=parent_uuid))
 
         return {"count": len(subnet_infos), "subnets": subnet_infos}
     except ACNHTTPError:
