@@ -234,7 +234,10 @@ def stub_task_service_for_followup():
     target = MagicMock()
     target.task_id = "task-target"
     target.creator_id = "user-1"
-    target.slug = None  # public task by default
+    # Task entity attribute is still ``subnet_id`` until Step 2 of the
+    # slug rename migrates cross-entity references; the test is set up
+    # to the field name production code reads.
+    target.subnet_id = None  # public task by default
     target.status = "open"
     target.mode = "single"
     target.title = "Test"
@@ -399,7 +402,8 @@ class TestTasksFlatErrorSchemaCrossModule:
         disambiguates anonymous vs non-member callers for the SDK.
         """
         target = MagicMock()
-        target.slug = "subnet-private"
+        # Task entity attribute is still ``subnet_id`` (Step 2).
+        target.subnet_id = "subnet-private"
         target.creator_id = "user-1"
         stub_task_service_for_followup.get_task = AsyncMock(return_value=target)
         _wire(stub_task_service_for_followup, stub_agent_service)
@@ -413,7 +417,10 @@ class TestTasksFlatErrorSchemaCrossModule:
         assert body["error_code"] == "not_subnet_member"
         assert body["details"] == {
             "task_id": "task-target",
-            "slug": "subnet-private",
+            # The route's error payload mirrors the request's URL/JSON
+            # field name. Until Step 2 ships, that's still ``subnet_id``
+            # in the task error contract.
+            "subnet_id": "subnet-private",
             "reason": "anonymous_caller",
         }
 
@@ -430,7 +437,9 @@ class TestTasksFlatErrorSchemaCrossModule:
         private-subnet gate's second branch fires.
         """
         target = MagicMock()
-        target.slug = "subnet-private"
+        # See ``test_get_task_private_subnet_anonymous_returns_not_subnet_member``
+        # — task entity attribute is still ``subnet_id`` until Step 2.
+        target.subnet_id = "subnet-private"
         target.creator_id = "user-1"
         stub_task_service_for_followup.get_task = AsyncMock(return_value=target)
         stub_task_service_for_followup.is_subnet_member = AsyncMock(
@@ -457,7 +466,9 @@ class TestTasksFlatErrorSchemaCrossModule:
         assert body["error_code"] == "not_subnet_member"
         assert body["details"] == {
             "task_id": "task-target",
-            "slug": "subnet-private",
+            # See sibling test — error payload field still uses
+            # ``subnet_id`` until Step 2 of the slug rename.
+            "subnet_id": "subnet-private",
             "agent_id": "user-2",
             "reason": "not_member",
         }

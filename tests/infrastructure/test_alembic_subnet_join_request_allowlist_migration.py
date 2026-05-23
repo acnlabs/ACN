@@ -11,9 +11,14 @@ What we check
 -------------
 - Revision chain points at the Phase 1 head (``f7b9c2d4e8a1``).
 - ``upgrade()`` creates both tables and all four indexes.
-- The unique partial index on ``(slug, agent_id) WHERE
+- The unique partial index on ``(subnet_id, agent_id) WHERE
   status='pending'`` is present (THE invariant of the table; a
   missing one silently re-opens the two-pending race).
+  Note: the DB column is still named ``subnet_id`` post-Step-1
+  rename — the Python ORM attribute on
+  ``SubnetJoinRequestModel`` is ``slug`` but maps to the legacy
+  column name; Step 2 of the rename migration will move the
+  column itself.
 - ``downgrade()`` drops indexes before their tables (good DDL
   hygiene; also pins the symmetric reverse-order contract).
 """
@@ -92,12 +97,16 @@ class TestUpgrade:
             if c.args[0] == "subnet_join_requests_pending_unique"
         ]
         assert len(pending_unique_calls) == 1, (
-            "missing the (slug, agent_id) WHERE status='pending' "
+            "missing the (subnet_id, agent_id) WHERE status='pending' "
             "unique partial index"
         )
         call_args = pending_unique_calls[0]
         assert call_args.args[1] == "subnet_join_requests"
-        assert call_args.args[2] == ["slug", "agent_id"]
+        # ``subnet_id`` (not ``slug``) — the DB column keeps its
+        # legacy name through Step 1; only the ORM attribute is
+        # renamed. Step 2 will rename the column too and this
+        # assertion should be updated alongside that migration.
+        assert call_args.args[2] == ["subnet_id", "agent_id"]
         assert call_args.kwargs.get("unique") is True
         # The ``postgresql_where`` clause is the partial-index predicate;
         # SQLAlchemy ``TextClause`` doesn't compare equal cross-instance,

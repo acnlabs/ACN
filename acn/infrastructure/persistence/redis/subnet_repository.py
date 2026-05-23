@@ -369,7 +369,16 @@ class RedisSubnetRepository(ISubnetRepository):
         description = subnet_dict.get("description") or None
         harness_url = subnet_dict.get("harness_url") or None
         harness_secret = subnet_dict.get("harness_secret") or None
-        parent_slug = subnet_dict.get("parent_slug") or None
+        # Back-compat: pre-rename Redis HASHes used ``parent_subnet_id``
+        # as the key. Read both so a deployment that hasn't run a Redis
+        # backfill still hydrates correctly. The next ``save()`` rewrites
+        # the row with the new ``parent_slug`` key, so this only matters
+        # for the first read after the rollout.
+        parent_slug = (
+            subnet_dict.get("parent_slug")
+            or subnet_dict.get("parent_subnet_id")
+            or None
+        )
         linked_task_id = subnet_dict.get("linked_task_id") or None
         # ``lifecycle`` defaults to "persistent" both when key absent
         # (legacy row) and when stored value is empty/falsy.
@@ -393,8 +402,16 @@ class RedisSubnetRepository(ISubnetRepository):
         else:
             join_policy = "open"
 
+        # Back-compat: pre-rename HASHes stored the slug under the
+        # ``subnet_id`` key. ``KeyError`` here would be a hard failure
+        # on the first read after the rollout, so accept either key.
+        slug_value = subnet_dict.get("slug") or subnet_dict.get("subnet_id")
+        if not slug_value:
+            raise KeyError(
+                "subnet HASH is missing both 'slug' and legacy 'subnet_id' keys"
+            )
         data = {
-            "slug": subnet_dict["slug"],
+            "slug": slug_value,
             "name": subnet_dict["name"],
             "owner": subnet_dict["owner"],
             "description": description,

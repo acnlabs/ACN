@@ -34,9 +34,15 @@ class Subnet:
     -----------
     ``slug`` — the URL-safe, human-readable identifier. Stable primary key
         in Postgres (column ``subnets.slug``), used in every API path,
-        agent ``subnet_ids`` array, ``tasks.slug`` reference, Redis
-        index, CLI, and SDK. Examples: ``"public"``, ``"acnlabs-core"``,
-        ``"team-alpha-7f3a9c"``.
+        Redis index, CLI, and SDK. Examples: ``"public"``,
+        ``"acnlabs-core"``, ``"team-alpha-7f3a9c"``.
+
+        Cross-entity columns that *carry* a slug value but whose Python
+        attribute / DB column are still named ``subnet_id`` (Step 2 of
+        the rename migration): ``Agent.subnet_ids``, ``Task.subnet_id``,
+        ``SubnetJoinRequest`` / ``SubnetAllowlist`` ORM rows
+        (Python attribute is ``slug`` since Step 1, DB column stays
+        ``subnet_id`` until Step 2's column-rename migration ships).
     ``id`` — opaque UUID, server-generated. Surfaced only in
         ``SubnetInfo.id`` and ``SubnetStub.id`` so anonymous callers
         receive a non-revealing identifier. NOT used for lookups, foreign
@@ -255,10 +261,17 @@ class Subnet:
         if "join_policy" not in data and data.get("is_private") is True:
             data["join_policy"] = "approval"
         # Back-compat: old serialised dicts used ``subnet_id`` and
-        # ``parent_slug`` before the slug rename. Translate on read
-        # so Redis-cached rows survive the migration without a backfill.
+        # ``parent_subnet_id`` before the slug rename. Translate on
+        # read so Redis-cached rows survive the migration without a
+        # backfill. ``data.pop`` (not ``setdefault``) so the legacy
+        # key never reaches ``cls(**data)`` — the dataclass would
+        # otherwise reject it as an unexpected keyword argument.
         if "subnet_id" in data and "slug" not in data:
             data["slug"] = data.pop("subnet_id")
-        if "parent_slug" in data and "parent_slug" not in data:
-            data["parent_slug"] = data.pop("parent_slug")
+        elif "subnet_id" in data:
+            data.pop("subnet_id")
+        if "parent_subnet_id" in data and "parent_slug" not in data:
+            data["parent_slug"] = data.pop("parent_subnet_id")
+        elif "parent_subnet_id" in data:
+            data.pop("parent_subnet_id")
         return cls(**data)

@@ -108,9 +108,14 @@ class TestTaskCreateRequest:
         )
         assert max_len == 64, "anchor: SubnetCreateRequest.slug should still be 64"
 
-        TaskCreateRequest(**self._base(slug="s" * 64))
+        # ``TaskCreateRequest.subnet_id`` keeps the legacy field name
+        # until Step 2 of the slug rename migrates the cross-entity
+        # references (``Task.subnet_id``); the cap should match the
+        # subnet's ``slug`` field even while the request field name
+        # has not been renamed yet.
+        TaskCreateRequest(**self._base(subnet_id="s" * 64))
         with pytest.raises(ValidationError):
-            TaskCreateRequest(**self._base(slug="s" * 65))
+            TaskCreateRequest(**self._base(subnet_id="s" * 65))
 
     def test_max_total_budget_capped(self) -> None:
         with pytest.raises(ValidationError):

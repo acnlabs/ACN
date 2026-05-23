@@ -107,7 +107,11 @@ def _make_task(
     t.metadata = {}
     t.submission = submission
     t.submission_artifacts = []
-    t.slug = slug
+    # ``Task`` entity still uses ``subnet_id`` until Step 2 of the
+    # slug rename; the test parameter is named ``slug`` for parity
+    # with the route layer's URL parameter naming, but the value is
+    # written to the entity attribute the production code reads.
+    t.subnet_id = slug
     t.max_resubmit_attempts = None
     return t
 
@@ -369,7 +373,9 @@ _VALID_TASK_BODY: dict[str, Any] = {
     "description": "A sufficiently long description for the task creation gate test.",
     "deadline_hours": 24,
     "reward": "0",
-    "slug": _SUBNET_ID,
+    # ``TaskCreateRequest`` keeps the legacy ``subnet_id`` field name
+    # until Step 2 of the slug rename migrates cross-entity references.
+    "subnet_id": _SUBNET_ID,
 }
 
 
@@ -412,11 +418,11 @@ class TestCreateGate:
         stub_task_service.create_task.assert_awaited_once()
 
     def test_no_subnet_id_skips_membership_check(self, stub_task_service):
-        """Creating a public task (no slug) skips the membership check."""
+        """Creating a public task (no subnet_id) skips the membership check."""
         task = _make_task(creator_id=_AGENT_A, slug=None)
         stub_task_service.create_task = AsyncMock(return_value=task)
 
-        body = {k: v for k, v in _VALID_TASK_BODY.items() if k != "slug"}
+        body = {k: v for k, v in _VALID_TASK_BODY.items() if k != "subnet_id"}
         with TestClient(app) as client:
             r = client.post(
                 "/api/v1/tasks",

@@ -11,7 +11,14 @@ from uuid import uuid4
 
 from a2a.compat.v0_3.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
 from a2a.compat.v0_3.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 # Re-export SDK types as canonical Agent Card / Skill for ACN
 AgentCard = A2AAgentCard
@@ -271,11 +278,19 @@ class AgentRegisterRequest(BaseModel):
         return v
 
     def get_subnet_ids(self) -> list[str]:
-        """Get effective subnet IDs (handles backward compatibility)"""
+        """Get effective subnet IDs (handles backward compatibility).
+
+        ``subnet_ids`` (plural) is the canonical input. The legacy
+        ``subnet_id`` (singular) is still accepted so older clients
+        that pre-date multi-subnet membership keep working — its value
+        is wrapped into a single-element list. Defaults to ``["public"]``
+        so registration without any subnet hint joins the platform's
+        always-on public subnet.
+        """
         if self.subnet_ids:
             return self.subnet_ids
-        if self.slug:
-            return [self.slug]
+        if self.subnet_id:
+            return [self.subnet_id]
         return ["public"]
 
 
@@ -517,7 +532,14 @@ class SubnetCreateRequest(BaseModel):
         None,
         min_length=1,
         max_length=64,
-        description="URL-safe subnet identifier (e.g. 'acnlabs-core'). Optional — auto-generated when omitted.",
+        # Accept the legacy ``subnet_id`` body field so older clients
+        # that pre-date the slug rename keep working: their value lands
+        # in ``slug`` rather than being silently dropped (which would
+        # make the route auto-generate a different identifier than the
+        # caller intended). Removed in a future major version once SDKs
+        # have rolled forward.
+        validation_alias=AliasChoices("slug", "subnet_id"),
+        description="URL-safe subnet identifier (e.g. 'acnlabs-core'). Optional — auto-generated when omitted. Legacy alias 'subnet_id' is also accepted on input.",
     )
     name: str | None = Field(
         None,
@@ -542,9 +564,14 @@ class SubnetCreateRequest(BaseModel):
         None,
         min_length=1,
         max_length=64,
+        # Same legacy-alias treatment as ``slug`` above — keeps clients
+        # that still send ``parent_subnet_id`` in the create body
+        # functional during the rename rollout.
+        validation_alias=AliasChoices("parent_slug", "parent_subnet_id"),
         description=(
             "Parent subnet slug for nested subnets (ADR-0003). Single-layer cap: "
-            "the parent itself must be top-level. Immutable after creation."
+            "the parent itself must be top-level. Immutable after creation. "
+            "Legacy alias 'parent_subnet_id' is also accepted on input."
         ),
     )
     lifecycle: Literal["persistent", "task_scoped"] = Field(

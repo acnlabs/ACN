@@ -757,6 +757,14 @@ class ACNAgentExecutor(AgentExecutor):
                     DataPart(
                         data={
                             "response": response,
+                            # Emit both keys symmetrically with the
+                            # input contract: ``slug`` is the canonical
+                            # field after the rename, ``subnet_id`` is
+                            # kept as a legacy alias so existing A2A
+                            # clients reading the artifact don't break
+                            # mid-rollout. Either key carries the same
+                            # slug value.
+                            "slug": subnet_id,
                             "subnet_id": subnet_id,
                             "agent_id": agent_id,
                         }

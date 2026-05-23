@@ -61,7 +61,7 @@ def _make_repo(task_by_id: dict[str, Task], open_ids: list[str], agent_subnet_id
 @pytest.mark.asyncio
 async def test_private_subnet_task_visible_to_member():
     """An agent whose subnet_ids include the task's subnet must see the task."""
-    t = _make_task(slug="subnet-sec")
+    t = _make_task(subnet_id="subnet-sec")
     repo, _ = _make_repo(
         task_by_id={"task-001": t},
         open_ids=["task-001"],
@@ -74,7 +74,7 @@ async def test_private_subnet_task_visible_to_member():
 
 @pytest.mark.asyncio
 async def test_private_subnet_task_hidden_from_non_member():
-    t = _make_task(slug="subnet-sec")
+    t = _make_task(subnet_id="subnet-sec")
     repo, _ = _make_repo(
         task_by_id={"task-001": t},
         open_ids=["task-001"],
@@ -88,7 +88,7 @@ async def test_private_subnet_task_hidden_from_non_member():
 @pytest.mark.asyncio
 async def test_public_task_always_visible_even_without_requesting_agent():
     """Tasks with no slug (public) bypass the visibility check."""
-    t = _make_task(slug=None)
+    t = _make_task(subnet_id=None)
     repo, fake_redis = _make_repo(
         task_by_id={"task-001": t},
         open_ids=["task-001"],
@@ -108,7 +108,7 @@ async def test_visibility_never_touches_legacy_broken_keys():
     `acn:subnet:{sid}` paths. Both were empty/wrong and made private
     subnets invisible.
     """
-    t = _make_task(slug="subnet-sec")
+    t = _make_task(subnet_id="subnet-sec")
     repo, fake_redis = _make_repo(
         task_by_id={"task-001": t},
         open_ids=["task-001"],
@@ -140,7 +140,7 @@ async def test_corrupt_subnet_ids_does_not_crash_and_hides_private_tasks():
         return "{not json"  # garbage
 
     fake_redis.hget.side_effect = fake_hget
-    t = _make_task(slug="subnet-sec")
+    t = _make_task(subnet_id="subnet-sec")
     repo = RedisTaskRepository(redis_client=fake_redis)
     repo.find_by_id = AsyncMock(return_value=t)  # type: ignore[method-assign]
 

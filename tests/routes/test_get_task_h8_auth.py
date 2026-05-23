@@ -40,14 +40,18 @@ def _disable_rate_limiter():
 
 
 def _public_task() -> SimpleNamespace:
-    """A task entity stand-in with ``slug=None`` — anyone can read it.
+    """A task entity stand-in with no subnet binding — anyone can read it.
 
     H8 only cares about identity resolution and the subnet-membership
     branch, not response serialisation, so we just need a value that
-    satisfies ``_task_to_response``'s field reads without exploding."""
+    satisfies ``_task_to_response``'s field reads without exploding.
+
+    Naming: the ``Task`` entity still uses ``subnet_id`` until Step 2
+    of the slug rename ships; until then the field on the namespace
+    must match the entity attribute the production code reads."""
     return SimpleNamespace(
         task_id="task-public",
-        slug=None,
+        subnet_id=None,
         creator_id="creator-1",
         creator_name="Creator",
         creator_type="human",
@@ -93,7 +97,8 @@ def _public_task() -> SimpleNamespace:
 def _private_task(slug: str = "sn-1") -> SimpleNamespace:
     t = _public_task()
     t.task_id = "task-private"
-    t.slug = slug
+    # See ``_public_task`` — entity attribute is still ``subnet_id``.
+    t.subnet_id = slug
     return t
 
 

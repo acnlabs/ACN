@@ -816,7 +816,12 @@ async def get_subnet_agents(
             return _empty_response
 
     try:
-        agents = await agent_service.search_agents(slug=slug)
+        # ``AgentService.search_agents`` keeps its parameter named
+        # ``subnet_id=`` until Step 2 of the slug rename migrates the
+        # cross-entity references (Agent.subnet_ids, Task.subnet_id).
+        # The argument *value* is the slug — only the keyword name
+        # has not been renamed yet.
+        agents = await agent_service.search_agents(subnet_id=slug)
 
         from .registry import _agent_entities_to_infos
 

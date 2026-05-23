@@ -288,7 +288,12 @@ async def list_allowlist(
         subnet_id, limit=limit, offset=offset
     )
     return {
-        "subnet_id": subnet_id,
+        # ``slug`` is the canonical key after the Step 1 rename.
+        # The previous ``subnet_id`` field is intentionally not emitted
+        # alongside — its absence is what the route's tests pin via
+        # equality assertion. SDK clients that still read ``subnet_id``
+        # from this response shape must roll forward to ``slug``.
+        "slug": subnet_id,
         "entries": [serialize_allowlist_entry(e) for e in entries],
     }
 
@@ -493,7 +498,8 @@ async def list_join_requests(
         offset=offset,
     )
     return {
-        "subnet_id": subnet_id,
+        # ``slug`` only — see allowlist endpoint for the rationale.
+        "slug": subnet_id,
         "items": [serialize_join_request(r) for r in rows],
     }
 
@@ -770,7 +776,8 @@ async def list_invitations(
         offset=offset,
     )
     return {
-        "subnet_id": subnet_id,
+        # ``slug`` only — see allowlist endpoint for the rationale.
+        "slug": subnet_id,
         "items": [serialize_join_request(r) for r in rows],
     }
 

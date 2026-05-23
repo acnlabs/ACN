@@ -237,3 +237,69 @@ class TestSingleLayerCapNotEnforcedAtEntity:
             parent_slug="subnet-some-parent",
         )
         assert subnet.parent_slug == "subnet-some-parent"
+
+
+class TestFromDictLegacyKeyTranslation:
+    """``Subnet.from_dict`` must accept dicts persisted before the
+    ``subnet_id`` → ``slug`` rename so Redis-cached rows survive a
+    rolling deploy without a backfill. Pinned here because mock-based
+    repository tests don't exercise the real entity translation
+    path — a regression here only surfaces on a real Redis deploy.
+    """
+
+    def test_translates_legacy_subnet_id_key_to_slug(self):
+        subnet = Subnet.from_dict(
+            {
+                "subnet_id": "legacy-net",
+                "name": "Legacy",
+                "owner": "alice",
+            }
+        )
+
+        assert subnet.slug == "legacy-net"
+
+    def test_translates_legacy_parent_subnet_id_to_parent_slug(self):
+        subnet = Subnet.from_dict(
+            {
+                "slug": "child-net",
+                "name": "Child",
+                "owner": "alice",
+                "parent_subnet_id": "parent-net",
+            }
+        )
+
+        assert subnet.parent_slug == "parent-net"
+
+    def test_translates_both_legacy_keys_in_one_dict(self):
+        # Realistic shape: a Redis HASH dumped before the rename
+        # carries both legacy keys; from_dict must hydrate cleanly.
+        subnet = Subnet.from_dict(
+            {
+                "subnet_id": "child-net",
+                "name": "Child",
+                "owner": "alice",
+                "parent_subnet_id": "parent-net",
+            }
+        )
+
+        assert subnet.slug == "child-net"
+        assert subnet.parent_slug == "parent-net"
+
+    def test_explicit_new_keys_take_precedence_over_legacy(self):
+        # Defensive: if both keys appear (mid-rollout migration glitch),
+        # the new ``slug`` / ``parent_slug`` win and the legacy values
+        # are discarded rather than triggering a "duplicate keyword
+        # argument" TypeError.
+        subnet = Subnet.from_dict(
+            {
+                "slug": "new-slug",
+                "subnet_id": "old-slug",
+                "parent_slug": "new-parent",
+                "parent_subnet_id": "old-parent",
+                "name": "Mixed",
+                "owner": "alice",
+            }
+        )
+
+        assert subnet.slug == "new-slug"
+        assert subnet.parent_slug == "new-parent"

@@ -178,7 +178,7 @@ class SubnetModel(Base):
     __tablename__ = "subnets"
 
     # ``slug`` is the URL-safe human-readable primary key (renamed from
-    # ``subnet_id`` in migration ``xxxx_rename_subnet_id_to_slug``).
+    # ``subnet_id`` in migration ``a1b2c3d4e5f6_rename_subnet_id_to_slug``).
     slug: Mapped[str] = mapped_column("slug", String, primary_key=True)
     # Opaque UUID — secondary identifier for SubnetStub privacy.
     # Server-default ``gen_random_uuid()`` fills the column on INSERT
