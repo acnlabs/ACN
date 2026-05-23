@@ -370,7 +370,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         body = r.json()
         _assert_flat_shape(body)
         assert body["error_code"] == "invalid_request"
-        assert body["details"] == {"reason": "subnet name already taken"}
+        assert body["details"] == {"reason": "invalid_request"}
 
     def test_list_subnets_owner_filter_no_auth_returns_authentication_required(
         self, stub_agent_service, stub_subnet_service
@@ -538,7 +538,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         assert body["error_code"] == "ownership_mismatch"
         assert body["details"] == {
             "subnet_id": "subnet-1",
-            "reason": "Only the subnet owner can delete it.",
+            "reason": "owner_mismatch",
         }
 
 

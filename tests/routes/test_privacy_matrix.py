@@ -194,12 +194,20 @@ def stub_subnet_service():
             result.extend([_subnet_public, _subnet_private])
         return result
 
+    async def _list_subnets_by_owners(owner_ids: set) -> list:
+        result = []
+        for s in [_subnet_public, _subnet_private]:
+            if s.owner in owner_ids:
+                result.append(s)
+        return result
+
     svc.get_subnet = AsyncMock(side_effect=_get_subnet)
     svc.find_agent_subnets = AsyncMock(side_effect=_find_agent_subnets)
     svc.list_public_subnets = AsyncMock(return_value=[_subnet_public])
     svc.list_subnets = AsyncMock(
         return_value=[_subnet_public, _subnet_private]
     )
+    svc.list_subnets_by_owners = AsyncMock(side_effect=_list_subnets_by_owners)
     return svc
 
 
