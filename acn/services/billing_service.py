@@ -341,6 +341,22 @@ class BillingService:
         2. Add earnings to agent owner
         3. Record network fee
 
+        Concurrency safety
+        ------------------
+        The status read + dedution + status write sequence is a
+        textbook TOCTOU: two concurrent callers (e.g. retried RPC,
+        racing schedulers) could both observe ``PENDING`` and both
+        deduct credits, double-charging the user. We bracket the
+        whole sequence in a Redis SET-NX-EX lock keyed on the
+        transaction id so only one caller proceeds; the other gets
+        ``ValueError("Transaction is currently being processed")``.
+        Lock TTL is 30s (well above the deduction p99) so a
+        crashed worker doesn't leave the row permanently locked.
+        After acquiring the lock we re-read the transaction status
+        — the lock prevents two concurrent processors, and the
+        re-read prevents reprocessing if a previous run finished
+        between the caller's status read and our lock acquisition.
+
         Args:
             transaction_id: ID of transaction to process
             deduct_credits_callback: async func(user_id, amount) to deduct credits
@@ -349,48 +365,70 @@ class BillingService:
         Returns:
             Updated transaction
         """
-        transaction = await self.get_transaction(transaction_id)
-        if not transaction:
-            raise ValueError(f"Transaction not found: {transaction_id}")
-
-        if transaction.status != BillingTransactionStatus.PENDING:
-            raise ValueError(f"Transaction not pending: {transaction.status}")
+        lock_key = f"{self._prefix}lock:tx:{transaction_id}"
+        # SET NX EX → only one caller acquires the lock at a time.
+        # Returns True on acquire, None/False otherwise (per redis-py
+        # contract for SET with nx=True).
+        acquired = await self.redis.set(lock_key, "1", nx=True, ex=30)
+        if not acquired:
+            raise ValueError(
+                f"Transaction is currently being processed: {transaction_id}"
+            )
 
         try:
-            # 1. Deduct credits from user
-            await deduct_credits_callback(
-                transaction.user_id,
-                transaction.cost.total_credits,
-            )
+            transaction = await self.get_transaction(transaction_id)
+            if not transaction:
+                raise ValueError(f"Transaction not found: {transaction_id}")
 
-            # 2. Add earnings to agent owner (if known)
-            if transaction.agent_owner_id:
-                await add_earnings_callback(
-                    transaction.agent_owner_id,
-                    transaction.cost.agent_income_credits,
+            # Re-check under the lock. If a previous processor finished
+            # before we acquired the lock the transaction will already
+            # be COMPLETED/FAILED — rejecting here prevents double
+            # charging on a stale ``process_transaction`` retry.
+            if transaction.status != BillingTransactionStatus.PENDING:
+                raise ValueError(f"Transaction not pending: {transaction.status}")
+
+            try:
+                # 1. Deduct credits from user
+                await deduct_credits_callback(
+                    transaction.user_id,
+                    transaction.cost.total_credits,
                 )
 
-            # 3. Record network fee (internal accounting)
-            await self._record_network_fee(
-                transaction.transaction_id,
-                transaction.cost.network_fee_credits,
-            )
+                # 2. Add earnings to agent owner (if known)
+                if transaction.agent_owner_id:
+                    await add_earnings_callback(
+                        transaction.agent_owner_id,
+                        transaction.cost.agent_income_credits,
+                    )
 
-            # Mark as completed
-            transaction.status = BillingTransactionStatus.COMPLETED
-            transaction.completed_at = datetime.now(UTC)
+                # 3. Record network fee (internal accounting)
+                await self._record_network_fee(
+                    transaction.transaction_id,
+                    transaction.cost.network_fee_credits,
+                )
 
-        except Exception as e:
-            # Mark as failed
-            transaction.status = BillingTransactionStatus.FAILED
-            transaction.error_message = str(e)
+                # Mark as completed
+                transaction.status = BillingTransactionStatus.COMPLETED
+                transaction.completed_at = datetime.now(UTC)
 
-        await self._save_transaction(transaction)
+            except Exception as e:
+                # Mark as failed
+                transaction.status = BillingTransactionStatus.FAILED
+                transaction.error_message = str(e)
 
-        # Send webhook notification
-        await self._send_billing_webhook(transaction)
+            await self._save_transaction(transaction)
 
-        return transaction
+            # Send webhook notification
+            await self._send_billing_webhook(transaction)
+
+            return transaction
+        finally:
+            # Best-effort lock release — failure here just leaves the
+            # 30s TTL to expire naturally, which is safe.
+            try:
+                await self.redis.delete(lock_key)
+            except Exception:  # noqa: BLE001
+                pass
 
     async def refund_transaction(
         self,

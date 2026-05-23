@@ -56,7 +56,7 @@ from __future__ import annotations
 from typing import Literal
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -83,6 +83,7 @@ from .dependencies import (
     RequestIdPath,
     SubnetIdPath,
     SubnetServiceDep,
+    limiter,
 )
 
 logger = structlog.get_logger()
@@ -162,7 +163,9 @@ class CancelInvitationBody(_OptionalNoteBody):
 
 
 @router.post("/subnets/{subnet_id}/allowlist", status_code=201)
+@limiter.limit("30/minute")
 async def add_to_allowlist(
+    request: Request,
     subnet_id: SubnetIdPath,
     body: AllowlistAddBody,
     agent_info: AgentApiKeyDep,
@@ -215,7 +218,9 @@ async def add_to_allowlist(
     status_code=204,
     responses={**ACN_DEFAULT_RESPONSES, 204: {"description": "Entry removed"}},
 )
+@limiter.limit("30/minute")
 async def remove_from_allowlist(
+    request: Request,
     subnet_id: SubnetIdPath,
     agent_id: AgentIdPath,
     agent_info: AgentApiKeyDep,
@@ -256,7 +261,9 @@ async def remove_from_allowlist(
 
 
 @router.get("/subnets/{subnet_id}/allowlist")
+@limiter.limit("60/minute")
 async def list_allowlist(
+    request: Request,
     subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
@@ -303,7 +310,9 @@ async def list_allowlist(
 
 
 @router.post("/subnets/{subnet_id}/join-requests/{request_id}/approve")
+@limiter.limit("30/minute")
 async def approve_join_request(
+    request: Request,
     subnet_id: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
@@ -340,7 +349,9 @@ async def approve_join_request(
 
 
 @router.post("/subnets/{subnet_id}/join-requests/{request_id}/reject")
+@limiter.limit("30/minute")
 async def reject_join_request(
+    request: Request,
     subnet_id: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
@@ -372,7 +383,9 @@ async def reject_join_request(
 
 
 @router.delete("/subnets/{subnet_id}/join-requests/{request_id}")
+@limiter.limit("30/minute")
 async def withdraw_join_request(
+    request: Request,
     subnet_id: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
@@ -435,7 +448,9 @@ async def withdraw_join_request(
 
 
 @router.get("/subnets/{subnet_id}/join-requests")
+@limiter.limit("60/minute")
 async def list_join_requests(
+    request: Request,
     subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
@@ -495,7 +510,9 @@ async def list_join_requests(
 
 
 @router.post("/subnets/{subnet_id}/invitations")
+@limiter.limit("30/minute")
 async def send_invitation(
+    request: Request,
     subnet_id: SubnetIdPath,
     body: InviteBody,
     agent_info: AgentApiKeyDep,
@@ -547,7 +564,9 @@ async def send_invitation(
 
 
 @router.post("/subnets/{subnet_id}/invitations/{request_id}/accept")
+@limiter.limit("30/minute")
 async def accept_invitation(
+    request: Request,
     subnet_id: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
@@ -634,7 +653,9 @@ async def accept_invitation(
 
 
 @router.post("/subnets/{subnet_id}/invitations/{request_id}/reject")
+@limiter.limit("30/minute")
 async def reject_invitation(
+    request: Request,
     subnet_id: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
@@ -674,7 +695,9 @@ async def reject_invitation(
 
 
 @router.delete("/subnets/{subnet_id}/invitations/{request_id}")
+@limiter.limit("30/minute")
 async def cancel_invitation(
+    request: Request,
     subnet_id: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
@@ -709,7 +732,9 @@ async def cancel_invitation(
 
 
 @router.get("/subnets/{subnet_id}/invitations")
+@limiter.limit("60/minute")
 async def list_invitations(
+    request: Request,
     subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
@@ -745,7 +770,9 @@ async def list_invitations(
 
 
 @router.get("/agents/{agent_id}/subnet-invitations")
+@limiter.limit("60/minute")
 async def list_agent_pending_invitations(
+    request: Request,
     agent_id: AgentIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,

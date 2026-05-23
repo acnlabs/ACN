@@ -15,7 +15,7 @@ owns only the URL + OpenAPI metadata.
 from __future__ import annotations
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from ..core.errors import ACN_DEFAULT_RESPONSES
 from ._subnet_membership import (
@@ -31,6 +31,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     SubnetIdPath,
     SubnetServiceDep,
     WebhookServiceDep,
+    limiter,
 )
 
 logger = structlog.get_logger()
@@ -43,7 +44,9 @@ router = APIRouter(
 
 
 @router.post("/{agent_id}/subnets/{subnet_id}")
+@limiter.limit("30/minute")
 async def join_subnet(
+    request: Request,
     agent_id: AgentIdPath,
     subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
@@ -74,7 +77,9 @@ async def join_subnet(
 
 
 @router.delete("/{agent_id}/subnets/{subnet_id}")
+@limiter.limit("30/minute")
 async def leave_subnet(
+    request: Request,
     agent_id: AgentIdPath,
     subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
