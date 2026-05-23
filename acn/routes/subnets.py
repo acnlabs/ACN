@@ -360,6 +360,8 @@ async def list_subnets(
     owner: str = None,
     parent: str | None = None,
     owned_by_user: str | None = None,
+    limit: int = Query(default=200, ge=1, le=1000, description="Max subnets to return."),
+    offset: int = Query(default=0, ge=0, description="Zero-based offset for pagination."),
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
@@ -432,10 +434,7 @@ async def list_subnets(
                     ErrorCode.OWNERSHIP_MISMATCH,
                     403,
                     message="Cannot list subnets owned by another user.",
-                    details={
-                        "requested_user": owned_by_user,
-                        "token_sub": caller_sub,
-                    },
+                    details={"reason": "ownership_mismatch"},
                 )
             # Resolve the user's owned agents, then query subnets by that
             # bounded owner set — avoids the O(N) full-table scan that
@@ -468,14 +467,38 @@ async def list_subnets(
             # per-row below (ACL V6 B5 caller-aware rendering).
             subnets = await subnet_service.list_subnets()
 
+        # Apply pagination before the per-row rendering pass (bounds peak work).
+        total = len(subnets)
+        subnets_page = subnets[offset : offset + limit]
+
+        # Batch-resolve all parent UUIDs in a single pass to avoid N+1 queries.
+        parent_ids_needed = {
+            getattr(s, "parent_subnet_id", None)
+            for s in subnets_page
+            if getattr(s, "parent_subnet_id", None)
+        }
+        parent_uuid_map: dict[str, str | None] = {}
+        for pid in parent_ids_needed:
+            try:
+                parent_obj = await subnet_service.get_subnet(pid)
+                parent_uuid_map[pid] = _coerce_optional_str(getattr(parent_obj, "id", None))
+            except Exception:  # noqa: BLE001
+                parent_uuid_map[pid] = None
+
+        def _get_parent_uuid(s) -> str | None:
+            pid = getattr(s, "parent_subnet_id", None)
+            if not pid:
+                return None
+            return parent_uuid_map.get(pid)
+
         # Per-row caller-aware rendering (ACL V6 B5).
         # Exception: when ?owned_by_user= is set, all rows are already
         # confirmed as owned-by-user-via-agent (ownership-chain bridge)
         # so they always receive full SubnetInfo regardless of is_private.
         full_access_all_rows = owned_by_user is not None
         subnet_infos: list = []
-        for s in subnets:
-            parent_uuid = await _resolve_parent_uuid(s, subnet_service)
+        for s in subnets_page:
+            parent_uuid = _get_parent_uuid(s)
             if full_access_all_rows or not getattr(s, "is_private", False):
                 subnet_infos.append(_subnet_entity_to_info(s, parent_uuid=parent_uuid))
             elif caller_payload and await _resolve_caller_access(
@@ -495,7 +518,7 @@ async def list_subnets(
                     )
                 )
 
-        return {"subnets": subnet_infos, "count": len(subnet_infos)}
+        return {"subnets": subnet_infos, "count": len(subnet_infos), "total": total, "has_more": offset + limit < total}
     except ACNHTTPError:
         raise
     except HTTPException:
@@ -586,7 +609,11 @@ async def get_subnet(
     if not credentials:
         return _stub()
 
-    payload = await verify_token(request, credentials)
+    # Align with list_subnets: invalid token → treat as anonymous → Stub.
+    try:
+        payload = await verify_token(request, credentials)
+    except Exception:  # noqa: BLE001
+        return _stub()
 
     if not await _resolve_caller_access(payload, subnet, agent_service):
         return _stub()

@@ -247,7 +247,11 @@ class TestListSubnetsParentFilter:
 
         assert r.status_code == 200
         body = r.json()
-        assert body == {"count": 0, "subnets": []}
+        assert body["count"] == 0
+        assert body["subnets"] == []
+        # P2-5: list_subnets now includes pagination metadata
+        assert body["total"] == 0
+        assert body["has_more"] is False
 
 
 # ---------------------------------------------------------------------------

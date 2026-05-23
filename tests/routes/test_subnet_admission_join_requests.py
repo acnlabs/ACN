@@ -200,7 +200,7 @@ class TestWithdrawJoinRequest:
             initiated_by=INVITEE_AGENT_ID,
             decided_by=INVITEE_AGENT_ID,
         )
-        subnet_svc._load_join_request_or_404.return_value = pending
+        subnet_svc.load_join_request_or_404.return_value = pending
         subnet_svc.withdraw_join_request.return_value = withdrawn
 
         with TestClient(app) as client:
@@ -220,7 +220,7 @@ class TestWithdrawJoinRequest:
             request_id=REQUEST_ID,
             initiated_by=INVITEE_AGENT_ID,
         )
-        subnet_svc._load_join_request_or_404.return_value = pending
+        subnet_svc.load_join_request_or_404.return_value = pending
 
         with TestClient(app) as client:
             r = client.delete(
@@ -236,7 +236,7 @@ class TestWithdrawJoinRequest:
     def test_namespace_mismatch_returns_join_request_not_found(self, wire):
         """Hitting /join-requests/{id} with an invitation id → 404."""
         _, subnet_svc, _, _ = wire
-        subnet_svc._load_join_request_or_404.side_effect = JoinRequestNotFoundError(
+        subnet_svc.load_join_request_or_404.side_effect = JoinRequestNotFoundError(
             REQUEST_ID
         )
 

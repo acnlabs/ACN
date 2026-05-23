@@ -514,16 +514,12 @@ class SubnetService:
             exist, the parent is unknown, or every child is filtered
             by ACL.
         """
-        children = await self.repository.find_by_parent(parent_subnet_id)
-
-        def _visible(subnet: Subnet) -> bool:
-            if not subnet.is_private:
-                return True
-            if requester_id is None:
-                return False
-            return subnet.owner == requester_id or requester_id in subnet.member_agent_ids
-
-        return [c for c in children if _visible(c)]
+        # Return all children; the route layer applies per-row V6 B5
+        # caller-aware rendering (SubnetInfo for authorised, SubnetStub
+        # for private-unauthorised) — same as list_subnets.
+        # requester_id is kept in signature for backward compat but is
+        # no longer used here.
+        return await self.repository.find_by_parent(parent_subnet_id)
 
     async def delete_subnet(self, subnet_id: str, owner: str) -> bool:
         """
@@ -1084,7 +1080,7 @@ class SubnetService:
         """Server-generated UUID per ADR §SubnetJoinRequest schema."""
         return str(uuid.uuid4())
 
-    async def _load_join_request_or_404(
+    async def load_join_request_or_404(
         self,
         request_id: str,
         *,
@@ -1269,7 +1265,7 @@ class SubnetService:
         captured separately if it surfaces in production.
         """
         await self.get_subnet(subnet_id)
-        row = await self._load_join_request_or_404(
+        row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
             expected_subnet_id=subnet_id,
@@ -1322,7 +1318,7 @@ class SubnetService:
         # webhook payload — reject doesn't mutate subnet membership,
         # so the entity snapshot stays valid for the event emit.
         subnet = await self.get_subnet(subnet_id)
-        row = await self._load_join_request_or_404(
+        row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
             expected_subnet_id=subnet_id,
@@ -1363,7 +1359,7 @@ class SubnetService:
         """
         # See ``reject_join_request`` for the single-fetch reasoning.
         subnet = await self.get_subnet(subnet_id)
-        row = await self._load_join_request_or_404(
+        row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
             expected_subnet_id=subnet_id,
@@ -1518,7 +1514,7 @@ class SubnetService:
         ``"system:allowlist"`` token surface in the payload.
         """
         await self.get_subnet(subnet_id)
-        row = await self._load_join_request_or_404(
+        row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
             expected_subnet_id=subnet_id,
@@ -1564,7 +1560,7 @@ class SubnetService:
         """
         # See ``reject_join_request`` for the single-fetch reasoning.
         subnet = await self.get_subnet(subnet_id)
-        row = await self._load_join_request_or_404(
+        row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
             expected_subnet_id=subnet_id,
@@ -1604,7 +1600,7 @@ class SubnetService:
         """
         # See ``reject_join_request`` for the single-fetch reasoning.
         subnet = await self.get_subnet(subnet_id)
-        row = await self._load_join_request_or_404(
+        row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
             expected_subnet_id=subnet_id,

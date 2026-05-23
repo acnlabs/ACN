@@ -632,10 +632,15 @@ def _enforce_feedback_authorisation(
     task,
     caller_id: str,
     target_agent_id: str,
+    valid_participant_ids: set[str] | None = None,
 ) -> None:
-    """Enforce: caller is task creator, target is task assignee, task
-    is in COMPLETED state. Each failure surfaces a distinct error code
-    so the SDK can show actionable messages."""
+    """Enforce: caller is task creator, target is task assignee (or a
+    valid participant for multi-participant tasks), task is COMPLETED.
+
+    ``valid_participant_ids`` should be supplied for multi-participant
+    tasks (``task.assignee_id is None``).  When provided, the target
+    must be in the set; otherwise the single-assignee check is used.
+    """
     from ..core.entities.task import TaskStatus
 
     if task.status != TaskStatus.COMPLETED:
@@ -662,29 +667,41 @@ def _enforce_feedback_authorisation(
                 "caller_id": caller_id,
             },
         )
-    if task.assignee_id != target_agent_id:
-        # 400 not 403: this is a route-shape error (the caller asked
-        # to write feedback against the wrong agent for this task),
-        # not an auth failure.
-        raise ACNHTTPError(
-            ErrorCode.INVALID_REQUEST,
-            status_code=400,
-            details={
-                "reason": "target_is_not_task_assignee",
-                "task_id": task.task_id,
-                "task_assignee_id": task.assignee_id,
-                "target_agent_id": target_agent_id,
-            },
-        )
+    # Multi-participant tasks use the participation set; single-assignee
+    # tasks still use task.assignee_id for backward compat.
+    if task.assignee_id is not None:
+        if task.assignee_id != target_agent_id:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                status_code=400,
+                details={
+                    "reason": "target_is_not_task_assignee",
+                    "task_id": task.task_id,
+                    "task_assignee_id": task.assignee_id,
+                    "target_agent_id": target_agent_id,
+                },
+            )
+    elif valid_participant_ids is not None:
+        if target_agent_id not in valid_participant_ids:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                status_code=400,
+                details={
+                    "reason": "target_is_not_task_participant",
+                    "task_id": task.task_id,
+                    "target_agent_id": target_agent_id,
+                },
+            )
 
 
 def _enforce_validation_authorisation(
     task,
     caller_id: str,
     target_agent_id: str,
+    valid_participant_ids: set[str] | None = None,
 ) -> None:
-    """Enforce: target is task assignee, task is COMPLETED, caller is
-    NEITHER creator NOR assignee (validation is a third-party voice).
+    """Enforce: target is task assignee (or valid participant), task is
+    COMPLETED, caller is NEITHER creator NOR assignee/participant.
     """
     from ..core.entities.task import TaskStatus
 
@@ -698,17 +715,29 @@ def _enforce_validation_authorisation(
                 "current_status": task.status,
             },
         )
-    if task.assignee_id != target_agent_id:
-        raise ACNHTTPError(
-            ErrorCode.INVALID_REQUEST,
-            status_code=400,
-            details={
-                "reason": "target_is_not_task_assignee",
-                "task_id": task.task_id,
-                "task_assignee_id": task.assignee_id,
-                "target_agent_id": target_agent_id,
-            },
-        )
+    if task.assignee_id is not None:
+        if task.assignee_id != target_agent_id:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                status_code=400,
+                details={
+                    "reason": "target_is_not_task_assignee",
+                    "task_id": task.task_id,
+                    "task_assignee_id": task.assignee_id,
+                    "target_agent_id": target_agent_id,
+                },
+            )
+    elif valid_participant_ids is not None:
+        if target_agent_id not in valid_participant_ids:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                status_code=400,
+                details={
+                    "reason": "target_is_not_task_participant",
+                    "task_id": task.task_id,
+                    "target_agent_id": target_agent_id,
+                },
+            )
     if task.creator_id == caller_id:
         # Creator should write feedback, not validation. Surface a
         # distinct reason so the SDK can suggest the correct endpoint.
@@ -799,7 +828,13 @@ async def post_agent_feedback(
     _enforce_not_self(caller["agent_id"], agent_id)
     await _fetch_agent_or_404(agent_service, agent_id)
     task = await _fetch_task_for_reputation(task_service, body.task_id)
-    _enforce_feedback_authorisation(task, caller["agent_id"], agent_id)
+    # For multi-participant tasks (assignee_id is None), resolve the set
+    # of valid participant IDs so the authorisation helper can check them.
+    participant_ids: set[str] | None = None
+    if task.assignee_id is None:
+        participations = await task_service.get_task_participations(task_id=body.task_id)
+        participant_ids = {p.participant_id for p in participations}
+    _enforce_feedback_authorisation(task, caller["agent_id"], agent_id, participant_ids)
 
     try:
         event = await reputation_service.record_feedback(  # type: ignore[union-attr]
@@ -876,7 +911,11 @@ async def post_agent_validation(
     _enforce_not_self(caller["agent_id"], agent_id)
     await _fetch_agent_or_404(agent_service, agent_id)
     task = await _fetch_task_for_reputation(task_service, body.task_id)
-    _enforce_validation_authorisation(task, caller["agent_id"], agent_id)
+    participant_ids_v: set[str] | None = None
+    if task.assignee_id is None:
+        participations_v = await task_service.get_task_participations(task_id=body.task_id)
+        participant_ids_v = {p.participant_id for p in participations_v}
+    _enforce_validation_authorisation(task, caller["agent_id"], agent_id, participant_ids_v)
 
     try:
         event = await reputation_service.record_validation(  # type: ignore[union-attr]

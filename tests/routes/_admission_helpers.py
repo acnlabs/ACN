@@ -185,7 +185,7 @@ def stub_subnet_service():
     svc.cancel_invitation = AsyncMock()
     svc.list_invitations = AsyncMock(return_value=[])
     svc.list_pending_invitations_for_agent = AsyncMock(return_value=[])
-    svc._load_join_request_or_404 = AsyncMock()
+    svc.load_join_request_or_404 = AsyncMock()
     svc.add_member = AsyncMock()
     svc.remove_member = AsyncMock()
     return svc

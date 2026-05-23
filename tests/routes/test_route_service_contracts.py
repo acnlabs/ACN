@@ -379,7 +379,11 @@ class TestPaymentContract:
         return pt
 
     def test_discover_calls_find_agents_accepting_payment(self, stub_payment_discovery):
+        from acn.routes.dependencies import verify_agent_api_key
+
         app.dependency_overrides[get_payment_discovery] = lambda: stub_payment_discovery
+        # P3-2: discover now requires authentication
+        app.dependency_overrides[verify_agent_api_key] = lambda: _make_agent_info("agent-x")
 
         with TestClient(app) as client:
             r = client.get("/api/v1/payments/discover")

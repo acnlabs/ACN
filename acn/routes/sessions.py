@@ -27,7 +27,7 @@ from typing import Any
 
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..infrastructure.messaging.websocket_manager import MessageType
@@ -65,6 +65,17 @@ class SessionInviteRequest(BaseModel):
             "(task description, capabilities, etc.). Max 4 KB."
         ),
     )
+
+    @field_validator("metadata")
+    @classmethod
+    def _check_metadata_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        import json
+        size = len(json.dumps(v).encode())
+        if size > 4096:
+            raise ValueError(f"metadata exceeds 4 KB limit ({size} bytes)")
+        return v
 
 
 def _entry_to_dict(entry, extra: dict[str, Any] | None = None) -> dict[str, Any]:

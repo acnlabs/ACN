@@ -184,7 +184,7 @@ class TestAcceptInvitation:
             status="approved",
             decided_by=INVITEE_AGENT_ID,
         )
-        subnet_svc._load_join_request_or_404.return_value = pending
+        subnet_svc.load_join_request_or_404.return_value = pending
         subnet_svc.accept_invitation.return_value = accepted
 
         with TestClient(app) as client:
@@ -209,7 +209,7 @@ class TestAcceptInvitation:
             kind="invitation",
             agent_id=INVITEE_AGENT_ID,
         )
-        subnet_svc._load_join_request_or_404.return_value = pending
+        subnet_svc.load_join_request_or_404.return_value = pending
 
         with TestClient(app) as client:
             r = client.post(
@@ -224,7 +224,7 @@ class TestAcceptInvitation:
     def test_namespace_mismatch_returns_invitation_not_found(self, wire):
         """Hitting /invitations/{id} with a join_request row → 404."""
         _, subnet_svc, _, _ = wire
-        subnet_svc._load_join_request_or_404.side_effect = InvitationNotFoundError(
+        subnet_svc.load_join_request_or_404.side_effect = InvitationNotFoundError(
             INVITATION_ID
         )
 
@@ -251,7 +251,7 @@ class TestRejectInvitation:
             decided_by=INVITEE_AGENT_ID,
             note="not now",
         )
-        subnet_svc._load_join_request_or_404.return_value = pending
+        subnet_svc.load_join_request_or_404.return_value = pending
         subnet_svc.reject_invitation.return_value = rejected
 
         with TestClient(app) as client:
@@ -271,7 +271,7 @@ class TestRejectInvitation:
         pending = make_join_request(
             request_id=INVITATION_ID, kind="invitation"
         )
-        subnet_svc._load_join_request_or_404.return_value = pending
+        subnet_svc.load_join_request_or_404.return_value = pending
 
         with TestClient(app) as client:
             r = client.post(

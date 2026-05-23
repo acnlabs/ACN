@@ -7,10 +7,13 @@ implicit heartbeat when ``SubnetManager`` receives ``agent_service`` from
 lifespan wiring.
 """
 
+import structlog
 from fastapi import APIRouter, Depends, WebSocket
 
 from ..infrastructure.messaging.subnet_manager import SubnetManager
 from .dependencies import AgentIdPath, SubnetIdPath, get_subnet_manager
+
+logger = structlog.get_logger()
 
 router = APIRouter(tags=["gateway"])
 
@@ -31,9 +34,10 @@ def _extract_gateway_credentials(websocket: WebSocket) -> dict | None:
     non-browser caller without leaking the secret into the URL (which
     proxies and access logs may capture).
 
-    Returns ``None`` when neither header is present so the caller can
-    pass that through to public-subnet flows where credentials are
-    optional.
+    Returns ``None`` when neither header is present.  Public-subnet
+    flows still forward ``None`` to ``handle_connection``; the manager
+    then allows the connection but the ``agent_id`` in the URL is
+    unverified (known limitation — see threat model in ADR-0006).
     """
     headers = websocket.headers
     auth = headers.get("authorization") or headers.get("Authorization")
@@ -73,6 +77,16 @@ async def gateway_connect(
     credentials over the WS path.
     """
     credentials = _extract_gateway_credentials(websocket)
+    if credentials is None:
+        # No credentials supplied.  Non-public subnets will reject the
+        # connection inside handle_connection.  Public subnets allow it,
+        # but the agent_id in the URL is then unverified — log so ops
+        # can detect abuse patterns.
+        logger.info(
+            "gateway_connect_unauthenticated",
+            subnet_id=subnet_id,
+            agent_id=agent_id,
+        )
     await subnet_manager.handle_connection(
         websocket, subnet_id, agent_id, credentials=credentials
     )

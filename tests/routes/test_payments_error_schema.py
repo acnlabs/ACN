@@ -300,7 +300,9 @@ class TestResourceNotFoundFlatShape:
     converge on the same code; the others have a single site each."""
 
     def test_get_payment_capability_404_flat_shape(self, stub_payment_discovery):
-        _wire_self_authed()
+        # P3-3: get_payment_capability now enforces self-only — caller must
+        # match the path agent_id, so wire the key to match "agent-x".
+        _wire_self_authed("agent-x")
         app.dependency_overrides[get_payment_discovery] = lambda: stub_payment_discovery
         try:
             with TestClient(app) as client:

@@ -120,9 +120,11 @@ class BillUsageRequest(BaseModel):
 
 
 @router.post("/{agent_id}/payment-capability")
+@limiter.limit("30/minute")
 async def set_payment_capability(
+    request: Request,
     agent_id: str,
-    request: PaymentCapabilityRequest,
+    body: PaymentCapabilityRequest,
     agent_info: AgentApiKeyDep,
     agent_service: AgentServiceDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
@@ -154,39 +156,33 @@ async def set_payment_capability(
         ) from None
 
     try:
-        # Build wallet_addresses: merge request.wallet_addresses with legacy wallet_address
-        wallet_addresses = dict(request.wallet_addresses)
-        if request.wallet_address and "ethereum" not in wallet_addresses:
-            wallet_addresses["ethereum"] = request.wallet_address
+        # Build wallet_addresses: merge body.wallet_addresses with legacy wallet_address
+        wallet_addresses = dict(body.wallet_addresses)
+        if body.wallet_address and "ethereum" not in wallet_addresses:
+            wallet_addresses["ethereum"] = body.wallet_address
 
         # Derive legacy single-address field
-        if not request.wallet_address and wallet_addresses:
+        if not body.wallet_address and wallet_addresses:
             legacy_addr = (
                 wallet_addresses.get("ethereum")
                 or wallet_addresses.get("base")
                 or next(iter(wallet_addresses.values()), None)
             )
         else:
-            legacy_addr = request.wallet_address
+            legacy_addr = body.wallet_address
 
         # Persist payment fields to Agent entity and save to PG (critical path)
-        agent.accepts_payment = request.accepts_payment
+        agent.accepts_payment = body.accepts_payment
         agent.wallet_address = legacy_addr
         agent.wallet_addresses = wallet_addresses
-        agent.token_pricing = request.token_pricing
-        if request.supported_methods:
-            agent.payment_methods = [m.value for m in request.supported_methods]
+        agent.token_pricing = body.token_pricing
+        if body.supported_methods:
+            agent.payment_methods = [m.value for m in body.supported_methods]
         await agent_service.repository.save(agent)
 
     except ACNHTTPError:
-        # P3 cross-module catch-all defence: ``ACNHTTPError`` is
-        # ``Exception``-typed (not ``HTTPException``-typed); without
-        # this re-raise, any caller-actionable 4xx raised inside the
-        # try body would be silently rewritten as a sanitised 500.
         raise
     except HTTPException:
-        # Mirror defence for legacy ``HTTPException`` raises — same
-        # swallow risk via the catch-all below.
         raise
     except Exception as e:
         logger.error(
@@ -196,22 +192,22 @@ async def set_payment_capability(
 
     # Index into Redis discovery service (best-effort: PG is source of truth)
     token_pricing_obj = None
-    if request.token_pricing:
+    if body.token_pricing:
         try:
-            token_pricing_obj = TokenPricing(**request.token_pricing)
+            token_pricing_obj = TokenPricing(**body.token_pricing)
         except Exception:
             pass
 
     capability = PaymentCapability(
         agent_id=agent_id,
-        accepts_payment=request.accepts_payment,
-        payment_methods=request.supported_methods,
-        supported_networks=request.supported_networks,
+        accepts_payment=body.accepts_payment,
+        payment_methods=body.supported_methods,
+        supported_networks=body.supported_networks,
         wallet_address=legacy_addr,
         wallet_addresses=wallet_addresses,
         token_pricing=token_pricing_obj,
-        api_endpoint=request.api_endpoint,
-        webhook_url=request.webhook_url,
+        api_endpoint=body.api_endpoint,
+        webhook_url=body.webhook_url,
     )
     try:
         await payment_discovery.index_payment_capability(agent_id, capability)
@@ -222,12 +218,24 @@ async def set_payment_capability(
 
 
 @router.get("/{agent_id}/payment-capability")
+@limiter.limit("60/minute")
 async def get_payment_capability(
+    request: Request,
     agent_id: str,
-    _caller: AgentApiKeyDep,
+    caller: AgentApiKeyDep,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
-    """Get payment capability for agent"""
+    """Get payment capability for an agent.
+
+    Only the agent itself may read its own full payment configuration.
+    Prevents cross-tenant enumeration of wallet addresses / pricing.
+    """
+    if caller["agent_id"] != agent_id:
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            status_code=403,
+            details={"key_agent": caller["agent_id"], "path_agent": agent_id},
+        )
     capability = await payment_discovery.get_agent_payment_capability(agent_id)
     if not capability:
         raise ACNHTTPError(
@@ -239,12 +247,19 @@ async def get_payment_capability(
 
 
 @router.get("/discover")
+@limiter.limit("60/minute")
 async def discover_payment_agents(
+    request: Request,
     method: SupportedPaymentMethod | None = None,
     network: SupportedNetwork | None = None,
+    agent_info: AgentApiKeyDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
-    """Discover agents with payment capabilities"""
+    """Discover agents with payment capabilities.
+
+    Requires authentication — exposes the set of agents participating
+    in the payment network, which should not be enumerable anonymously.
+    """
     agents = await payment_discovery.find_agents_accepting_payment(
         payment_method=method,
         network=network,
@@ -296,10 +311,11 @@ async def create_payment_task(
     except ValueError as e:
         # The seller does not accept this method/network, or the seller has
         # no payment capability registered. These are caller-correctable.
+        logger.warning("create_payment_task_invalid_request", error=str(e))
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             status_code=400,
-            details={"reason": str(e)},
+            details={"reason": "invalid_payment_request"},
         ) from e
     except Exception as e:
         logger.error("create_payment_task_failed", error=str(e), exc_info=True)
@@ -582,8 +598,10 @@ async def estimate_cost(
 
 
 @router.post("/billing/charge")
+@limiter.limit("60/minute")
 async def bill_usage(
-    request: BillUsageRequest,
+    request: Request,
+    body: BillUsageRequest,
     _: InternalTokenDep,
     payment_discovery: PaymentDiscoveryDep = None,
     billing_service: BillingServiceDep = None,
@@ -597,34 +615,34 @@ async def bill_usage(
     The actual credit deduction is handled by the backend wallet system.
     """
     # Get agent's token pricing
-    capability = await payment_discovery.get_agent_payment_capability(request.agent_id)
+    capability = await payment_discovery.get_agent_payment_capability(body.agent_id)
     if not capability or not capability.token_pricing:
         raise ACNHTTPError(
             ErrorCode.TOKEN_PRICING_NOT_CONFIGURED,
             status_code=404,
-            details={"agent_id": request.agent_id},
+            details={"agent_id": body.agent_id},
         )
 
     # Get agent owner — None is a legitimate state (autonomous /
     # unclaimed agent), so the billing record stays owner-less rather
     # than erroring out.
-    agent = await agent_service.find_agent(request.agent_id)
+    agent = await agent_service.find_agent(body.agent_id)
     agent_owner_id = agent.owner if agent else None
 
     # Calculate cost
     cost = billing_service.calculate_cost(
-        request.input_tokens,
-        request.output_tokens,
+        body.input_tokens,
+        body.output_tokens,
         capability.token_pricing,
     )
 
     # Create transaction
     transaction = await billing_service.create_transaction(
-        user_id=request.user_id,
-        agent_id=request.agent_id,
+        user_id=body.user_id,
+        agent_id=body.agent_id,
         agent_owner_id=agent_owner_id,
         cost=cost,
-        task_id=request.task_id,
+        task_id=body.task_id,
     )
 
     return {

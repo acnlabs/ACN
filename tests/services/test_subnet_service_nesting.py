@@ -332,9 +332,13 @@ class TestAddMemberMembershipSubset:
 
 class TestListChildrenACL:
     @pytest.mark.asyncio
-    async def test_anonymous_sees_only_public_children(
+    async def test_returns_all_children_regardless_of_requester(
         self, mock_subnet_repository: ISubnetRepository
     ):
+        """Service layer returns ALL children; ACL rendering is now
+        the route layer's responsibility (per-row SubnetStub for private
+        unauthorised — same pattern as list_subnets, P2-1 fix).
+        """
         children = [
             Subnet(
                 subnet_id="public-child",
@@ -362,12 +366,15 @@ class TestListChildrenACL:
 
         result = await service.list_children("parent-1", requester_id=None)
         ids = {c.subnet_id for c in result}
-        assert ids == {"public-child"}
+        # Service now returns all children; route applies per-row V6 rendering.
+        assert ids == {"public-child", "private-child"}
 
     @pytest.mark.asyncio
-    async def test_member_sees_private_child_they_belong_to(
+    async def test_returns_all_children_for_member(
         self, mock_subnet_repository: ISubnetRepository
     ):
+        """Service layer returns all children; access control is done
+        at the route layer (per-row SubnetStub vs SubnetInfo)."""
         children = [
             Subnet(
                 subnet_id="private-mine",
@@ -394,8 +401,8 @@ class TestListChildrenACL:
 
         result = await service.list_children("parent-1", requester_id="bob")
         ids = {c.subnet_id for c in result}
-        # Bob sees "private-mine" (member) but not "private-theirs".
-        assert ids == {"private-mine"}
+        # Service returns all; route renders private-theirs as Stub for bob.
+        assert ids == {"private-mine", "private-theirs"}
 
     @pytest.mark.asyncio
     async def test_no_existence_leak_for_unknown_parent(

@@ -1284,6 +1284,24 @@ async def list_participations(
     caller_id: str = payload.get("agent_id") or payload.get("sub") or ""
     try:
         task = await task_service.get_task(task_id)
+
+        # P1-2: subnet membership gate — same as get_task.
+        # Internal / admin callers are exempted.
+        permissions = payload.get("permissions", [])
+        is_internal = payload.get("type") == "internal" or "acn:admin" in permissions
+        if task.subnet_id and not is_internal:
+            is_member = await task_service.is_subnet_member(task.subnet_id, caller_id)
+            if not is_member:
+                raise ACNHTTPError(
+                    ErrorCode.NOT_SUBNET_MEMBER,
+                    403,
+                    details={
+                        "task_id": task_id,
+                        "subnet_id": task.subnet_id,
+                        "reason": "not_member",
+                    },
+                )
+
         participations = await task_service.get_task_participations(
             task_id=task_id,
             status=status,
@@ -1293,8 +1311,8 @@ async def list_participations(
         is_creator = caller_id == task.creator_id
 
         def _maybe_redact(p: ParticipationResponse) -> ParticipationResponse:
-            # Reveal submission only to creator or the participant themselves
-            if is_creator or p.agent_id == caller_id:
+            # P1-1: use participant_id (not agent_id which doesn't exist on this model)
+            if is_creator or p.participant_id == caller_id:
                 return p
             return p.model_copy(update={"submission": None, "submission_artifacts": []})
 
@@ -1354,7 +1372,8 @@ async def cancel_participation(
             participation_id=participation_id,
             canceller_id=agent_id,
         )
-        return _task_to_response(task)
+        # P3-7: expose submission only to the task creator.
+        return _task_to_response(task, expose_submission=(agent_id == task.creator_id))
     except TaskNotFoundException:
         raise ACNHTTPError(
             ErrorCode.TASK_NOT_FOUND,
@@ -1540,6 +1559,7 @@ async def agent_create_task(
         group_id=body.group_id,
         deadline_hours=body.deadline_hours,
         metadata=merged_metadata,
+        subnet_id=body.subnet_id,  # P1-3: was missing, task was created without subnet context
     )
 
     return _task_to_response(task, expose_submission=True)

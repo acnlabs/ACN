@@ -389,7 +389,7 @@ async def withdraw_join_request(
     subnet_id: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
-    body: WithdrawBody | None = None,
+    note: str | None = Query(default=None, description="Optional reason for withdrawal."),
     subnet_service: SubnetServiceDep = None,
 ):
     """Applicant withdraws their own pending ``join_request``.
@@ -408,7 +408,7 @@ async def withdraw_join_request(
     # Load + namespace-check the row up front so we can authz
     # against initiated_by. Wrong namespace → 404 surfaces here.
     try:
-        row = await subnet_service._load_join_request_or_404(
+        row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
             expected_subnet_id=subnet_id,
@@ -432,8 +432,7 @@ async def withdraw_join_request(
             },
         )
 
-    note = body.note if body is not None else None
-
+    # note comes from query param (P3-8: removed optional body on DELETE)
     try:
         withdrawn = await subnet_service.withdraw_join_request(
             subnet_id,
@@ -592,7 +591,7 @@ async def accept_invitation(
 
     # Load + namespace-check up front so authz uses the loaded row.
     try:
-        row = await subnet_service._load_join_request_or_404(
+        row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
             expected_subnet_id=subnet_id,
@@ -636,14 +635,26 @@ async def accept_invitation(
             error=str(e),
             exc_info=True,
         )
-        # Unlike join, we do NOT roll back ``add_member`` here —
-        # the invitation row has already been CAS'd to approved,
-        # and reversing that CAS would leak a partial-success
-        # signal to Harness consumers. Surface 500 and let the SDK
-        # retry (idempotent CAS will then succeed at the
-        # already-decided check, surfacing 409
-        # INVITATION_ALREADY_DECIDED — SDK can treat that as
-        # success).
+        # Best-effort rollback: remove the member record so the system
+        # is not left in a half-joined state (subnet has member but
+        # agent.subnet_ids has no record). The invitation row has
+        # already been CAS'd to approved; if the SDK retries, the
+        # already-decided check will surface 409 INVITATION_ALREADY_DECIDED
+        # which is preferable to a permanent inconsistency.
+        try:
+            await subnet_service.remove_member(subnet_id, agent_info["agent_id"])
+            logger.info(
+                "accept_invitation_rollback_ok",
+                agent_id=agent_info["agent_id"],
+                subnet_id=subnet_id,
+            )
+        except Exception as rollback_err:  # noqa: BLE001
+            logger.error(
+                "accept_invitation_rollback_failed",
+                agent_id=agent_info["agent_id"],
+                subnet_id=subnet_id,
+                rollback_error=str(rollback_err),
+            )
         raise HTTPException(
             status_code=500,
             detail="Failed to write agent back-reference",
@@ -670,7 +681,7 @@ async def reject_invitation(
     await load_subnet_or_404(subnet_service, subnet_id)
 
     try:
-        row = await subnet_service._load_join_request_or_404(
+        row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
             expected_subnet_id=subnet_id,
