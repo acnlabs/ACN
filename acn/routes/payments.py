@@ -234,7 +234,7 @@ async def get_payment_capability(
         raise ACNHTTPError(
             ErrorCode.API_KEY_AGENT_MISMATCH,
             status_code=403,
-            details={"reason": "can_only_read_own_payment_capability"},
+            details={"key_agent": caller["agent_id"], "path_agent": agent_id},
         )
     capability = await payment_discovery.get_agent_payment_capability(agent_id)
     if not capability:
