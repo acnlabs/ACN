@@ -4,6 +4,7 @@ import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
+from ..config import get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.validators import check_dict_size_64k
 from ..protocols.ap2 import (
@@ -15,6 +16,7 @@ from ..protocols.ap2 import (
     SupportedPaymentMethod,
     TokenPricing,
 )
+from ..security import SSRFViolation, validate_endpoint_url
 from ..services.billing_service import BillingTransactionStatus
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
@@ -56,6 +58,17 @@ class PaymentCapabilityRequest(BaseModel):
         if v is None:
             return v
         return check_dict_size_64k("token_pricing", v)
+
+    @field_validator("api_endpoint", "webhook_url")
+    @classmethod
+    def _validate_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            validate_endpoint_url(v, allow_loopback=get_settings().dev_mode)
+        except SSRFViolation as exc:
+            raise ValueError("The provided URL is not allowed.") from exc
+        return v
 
 
 class CreatePaymentTaskRequest(BaseModel):

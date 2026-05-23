@@ -470,6 +470,15 @@ class SubnetService:
             return await self.repository.find_by_owner(owner)
         return await self.repository.find_all()
 
+    async def list_subnets_by_owners(self, owner_ids: set[str]) -> list[Subnet]:
+        """Return all subnets whose owner is in *owner_ids*.
+
+        Uses the repository's ``find_by_owners`` to avoid a full-table scan
+        (O(N)) for the ``?owned_by_user=`` filter on ``GET /api/v1/subnets``.
+        An empty *owner_ids* set returns [] immediately without a DB query.
+        """
+        return await self.repository.find_by_owners(owner_ids)
+
     async def list_public_subnets(self) -> list[Subnet]:
         """
         List all public subnets

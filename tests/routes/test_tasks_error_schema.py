@@ -490,7 +490,7 @@ class TestTasksFlatErrorSchemaCrossModule:
         assert body["error_code"] == "ownership_mismatch"
         assert body["details"] == {
             "task_id": "task-target",
-            "reason": "Task is not open for acceptance.",
+            "reason": "permission_denied",
         }
 
     def test_accept_task_value_error_returns_invalid_request(
@@ -519,5 +519,5 @@ class TestTasksFlatErrorSchemaCrossModule:
         assert body["error_code"] == "invalid_request"
         assert body["details"] == {
             "task_id": "task-target",
-            "reason": "Task already in terminal state.",
+            "reason": "invalid_request",
         }

@@ -134,6 +134,26 @@ async def list_activities(
     - agent_id: Filter by single agent (optional, requires auth)
     - agent_ids: Filter by multiple agents, comma-separated (optional, requires auth)
     """
+    # Enforce auth when filtering by task_id or user_id: these filters can reveal
+    # private task titles / user associations via the activity description field,
+    # bypassing the Task ACL contract enforced on GET /tasks endpoints.
+    if task_id or user_id:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
+                status_code=401,
+                details={"reason": "auth_required_for_task_or_user_filter"},
+            )
+        api_key = authorization[7:]
+        agent_service = get_agent_service()
+        authed_agent = await agent_service.get_agent_by_api_key(api_key)
+        if not authed_agent:
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
+                status_code=401,
+                details={"reason": "invalid_api_key"},
+            )
+
     # Enforce auth when filtering by specific agent identity to prevent enumeration
     if agent_id or agent_ids:
         if not authorization or not authorization.startswith("Bearer "):

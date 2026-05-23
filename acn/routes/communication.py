@@ -841,7 +841,7 @@ async def send_message(
             to_agent=body.target_agent,
             status="error",
         )
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Message delivery failed") from e
 
 
 @router.post("/broadcast")
@@ -878,6 +878,21 @@ async def broadcast_message(
                 "from_agent": body.from_agent,
             },
         )
+
+    # Safety guard: broadcasting to the entire network (no target_subnet and
+    # no target_tags) is an O(N) fan-out that can saturate outbound connections
+    # and exhaust Redis/HTTP resources. Require at least one scoping selector
+    # so callers must explicitly opt in to the set they want to reach.
+    if not body.target_subnet and not body.target_tags:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            422,
+            message="Broadcast requires at least one selector: target_subnet or target_tags.",
+            details={
+                "hint": "Set target_subnet to a subnet_id or target_tags to a non-empty list.",
+            },
+        )
+
     try:
         message = _payload_to_a2a_message(body.message)
 
@@ -970,7 +985,7 @@ async def broadcast_message(
             "broadcast_sent",
             labels={"type": "broadcast", "status": "error"},
         )
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Broadcast failed") from e
 
 
 @router.post("/broadcast-by-tag")
@@ -1062,7 +1077,7 @@ async def broadcast_by_tag(
 
     except Exception as e:
         logger.error("tag_broadcast_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Tag broadcast failed") from e
 
 
 @router.get("/history/{agent_id}")
@@ -1121,7 +1136,7 @@ async def get_message_history(
 
     except Exception as e:
         logger.error("inbox_retrieve_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to retrieve inbox") from e
 
 
 class AckInboxRequest(BaseModel):
@@ -1176,7 +1191,7 @@ async def ack_message_history(
 
     except Exception as e:
         logger.error("inbox_ack_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to acknowledge message") from e
 
 
 @router.post("/retry-dlq")
@@ -1199,7 +1214,7 @@ async def retry_dead_letter_queue(
 
     except Exception as e:
         logger.error("dlq_retry_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to retry dead-letter message") from e
 
 
 # ---------------------------------------------------------------------------
@@ -1362,4 +1377,4 @@ async def internal_send_message(
             to_agent=body.target_agent,
             status="error",
         )
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Message delivery failed") from e

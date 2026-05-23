@@ -416,9 +416,12 @@ class SubnetManager:
                     return True
 
             elif scheme.type == "apiKey":
-                # Validate API key
+                # Validate API key using constant-time comparison to prevent
+                # timing side-channel attacks (mirrors the bearer branch above).
                 api_key = credentials.get("api_key") or credentials.get("apiKey")
-                if api_key and api_key == subnet.generated_token:
+                if api_key and subnet.generated_token and secrets.compare_digest(
+                    api_key, subnet.generated_token
+                ):
                     return True
 
             elif scheme.type in ("openIdConnect", "oauth2"):
@@ -546,7 +549,10 @@ class SubnetManager:
             logger.info(f"Agent disconnected: {subnet_id}/{agent_id}")
         except Exception as e:
             logger.error(f"Connection error for {subnet_id}/{agent_id}: {e}")
-            await self._send_error(websocket, str(e))
+            # Send a generic error code to the client — do not echo internal
+            # exception details over the WebSocket frame (they may contain
+            # internal hostnames, SQL errors, or agent_id enumeration hints).
+            await self._send_error(websocket, "connection_error")
         finally:
             await self._disconnect(subnet_id, agent_id)
 
@@ -750,17 +756,19 @@ class SubnetManager:
             if not future.done():
                 future.set_exception(ConnectionError(f"Agent disconnected: {reason}"))
 
-        # Unregister from ACN. We bypass ``AgentService.unregister_agent``
-        # here because that method enforces owner-based authorization
-        # (caller must match ``agent.owner``) and the gateway has no
-        # owner context — the connection is identified by its WS
-        # session, not a user identity. Going straight to the
-        # repository preserves the legacy "best-effort cleanup"
-        # contract.
+        # On disconnect, mark the agent as offline (clear alive key + inbox)
+        # but keep the agent record so the agent can reconnect later without
+        # re-choosing an agent_id. Full deletion happens only via the REST
+        # DELETE /agents/{id} endpoint, which runs the full
+        # unregister_agent() service path (subnet cleanup, payment index,
+        # follow-graph). Calling repository.delete() here would:
+        #   (a) bypass the service-layer cleanup gates, and
+        #   (b) in PG mode, leave Redis alive/inbox/payment indexes stale.
         try:
-            await self.agent_service.repository.delete(agent_id)
+            await self.redis.delete(f"acn:agents:{agent_id}:alive")
+            await self.redis.delete(f"acn:inbox:{agent_id}")
         except Exception as e:
-            logger.warning(f"Failed to unregister {agent_id}: {e}")
+            logger.warning(f"Failed to clear agent offline state {agent_id}: {e}")
 
         # Close WebSocket
         try:

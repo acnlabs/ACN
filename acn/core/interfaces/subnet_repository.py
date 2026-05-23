@@ -63,6 +63,24 @@ class ISubnetRepository(ABC):
         pass
 
     @abstractmethod
+    async def find_by_owners(self, owners: set[str]) -> list[Subnet]:
+        """
+        Find all subnets whose owner is in the given set.
+
+        More efficient than ``find_all`` + in-memory filter when the caller
+        already has a bounded set of owner IDs (e.g. ``?owned_by_user=``).
+        Postgres: ``WHERE owner = ANY(:owners)``.
+        Redis: iterates ``acn:subnets:by_owner:{owner}`` sets.
+
+        Args:
+            owners: Set of owner identifiers.  Empty set returns [].
+
+        Returns:
+            List of matching subnets.
+        """
+        pass
+
+    @abstractmethod
     async def find_public_subnets(self) -> list[Subnet]:
         """
         Find all public subnets

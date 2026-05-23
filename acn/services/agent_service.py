@@ -476,20 +476,29 @@ class AgentService:
 
         logger.info("unregister_agent", agent_id=agent_id)
         deleted = await self.repository.delete(agent_id)
-        # Best-effort follow-graph cleanup AFTER successful deletion so a
-        # cleanup failure cannot leave the agent itself half-deleted.
-        # Stale follow entries are cosmetic (lists ignore dangling ids
-        # via the existence check in ``_resolve_agents_with_counts``)
-        # so we do not unwind the agent delete on a cleanup error.
-        if deleted and self.follow_service is not None:
-            try:
-                await self.follow_service.cleanup_agent(agent_id)  # type: ignore[union-attr]
-            except Exception as e:  # noqa: BLE001 — best-effort
-                logger.warning(
-                    "follow_cleanup_failed_on_unregister",
-                    agent_id=agent_id,
-                    error=str(e),
-                )
+        if deleted:
+            # Best-effort follow-graph cleanup; stale follow entries are
+            # cosmetic so we do not unwind the delete on cleanup error.
+            if self.follow_service is not None:
+                try:
+                    await self.follow_service.cleanup_agent(agent_id)  # type: ignore[union-attr]
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "follow_cleanup_failed_on_unregister",
+                        agent_id=agent_id,
+                        error=str(e),
+                    )
+            # Remove from payment discovery index so the agent no longer
+            # appears in /payments/discover after deletion.
+            if self.payment_discovery is not None:
+                try:
+                    await self.payment_discovery.remove_payment_capability(agent_id)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "payment_discovery_cleanup_failed_on_unregister",
+                        agent_id=agent_id,
+                        error=str(e),
+                    )
         return deleted
 
     async def update_heartbeat(self, agent_id: str) -> Agent:

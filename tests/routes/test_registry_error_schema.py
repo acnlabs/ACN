@@ -422,7 +422,7 @@ class TestRegistryFlatErrorSchemaCrossModule:
         assert body["error_code"] == "ownership_mismatch"
         assert body["details"] == {
             "agent_id": "agent-target",
-            "reason": "Only the owner can unregister this agent.",
+            "reason": "owner_mismatch",
         }
 
     def test_bulk_delete_no_filter_returns_invalid_request(
