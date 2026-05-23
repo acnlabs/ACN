@@ -474,7 +474,7 @@ class TestSubnetsContract:
     @pytest.fixture
     def stub_subnet_service(self):
         svc = AsyncMock()
-        svc.list_public_subnets = AsyncMock(return_value=[])
+        svc.list_subnets = AsyncMock(return_value=[])
         svc.get_subnet = AsyncMock(return_value=MagicMock(
             subnet_id="subnet-1", name="test", owner="user-1",
             is_public=True, member_count=0,
@@ -488,9 +488,11 @@ class TestSubnetsContract:
         svc.search_agents = AsyncMock(return_value=[])
         return svc
 
-    def test_list_subnets_calls_list_public_subnets(
+    def test_list_subnets_calls_list_subnets(
         self, stub_subnet_service, stub_agent_service
     ):
+        """Unfiltered GET /subnets calls list_subnets() (all subnets); private
+        ones are downgraded to SubnetStub per-row by the V6 B5 renderer."""
         app.dependency_overrides[get_subnet_service] = lambda: stub_subnet_service
         app.dependency_overrides[get_agent_service] = lambda: stub_agent_service
 
@@ -500,7 +502,7 @@ class TestSubnetsContract:
         app.dependency_overrides.clear()
 
         assert r.status_code == 200
-        stub_subnet_service.list_public_subnets.assert_awaited_once()
+        stub_subnet_service.list_subnets.assert_awaited_once()
 
 
 # ─────────────────────────────────────────────

@@ -465,24 +465,34 @@ def test_get_agent_unrelated_sees_only_public_subnet_ids(monkeypatch, stub_agent
 # ---------------------------------------------------------------------------
 
 
-def test_list_subnets_anon_only_sees_public():
-    """Unauthenticated list (no filter) → only public subnets returned.
+def test_list_subnets_anon_sees_public_full_and_private_stub():
+    """Unauthenticated list (no filter) → public subnets as SubnetInfo,
+    private subnets as SubnetStub (opaque UUID, no name/slug).
 
-    The unfiltered list endpoint calls ``list_public_subnets()`` which
-    deliberately excludes private subnets from the result set — private
-    subnets are existence-hidden unless the caller uses a filter that
-    implies access (e.g. ``?owner=`` or ``?owned_by_user=``).
+    ACL V6 B5: all subnets are included in the result; the per-row renderer
+    downgrades private rows to SubnetStub for callers without access.
     """
     with TestClient(app) as client:
         r = client.get("/api/v1/subnets")
 
     assert r.status_code == 200, r.text
     subnets = r.json()["subnets"]
+
+    # Public subnet must appear as a full SubnetInfo (has subnet_id / name).
     subnet_ids = [s.get("subnet_id") for s in subnets if "subnet_id" in s]
-    assert _PUB_SUBNET in subnet_ids, "Public subnet must appear"
-    assert _PRIV_SUBNET not in subnet_ids, (
-        "Private subnet must be existence-hidden in unfiltered anon list"
-    )
+    assert _PUB_SUBNET in subnet_ids, "Public subnet must appear as SubnetInfo"
+
+    # Private subnet must appear as a SubnetStub: present in the list but
+    # with no subnet_id / name field — only the opaque ``id`` UUID.
+    stub_rows = [s for s in subnets if s.get("is_private") is True]
+    assert stub_rows, "Private subnet must appear as SubnetStub (is_private=True)"
+    for stub in stub_rows:
+        assert "subnet_id" not in stub or stub.get("subnet_id") is None, (
+            "SubnetStub must not expose the human-readable slug"
+        )
+        assert "name" not in stub or stub.get("name") is None, (
+            "SubnetStub must not expose the subnet name"
+        )
 
 
 def test_list_subnets_owner_filter_returns_private_full():
