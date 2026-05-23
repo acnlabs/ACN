@@ -122,7 +122,7 @@ async def invite_session(
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"reason": str(e)},
+            details={"reason": "invalid_request"},
         ) from e
 
     # Push WS notification to invitee (best-effort — no error if offline).
@@ -178,7 +178,7 @@ async def accept_session(
         raise ACNHTTPError(
             ErrorCode.SESSION_FORBIDDEN,
             403,
-            details={"session_id": session_id, "reason": str(e)},
+            details={"session_id": session_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         msg = str(e)
@@ -195,7 +195,7 @@ async def accept_session(
         raise ACNHTTPError(
             code,
             400,
-            details={"session_id": session_id, "reason": msg},
+            details={"session_id": session_id, "reason": "invalid_request"},
         ) from e
 
     if entry is None:
@@ -251,13 +251,13 @@ async def reject_session(
         raise ACNHTTPError(
             ErrorCode.SESSION_FORBIDDEN,
             403,
-            details={"session_id": session_id, "reason": str(e)},
+            details={"session_id": session_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.SESSION_EXPIRED,
             400,
-            details={"session_id": session_id, "reason": str(e)},
+            details={"session_id": session_id, "reason": "invalid_request"},
         ) from e
 
     if entry is None:
@@ -312,7 +312,7 @@ async def close_session(
         raise ACNHTTPError(
             ErrorCode.SESSION_FORBIDDEN,
             403,
-            details={"session_id": session_id, "reason": str(e)},
+            details={"session_id": session_id, "reason": "permission_denied"},
         ) from e
 
     if entry is None:

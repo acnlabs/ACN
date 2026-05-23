@@ -157,6 +157,15 @@ class PostgresSubnetRepository(ISubnetRepository):
             )
             return [self._model_to_subnet(r) for r in result.scalars().all()]
 
+    async def find_by_owners(self, owners: set[str]) -> list[Subnet]:
+        if not owners:
+            return []
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(SubnetModel).where(SubnetModel.owner.in_(owners))
+            )
+            return [self._model_to_subnet(r) for r in result.scalars().all()]
+
     async def find_public_subnets(self) -> list[Subnet]:
         async with self._session_factory() as session:
             result = await session.execute(

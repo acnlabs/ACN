@@ -10,7 +10,7 @@ from typing import Literal
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import require_internal_or_permission, verify_token
 from ..config import get_settings
@@ -18,6 +18,7 @@ from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import SubnetNotFoundException
 from ..models import SubnetCreateRequest, SubnetCreateResponse, SubnetInfo, SubnetStub
 from ..monitoring import AuditEventType, fire_and_forget_event, get_audit_singleton
+from ..security import SSRFViolation, validate_endpoint_url
 from ..services.subnet_service import SubnetInvariantError
 from ._subnet_membership import (
     do_get_agent_subnets,
@@ -336,7 +337,7 @@ async def create_subnet(
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"reason": str(e)},
+            details={"reason": "invalid_request"},
         ) from e
     except ACNHTTPError:
         # P3 cross-module catch-all defence: ``ACNHTTPError`` is
@@ -436,11 +437,12 @@ async def list_subnets(
                         "token_sub": caller_sub,
                     },
                 )
-            # Resolve the user's owned agents, then filter subnets by owner.
+            # Resolve the user's owned agents, then query subnets by that
+            # bounded owner set — avoids the O(N) full-table scan that
+            # ``list_subnets(owner=None)`` + in-memory filter would impose.
             owned_agents = await agent_service.find_by_owner(owned_by_user)
             owned_agent_ids = {a.agent_id for a in owned_agents}
-            all_subnets = await subnet_service.list_subnets(owner=None)
-            subnets = [s for s in all_subnets if s.owner in owned_agent_ids]
+            subnets = await subnet_service.list_subnets_by_owners(owned_agent_ids)
         elif owner:
             # Require auth when filtering by owner to prevent private subnet enumeration
             if not credentials or caller_payload is None:
@@ -718,7 +720,7 @@ async def promote_subnet(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"subnet_id": subnet_id, "reason": str(e)},
+            details={"subnet_id": subnet_id, "reason": "owner_mismatch"},
         ) from e
     except ACNHTTPError:
         raise
@@ -829,7 +831,9 @@ async def get_subnet_agents(
         "for one full release cycle. Behaviour is identical."
     ),
 )
+@limiter.limit("30/minute")
 async def join_subnet(
+    request: Request,
     agent_id: AgentIdPath,
     subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
@@ -865,7 +869,9 @@ async def join_subnet(
         "instead. Behaviour is identical."
     ),
 )
+@limiter.limit("30/minute")
 async def leave_subnet(
+    request: Request,
     agent_id: AgentIdPath,
     subnet_id: SubnetIdPath,
     agent_info: AgentApiKeyDep,
@@ -917,9 +923,22 @@ class UpdateHarnessRequest(BaseModel):
         description="HMAC-SHA256 secret. Null disables signing on outbound webhooks.",
     )
 
+    @field_validator("harness_url")
+    @classmethod
+    def _validate_harness_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            validate_endpoint_url(v, allow_loopback=get_settings().dev_mode)
+        except SSRFViolation as exc:
+            raise ValueError("The provided harness URL is not allowed.") from exc
+        return v
+
 
 @router.patch("/{subnet_id}/harness")
+@limiter.limit("20/minute")
 async def update_subnet_harness(
+    request: Request,
     subnet_id: SubnetIdPath,
     body: UpdateHarnessRequest,
     agent_info: AgentApiKeyDep,
@@ -946,7 +965,7 @@ async def update_subnet_harness(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"subnet_id": subnet_id, "reason": str(e)},
+            details={"subnet_id": subnet_id, "reason": "owner_mismatch"},
         ) from e
 
     return {
@@ -1053,7 +1072,7 @@ async def delete_subnet(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"subnet_id": subnet_id, "reason": str(e)},
+            details={"subnet_id": subnet_id, "reason": "owner_mismatch"},
         ) from e
     except ACNHTTPError:
         raise

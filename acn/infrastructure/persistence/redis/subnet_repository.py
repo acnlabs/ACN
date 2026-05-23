@@ -145,6 +145,23 @@ class RedisSubnetRepository(ISubnetRepository):
                 subnets.append(subnet)
         return subnets
 
+    async def find_by_owners(self, owners: set[str]) -> list[Subnet]:
+        """Find all subnets whose owner is in *owners* (union of per-owner sets)."""
+        if not owners:
+            return []
+        seen: set[str] = set()
+        subnets: list[Subnet] = []
+        for owner in owners:
+            subnet_ids = await self.redis.smembers(f"acn:subnets:by_owner:{owner}")
+            for subnet_id in subnet_ids:
+                if subnet_id in seen:
+                    continue
+                seen.add(subnet_id)
+                subnet = await self.find_by_id(subnet_id)
+                if subnet:
+                    subnets.append(subnet)
+        return subnets
+
     async def find_public_subnets(self) -> list[Subnet]:
         """Find all public subnets"""
         all_subnets = await self.find_all()

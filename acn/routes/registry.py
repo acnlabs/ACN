@@ -1231,7 +1231,7 @@ async def join_agent_internal(
     try:
         agent_svc = _get_svc()
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=f"Service unavailable: {e}") from e
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
     # Internal callers are CI / smoke tests / operator scripts. Stamp
     # ``visibility=test`` so these registrations are excluded from the
     # default public agent list and never surface on /world.
@@ -2489,7 +2489,9 @@ async def claim_agent(
 
 
 @router.post("/{agent_id}/transfer", response_model=AgentTransferResponse)
+@limiter.limit("10/hour")
 async def transfer_agent(
+    _request: Request,
     agent_id: AgentIdPath,
     request: AgentTransferRequest,
     payload: dict = Depends(require_permission("acn:write")),
@@ -2533,12 +2535,14 @@ async def transfer_agent(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"agent_id": agent_id, "reason": str(e)},
+            details={"agent_id": agent_id, "reason": "owner_mismatch"},
         ) from e
 
 
 @router.post("/{agent_id}/release", response_model=AgentReleaseResponse)
+@limiter.limit("10/hour")
 async def release_agent(
+    request: Request,
     agent_id: AgentIdPath,
     payload: dict = Depends(require_permission("acn:write")),
     agent_service: AgentServiceDep = None,
@@ -2575,7 +2579,7 @@ async def release_agent(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"agent_id": agent_id, "reason": str(e)},
+            details={"agent_id": agent_id, "reason": "owner_mismatch"},
         ) from e
 
 

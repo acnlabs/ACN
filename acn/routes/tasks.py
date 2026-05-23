@@ -491,6 +491,13 @@ class TaskSubmitRequest(BaseModel):
         None, max_length=128, description="Participation ID (for multi-participant tasks)"
     )
 
+    @field_validator("artifacts")
+    @classmethod
+    def _validate_artifact_sizes(cls, v: list[dict]) -> list[dict]:
+        for i, artifact in enumerate(v):
+            check_dict_size_64k(f"artifacts[{i}]", artifact)
+        return v
+
 
 class TaskReviewRequest(BaseModel):
     """Request to approve or reject submission"""
@@ -1057,13 +1064,13 @@ async def accept_task(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1102,13 +1109,13 @@ async def invite_solver(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1146,13 +1153,13 @@ async def submit_task(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1204,13 +1211,13 @@ async def review_task(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1243,13 +1250,13 @@ async def cancel_task(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1358,13 +1365,13 @@ async def cancel_participation(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1397,13 +1404,13 @@ async def approve_applicant(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1436,13 +1443,13 @@ async def reject_applicant(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1591,13 +1598,13 @@ async def agent_accept_task(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
 
 
@@ -1633,11 +1640,11 @@ async def agent_submit_task(
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "permission_denied"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"task_id": task_id, "reason": str(e)},
+            details={"task_id": task_id, "reason": "invalid_request"},
         ) from e
