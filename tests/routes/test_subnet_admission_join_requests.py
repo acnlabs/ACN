@@ -266,7 +266,7 @@ class TestListJoinRequests:
 
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["subnet_id"] == SUBNET_ID
+        assert body["slug"] == SUBNET_ID
         assert len(body["items"]) == 2
         # Default kind filter is join_request.
         subnet_svc.list_join_requests.assert_awaited_once_with(

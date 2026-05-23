@@ -25,13 +25,13 @@ Architecture:
 Usage:
     # Create subnet
     POST /api/v1/subnets
-    {"subnet_id": "enterprise-a", "name": "Enterprise A"}
+    {"slug": "enterprise-a", "name": "Enterprise A"}
 
     # Agent connects to specific subnet
-    WebSocket: /gateway/connect/{subnet_id}/{agent_id}
+    WebSocket: /gateway/connect/{slug}/{agent_id}
 
     # Send A2A message to subnet agent
-    POST /gateway/a2a/{subnet_id}/{agent_id}
+    POST /gateway/a2a/{slug}/{agent_id}
 """
 
 import asyncio
@@ -88,7 +88,7 @@ class GatewayConnection:
     """WebSocket connection from subnet agent"""
 
     connection_id: str
-    subnet_id: str
+    slug: str
     agent_id: str
     websocket: WebSocket
     agent_info: AgentInfo | None = None
@@ -127,14 +127,14 @@ class SubnetManager:
         await subnet_manager.create_subnet("enterprise-a", "Enterprise A")
 
         # Agent connects
-        @app.websocket("/gateway/connect/{subnet_id}/{agent_id}")
-        async def gateway_ws(ws, subnet_id, agent_id):
-            await subnet_manager.handle_connection(ws, subnet_id, agent_id)
+        @app.websocket("/gateway/connect/{slug}/{agent_id}")
+        async def gateway_ws(ws, slug, agent_id):
+            await subnet_manager.handle_connection(ws, slug, agent_id)
 
         # Forward A2A request
-        @app.post("/gateway/a2a/{subnet_id}/{agent_id}")
-        async def gateway_a2a(subnet_id, agent_id, message):
-            return await subnet_manager.forward_request(subnet_id, agent_id, message)
+        @app.post("/gateway/a2a/{slug}/{agent_id}")
+        async def gateway_a2a(slug, agent_id, message):
+            return await subnet_manager.forward_request(slug, agent_id, message)
     """
 
     # Default subnet for backwards compatibility
@@ -217,7 +217,7 @@ class SubnetManager:
         # gateway for unawaited futures.
         self._alive_renewal_tasks: set[asyncio.Task[None]] = set()
 
-        # Subnets: {subnet_id: Subnet}
+        # Subnets: {slug: Subnet}
         self._subnets: dict[str, Subnet] = {}
 
         # Background tasks
@@ -227,7 +227,7 @@ class SubnetManager:
         # Create default public subnet
         self._subnets[self.DEFAULT_SUBNET] = Subnet(
             info=SubnetInfo(
-                subnet_id=self.DEFAULT_SUBNET,
+                slug=self.DEFAULT_SUBNET,
                 name="Public Network",
                 owner="backend@internal",
                 description="Default subnet for public agents",
@@ -261,10 +261,10 @@ class SubnetManager:
                 pass
 
         # Disconnect all agents in all subnets
-        for subnet_id in list(self._subnets.keys()):
-            subnet = self._subnets[subnet_id]
+        for slug in list(self._subnets.keys()):
+            subnet = self._subnets[slug]
             for agent_id in list(subnet.connections.keys()):
-                await self._disconnect(subnet_id, agent_id, "Gateway shutting down")
+                await self._disconnect(slug, agent_id, "Gateway shutting down")
 
         logger.info("Subnet Manager stopped")
 
@@ -274,7 +274,7 @@ class SubnetManager:
 
     async def create_subnet(
         self,
-        subnet_id: str,
+        slug: str,
         name: str,
         description: str | None = None,
         security_schemes: dict | None = None,
@@ -296,7 +296,7 @@ class SubnetManager:
         does not go through ``SubnetService``. Tracked in acnlabs/ACN#48.
 
         Args:
-            subnet_id: Unique subnet identifier
+            slug: Unique subnet identifier
             name: Human-readable subnet name
             description: Optional description
             security_schemes: A2A-style security schemes (None = public)
@@ -320,8 +320,8 @@ class SubnetManager:
                 security_schemes={"bearer": {"type": "http", "scheme": "bearer"}}
             )
         """
-        if subnet_id in self._subnets:
-            raise ValueError(f"Subnet already exists: {subnet_id}")
+        if slug in self._subnets:
+            raise ValueError(f"Subnet already exists: {slug}")
 
         # Parse and validate security schemes
         parsed_schemes = None
@@ -333,7 +333,7 @@ class SubnetManager:
             }
 
         info = SubnetInfo(
-            subnet_id=subnet_id,
+            slug=slug,
             name=name,
             owner=owner,
             description=description,
@@ -359,7 +359,7 @@ class SubnetManager:
                     generated_token = f"ak_subnet_{secrets.token_urlsafe(32)}"
                     break
 
-        self._subnets[subnet_id] = Subnet(
+        self._subnets[slug] = Subnet(
             info=info,
             generated_token=generated_token,
         )
@@ -368,25 +368,25 @@ class SubnetManager:
         await self._persist_subnet(info, generated_token)
 
         is_public = security_schemes is None
-        logger.info(f"Created subnet: {subnet_id} (public={is_public})")
+        logger.info(f"Created subnet: {slug} (public={is_public})")
         return info, generated_token
 
-    def is_subnet_public(self, subnet_id: str) -> bool:
+    def is_subnet_public(self, slug: str) -> bool:
         """Check if subnet is public (no auth required)"""
-        if subnet_id not in self._subnets:
+        if slug not in self._subnets:
             return False
-        return self._subnets[subnet_id].info.security_schemes is None
+        return self._subnets[slug].info.security_schemes is None
 
     async def validate_credentials(
         self,
-        subnet_id: str,
+        slug: str,
         credentials: dict | None,
     ) -> bool:
         """
         Validate credentials for joining a subnet
 
         Args:
-            subnet_id: Subnet to join
+            slug: Subnet to join
             credentials: Authentication credentials
                 - For bearer: {"token": "sk_subnet_xxx"}
                 - For apiKey: {"api_key": "ak_subnet_xxx"}
@@ -395,10 +395,10 @@ class SubnetManager:
         Returns:
             True if valid, False otherwise
         """
-        if subnet_id not in self._subnets:
+        if slug not in self._subnets:
             return False
 
-        subnet = self._subnets[subnet_id]
+        subnet = self._subnets[slug]
 
         # Public subnet - no auth needed
         if subnet.info.security_schemes is None:
@@ -431,31 +431,31 @@ class SubnetManager:
                 # Tracked: https://github.com/acnlabs/ACN/issues/9
                 logger.warning(
                     "Subnet %s uses unsupported auth type '%s'. Access denied.",
-                    subnet_id,
+                    slug,
                     scheme.type,
                 )
                 return False
 
         return False
 
-    async def delete_subnet(self, subnet_id: str, force: bool = False):
+    async def delete_subnet(self, slug: str, force: bool = False):
         """
         Delete a subnet
 
         Args:
-            subnet_id: Subnet to delete
+            slug: Subnet to delete
             force: If True, disconnect all agents first
 
         Raises:
             ValueError: If subnet doesn't exist or has connected agents
         """
-        if subnet_id == self.DEFAULT_SUBNET:
+        if slug == self.DEFAULT_SUBNET:
             raise ValueError("Cannot delete default subnet")
 
-        if subnet_id not in self._subnets:
-            raise ValueError(f"Subnet not found: {subnet_id}")
+        if slug not in self._subnets:
+            raise ValueError(f"Subnet not found: {slug}")
 
-        subnet = self._subnets[subnet_id]
+        subnet = self._subnets[slug]
 
         if subnet.connections and not force:
             raise ValueError(
@@ -465,29 +465,29 @@ class SubnetManager:
 
         # Disconnect all agents
         for agent_id in list(subnet.connections.keys()):
-            await self._disconnect(subnet_id, agent_id, "Subnet deleted")
+            await self._disconnect(slug, agent_id, "Subnet deleted")
 
         # Remove subnet
-        del self._subnets[subnet_id]
+        del self._subnets[slug]
 
         # Remove from Redis
-        await self._remove_subnet_state(subnet_id)
+        await self._remove_subnet_state(slug)
 
-        logger.info(f"Deleted subnet: {subnet_id}")
+        logger.info(f"Deleted subnet: {slug}")
 
-    def get_subnet(self, subnet_id: str) -> SubnetInfo | None:
+    def get_subnet(self, slug: str) -> SubnetInfo | None:
         """Get subnet info"""
-        if subnet_id not in self._subnets:
+        if slug not in self._subnets:
             return None
-        return self._subnets[subnet_id].info
+        return self._subnets[slug].info
 
     def list_subnets(self) -> list[SubnetInfo]:
         """List all subnets"""
         return [subnet.info for subnet in self._subnets.values()]
 
-    def subnet_exists(self, subnet_id: str) -> bool:
+    def subnet_exists(self, slug: str) -> bool:
         """Check if subnet exists"""
-        return subnet_id in self._subnets
+        return slug in self._subnets
 
     # =========================================================================
     # Connection Handling
@@ -496,7 +496,7 @@ class SubnetManager:
     async def handle_connection(
         self,
         websocket: WebSocket,
-        subnet_id: str,
+        slug: str,
         agent_id: str,
         credentials: dict | None = None,
     ):
@@ -505,7 +505,7 @@ class SubnetManager:
 
         Args:
             websocket: FastAPI WebSocket
-            subnet_id: Subnet to join
+            slug: Subnet to join
             agent_id: Agent identifier
             credentials: Authentication credentials (for non-public subnets)
                 - bearer: {"token": "sk_subnet_xxx"}
@@ -513,24 +513,24 @@ class SubnetManager:
                 - oauth: {"access_token": "..."}
         """
         # Validate subnet exists
-        if subnet_id not in self._subnets:
-            await websocket.close(code=4004, reason=f"Subnet not found: {subnet_id}")
+        if slug not in self._subnets:
+            await websocket.close(code=4004, reason=f"Subnet not found: {slug}")
             return
 
         # Validate credentials for non-public subnets
-        if not self.is_subnet_public(subnet_id):
-            if not await self.validate_credentials(subnet_id, credentials):
+        if not self.is_subnet_public(slug):
+            if not await self.validate_credentials(slug, credentials):
                 await websocket.close(code=4001, reason="Authentication required for this subnet")
                 return
 
         await websocket.accept()
         connection_id = str(uuid4())
 
-        logger.info(f"Agent connecting: {subnet_id}/{agent_id} (authenticated)")
+        logger.info(f"Agent connecting: {slug}/{agent_id} (authenticated)")
 
         connection = GatewayConnection(
             connection_id=connection_id,
-            subnet_id=subnet_id,
+            slug=slug,
             agent_id=agent_id,
             websocket=websocket,
         )
@@ -540,21 +540,21 @@ class SubnetManager:
             await self._handle_registration(connection)
 
             # Store connection
-            self._subnets[subnet_id].connections[agent_id] = connection
+            self._subnets[slug].connections[agent_id] = connection
 
             # Message loop
             await self._message_loop(connection)
 
         except WebSocketDisconnect:
-            logger.info(f"Agent disconnected: {subnet_id}/{agent_id}")
+            logger.info(f"Agent disconnected: {slug}/{agent_id}")
         except Exception as e:
-            logger.error(f"Connection error for {subnet_id}/{agent_id}: {e}")
+            logger.error(f"Connection error for {slug}/{agent_id}: {e}")
             # Send a generic error code to the client — do not echo internal
             # exception details over the WebSocket frame (they may contain
             # internal hostnames, SQL errors, or agent_id enumeration hints).
             await self._send_error(websocket, "connection_error")
         finally:
-            await self._disconnect(subnet_id, agent_id)
+            await self._disconnect(slug, agent_id)
 
     async def _handle_registration(
         self,
@@ -601,14 +601,14 @@ class SubnetManager:
         # Build agent info with gateway endpoint
         agent_data = data.get("agent_info", {})
         gateway_endpoint = (
-            f"{self.gateway_base_url}/gateway/a2a/{connection.subnet_id}/{connection.agent_id}"
+            f"{self.gateway_base_url}/gateway/a2a/{connection.slug}/{connection.agent_id}"
         )
 
         # Prepare metadata
         metadata = {
             **agent_data.get("metadata", {}),
             "gateway": self.gateway_base_url,
-            "subnet_id": connection.subnet_id,
+            "slug": connection.slug,
             "connection_type": "gateway",
         }
 
@@ -635,7 +635,7 @@ class SubnetManager:
                 a2a_endpoint=gateway_endpoint,
                 description=agent_data.get("description", ""),
                 tags=_agent_tags,
-                subnet_ids=[connection.subnet_id],
+                subnet_ids=[connection.slug],
                 metadata=metadata,
                 agent_card=agent_data.get("agent_card"),
             )
@@ -656,12 +656,12 @@ class SubnetManager:
         # autonomous-join semantic.
         connection.agent_info = AgentInfo(
             agent_id=connection.agent_id,
-            owner=f"gateway:{connection.subnet_id}",
+            owner=f"gateway:{connection.slug}",
             name=agent_data.get("name", connection.agent_id),
             description=agent_data.get("description", ""),
             tags=_agent_tags,
             endpoint=gateway_endpoint,
-            subnet_ids=[connection.subnet_id],
+            subnet_ids=[connection.slug],
             metadata=metadata,
         )
 
@@ -670,14 +670,14 @@ class SubnetManager:
             {
                 "type": GatewayMessageType.REGISTER_ACK,
                 "agent_id": connection.agent_id,
-                "subnet_id": connection.subnet_id,
+                "slug": connection.slug,
                 "gateway_endpoint": gateway_endpoint,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
         )
 
         logger.info(
-            f"Agent registered: {connection.subnet_id}/{connection.agent_id} -> {gateway_endpoint}"
+            f"Agent registered: {connection.slug}/{connection.agent_id} -> {gateway_endpoint}"
         )
 
     async def _message_loop(self, connection: GatewayConnection):
@@ -688,7 +688,7 @@ class SubnetManager:
             if len(raw.encode("utf-8")) > _SUBNET_WS_MAX_FRAME_BYTES:
                 logger.warning(
                     "subnet_ws_frame_too_large",
-                    subnet_id=connection.subnet_id,
+                    slug=connection.slug,
                     agent_id=connection.agent_id,
                     frame_bytes=len(raw.encode("utf-8")),
                     limit=_SUBNET_WS_MAX_FRAME_BYTES,
@@ -731,21 +731,21 @@ class SubnetManager:
 
             else:
                 logger.debug(
-                    f"Unhandled message from {connection.subnet_id}/"
+                    f"Unhandled message from {connection.slug}/"
                     f"{connection.agent_id}: {msg_type}"
                 )
 
     async def _disconnect(
         self,
-        subnet_id: str,
+        slug: str,
         agent_id: str,
         reason: str = "",
     ):
         """Cleanup disconnected agent"""
-        if subnet_id not in self._subnets:
+        if slug not in self._subnets:
             return
 
-        subnet = self._subnets[subnet_id]
+        subnet = self._subnets[slug]
         if agent_id not in subnet.connections:
             return
 
@@ -776,7 +776,7 @@ class SubnetManager:
         except Exception:
             pass
 
-        logger.info(f"Agent cleaned up: {subnet_id}/{agent_id}")
+        logger.info(f"Agent cleaned up: {slug}/{agent_id}")
 
     async def _send_error(self, websocket: WebSocket, error: str):
         """Send error to agent"""
@@ -797,7 +797,7 @@ class SubnetManager:
 
     async def forward_request(
         self,
-        subnet_id: str,
+        slug: str,
         agent_id: str,
         message: Message | dict[str, Any],
         timeout: float = 30.0,
@@ -808,7 +808,7 @@ class SubnetManager:
         Forward A2A request to subnet agent
 
         Args:
-            subnet_id: Target subnet
+            slug: Target subnet
             agent_id: Target agent
             message: A2A message
             timeout: Response timeout
@@ -850,12 +850,12 @@ class SubnetManager:
         # escrow complexity without delivering meaningful trust benefit.
         # Senders who want to attach a fee should route via the HTTP
         # ``POST /communication/send`` path instead.
-        if subnet_id not in self._subnets:
-            raise ValueError(f"Subnet not found: {subnet_id}")
+        if slug not in self._subnets:
+            raise ValueError(f"Subnet not found: {slug}")
 
-        subnet = self._subnets[subnet_id]
+        subnet = self._subnets[slug]
         if agent_id not in subnet.connections:
-            raise ValueError(f"Agent not connected: {subnet_id}/{agent_id}")
+            raise ValueError(f"Agent not connected: {slug}/{agent_id}")
 
         # Gateway-level access control (Phase 1) + manifest divert (Phase 2 PR #1).
         #
@@ -904,7 +904,7 @@ class SubnetManager:
             # Subnet-internal forward: sender and recipient share this
             # subnet by definition. Pass it as shared_subnet_ids so the
             # policy service can bypass manifest for subnet peers.
-            _shared = {subnet_id} - {"public", "system"}
+            _shared = {slug} - {"public", "system"}
             decision = await self.policy_service.check_inbound(
                 sender_id=from_agent or "unknown",
                 recipient_id=agent_id,
@@ -993,7 +993,7 @@ class SubnetManager:
 
         except TimeoutError:
             connection.pending_requests.pop(request_id, None)
-            raise TimeoutError(f"Response timeout: {subnet_id}/{agent_id}") from None
+            raise TimeoutError(f"Response timeout: {slug}/{agent_id}") from None
         except Exception:
             connection.pending_requests.pop(request_id, None)
             raise
@@ -1018,58 +1018,58 @@ class SubnetManager:
         now = datetime.now(UTC)
         stale = []
 
-        for subnet_id, subnet in self._subnets.items():
+        for slug, subnet in self._subnets.items():
             for agent_id, conn in subnet.connections.items():
                 elapsed = (now - conn.last_heartbeat).total_seconds()
                 if elapsed > self.heartbeat_timeout:
-                    stale.append((subnet_id, agent_id))
+                    stale.append((slug, agent_id))
                     logger.warning(
-                        f"Agent {subnet_id}/{agent_id} heartbeat timeout ({elapsed:.0f}s)"
+                        f"Agent {slug}/{agent_id} heartbeat timeout ({elapsed:.0f}s)"
                     )
 
-        for subnet_id, agent_id in stale:
-            await self._disconnect(subnet_id, agent_id, "Heartbeat timeout")
+        for slug, agent_id in stale:
+            await self._disconnect(slug, agent_id, "Heartbeat timeout")
 
     # =========================================================================
     # Query Methods
     # =========================================================================
 
-    def is_connected(self, subnet_id: str, agent_id: str) -> bool:
+    def is_connected(self, slug: str, agent_id: str) -> bool:
         """Check if agent is connected in subnet"""
-        if subnet_id not in self._subnets:
+        if slug not in self._subnets:
             return False
-        return agent_id in self._subnets[subnet_id].connections
+        return agent_id in self._subnets[slug].connections
 
-    def get_subnet_agents(self, subnet_id: str) -> list[str]:
+    def get_subnet_agents(self, slug: str) -> list[str]:
         """Get list of connected agents in subnet"""
-        if subnet_id not in self._subnets:
+        if slug not in self._subnets:
             return []
-        return list(self._subnets[subnet_id].connections.keys())
+        return list(self._subnets[slug].connections.keys())
 
     def get_all_agents(self) -> dict[str, list[str]]:
         """Get all connected agents by subnet"""
         return {
-            subnet_id: list(subnet.connections.keys())
-            for subnet_id, subnet in self._subnets.items()
+            slug: list(subnet.connections.keys())
+            for slug, subnet in self._subnets.items()
         }
 
     def get_connection_info(
         self,
-        subnet_id: str,
+        slug: str,
         agent_id: str,
     ) -> dict[str, Any] | None:
         """Get connection info for agent"""
-        if subnet_id not in self._subnets:
+        if slug not in self._subnets:
             return None
 
-        subnet = self._subnets[subnet_id]
+        subnet = self._subnets[slug]
         if agent_id not in subnet.connections:
             return None
 
         conn = subnet.connections[agent_id]
         return {
             "agent_id": agent_id,
-            "subnet_id": subnet_id,
+            "slug": slug,
             "connection_id": conn.connection_id,
             "connected_at": conn.connected_at.isoformat(),
             "last_heartbeat": conn.last_heartbeat.isoformat(),
@@ -1089,7 +1089,7 @@ class SubnetManager:
             "heartbeat_timeout": self.heartbeat_timeout,
             "subnets": [
                 {
-                    "subnet_id": subnet_id,
+                    "slug": slug,
                     "name": subnet.info.name,
                     "agent_count": len(subnet.connections),
                     "agents": [
@@ -1100,7 +1100,7 @@ class SubnetManager:
                         for agent_id, conn in subnet.connections.items()
                     ],
                 }
-                for subnet_id, subnet in self._subnets.items()
+                for slug, subnet in self._subnets.items()
             ],
         }
 
@@ -1112,18 +1112,18 @@ class SubnetManager:
         """Persist subnet info to Redis"""
         import json
 
-        key = f"acn:subnet:{info.subnet_id}"
+        key = f"acn:subnet:{info.slug}"
         await self.redis.set(key, json.dumps(info.model_dump(), default=str))
 
         # Store token separately (for security)
         if generated_token:
-            token_key = f"acn:subnet:{info.subnet_id}:token"
+            token_key = f"acn:subnet:{info.slug}:token"
             await self.redis.set(token_key, generated_token)
 
-    async def _remove_subnet_state(self, subnet_id: str):
+    async def _remove_subnet_state(self, slug: str):
         """Remove subnet state from Redis"""
-        await self.redis.delete(f"acn:subnet:{subnet_id}")
-        await self.redis.delete(f"acn:subnet:{subnet_id}:token")
+        await self.redis.delete(f"acn:subnet:{slug}")
+        await self.redis.delete(f"acn:subnet:{slug}:token")
 
     def hydrate_from_subnet_infos(self, subnet_infos: list["SubnetInfo"]) -> int:
         """Populate the in-memory subnet registry from a list of SubnetInfo objects.
@@ -1137,8 +1137,8 @@ class SubnetManager:
         """
         added = 0
         for info in subnet_infos:
-            if info.subnet_id not in self._subnets:
-                self._subnets[info.subnet_id] = Subnet(info=info)
+            if info.slug not in self._subnets:
+                self._subnets[info.slug] = Subnet(info=info)
                 added += 1
         if added:
             logger.info("subnet_manager_hydrated", subnets_added=added)
@@ -1167,11 +1167,11 @@ class SubnetManager:
                             f"subnet_manager: skipping corrupted subnet key during restore: {key}"
                         )
                         continue
-                    subnet_id = subnet_data["subnet_id"]
+                    slug = subnet_data["slug"]
 
-                    if subnet_id not in self._subnets:
+                    if slug not in self._subnets:
                         # Load token if exists
-                        token = await self.redis.get(f"acn:subnet:{subnet_id}:token")
+                        token = await self.redis.get(f"acn:subnet:{slug}:token")
 
                         # Parse security_schemes if present
                         security_schemes = subnet_data.get("security_schemes")
@@ -1193,11 +1193,11 @@ class SubnetManager:
                         # records loadable while that migration is pending.
                         subnet_data.setdefault("owner", "backend@internal")
 
-                        self._subnets[subnet_id] = Subnet(
+                        self._subnets[slug] = Subnet(
                             info=SubnetInfo(**subnet_data),
                             generated_token=token,
                         )
-                        logger.info(f"Loaded subnet from Redis: {subnet_id}")
+                        logger.info(f"Loaded subnet from Redis: {slug}")
 
             if cursor == 0:
                 break

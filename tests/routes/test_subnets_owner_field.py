@@ -31,14 +31,14 @@ from acn.routes.dependencies import get_subnet_service
 
 
 def _make_subnet_mock(
-    subnet_id: str,
+    slug: str,
     *,
     owner: str,
     name: str = "Test Subnet",
     is_private: bool = False,
 ):
     sn = MagicMock()
-    sn.subnet_id = subnet_id
+    sn.slug = slug
     sn.name = name
     sn.owner = owner
     sn.description = None
@@ -64,11 +64,11 @@ def stub_subnet_service():
     async def _list_subnets(owner=None):
         return [user_subnet, system_subnet]
 
-    async def _get_subnet(subnet_id: str):
+    async def _get_subnet(slug: str):
         for sn in (user_subnet, system_subnet):
-            if sn.subnet_id == subnet_id:
+            if sn.slug == slug:
                 return sn
-        raise KeyError(subnet_id)
+        raise KeyError(slug)
 
     svc.list_subnets = AsyncMock(side_effect=_list_subnets)
     svc.list_public_subnets = AsyncMock(side_effect=_list_subnets)  # kept for compat
@@ -95,7 +95,7 @@ class TestListSubnetsOwnerField:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["count"] == 2
-        owners_by_id = {s["subnet_id"]: s.get("owner") for s in body["subnets"]}
+        owners_by_id = {s["slug"]: s.get("owner") for s in body["subnets"]}
         assert owners_by_id == {
             "subnet-user-001": "agent-creator",
             "ws-system-001": "backend@internal",
@@ -113,11 +113,11 @@ class TestListSubnetsOwnerField:
         assert r.status_code == 200
         for s in r.json()["subnets"]:
             assert "owner" in s, f"missing owner field: {s}"
-            assert s["owner"], f"empty owner for {s['subnet_id']}: {s}"
+            assert s["owner"], f"empty owner for {s['slug']}: {s}"
 
 
 # ---------------------------------------------------------------------------
-# GET /api/v1/subnets/{subnet_id} — single
+# GET /api/v1/subnets/{slug} — single
 # ---------------------------------------------------------------------------
 
 

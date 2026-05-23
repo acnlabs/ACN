@@ -60,9 +60,9 @@ def _make_agent(
     return a
 
 
-def _make_public_subnet(subnet_id: str) -> MagicMock:
+def _make_public_subnet(slug: str) -> MagicMock:
     s = MagicMock()
-    s.subnet_id = subnet_id
+    s.slug = slug
     s.is_private = False
     return s
 

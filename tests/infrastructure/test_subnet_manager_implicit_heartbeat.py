@@ -60,7 +60,7 @@ def _mock_ws_yielding_one_heartbeat() -> MagicMock:
 def _make_connection(ws: MagicMock, agent_id: str = "agent-ws") -> GatewayConnection:
     return GatewayConnection(
         connection_id="conn-1",
-        subnet_id="public",
+        slug="public",
         agent_id=agent_id,
         websocket=ws,
     )

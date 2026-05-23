@@ -63,14 +63,14 @@ def stub_agent_service():
 
 
 def _make_subnet_mock(
-    subnet_id: str,
+    slug: str,
     *,
     owner: str = "agent-target",
     is_private: bool = False,
     join_policy: str = "open",
 ):
     sn = MagicMock()
-    sn.subnet_id = subnet_id
+    sn.slug = slug
     sn.owner = owner
     sn.is_private = is_private
     sn.harness_url = None
@@ -100,7 +100,7 @@ def stub_subnet_service():
                 )
             effective = join_policy
         return _make_subnet_mock(
-            kwargs["subnet_id"],
+            kwargs["slug"],
             owner=kwargs["owner"],
             is_private=is_private,
             join_policy=effective,
@@ -133,7 +133,7 @@ class TestJoinPolicyInference:
                 headers={"Authorization": "Bearer owner-key"},
                 json={
                     "name": "Legacy Private",
-                    "subnet_id": "subnet-legacy-priv",
+                    "slug": "subnet-legacy-priv",
                     "is_private": True,
                 },
             )
@@ -156,7 +156,7 @@ class TestJoinPolicyInference:
                 headers={"Authorization": "Bearer owner-key"},
                 json={
                     "name": "Legacy Public",
-                    "subnet_id": "subnet-legacy-pub",
+                    "slug": "subnet-legacy-pub",
                 },
             )
 
@@ -180,7 +180,7 @@ class TestExplicitJoinPolicy:
                 headers={"Authorization": "Bearer owner-key"},
                 json={
                     "name": "Curated Board",
-                    "subnet_id": "subnet-curated",
+                    "slug": "subnet-curated",
                     "is_private": False,
                     "join_policy": "approval",
                 },
@@ -201,7 +201,7 @@ class TestExplicitJoinPolicy:
                 headers={"Authorization": "Bearer owner-key"},
                 json={
                     "name": "Forward-Aware Private",
-                    "subnet_id": "subnet-aware-priv",
+                    "slug": "subnet-aware-priv",
                     "is_private": True,
                     "join_policy": "approval",
                 },
@@ -226,7 +226,7 @@ class TestExplicitJoinPolicy:
                 headers={"Authorization": "Bearer owner-key"},
                 json={
                     "name": "Conflict",
-                    "subnet_id": "subnet-conflict",
+                    "slug": "subnet-conflict",
                     "is_private": True,
                     "join_policy": "open",
                 },
@@ -257,7 +257,7 @@ class TestRequestModelValidation:
                 headers={"Authorization": "Bearer owner-key"},
                 json={
                     "name": "Bad",
-                    "subnet_id": "subnet-bad",
+                    "slug": "subnet-bad",
                     "join_policy": "moderated",  # not in the literal set
                 },
             )

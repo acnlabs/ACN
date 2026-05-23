@@ -1,7 +1,7 @@
 """SubnetService — agent-side back-reference cleanup on delete (issue #56).
 
 Pins the contract that ``delete_subnet`` symmetrically clears the
-``subnet_id`` from each member's ``agent.subnet_ids`` set before the
+``slug`` from each member's ``agent.subnet_ids`` set before the
 subnet record itself is removed. Without this cleanup, ADR-0003
 cascade deletes amplify pre-existing dual-store dust (per-child member
 × per-subnet) into a much larger orphan surface.
@@ -33,16 +33,16 @@ from acn.services.subnet_service import SubnetService
 
 
 def _make_subnet(
-    subnet_id: str,
+    slug: str,
     owner: str = "alice",
-    parent_subnet_id: str | None = None,
+    parent_slug: str | None = None,
     members: set[str] | None = None,
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
         member_agent_ids=members if members is not None else {owner},
         created_at=datetime.now(UTC),
     )
@@ -206,13 +206,13 @@ class TestCascadeDeleteClearsBackRefs:
             _make_subnet(
                 "squad-1",
                 owner="alice",
-                parent_subnet_id="team",
+                parent_slug="team",
                 members={"alice", "bob"},
             ),
             _make_subnet(
                 "squad-2",
                 owner="carol",
-                parent_subnet_id="team",
+                parent_slug="team",
                 members={"carol"},
             ),
         ]
@@ -273,7 +273,7 @@ class TestCascadeDeleteClearsBackRefs:
             _make_subnet(
                 "squad-1",
                 owner="alice",
-                parent_subnet_id="team",
+                parent_slug="team",
                 members={"alice"},
             ),
         ]
@@ -389,7 +389,7 @@ class TestCleanupBestEffort:
             _make_subnet(
                 "squad-1",
                 owner="alice",
-                parent_subnet_id="team",
+                parent_slug="team",
                 members={"alice"},
             ),
         ]

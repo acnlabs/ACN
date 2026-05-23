@@ -13,9 +13,9 @@ What we check
 - ``upgrade()`` adds the three columns *and* both partial indexes.
 - ``downgrade()`` removes them in reverse order — indexes first
   (PostgreSQL refuses to drop a column an index still references)
-  and ``parent_subnet_id`` last (mirrors the ``upgrade`` order).
+  and ``parent_slug`` last (mirrors the ``upgrade`` order).
 - The partial-index ``postgresql_where`` clauses target the right
-  column (``parent_subnet_id IS NOT NULL`` /
+  column (``parent_slug IS NOT NULL`` /
   ``linked_task_id IS NOT NULL``).
 """
 
@@ -73,7 +73,7 @@ def test_upgrade_adds_three_columns_and_two_indexes(migration_module):
         call.args[1].name for call in column_calls
     ]
     assert column_names == [
-        "parent_subnet_id",
+        "parent_slug",
         "lifecycle",
         "linked_task_id",
     ], f"unexpected upgrade() column order: {column_names!r}"
@@ -123,7 +123,7 @@ def test_upgrade_indexes_use_partial_where_on_correct_columns(migration_module):
         if c.args[0] == "subnets_parent_idx"
     )
     where_clause = parent_idx_call.kwargs["postgresql_where"]
-    assert "parent_subnet_id IS NOT NULL" in str(where_clause), (
+    assert "parent_slug IS NOT NULL" in str(where_clause), (
         f"subnets_parent_idx WHERE clause wrong: {where_clause}"
     )
 
@@ -183,5 +183,5 @@ def test_downgrade_drops_columns_in_reverse_of_upgrade(migration_module):
     assert column_names == [
         "linked_task_id",
         "lifecycle",
-        "parent_subnet_id",
+        "parent_slug",
     ], f"unexpected downgrade() column order: {column_names!r}"

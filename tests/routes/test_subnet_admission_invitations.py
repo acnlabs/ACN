@@ -62,7 +62,7 @@ class TestSendInvitation:
             request_id=INVITATION_ID, kind="invitation"
         )
         subnet_svc.invite_agent.return_value = InviteAgentSentResult(
-            subnet_id=SUBNET_ID,
+            slug=SUBNET_ID,
             agent_id=INVITEE_AGENT_ID,
             invitation=invitation,
         )
@@ -95,7 +95,7 @@ class TestSendInvitation:
         )
         subnet_svc.invite_agent.return_value = (
             InviteAgentMergedToApprovedJoinRequestResult(
-                subnet_id=SUBNET_ID,
+                slug=SUBNET_ID,
                 agent_id=INVITEE_AGENT_ID,
                 request=approved,
             )
@@ -368,12 +368,12 @@ class TestAgentPendingInvitations:
             make_join_request(
                 request_id="inv-1",
                 kind="invitation",
-                subnet_id="subnet-A",
+                slug="subnet-A",
             ),
             make_join_request(
                 request_id="inv-2",
                 kind="invitation",
-                subnet_id="subnet-B",
+                slug="subnet-B",
             ),
         ]
 

@@ -177,7 +177,9 @@ class AgentModel(Base):
 class SubnetModel(Base):
     __tablename__ = "subnets"
 
-    subnet_id: Mapped[str] = mapped_column(String, primary_key=True)
+    # ``slug`` is the URL-safe human-readable primary key (renamed from
+    # ``subnet_id`` in migration ``xxxx_rename_subnet_id_to_slug``).
+    slug: Mapped[str] = mapped_column("slug", String, primary_key=True)
     # Opaque UUID — secondary identifier for SubnetStub privacy.
     # Server-default ``gen_random_uuid()`` fills the column on INSERT
     # so existing call sites that don't set ``id`` keep working.
@@ -202,7 +204,8 @@ class SubnetModel(Base):
     # and ``server_default`` (DDL path) are set on ``lifecycle`` so a
     # fresh INSERT through the ORM matches a backfilled row inserted
     # via Alembic — avoids the "ORM default ≠ DB default" drift trap.
-    parent_subnet_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # ``parent_slug`` renamed from ``parent_subnet_id`` in same migration.
+    parent_slug: Mapped[str | None] = mapped_column("parent_slug", String, nullable=True)
     lifecycle: Mapped[str] = mapped_column(
         String,
         nullable=False,
@@ -234,8 +237,8 @@ class SubnetModel(Base):
         # without a parent / linked task don't contribute rows.
         Index(
             "subnets_parent_idx",
-            "parent_subnet_id",
-            postgresql_where=text("parent_subnet_id IS NOT NULL"),
+            "parent_slug",
+            postgresql_where=text("parent_slug IS NOT NULL"),
         ),
         Index(
             "subnets_linked_task_idx",
@@ -612,7 +615,7 @@ class ReputationEventModel(Base):
 # §"SubnetJoinRequest schema (three-in-one table)" for the full data-model
 # rationale.
 #
-# Why no FK to ``subnets.subnet_id``: ADR §"Cascade deletion" explicitly
+# Why no FK to ``subnets.slug``: ADR §"Cascade deletion" explicitly
 # chooses a manual cascade for symmetry with ADR-0003's parent-subnet
 # cascade — the service layer DELETEs both tables in the same transaction
 # so cascade behaviour is observable through code, not hidden in DDL. A
@@ -635,7 +638,7 @@ class SubnetJoinRequestModel(Base):
     # use ``uuid.UUID`` rather than the lower-case-hex string the rest of
     # the codebase passes around.
     request_id: Mapped[str] = mapped_column(String, primary_key=True)
-    subnet_id: Mapped[str] = mapped_column(String, nullable=False)
+    slug: Mapped[str] = mapped_column("subnet_id", String, nullable=False)
     agent_id: Mapped[str] = mapped_column(String, nullable=False)
     # ``length=16`` mirrors the ADR data-model table for ``kind``; the
     # three legal values (``join_request`` is the longest at 13 chars)
@@ -713,7 +716,7 @@ class SubnetJoinRequestModel(Base):
 class SubnetAllowlistModel(Base):
     __tablename__ = "subnet_allowlist"
 
-    subnet_id: Mapped[str] = mapped_column(String, nullable=False)
+    slug: Mapped[str] = mapped_column("subnet_id", String, nullable=False)
     # ``agent_id`` references ``agents.agent_id`` — but **no FK**. Symmetric
     # with ``subnet_join_requests``: ADR §"Cascade deletion" makes the
     # cascade manual for observability, and the route-layer existence

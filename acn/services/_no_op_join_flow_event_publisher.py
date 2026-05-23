@@ -59,7 +59,7 @@ class NoOpJoinFlowEventPublisher(IJoinFlowEventPublisher):
         logger.debug(
             "join_flow_event_dropped_slice_2_2",
             join_flow_event=event.value,
-            subnet_id=subnet.subnet_id,
+            slug=subnet.slug,
             request_id=request.request_id,
             agent_id=request.agent_id,
             kind=request.kind,

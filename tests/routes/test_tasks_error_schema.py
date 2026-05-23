@@ -234,7 +234,7 @@ def stub_task_service_for_followup():
     target = MagicMock()
     target.task_id = "task-target"
     target.creator_id = "user-1"
-    target.subnet_id = None  # public task by default
+    target.slug = None  # public task by default
     target.status = "open"
     target.mode = "single"
     target.title = "Test"
@@ -388,7 +388,7 @@ class TestTasksFlatErrorSchemaCrossModule:
     def test_get_task_private_subnet_anonymous_returns_not_subnet_member(
         self, stub_task_service_for_followup, stub_agent_service
     ):
-        """``GET /tasks/{id}`` against a task whose ``subnet_id``
+        """``GET /tasks/{id}`` against a task whose ``slug``
         is set, with no authentication — pins ``NOT_SUBNET_MEMBER``
         with ``reason="anonymous_caller"``.
 
@@ -399,7 +399,7 @@ class TestTasksFlatErrorSchemaCrossModule:
         disambiguates anonymous vs non-member callers for the SDK.
         """
         target = MagicMock()
-        target.subnet_id = "subnet-private"
+        target.slug = "subnet-private"
         target.creator_id = "user-1"
         stub_task_service_for_followup.get_task = AsyncMock(return_value=target)
         _wire(stub_task_service_for_followup, stub_agent_service)
@@ -413,7 +413,7 @@ class TestTasksFlatErrorSchemaCrossModule:
         assert body["error_code"] == "not_subnet_member"
         assert body["details"] == {
             "task_id": "task-target",
-            "subnet_id": "subnet-private",
+            "slug": "subnet-private",
             "reason": "anonymous_caller",
         }
 
@@ -430,7 +430,7 @@ class TestTasksFlatErrorSchemaCrossModule:
         private-subnet gate's second branch fires.
         """
         target = MagicMock()
-        target.subnet_id = "subnet-private"
+        target.slug = "subnet-private"
         target.creator_id = "user-1"
         stub_task_service_for_followup.get_task = AsyncMock(return_value=target)
         stub_task_service_for_followup.is_subnet_member = AsyncMock(
@@ -457,7 +457,7 @@ class TestTasksFlatErrorSchemaCrossModule:
         assert body["error_code"] == "not_subnet_member"
         assert body["details"] == {
             "task_id": "task-target",
-            "subnet_id": "subnet-private",
+            "slug": "subnet-private",
             "agent_id": "user-2",
             "reason": "not_member",
         }

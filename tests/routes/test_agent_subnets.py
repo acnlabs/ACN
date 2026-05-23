@@ -1,8 +1,8 @@
 """Route-level tests for the canonical agent-side subnet membership API.
 
 Covers the new canonical paths introduced in this batch:
-- ``POST   /api/v1/agents/{agent_id}/subnets/{subnet_id}`` — join
-- ``DELETE /api/v1/agents/{agent_id}/subnets/{subnet_id}`` — leave
+- ``POST   /api/v1/agents/{agent_id}/subnets/{slug}`` — join
+- ``DELETE /api/v1/agents/{agent_id}/subnets/{slug}`` — leave
 - ``GET    /api/v1/agents/{agent_id}/subnets`` — list
 
 The legacy paths under ``/api/v1/subnets/{agent_id}/subnets/…`` are still
@@ -62,13 +62,13 @@ def stub_agent_service():
 
 
 def _make_subnet_mock(
-    subnet_id: str = "subnet-1",
+    slug: str = "subnet-1",
     owner: str = "agent-target",
     harness_url: str | None = None,
     harness_secret: str | None = None,
 ):
     sn = MagicMock()
-    sn.subnet_id = subnet_id
+    sn.slug = slug
     sn.owner = owner
     sn.harness_url = harness_url
     sn.harness_secret = harness_secret
@@ -82,10 +82,10 @@ def stub_subnet_service():
     svc = AsyncMock()
     default = _make_subnet_mock()
 
-    async def _get_subnet(subnet_id: str):
-        if subnet_id == "subnet-1":
+    async def _get_subnet(slug: str):
+        if slug == "subnet-1":
             return default
-        raise SubnetNotFoundException(subnet_id)
+        raise SubnetNotFoundException(slug)
 
     svc.get_subnet = AsyncMock(side_effect=_get_subnet)
     svc.add_member = AsyncMock(return_value=None)
@@ -123,10 +123,10 @@ def stub_join_flow_service(stub_subnet_service):
     """
     svc = AsyncMock()
 
-    async def _join_subnet(subnet_id: str, agent_id: str):
-        await stub_subnet_service.get_subnet(subnet_id)
-        await stub_subnet_service.add_member(subnet_id, agent_id)
-        return JoinFlowJoinedOpenResult(subnet_id=subnet_id, agent_id=agent_id)
+    async def _join_subnet(slug: str, agent_id: str):
+        await stub_subnet_service.get_subnet(slug)
+        await stub_subnet_service.add_member(slug, agent_id)
+        return JoinFlowJoinedOpenResult(slug=slug, agent_id=agent_id)
 
     svc.join_subnet = AsyncMock(side_effect=_join_subnet)
     app.dependency_overrides[get_join_flow_service] = lambda: svc
@@ -144,7 +144,7 @@ def _wire(agent_svc, subnet_svc, webhook_svc=None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/agents/{agent_id}/subnets/{subnet_id} — canonical join
+# POST /api/v1/agents/{agent_id}/subnets/{slug} — canonical join
 # ---------------------------------------------------------------------------
 
 
@@ -165,7 +165,7 @@ class TestCanonicalJoin:
         assert body == {
             "status": "joined",
             "agent_id": "agent-target",
-            "subnet_id": "subnet-1",
+            "slug": "subnet-1",
         }
         # Both service-layer mutations must have been called exactly once
         stub_agent_service.join_subnet.assert_awaited_once_with("agent-target", "subnet-1")
@@ -191,14 +191,14 @@ class TestCanonicalJoin:
         assert kw["url"] == "https://h.example/hook"
         assert kw["secret"] == "hs"
         assert kw["event"] == WebhookEventType.AGENT_JOINED_SUBNET
-        # ADR-0003 Phase 3 added ``parent_subnet_id`` to the payload.
+        # ADR-0003 Phase 3 added ``parent_slug`` to the payload.
         # ``_default_subnet`` is a MagicMock stub, so the helper's
         # ``isinstance(str)`` guard returns ``None`` — matching the
         # contract for a top-level subnet.
         assert kw["data"] == {
-            "subnet_id": "subnet-1",
+            "slug": "subnet-1",
             "agent_id": "agent-target",
-            "parent_subnet_id": None,
+            "parent_slug": None,
         }
 
     def test_join_returns_403_when_path_agent_differs_from_api_key(
@@ -236,7 +236,7 @@ class TestCanonicalJoin:
         body = r.json()
         _assert_flat_shape(body)
         assert body["error_code"] == "subnet_not_found"
-        assert body["details"] == {"subnet_id": "ghost"}
+        assert body["details"] == {"slug": "ghost"}
 
     def test_join_returns_404_when_agent_not_found(
         self, stub_agent_service, stub_subnet_service, stub_webhook_service
@@ -287,7 +287,7 @@ class TestCanonicalJoin:
 
 
 # ---------------------------------------------------------------------------
-# DELETE /api/v1/agents/{agent_id}/subnets/{subnet_id} — canonical leave
+# DELETE /api/v1/agents/{agent_id}/subnets/{slug} — canonical leave
 # ---------------------------------------------------------------------------
 
 
@@ -307,7 +307,7 @@ class TestCanonicalLeave:
         assert r.json() == {
             "status": "left",
             "agent_id": "agent-target",
-            "subnet_id": "subnet-1",
+            "slug": "subnet-1",
         }
         stub_agent_service.leave_subnet.assert_awaited_once_with("agent-target", "subnet-1")
         stub_subnet_service.remove_member.assert_awaited_once_with("subnet-1", "agent-target")
@@ -453,7 +453,7 @@ class TestPathEquivalence:
         paths = spec["paths"]
 
         legacy_membership_paths = {
-            "/api/v1/subnets/{agent_id}/subnets/{subnet_id}": ("post", "delete"),
+            "/api/v1/subnets/{agent_id}/subnets/{slug}": ("post", "delete"),
             "/api/v1/subnets/{agent_id}/subnets": ("get",),
         }
         for path, methods in legacy_membership_paths.items():
@@ -466,7 +466,7 @@ class TestPathEquivalence:
                 )
 
         canonical_membership_paths = {
-            "/api/v1/agents/{agent_id}/subnets/{subnet_id}": ("post", "delete"),
+            "/api/v1/agents/{agent_id}/subnets/{slug}": ("post", "delete"),
             "/api/v1/agents/{agent_id}/subnets": ("get",),
         }
         for path, methods in canonical_membership_paths.items():

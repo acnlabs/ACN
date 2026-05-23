@@ -88,13 +88,13 @@ async def pg(request: Any):
 
 
 def _row(
-    subnet_id: str,
+    slug: str,
     parent_id: str | None = None,
 ) -> SubnetModel:
     """Build a minimal SubnetModel row suitable for direct INSERT."""
     return SubnetModel(
-        subnet_id=subnet_id,
-        name=f"subnet-{subnet_id}",
+        slug=slug,
+        name=f"subnet-{slug}",
         owner="test-owner",
         description=None,
         is_private=False,
@@ -103,18 +103,18 @@ def _row(
         subnet_metadata=None,
         harness_url=None,
         harness_secret=None,
-        parent_subnet_id=parent_id,
+        parent_slug=parent_id,
         lifecycle="persistent",
         linked_task_id=None,
         created_at=datetime.now(UTC),
     )
 
 
-async def _exists(factory: async_sessionmaker, subnet_id: str) -> bool:
-    """Return True if a subnet row with *subnet_id* is present."""
+async def _exists(factory: async_sessionmaker, slug: str) -> bool:
+    """Return True if a subnet row with *slug* is present."""
     async with factory() as session:
         result = await session.execute(
-            select(SubnetModel).where(SubnetModel.subnet_id == subnet_id)
+            select(SubnetModel).where(SubnetModel.slug == slug)
         )
         return result.scalar_one_or_none() is not None
 

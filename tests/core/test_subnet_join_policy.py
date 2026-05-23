@@ -31,14 +31,14 @@ class TestJoinPolicyDefault:
     matching pre-ADR-0004 behaviour for public subnets."""
 
     def test_default_is_open(self):
-        subnet = Subnet(subnet_id="subnet-a", name="A", owner="agent-1")
+        subnet = Subnet(slug="subnet-a", name="A", owner="agent-1")
         assert subnet.join_policy == "open"
 
     def test_public_subnet_with_explicit_open_accepted(self):
         # ``is_private=False`` (default) + ``join_policy="open"`` is the
         # status quo for public, freely-joinable subnets.
         subnet = Subnet(
-            subnet_id="subnet-public",
+            slug="subnet-public",
             name="Public",
             owner="agent-1",
             is_private=False,
@@ -51,7 +51,7 @@ class TestJoinPolicyDefault:
         # Public + approval is one of the three legal combinations
         # introduced by ADR-0004 (public board with curated entry).
         subnet = Subnet(
-            subnet_id="subnet-public-approval",
+            slug="subnet-public-approval",
             name="Public-Approval",
             owner="agent-1",
             is_private=False,
@@ -69,7 +69,7 @@ class TestJoinPolicyValueValidation:
     def test_unknown_value_rejected(self):
         with pytest.raises(ValueError, match="join_policy must be one of"):
             Subnet(
-                subnet_id="subnet-a",
+                slug="subnet-a",
                 name="A",
                 owner="agent-1",
                 join_policy="moderated",  # not in the legal set
@@ -80,7 +80,7 @@ class TestJoinPolicyValueValidation:
         # default — callers that want the default omit the kwarg.
         with pytest.raises(ValueError, match="join_policy must be one of"):
             Subnet(
-                subnet_id="subnet-a",
+                slug="subnet-a",
                 name="A",
                 owner="agent-1",
                 join_policy="",
@@ -99,7 +99,7 @@ class TestVisibilityPolicyConflict:
             ValueError, match="visibility_policy_conflict"
         ):
             Subnet(
-                subnet_id="subnet-priv",
+                slug="subnet-priv",
                 name="Priv",
                 owner="agent-1",
                 is_private=True,
@@ -115,7 +115,7 @@ class TestVisibilityPolicyConflict:
             ValueError, match="visibility_policy_conflict"
         ):
             Subnet(
-                subnet_id="subnet-priv",
+                slug="subnet-priv",
                 name="Priv",
                 owner="agent-1",
                 is_private=True,
@@ -123,7 +123,7 @@ class TestVisibilityPolicyConflict:
 
     def test_private_plus_approval_accepted(self):
         subnet = Subnet(
-            subnet_id="subnet-priv",
+            slug="subnet-priv",
             name="Priv",
             owner="agent-1",
             is_private=True,
@@ -138,7 +138,7 @@ class TestJoinPolicyDictRoundTrip:
 
     def test_to_dict_includes_join_policy(self):
         subnet = Subnet(
-            subnet_id="subnet-a",
+            slug="subnet-a",
             name="A",
             owner="agent-1",
             is_private=True,
@@ -149,7 +149,7 @@ class TestJoinPolicyDictRoundTrip:
 
     def test_from_dict_round_trips_join_policy(self):
         original = Subnet(
-            subnet_id="subnet-a",
+            slug="subnet-a",
             name="A",
             owner="agent-1",
             is_private=True,
@@ -165,7 +165,7 @@ class TestJoinPolicyDictRoundTrip:
         on these — they were always joinable, the field just records
         that fact explicitly going forward."""
         legacy_public = {
-            "subnet_id": "subnet-legacy-public",
+            "slug": "subnet-legacy-public",
             "name": "Legacy",
             "owner": "agent-1",
             "is_private": False,
@@ -185,7 +185,7 @@ class TestFromDictLegacyAutoUpgrade:
     def test_legacy_private_row_auto_upgrades_to_approval(self):
         # Row predates ADR-0004 — no ``join_policy`` key at all.
         legacy_private = {
-            "subnet_id": "subnet-legacy-priv",
+            "slug": "subnet-legacy-priv",
             "name": "LegacyPriv",
             "owner": "agent-1",
             "is_private": True,
@@ -201,7 +201,7 @@ class TestFromDictLegacyAutoUpgrade:
         # invariant rejects it. The auto-upgrade only kicks in when
         # the field is **absent**, never when it is present-but-wrong.
         explicit_conflict = {
-            "subnet_id": "subnet-conflict",
+            "slug": "subnet-conflict",
             "name": "Conflict",
             "owner": "agent-1",
             "is_private": True,

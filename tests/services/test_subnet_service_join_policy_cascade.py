@@ -41,15 +41,15 @@ from acn.services.subnet_service import SubnetService
 
 
 def _subnet(
-    subnet_id: str,
+    slug: str,
     owner: str = "alice",
-    parent_subnet_id: str | None = None,
+    parent_slug: str | None = None,
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
         member_agent_ids={owner},
         created_at=datetime.now(UTC),
     )
@@ -195,7 +195,7 @@ class TestSingleSubnetCascade:
             and c.args[0] == "delete_subnet_cascade_join_requests"
         )
         assert jr_call.kwargs.get("deleted_count") == 7
-        assert jr_call.kwargs.get("subnet_id") == "s-with-rows"
+        assert jr_call.kwargs.get("slug") == "s-with-rows"
 
     @pytest.mark.asyncio
     async def test_cascade_silent_when_zero_rows_deleted(
@@ -250,8 +250,8 @@ class TestTopLevelCascadeWithChildren:
         every subnet HASH for orphan secondary keys."""
         parent = _subnet("parent")
         children = [
-            _subnet("child-1", parent_subnet_id="parent"),
-            _subnet("child-2", parent_subnet_id="parent"),
+            _subnet("child-1", parent_slug="parent"),
+            _subnet("child-2", parent_slug="parent"),
         ]
         mock_subnet_repo.find_by_id.return_value = parent
         mock_subnet_repo.find_by_parent.return_value = children

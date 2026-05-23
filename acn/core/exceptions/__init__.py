@@ -186,7 +186,7 @@ class AlreadyMemberError(JoinFlowError):
     """
 
     def __init__(self, subnet_id: str, agent_id: str) -> None:
-        self.subnet_id = subnet_id
+        self.slug = subnet_id
         self.agent_id = agent_id
         super().__init__(
             "already_member",
@@ -202,7 +202,7 @@ class AllowlistEntryExistsError(JoinFlowError):
     """
 
     def __init__(self, subnet_id: str, agent_id: str) -> None:
-        self.subnet_id = subnet_id
+        self.slug = subnet_id
         self.agent_id = agent_id
         super().__init__(
             "already_on_allowlist",

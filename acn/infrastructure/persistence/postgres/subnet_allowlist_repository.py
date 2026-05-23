@@ -61,7 +61,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
 
     def _model_to_entity(self, row: SubnetAllowlistModel) -> SubnetAllowlist:
         return SubnetAllowlist(
-            subnet_id=row.subnet_id,
+            slug=row.slug,
             agent_id=row.agent_id,
             added_by=row.added_by,
             added_at=row.added_at,
@@ -97,7 +97,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
             stmt = (
                 pg_insert(SubnetAllowlistModel)
                 .values(
-                    subnet_id=entry.subnet_id,
+                    slug=entry.slug,
                     agent_id=entry.agent_id,
                     added_by=entry.added_by,
                     added_at=entry.added_at,
@@ -105,7 +105,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
                 .on_conflict_do_nothing(
                     index_elements=["subnet_id", "agent_id"]
                 )
-                .returning(SubnetAllowlistModel.subnet_id)
+                .returning(SubnetAllowlistModel.slug)
             )
             result = await session.execute(stmt)
             await session.commit()
@@ -117,7 +117,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
         async with self._session_factory() as session:
             result = await session.execute(
                 delete(SubnetAllowlistModel).where(
-                    SubnetAllowlistModel.subnet_id == subnet_id,
+                    SubnetAllowlistModel.slug == subnet_id,
                     SubnetAllowlistModel.agent_id == agent_id,
                 )
             )
@@ -134,9 +134,9 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
         """
         async with self._session_factory() as session:
             result = await session.execute(
-                select(SubnetAllowlistModel.subnet_id)
+                select(SubnetAllowlistModel.slug)
                 .where(
-                    SubnetAllowlistModel.subnet_id == subnet_id,
+                    SubnetAllowlistModel.slug == subnet_id,
                     SubnetAllowlistModel.agent_id == agent_id,
                 )
                 .limit(1)
@@ -149,7 +149,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
         async with self._session_factory() as session:
             result = await session.execute(
                 select(SubnetAllowlistModel)
-                .where(SubnetAllowlistModel.subnet_id == subnet_id)
+                .where(SubnetAllowlistModel.slug == subnet_id)
                 .order_by(desc(SubnetAllowlistModel.added_at))
                 .limit(limit)
                 .offset(offset)
@@ -171,7 +171,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
         async with self._session_scope(session) as sess:
             result = await sess.execute(
                 delete(SubnetAllowlistModel).where(
-                    SubnetAllowlistModel.subnet_id == subnet_id
+                    SubnetAllowlistModel.slug == subnet_id
                 )
             )
             return result.rowcount or 0

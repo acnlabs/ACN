@@ -69,21 +69,21 @@ def stub_agent_service():
 
 
 def _make_subnet_entity(
-    subnet_id: str = "subnet-1",
+    slug: str = "subnet-1",
     owner: str = "agent-target",
     *,
     is_private: bool = False,
-    parent_subnet_id: str | None = None,
+    parent_slug: str | None = None,
     lifecycle: str = "persistent",
     linked_task_id: str | None = None,
     member_agent_ids: set[str] | None = None,
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
         is_private=is_private,
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
         lifecycle=lifecycle,  # type: ignore[arg-type]
         linked_task_id=linked_task_id,
         member_agent_ids=member_agent_ids or {owner},
@@ -128,13 +128,13 @@ def test_create_subnet_invariant_rejection(reason, stub_agent_service):
     )
     _wire(stub_agent_service, subnet_svc)
 
-    body: dict = {"name": "Squad", "subnet_id": "squad-1"}
+    body: dict = {"name": "Squad", "slug": "squad-1"}
     # Send a body shape that *could* plausibly produce each reason —
     # the stub raises regardless, but a realistic payload helps the
     # contract test document each variant's intended call site.
     if reason in {REASON_PARENT_NOT_FOUND, REASON_PARENT_IS_RESERVED,
                   REASON_PARENT_IS_NESTED}:
-        body["parent_subnet_id"] = "some-parent"
+        body["parent_slug"] = "some-parent"
     if reason == REASON_TASK_SCOPED_REQUIRES_LINKED_TASK:
         body["lifecycle"] = "task_scoped"
     if reason == REASON_LINKED_TASK_NOT_FOUND:
@@ -163,9 +163,9 @@ def test_create_subnet_happy_path_with_nesting(stub_agent_service):
 
     async def _create(**kwargs):
         return _make_subnet_entity(
-            subnet_id=kwargs["subnet_id"],
+            slug=kwargs["slug"],
             owner=kwargs["owner"],
-            parent_subnet_id=kwargs.get("parent_subnet_id"),
+            parent_slug=kwargs.get("parent_slug"),
             lifecycle=kwargs.get("lifecycle", "persistent"),
             linked_task_id=kwargs.get("linked_task_id"),
         )
@@ -179,8 +179,8 @@ def test_create_subnet_happy_path_with_nesting(stub_agent_service):
             headers={"Authorization": "Bearer owner-key"},
             json={
                 "name": "Bug Squad",
-                "subnet_id": "squad-1",
-                "parent_subnet_id": "parent-1",
+                "slug": "squad-1",
+                "parent_slug": "parent-1",
                 "lifecycle": "task_scoped",
                 "linked_task_id": "task-42",
             },
@@ -188,11 +188,11 @@ def test_create_subnet_happy_path_with_nesting(stub_agent_service):
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["subnet_id"] == "squad-1"
+    assert body["slug"] == "squad-1"
     # Service was called with the three nesting fields wired through
     subnet_svc.create_subnet.assert_awaited_once()
     call_kwargs = subnet_svc.create_subnet.await_args.kwargs
-    assert call_kwargs["parent_subnet_id"] == "parent-1"
+    assert call_kwargs["parent_slug"] == "parent-1"
     assert call_kwargs["lifecycle"] == "task_scoped"
     assert call_kwargs["linked_task_id"] == "task-42"
 
@@ -206,14 +206,14 @@ class TestListSubnetsParentFilter:
     def test_parent_filter_returns_children(self, stub_agent_service):
         children = [
             _make_subnet_entity(
-                subnet_id="child-1",
+                slug="child-1",
                 owner="agent-target",
-                parent_subnet_id="parent-1",
+                parent_slug="parent-1",
             ),
             _make_subnet_entity(
-                subnet_id="child-2",
+                slug="child-2",
                 owner="agent-target",
-                parent_subnet_id="parent-1",
+                parent_slug="parent-1",
             ),
         ]
         subnet_svc = AsyncMock()
@@ -226,11 +226,11 @@ class TestListSubnetsParentFilter:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["count"] == 2
-        ids = {s["subnet_id"] for s in body["subnets"]}
+        ids = {s["slug"] for s in body["subnets"]}
         assert ids == {"child-1", "child-2"}
         # ACL: anonymous → requester_id=None
         subnet_svc.list_children.assert_awaited_once_with(
-            parent_subnet_id="parent-1", requester_id=None
+            parent_slug="parent-1", requester_id=None
         )
 
     def test_parent_filter_no_existence_leak_returns_empty(
@@ -261,19 +261,19 @@ class TestListSubnetsParentFilter:
 
 class TestGetSubnetChildren:
     def test_children_endpoint_returns_count_and_subnets(self, stub_agent_service):
-        parent = _make_subnet_entity(subnet_id="parent-1")
+        parent = _make_subnet_entity(slug="parent-1")
         children = [
             _make_subnet_entity(
-                subnet_id="child-A",
-                parent_subnet_id="parent-1",
+                slug="child-A",
+                parent_slug="parent-1",
             ),
         ]
         subnet_svc = AsyncMock()
 
-        async def _get_subnet(subnet_id: str):
-            if subnet_id == "parent-1":
+        async def _get_subnet(slug: str):
+            if slug == "parent-1":
                 return parent
-            raise SubnetNotFoundException(subnet_id)
+            raise SubnetNotFoundException(slug)
 
         subnet_svc.get_subnet = AsyncMock(side_effect=_get_subnet)
         subnet_svc.list_children = AsyncMock(return_value=children)
@@ -285,9 +285,9 @@ class TestGetSubnetChildren:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["count"] == 1
-        assert body["subnets"][0]["subnet_id"] == "child-A"
-        # ACL V6 B6: parent_subnet_id slug is always suppressed in responses.
-        assert body["subnets"][0].get("parent_subnet_id") is None
+        assert body["subnets"][0]["slug"] == "child-A"
+        # ACL V6 B6: parent_slug slug is always suppressed in responses.
+        assert body["subnets"][0].get("parent_slug") is None
         # parent_id (UUID) is the new field — non-None for child subnets.
         assert body["subnets"][0].get("parent_id") is not None
 
@@ -318,8 +318,8 @@ class TestGetSubnetChildren:
 class TestPromoteSubnet:
     def test_promote_returns_updated_subnet_info(self, stub_agent_service):
         promoted = _make_subnet_entity(
-            subnet_id="squad-1",
-            parent_subnet_id="parent-1",
+            slug="squad-1",
+            parent_slug="parent-1",
             lifecycle="persistent",
             linked_task_id=None,
         )
@@ -335,11 +335,11 @@ class TestPromoteSubnet:
 
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["subnet_id"] == "squad-1"
+        assert body["slug"] == "squad-1"
         assert body["lifecycle"] == "persistent"
         assert body["linked_task_id"] is None
         subnet_svc.promote_to_persistent.assert_awaited_once_with(
-            subnet_id="squad-1", owner="agent-target"
+            slug="squad-1", owner="agent-target"
         )
 
     def test_promote_404_for_missing_subnet(self, stub_agent_service):

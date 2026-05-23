@@ -83,7 +83,7 @@ class TestBackfillOne:
         is one HGETALL, period."""
         redis = AsyncMock()
         redis.hgetall.return_value = {
-            "subnet_id": "subnet-1",
+            "slug": "subnet-1",
             "is_private": "True",
             "join_policy": "approval",
             "backfill_v0004": "done",
@@ -106,7 +106,7 @@ class TestBackfillOne:
         a user just set."""
         redis = AsyncMock()
         redis.hgetall.return_value = {
-            "subnet_id": "subnet-2",
+            "slug": "subnet-2",
             "is_private": "False",
             "join_policy": "approval",
             # no sentinel
@@ -136,7 +136,7 @@ class TestBackfillOne:
         sentinel, in a single HSET."""
         redis = AsyncMock()
         redis.hgetall.return_value = {
-            "subnet_id": "subnet-priv-legacy",
+            "slug": "subnet-priv-legacy",
             "is_private": "True",
             # no join_policy, no sentinel
         }
@@ -164,7 +164,7 @@ class TestBackfillOne:
         already auto-infer on read."""
         redis = AsyncMock()
         redis.hgetall.return_value = {
-            "subnet_id": "subnet-pub-legacy",
+            "slug": "subnet-pub-legacy",
             "is_private": "False",
         }
 
@@ -188,7 +188,7 @@ class TestBackfillOne:
         crashing or writing ``'approval'`` (which would over-restrict
         a row that was never marked private)."""
         redis = AsyncMock()
-        redis.hgetall.return_value = {"subnet_id": "subnet-pathological"}
+        redis.hgetall.return_value = {"slug": "subnet-pathological"}
 
         status, value = await backfill_module._backfill_one(
             redis, "acn:subnets:info:subnet-pathological"
@@ -215,7 +215,7 @@ class TestDualDecode:
     async def test_bytes_keys_and_values_decoded_correctly(self, backfill_module):
         redis = AsyncMock()
         redis.hgetall.return_value = {
-            b"subnet_id": b"subnet-bytes",
+            b"slug": b"subnet-bytes",
             b"is_private": b"True",
             # no join_policy, no sentinel
         }
@@ -233,7 +233,7 @@ class TestDualDecode:
         as ``bytes`` or ``str``."""
         redis = AsyncMock()
         redis.hgetall.return_value = {
-            b"subnet_id": b"subnet-bytes-done",
+            b"slug": b"subnet-bytes-done",
             b"is_private": b"True",
             b"join_policy": b"approval",
             b"backfill_v0004": b"done",

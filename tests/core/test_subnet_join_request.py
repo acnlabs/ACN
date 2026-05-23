@@ -39,12 +39,12 @@ def _now() -> datetime:
 class TestIdentityFieldInvariants:
     @pytest.mark.parametrize(
         "field_name",
-        ["request_id", "subnet_id", "agent_id", "initiated_by"],
+        ["request_id", "slug", "agent_id", "initiated_by"],
     )
     def test_empty_identity_field_raises(self, field_name: str) -> None:
         kwargs: dict = {
             "request_id": "r1",
-            "subnet_id": "s1",
+            "slug": "s1",
             "agent_id": "a1",
             "kind": "join_request",
             "status": "pending",
@@ -65,7 +65,7 @@ class TestKindAndStatusMembership:
         with pytest.raises(ValueError, match="kind must be one of"):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="unknown_kind",  # type: ignore[arg-type]
                 status="pending",
@@ -76,7 +76,7 @@ class TestKindAndStatusMembership:
         with pytest.raises(ValueError, match="status must be one of"):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="join_request",
                 status="banana",  # type: ignore[arg-type]
@@ -99,7 +99,7 @@ class TestDecisionCoherence:
         with pytest.raises(ValueError, match="pending rows must have"):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="join_request",
                 status="pending",
@@ -111,7 +111,7 @@ class TestDecisionCoherence:
         with pytest.raises(ValueError, match="pending rows must have"):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="join_request",
                 status="pending",
@@ -126,7 +126,7 @@ class TestDecisionCoherence:
         ):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="join_request",
                 status="approved",
@@ -139,7 +139,7 @@ class TestDecisionCoherence:
         with pytest.raises(ValueError, match=f"status={status!r} requires both"):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="join_request",
                 status=status,  # type: ignore[arg-type]
@@ -150,7 +150,7 @@ class TestDecisionCoherence:
     def test_pending_with_no_decision_fields_accepted(self) -> None:
         r = SubnetJoinRequest(
             request_id="r1",
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             kind="join_request",
             status="pending",
@@ -164,7 +164,7 @@ class TestDecisionCoherence:
     def test_approved_with_decision_fields_accepted(self) -> None:
         r = SubnetJoinRequest(
             request_id="r1",
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             kind="join_request",
             status="approved",
@@ -195,7 +195,7 @@ class TestAllowlistAutoShape:
         ):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="allowlist_auto",
                 status="pending",
@@ -208,7 +208,7 @@ class TestAllowlistAutoShape:
         ):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="allowlist_auto",
                 status="approved",
@@ -223,7 +223,7 @@ class TestAllowlistAutoShape:
         ):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="allowlist_auto",
                 status="approved",
@@ -235,7 +235,7 @@ class TestAllowlistAutoShape:
     def test_canonical_allowlist_auto_accepted(self) -> None:
         r = SubnetJoinRequest(
             request_id="r1",
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             kind="allowlist_auto",
             status="approved",
@@ -258,7 +258,7 @@ class TestNoteLengthCap:
     def test_note_at_limit_accepted(self) -> None:
         r = SubnetJoinRequest(
             request_id="r1",
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             kind="join_request",
             status="rejected",
@@ -274,7 +274,7 @@ class TestNoteLengthCap:
         with pytest.raises(ValueError, match="note exceeds 500-char limit"):
             SubnetJoinRequest(
                 request_id="r1",
-                subnet_id="s1",
+                slug="s1",
                 agent_id="a1",
                 kind="join_request",
                 status="rejected",
@@ -301,7 +301,7 @@ class TestSerializationRoundTrip:
     def test_pending_round_trip_preserves_none_decision_fields(self) -> None:
         original = SubnetJoinRequest(
             request_id="r1",
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             kind="join_request",
             status="pending",
@@ -317,7 +317,7 @@ class TestSerializationRoundTrip:
         decided_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         original = SubnetJoinRequest(
             request_id="r1",
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             kind="invitation",
             status="approved",
@@ -332,7 +332,7 @@ class TestSerializationRoundTrip:
     def test_allowlist_auto_round_trip(self) -> None:
         original = SubnetJoinRequest(
             request_id="r1",
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             kind="allowlist_auto",
             status="approved",
@@ -351,7 +351,7 @@ class TestSerializationRoundTrip:
         for pending rows, breaking every existing parser."""
         r = SubnetJoinRequest(
             request_id="r1",
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             kind="join_request",
             status="pending",

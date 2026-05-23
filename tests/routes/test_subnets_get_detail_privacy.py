@@ -1,4 +1,4 @@
-"""Route-level tests for ``GET /api/v1/subnets/{subnet_id}`` privacy
+"""Route-level tests for ``GET /api/v1/subnets/{slug}`` privacy
 contract (ACL V6 / issue #114).
 
 Contract:
@@ -10,9 +10,9 @@ Contract:
 3. **Private subnets — anon or authed non-member** receive a
    ``SubnetStub`` (200) — opaque UUID plus minimal structural metadata.
    Sensitive fields (slug, name, owner, description, harness_url,
-   security_schemes, parent_subnet_id) are omitted.
+   security_schemes, parent_slug) are omitted.
 4. **Genuinely missing subnets** still 404 with ``SUBNET_NOT_FOUND``.
-5. **``SubnetInfo`` no longer leaks ``parent_subnet_id`` slug** (B6) —
+5. **``SubnetInfo`` no longer leaks ``parent_slug`` slug** (B6) —
    the field is always ``None`` in responses; ``parent_id`` UUID is
    used instead.
 """
@@ -36,20 +36,20 @@ from acn.routes.dependencies import get_agent_service, get_subnet_service
 
 
 def _make_subnet(
-    subnet_id: str,
+    slug: str,
     *,
     owner: str,
     is_private: bool,
     member_agent_ids: set[str] | None = None,
     name: str = "Test Subnet",
     opaque_id: str | None = None,
-    parent_subnet_id: str | None = None,
+    parent_slug: str | None = None,
 ) -> MagicMock:
     sn = MagicMock()
-    sn.subnet_id = subnet_id
+    sn.slug = slug
     # Opaque UUID — defaults to a deterministic-per-slug value so test
     # assertions can predict which UUID a stub will surface.
-    sn.id = opaque_id or f"00000000-0000-0000-0000-{subnet_id.replace('-', '')[:12]:0<12}"
+    sn.id = opaque_id or f"00000000-0000-0000-0000-{slug.replace('-', '')[:12]:0<12}"
     sn.name = name
     sn.owner = owner
     sn.description = None
@@ -59,7 +59,7 @@ def _make_subnet(
     sn.harness_url = "https://harness.example.org" if is_private else None
     sn.created_at = datetime(2026, 5, 18, tzinfo=UTC)
     sn.member_agent_ids = set(member_agent_ids or ())
-    sn.parent_subnet_id = parent_subnet_id
+    sn.parent_slug = parent_slug
     sn.lifecycle = "persistent"
     sn.linked_task_id = None
     return sn
@@ -91,11 +91,11 @@ def private_subnet() -> MagicMock:
 def stub_subnet_service(public_subnet, private_subnet):
     svc = AsyncMock()
 
-    async def _get_subnet(subnet_id: str):
+    async def _get_subnet(slug: str):
         for sn in (public_subnet, private_subnet):
-            if sn.subnet_id == subnet_id:
+            if sn.slug == slug:
                 return sn
-        raise SubnetNotFoundException(subnet_id)
+        raise SubnetNotFoundException(slug)
 
     svc.get_subnet = AsyncMock(side_effect=_get_subnet)
     return svc
@@ -156,18 +156,18 @@ def _fake_verify_token(
 
 def _assert_stub(body: dict) -> None:
     """Discoverable-private callers must get a SubnetStub — opaque UUID
-    plus minimal structural metadata. The human-readable ``subnet_id``
+    plus minimal structural metadata. The human-readable ``slug``
     slug, ``name``, and all sensitive fields must be absent."""
     # Opaque UUID is the only identifier surfaced.
     assert "id" in body and body["id"], "stub must carry the opaque UUID"
     assert body["is_private"] is True
     # Privacy contract: human-readable identifiers must be absent.
-    for leak in ("subnet_id", "name", "slug"):
+    for leak in ("slug", "name", "slug"):
         assert leak not in body, f"stub must not leak {leak!r} (organisational naming)"
     # Other sensitive fields must also be absent.
     for sensitive in ("owner", "description", "harness_url", "metadata",
                       "security_schemes", "default_security",
-                      "parent_subnet_id"):
+                      "parent_slug"):
         assert sensitive not in body, f"stub must not leak {sensitive!r}"
 
 
@@ -187,7 +187,7 @@ class TestPublicSubnetUnchanged:
 
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["subnet_id"] == "subnet-public"
+        assert body["slug"] == "subnet-public"
         assert body["owner"] == "agent-owner"
 
     def test_authed_non_member_can_still_read_public_subnet(self, monkeypatch):
@@ -204,14 +204,14 @@ class TestPublicSubnetUnchanged:
         assert r.status_code == 200, r.text
 
     def test_public_subnet_parent_subnet_id_suppressed(self):
-        """B6: SubnetInfo must never expose parent_subnet_id slug."""
+        """B6: SubnetInfo must never expose parent_slug slug."""
         with TestClient(app) as client:
             r = client.get("/api/v1/subnets/subnet-public")
 
         assert r.status_code == 200
         body = r.json()
-        # parent_subnet_id slug is always None; parent_id UUID is the new field.
-        assert body.get("parent_subnet_id") is None
+        # parent_slug slug is always None; parent_id UUID is the new field.
+        assert body.get("parent_slug") is None
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ class TestPrivateSubnetAuthorisedCallers:
 
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["subnet_id"] == "subnet-private"
+        assert body["slug"] == "subnet-private"
         assert body["owner"] == "agent-owner"
         assert body["harness_url"] == "https://harness.example.org"
 
@@ -251,7 +251,7 @@ class TestPrivateSubnetAuthorisedCallers:
             )
 
         assert r.status_code == 200, r.text
-        assert r.json()["subnet_id"] == "subnet-private"
+        assert r.json()["slug"] == "subnet-private"
 
     def test_admin_sees_full_payload(self, monkeypatch):
         """``acn:admin`` is a platform-level permission (ops, support,
@@ -291,11 +291,11 @@ class TestPrivateSubnetAuthorisedCallers:
 
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["subnet_id"] == "subnet-private"
+        assert body["slug"] == "subnet-private"
         assert body["owner"] == "agent-owner"
 
     def test_full_payload_parent_subnet_id_suppressed(self, monkeypatch):
-        """B6: even authorised callers must not receive parent_subnet_id slug."""
+        """B6: even authorised callers must not receive parent_slug slug."""
         monkeypatch.setattr(
             "acn.routes.subnets.verify_token",
             _fake_verify_token(sub="agent-owner", caller_type="agent"),
@@ -307,7 +307,7 @@ class TestPrivateSubnetAuthorisedCallers:
             )
 
         assert r.status_code == 200, r.text
-        assert r.json().get("parent_subnet_id") is None
+        assert r.json().get("parent_slug") is None
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +317,7 @@ class TestPrivateSubnetAuthorisedCallers:
 
 class TestPrivateSubnetDiscoverable:
     """Anon and non-member callers now get structural metadata (SubnetStub)
-    instead of 404.  The subnet_id is already discoverable via public
+    instead of 404.  The slug is already discoverable via public
     agent subnet_ids, so existence-hiding provides no real security."""
 
     def test_anon_gets_stub(self):
@@ -400,7 +400,7 @@ class TestPrivateSubnetDiscoverable:
         """Discoverable-private returns 200 (stub); genuinely missing
         returns 404.  Callers can tell the difference via status_code —
         the *body* of the stub deliberately does NOT echo back the
-        requested ``subnet_id`` (that slug carries organisational
+        requested ``slug`` (that slug carries organisational
         semantics for private subnets).  Instead the stub carries an
         opaque ``id`` (UUID) which is safe to expose.
         """
@@ -413,7 +413,7 @@ class TestPrivateSubnetDiscoverable:
         body = stub_resp.json()
         assert body["is_private"] is True
         assert body.get("id"), "stub must carry the opaque UUID"
-        assert "subnet_id" not in body, "stub must not echo back the slug"
+        assert "slug" not in body, "stub must not echo back the slug"
         assert missing_resp.json()["error_code"] == "subnet_not_found"
 
 
@@ -430,7 +430,7 @@ class TestMissingSubnetRegression:
         assert r.status_code == 404
         body = r.json()
         assert body["error_code"] == "subnet_not_found"
-        assert body["details"] == {"subnet_id": "never-existed"}
+        assert body["details"] == {"slug": "never-existed"}
 
     def test_authed_truly_missing_subnet_404(self, monkeypatch):
         """The fix must not let the auth branch swallow a real 404

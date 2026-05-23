@@ -90,7 +90,7 @@ def sample_agent() -> Agent:
 def sample_subnet() -> Subnet:
     """Sample Subnet entity for testing"""
     return Subnet(
-        subnet_id="test-subnet-123",
+        slug="test-subnet-123",
         name="Test Subnet",
         owner="user-456",
         description="A test subnet",

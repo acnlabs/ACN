@@ -106,7 +106,7 @@ def _build_manager(
     policy_service: PolicyCheckService | None,
     manifest_dispatcher: MagicMock | None = None,
     allowlist_service=None,
-    subnet_id: str = "public",
+    slug: str = "public",
     agent_id: str = "agent-b",
 ) -> tuple[SubnetManager, MagicMock]:
     manager = SubnetManager(
@@ -120,11 +120,11 @@ def _build_manager(
     websocket.send_json = AsyncMock()
     connection = GatewayConnection(
         connection_id="conn-1",
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         websocket=websocket,
     )
-    manager._subnets[subnet_id].connections[agent_id] = connection
+    manager._subnets[slug].connections[agent_id] = connection
     return manager, websocket
 
 

@@ -81,7 +81,7 @@ async def test_save_serialises_is_private_as_string_not_bool() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     subnet = Subnet(
-        subnet_id="subnet-test-1",
+        slug="subnet-test-1",
         name="test",
         owner="agent-owner",
         is_private=True,
@@ -118,7 +118,7 @@ async def test_save_round_trip_preserves_is_private() -> None:
     cases: list[tuple[bool, str]] = [(True, "approval"), (False, "open")]
     for is_private, join_policy in cases:
         subnet = Subnet(
-            subnet_id=f"subnet-rt-{is_private}",
+            slug=f"subnet-rt-{is_private}",
             name="rt",
             owner="agent-owner",
             is_private=is_private,
@@ -140,7 +140,7 @@ async def test_save_normalises_none_fields_to_empty_string() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     subnet = Subnet(
-        subnet_id="subnet-none",
+        slug="subnet-none",
         name="nones",
         owner="agent-owner",
         description=None,

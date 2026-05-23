@@ -42,7 +42,7 @@ from acn.services.webhook_join_flow_event_publisher import (
 
 def _subnet() -> Subnet:
     return Subnet(
-        subnet_id="s-1",
+        slug="s-1",
         name="s-1",
         owner="alice",
         member_agent_ids={"alice"},
@@ -55,7 +55,7 @@ def _subnet() -> Subnet:
 def _pending_join_request() -> SubnetJoinRequest:
     return SubnetJoinRequest(
         request_id="rq-1",
-        subnet_id="s-1",
+        slug="s-1",
         agent_id="bob",
         kind="join_request",
         status="pending",
@@ -128,7 +128,7 @@ class TestWireThroughHappyPath:
         assert kwargs["url"] == "https://harness.example/webhook"
         assert kwargs["secret"] == "secret"
         assert kwargs["task_id"] == "s-1"
-        assert kwargs["data"]["subnet_id"] == "s-1"
+        assert kwargs["data"]["slug"] == "s-1"
         assert kwargs["data"]["agent_id"] == "bob"
         assert kwargs["data"]["request_id"] == "rq-1"
         assert kwargs["data"]["kind"] == "join_request"
@@ -137,7 +137,7 @@ class TestWireThroughHappyPath:
         assert kwargs["data"]["trigger"] == "explicit"
         assert kwargs["data"]["via"] is None
         # ADR-0003 nesting carry-through: top-level subnet has no parent.
-        assert kwargs["data"]["parent_subnet_id"] is None
+        assert kwargs["data"]["parent_slug"] is None
 
     @pytest.mark.asyncio
     async def test_subnet_without_harness_url_skips_send_to(
@@ -149,7 +149,7 @@ class TestWireThroughHappyPath:
         # Re-pin the subnet repo to return a harnessless subnet —
         # the adapter must short-circuit so no transport call fires.
         mock_subnet_repo.find_by_id.return_value = Subnet(
-            subnet_id="s-1",
+            slug="s-1",
             name="s-1",
             owner="alice",
             member_agent_ids={"alice"},

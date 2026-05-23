@@ -39,24 +39,24 @@ class RedisSubnetRepository(ISubnetRepository):
         all secondary index mutations into a single
         ``pipeline(transaction=False)``:
 
-        - ``acn:subnets:by_owner:{owner}`` — owner → subnet_id SET
+        - ``acn:subnets:by_owner:{owner}`` — owner → slug SET
         - ``acn:subnets:children:{parent_id}`` — parent → child SET
-          (ADR-0003; absent when ``parent_subnet_id is None``)
-        - ``acn:subnets:by_linked_task:{task_id}`` — task → subnet_id
+          (ADR-0003; absent when ``parent_slug is None``)
+        - ``acn:subnets:by_linked_task:{task_id}`` — task → slug
           SET (ADR-0003; absent when ``linked_task_id is None``)
 
         On update, the old row is read first so stale entries get
-        ``SREM``'d when ``parent_subnet_id`` or ``linked_task_id``
-        changes. ``parent_subnet_id`` is immutable per ADR-0003 §5
+        ``SREM``'d when ``parent_slug`` or ``linked_task_id``
+        changes. ``parent_slug`` is immutable per ADR-0003 §5
         but ``linked_task_id`` flips to ``None`` when Phase 2's
         ``promote_to_persistent`` lands — defensive incremental
         update keeps the index honest either way.
         """
-        subnet_key = f"acn:subnets:info:{subnet.subnet_id}"
+        subnet_key = f"acn:subnets:info:{subnet.slug}"
 
         # Read existing row (if any) so we know which stale index
         # entries to evict when nesting fields change.
-        old_subnet = await self.find_by_id(subnet.subnet_id)
+        old_subnet = await self.find_by_id(subnet.slug)
 
         subnet_dict = subnet.to_dict(include_secret=True)
         subnet_dict["security_config"] = json.dumps(subnet_dict["security_config"])
@@ -72,8 +72,8 @@ class RedisSubnetRepository(ISubnetRepository):
         # Nesting fields: empty string ≡ NULL, same convention as
         # description / harness_url. Parsed back to ``None`` in
         # ``_dict_to_subnet``.
-        if subnet_dict.get("parent_subnet_id") is None:
-            subnet_dict["parent_subnet_id"] = ""
+        if subnet_dict.get("parent_slug") is None:
+            subnet_dict["parent_slug"] = ""
         if subnet_dict.get("linked_task_id") is None:
             subnet_dict["linked_task_id"] = ""
         # ADR-0004: ``join_policy`` is always populated on the entity
@@ -91,34 +91,34 @@ class RedisSubnetRepository(ISubnetRepository):
         await self.redis.hset(subnet_key, mapping=subnet_dict)  # type: ignore[arg-type]
 
         async with self.redis.pipeline(transaction=False) as pipe:
-            pipe.sadd(f"acn:subnets:by_owner:{subnet.owner}", subnet.subnet_id)
+            pipe.sadd(f"acn:subnets:by_owner:{subnet.owner}", subnet.slug)
             # Maintain children index: SREM old → SADD new when changed.
-            old_parent = old_subnet.parent_subnet_id if old_subnet else None
-            new_parent = subnet.parent_subnet_id
+            old_parent = old_subnet.parent_slug if old_subnet else None
+            new_parent = subnet.parent_slug
             if old_parent and old_parent != new_parent:
                 pipe.srem(
-                    f"acn:subnets:children:{old_parent}", subnet.subnet_id
+                    f"acn:subnets:children:{old_parent}", subnet.slug
                 )
             if new_parent:
                 pipe.sadd(
-                    f"acn:subnets:children:{new_parent}", subnet.subnet_id
+                    f"acn:subnets:children:{new_parent}", subnet.slug
                 )
             # Maintain by_linked_task index identically.
             old_task = old_subnet.linked_task_id if old_subnet else None
             new_task = subnet.linked_task_id
             if old_task and old_task != new_task:
                 pipe.srem(
-                    f"acn:subnets:by_linked_task:{old_task}", subnet.subnet_id
+                    f"acn:subnets:by_linked_task:{old_task}", subnet.slug
                 )
             if new_task:
                 pipe.sadd(
-                    f"acn:subnets:by_linked_task:{new_task}", subnet.subnet_id
+                    f"acn:subnets:by_linked_task:{new_task}", subnet.slug
                 )
             await pipe.execute()
 
-    async def find_by_id(self, subnet_id: str) -> Subnet | None:
+    async def find_by_id(self, slug: str) -> Subnet | None:
         """Find subnet by ID"""
-        subnet_key = f"acn:subnets:info:{subnet_id}"
+        subnet_key = f"acn:subnets:info:{slug}"
         subnet_dict = await self.redis.hgetall(subnet_key)
 
         if not subnet_dict:
@@ -139,8 +139,8 @@ class RedisSubnetRepository(ISubnetRepository):
         """Find all subnets owned by a user"""
         subnet_ids = await self.redis.smembers(f"acn:subnets:by_owner:{owner}")
         subnets = []
-        for subnet_id in subnet_ids:
-            subnet = await self.find_by_id(subnet_id)
+        for slug in subnet_ids:
+            subnet = await self.find_by_id(slug)
             if subnet:
                 subnets.append(subnet)
         return subnets
@@ -153,11 +153,11 @@ class RedisSubnetRepository(ISubnetRepository):
         subnets: list[Subnet] = []
         for owner in owners:
             subnet_ids = await self.redis.smembers(f"acn:subnets:by_owner:{owner}")
-            for subnet_id in subnet_ids:
-                if subnet_id in seen:
+            for slug in subnet_ids:
+                if slug in seen:
                     continue
-                seen.add(subnet_id)
-                subnet = await self.find_by_id(subnet_id)
+                seen.add(slug)
+                subnet = await self.find_by_id(slug)
                 if subnet:
                     subnets.append(subnet)
         return subnets
@@ -168,7 +168,7 @@ class RedisSubnetRepository(ISubnetRepository):
         return [s for s in all_subnets if s.is_public()]
 
     async def delete(
-        self, subnet_id: str, *, session: object | None = None
+        self, slug: str, *, session: object | None = None
     ) -> bool:
         """Delete a subnet and all its secondary index entries.
 
@@ -186,21 +186,21 @@ class RedisSubnetRepository(ISubnetRepository):
         instead.
         """
         del session  # explicit ignore — see docstring
-        subnet = await self.find_by_id(subnet_id)
+        subnet = await self.find_by_id(slug)
         if not subnet:
             return False
 
-        subnet_key = f"acn:subnets:info:{subnet_id}"
+        subnet_key = f"acn:subnets:info:{slug}"
         async with self.redis.pipeline(transaction=False) as pipe:
             pipe.delete(subnet_key)
-            pipe.srem(f"acn:subnets:by_owner:{subnet.owner}", subnet_id)
-            if subnet.parent_subnet_id:
+            pipe.srem(f"acn:subnets:by_owner:{subnet.owner}", slug)
+            if subnet.parent_slug:
                 pipe.srem(
-                    f"acn:subnets:children:{subnet.parent_subnet_id}", subnet_id
+                    f"acn:subnets:children:{subnet.parent_slug}", slug
                 )
             if subnet.linked_task_id:
                 pipe.srem(
-                    f"acn:subnets:by_linked_task:{subnet.linked_task_id}", subnet_id
+                    f"acn:subnets:by_linked_task:{subnet.linked_task_id}", slug
                 )
             await pipe.execute()
 
@@ -242,7 +242,7 @@ class RedisSubnetRepository(ISubnetRepository):
                 logger.warning(
                     "delete_with_children_partial",
                     extra={
-                        "parent_subnet_id": parent_id,
+                        "parent_slug": parent_id,
                         "child_subnet_id": child_id,
                         "reason": "child_delete_returned_false",
                     },
@@ -253,11 +253,11 @@ class RedisSubnetRepository(ISubnetRepository):
                 )
         return await self.delete(parent_id)
 
-    async def exists(self, subnet_id: str) -> bool:
+    async def exists(self, slug: str) -> bool:
         """Check if subnet exists"""
-        return await self.redis.exists(f"acn:subnets:info:{subnet_id}") > 0
+        return await self.redis.exists(f"acn:subnets:info:{slug}") > 0
 
-    async def find_by_parent(self, parent_subnet_id: str) -> list[Subnet]:
+    async def find_by_parent(self, parent_slug: str) -> list[Subnet]:
         """Return all child subnets of a given parent.
 
         Reads the ``acn:subnets:children:{parent_id}`` index, then
@@ -265,7 +265,7 @@ class RedisSubnetRepository(ISubnetRepository):
         or the parent itself is unknown.
         """
         subnet_ids = await self.redis.smembers(
-            f"acn:subnets:children:{parent_subnet_id}"
+            f"acn:subnets:children:{parent_slug}"
         )
         subnets: list[Subnet] = []
         for sid in subnet_ids:
@@ -355,9 +355,9 @@ class RedisSubnetRepository(ISubnetRepository):
 
         Empty strings stored in Redis mean NULL — translate back to
         ``None`` for the relevant fields (description, harness_url /
-        secret, parent_subnet_id, linked_task_id). Legacy rows that
+        secret, parent_slug, linked_task_id). Legacy rows that
         predate ADR-0003 don't carry the nesting keys at all; the
-        ``.get("parent_subnet_id") or None`` pattern handles both
+        ``.get("parent_slug") or None`` pattern handles both
         "missing key" and "empty string" identically.
 
         Input is normalised through :meth:`_normalize_redis_dict`
@@ -369,7 +369,7 @@ class RedisSubnetRepository(ISubnetRepository):
         description = subnet_dict.get("description") or None
         harness_url = subnet_dict.get("harness_url") or None
         harness_secret = subnet_dict.get("harness_secret") or None
-        parent_subnet_id = subnet_dict.get("parent_subnet_id") or None
+        parent_slug = subnet_dict.get("parent_slug") or None
         linked_task_id = subnet_dict.get("linked_task_id") or None
         # ``lifecycle`` defaults to "persistent" both when key absent
         # (legacy row) and when stored value is empty/falsy.
@@ -394,7 +394,7 @@ class RedisSubnetRepository(ISubnetRepository):
             join_policy = "open"
 
         data = {
-            "subnet_id": subnet_dict["subnet_id"],
+            "slug": subnet_dict["slug"],
             "name": subnet_dict["name"],
             "owner": subnet_dict["owner"],
             "description": description,
@@ -409,7 +409,7 @@ class RedisSubnetRepository(ISubnetRepository):
             "metadata": self._safe_loads(subnet_dict.get("metadata", "{}"), {}),
             "harness_url": harness_url,
             "harness_secret": harness_secret,
-            "parent_subnet_id": parent_subnet_id,
+            "parent_slug": parent_slug,
             "lifecycle": lifecycle,
             "linked_task_id": linked_task_id,
             "join_policy": join_policy,

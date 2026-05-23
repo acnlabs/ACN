@@ -1,6 +1,6 @@
-"""Webhook payload ``parent_subnet_id`` field — ADR-0003 Phase 3.
+"""Webhook payload ``parent_slug`` field — ADR-0003 Phase 3.
 
-The ADR adds a single new field (``parent_subnet_id``) to the
+The ADR adds a single new field (``parent_slug``) to the
 ``data`` block of two existing webhook events —
 ``AGENT_JOINED_SUBNET`` and ``AGENT_LEFT_SUBNET`` — fired by
 ``routes/_subnet_membership.py::do_join_subnet`` /
@@ -8,10 +8,10 @@ The ADR adds a single new field (``parent_subnet_id``) to the
 
 Contract pinned here:
 
-* Top-level subnet (``Subnet.parent_subnet_id is None``) →
-  ``payload.data["parent_subnet_id"] is None``.
-* Child subnet (``Subnet.parent_subnet_id == "<parent_id>"``) →
-  ``payload.data["parent_subnet_id"] == "<parent_id>"``.
+* Top-level subnet (``Subnet.parent_slug is None``) →
+  ``payload.data["parent_slug"] is None``.
+* Child subnet (``Subnet.parent_slug == "<parent_id>"``) →
+  ``payload.data["parent_slug"] == "<parent_id>"``.
 * All other ``data`` fields stay byte-identical to the pre-Phase-3
   shape so harnesses that ignore the new field continue to work.
 * No new ``WebhookEventType`` values are added — events used are
@@ -37,19 +37,19 @@ from acn.services._join_flow_result import JoinFlowJoinedOpenResult
 
 
 def _make_subnet(
-    subnet_id: str = "subnet-1",
+    slug: str = "subnet-1",
     *,
-    parent_subnet_id: str | None = None,
+    parent_slug: str | None = None,
     owner: str = "alice",
     member_agent_ids: set[str] | None = None,
     harness_url: str = "https://harness.example/webhook",
     harness_secret: str | None = "s3cr3t",
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
         member_agent_ids=member_agent_ids or {owner},
         harness_url=harness_url,
         harness_secret=harness_secret,
@@ -84,9 +84,9 @@ def _build_join_flow_service(subnet_service: AsyncMock) -> AsyncMock:
     """
     svc = AsyncMock()
 
-    async def _join(subnet_id: str, agent_id: str):
-        await subnet_service.add_member(subnet_id, agent_id)
-        return JoinFlowJoinedOpenResult(subnet_id=subnet_id, agent_id=agent_id)
+    async def _join(slug: str, agent_id: str):
+        await subnet_service.add_member(slug, agent_id)
+        return JoinFlowJoinedOpenResult(slug=slug, agent_id=agent_id)
 
     svc.join_subnet = AsyncMock(side_effect=_join)
     return svc
@@ -98,19 +98,19 @@ def _build_subnet_service_for_join(
     parent_subnet: Subnet | None = None,
 ) -> AsyncMock:
     """Build a ``SubnetService`` mock that returns ``subnet`` (and a
-    parent subnet when ``parent_subnet_id`` is set).
+    parent subnet when ``parent_slug`` is set).
 
     For child subnets, ``do_join_subnet`` performs a parent-membership
-    pre-check via ``subnet_service.get_subnet(parent_subnet_id)``; we
+    pre-check via ``subnet_service.get_subnet(parent_slug)``; we
     need to seed that response too so the join doesn't reject with
     ``NOT_SUBNET_MEMBER`` before reaching the webhook.
     """
     svc = AsyncMock()
 
     async def _get_subnet(sid: str):
-        if sid == subnet.subnet_id:
+        if sid == subnet.slug:
             return subnet
-        if parent_subnet is not None and sid == parent_subnet.subnet_id:
+        if parent_subnet is not None and sid == parent_subnet.slug:
             return parent_subnet
         raise AssertionError(f"unexpected get_subnet({sid!r})")
 
@@ -121,7 +121,7 @@ def _build_subnet_service_for_join(
 
 
 # ---------------------------------------------------------------------------
-# AGENT_JOINED_SUBNET — payload.data.parent_subnet_id
+# AGENT_JOINED_SUBNET — payload.data.parent_slug
 # ---------------------------------------------------------------------------
 
 
@@ -132,13 +132,13 @@ class TestJoinSubnetWebhookParentField:
         webhook_service,
         agent_service,
     ):
-        subnet = _make_subnet(parent_subnet_id=None)
+        subnet = _make_subnet(parent_slug=None)
         subnet_service = _build_subnet_service_for_join(subnet)
         join_flow_service = _build_join_flow_service(subnet_service)
 
         await do_join_subnet(
             agent_id="alice",
-            subnet_id="subnet-1",
+            slug="subnet-1",
             agent_info={"agent_id": "alice"},
             subnet_service=subnet_service,
             agent_service=agent_service,
@@ -151,9 +151,9 @@ class TestJoinSubnetWebhookParentField:
         assert call.kwargs["event"] == WebhookEventType.AGENT_JOINED_SUBNET
         data = call.kwargs["data"]
         assert data == {
-            "subnet_id": "subnet-1",
+            "slug": "subnet-1",
             "agent_id": "alice",
-            "parent_subnet_id": None,
+            "parent_slug": None,
         }
 
     @pytest.mark.asyncio
@@ -163,13 +163,13 @@ class TestJoinSubnetWebhookParentField:
         agent_service,
     ):
         child = _make_subnet(
-            subnet_id="squad-1",
-            parent_subnet_id="parent-1",
+            slug="squad-1",
+            parent_slug="parent-1",
             member_agent_ids={"alice"},
         )
         parent = _make_subnet(
-            subnet_id="parent-1",
-            parent_subnet_id=None,
+            slug="parent-1",
+            parent_slug=None,
             member_agent_ids={"alice"},  # alice is in parent → join allowed
             harness_url=None,  # parent doesn't need a harness for this test
             harness_secret=None,
@@ -179,7 +179,7 @@ class TestJoinSubnetWebhookParentField:
 
         await do_join_subnet(
             agent_id="alice",
-            subnet_id="squad-1",
+            slug="squad-1",
             agent_info={"agent_id": "alice"},
             subnet_service=subnet_service,
             agent_service=agent_service,
@@ -190,9 +190,9 @@ class TestJoinSubnetWebhookParentField:
         webhook_service.send_to.assert_awaited_once()
         data = webhook_service.send_to.await_args.kwargs["data"]
         assert data == {
-            "subnet_id": "squad-1",
+            "slug": "squad-1",
             "agent_id": "alice",
-            "parent_subnet_id": "parent-1",
+            "parent_slug": "parent-1",
         }
 
     @pytest.mark.asyncio
@@ -202,10 +202,10 @@ class TestJoinSubnetWebhookParentField:
         agent_service,
     ):
         """Sanity check — subnets without ``harness_url`` do NOT emit
-        a webhook regardless of the parent_subnet_id field. Phase 3
+        a webhook regardless of the parent_slug field. Phase 3
         does not change this gate."""
         subnet = _make_subnet(
-            parent_subnet_id=None,
+            parent_slug=None,
             harness_url=None,
             harness_secret=None,
         )
@@ -214,7 +214,7 @@ class TestJoinSubnetWebhookParentField:
 
         await do_join_subnet(
             agent_id="alice",
-            subnet_id="subnet-1",
+            slug="subnet-1",
             agent_info={"agent_id": "alice"},
             subnet_service=subnet_service,
             agent_service=agent_service,
@@ -237,12 +237,12 @@ class TestLeaveSubnetWebhookParentField:
         webhook_service,
         agent_service,
     ):
-        subnet = _make_subnet(parent_subnet_id=None)
+        subnet = _make_subnet(parent_slug=None)
         subnet_service = _build_subnet_service_for_join(subnet)
 
         await do_leave_subnet(
             agent_id="alice",
-            subnet_id="subnet-1",
+            slug="subnet-1",
             agent_info={"agent_id": "alice"},
             subnet_service=subnet_service,
             agent_service=agent_service,
@@ -254,9 +254,9 @@ class TestLeaveSubnetWebhookParentField:
         assert call.kwargs["event"] == WebhookEventType.AGENT_LEFT_SUBNET
         data = call.kwargs["data"]
         assert data == {
-            "subnet_id": "subnet-1",
+            "slug": "subnet-1",
             "agent_id": "alice",
-            "parent_subnet_id": None,
+            "parent_slug": None,
         }
 
     @pytest.mark.asyncio
@@ -266,8 +266,8 @@ class TestLeaveSubnetWebhookParentField:
         agent_service,
     ):
         child = _make_subnet(
-            subnet_id="squad-1",
-            parent_subnet_id="parent-1",
+            slug="squad-1",
+            parent_slug="parent-1",
         )
         # do_leave_subnet does NOT do the parent-membership pre-check
         # (that's join-only), so we don't need to seed a parent
@@ -276,7 +276,7 @@ class TestLeaveSubnetWebhookParentField:
 
         await do_leave_subnet(
             agent_id="alice",
-            subnet_id="squad-1",
+            slug="squad-1",
             agent_info={"agent_id": "alice"},
             subnet_service=subnet_service,
             agent_service=agent_service,
@@ -286,7 +286,7 @@ class TestLeaveSubnetWebhookParentField:
         webhook_service.send_to.assert_awaited_once()
         data = webhook_service.send_to.await_args.kwargs["data"]
         assert data == {
-            "subnet_id": "squad-1",
+            "slug": "squad-1",
             "agent_id": "alice",
-            "parent_subnet_id": "parent-1",
+            "parent_slug": "parent-1",
         }

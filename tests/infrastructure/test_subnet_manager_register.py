@@ -2,7 +2,7 @@
 
 The 2026-05 AgentRegistry removal rewrote this path: instead of
 delegating to ``AgentRegistry.register_agent`` (which baked in
-``owner=f"gateway:{subnet_id}"`` + ``status="online"``), the gateway now
+``owner=f"gateway:{slug}"`` + ``status="online"``), the gateway now
 
 1. persists an ``Agent`` entity through ``agent_service.repository.save``
    with **``owner=None``** — explicit product decision to mirror the
@@ -20,7 +20,7 @@ These tests pin the three invariants the rewrite established:
 * ``agent_service.touch_alive`` is awaited exactly once with the
   connection's ``agent_id``;
 * the in-memory ``connection.agent_info.owner`` still carries the
-  synthetic ``f"gateway:{subnet_id}"`` marker (legacy DTO compat —
+  synthetic ``f"gateway:{slug}"`` marker (legacy DTO compat —
   internal caches stay self-describing without overloading the
   persisted owner field).
 
@@ -77,7 +77,7 @@ def _make_ws_yielding_register() -> MagicMock:
 def _make_connection(ws: MagicMock, agent_id: str = "agent-1") -> GatewayConnection:
     return GatewayConnection(
         connection_id="conn-1",
-        subnet_id="enterprise-a",
+        slug="enterprise-a",
         agent_id=agent_id,
         websocket=ws,
     )
@@ -131,7 +131,7 @@ async def test_handle_registration_persists_agent_with_owner_none():
     assert saved.agent_id == "agent-1"
     assert saved.subnet_ids == ["enterprise-a"]
     assert "gateway" in saved.metadata
-    assert saved.metadata["subnet_id"] == "enterprise-a"
+    assert saved.metadata["slug"] == "enterprise-a"
 
 
 @pytest.mark.asyncio
@@ -155,7 +155,7 @@ async def test_handle_registration_seeds_alive_key_via_touch_alive():
 @pytest.mark.asyncio
 async def test_handle_registration_sets_in_memory_owner_to_gateway_marker():
     """``connection.agent_info.owner`` keeps the synthetic
-    ``gateway:{subnet_id}`` string so the in-memory DTO stays
+    ``gateway:{slug}`` string so the in-memory DTO stays
     self-describing.
 
     This is the deliberate split from the persisted entity (which has

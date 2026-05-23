@@ -132,7 +132,7 @@ class Analytics:
         (``agent.subnet_ids`` is a list).  Each subnet membership is counted
         independently, so ``sum(by_subnet.values()) >= total`` when any agent
         belongs to more than one subnet.  The Redis fallback counts only the
-        agent's primary ``subnet_id`` field (single value), so the two paths
+        agent's primary ``slug`` field (single value), so the two paths
         are not strictly equivalent; this is the more accurate representation.
         """
         agents = await self._agent_repo.find_all()  # type: ignore[union-attr]
@@ -226,7 +226,7 @@ class Analytics:
                 status_bucket = "online" if is_alive else "offline"
                 stats["by_status"][status_bucket] += 1
 
-                subnet = agent.get("subnet_id", "public")
+                subnet = agent.get("slug", "public")
                 stats["by_subnet"][subnet] = stats["by_subnet"].get(subnet, 0) + 1
 
                 tags_str = agent.get("tags") or agent.get("skills", "[]")
@@ -496,14 +496,14 @@ class Analytics:
         subnet_list = []
         for subnet in subnets:
             agent_count = (
-                await self._agent_repo.count_by_subnet(subnet.subnet_id)
+                await self._agent_repo.count_by_subnet(subnet.slug)
                 if self._agent_repo
-                else await self._count_agents_in_subnet(subnet.subnet_id)
+                else await self._count_agents_in_subnet(subnet.slug)
             )
-            gateway_count = await self._count_gateway_connections(subnet.subnet_id)
+            gateway_count = await self._count_gateway_connections(subnet.slug)
             subnet_list.append(
                 {
-                    "subnet_id": subnet.subnet_id,
+                    "slug": subnet.slug,
                     "name": subnet.name,
                     "agent_count": agent_count,
                     "gateway_connections": gateway_count,
@@ -521,7 +521,7 @@ class Analytics:
             "total": len(subnets) + 1,  # +1 for implicit public network
             "subnets": [
                 {
-                    "subnet_id": "public",
+                    "slug": "public",
                     "name": "Public Network",
                     "agent_count": public_count,
                     "gateway_connections": 0,
@@ -550,14 +550,14 @@ class Analytics:
                     for k, v in subnet_data.items()
                 }
 
-                subnet_id = subnet.get("subnet_id", "unknown")
-                agent_count = await self._count_agents_in_subnet(subnet_id)
-                gateway_count = await self._count_gateway_connections(subnet_id)
+                slug = subnet.get("slug", "unknown")
+                agent_count = await self._count_agents_in_subnet(slug)
+                gateway_count = await self._count_gateway_connections(slug)
 
                 subnets.append(
                     {
-                        "subnet_id": subnet_id,
-                        "name": subnet.get("name", subnet_id),
+                        "slug": slug,
+                        "name": subnet.get("name", slug),
                         "agent_count": agent_count,
                         "gateway_connections": gateway_count,
                         "has_security": subnet.get("security_schemes") is not None,
@@ -573,7 +573,7 @@ class Analytics:
             "total": len(subnets) + 1,
             "subnets": [
                 {
-                    "subnet_id": "public",
+                    "slug": "public",
                     "name": "Public Network",
                     "agent_count": public_count,
                     "gateway_connections": 0,
@@ -733,11 +733,11 @@ class Analytics:
         count = await self.redis.llen("acn:dlq")
         return count
 
-    async def _count_agents_in_subnet(self, subnet_id: str) -> int:
+    async def _count_agents_in_subnet(self, slug: str) -> int:
         """Count agents in a specific subnet.
 
         Reads directly from the authoritative membership set
-        `acn:subnets:{subnet_id}:agents` that AgentRepository and the registry
+        `acn:subnets:{slug}:agents` that AgentRepository and the registry
         already maintain (sadd on save, srem on delete). The previous
         implementation scanned every agent hash and filtered in Python,
         which (a) used the wrong key pattern `acn:agents:*:info` (never
@@ -745,11 +745,11 @@ class Analytics:
         fixed would be O(N_agents) per call — unacceptable when this
         function is invoked for every subnet in `get_subnet_stats`.
         """
-        return await self.redis.scard(f"acn:subnets:{subnet_id}:agents")
+        return await self.redis.scard(f"acn:subnets:{slug}:agents")
 
-    async def _count_gateway_connections(self, subnet_id: str) -> int:
+    async def _count_gateway_connections(self, slug: str) -> int:
         """Count gateway connections for a subnet"""
-        key = f"acn:metrics:acn_gateway_connections:subnet={subnet_id}"
+        key = f"acn:metrics:acn_gateway_connections:subnet={slug}"
         value = await self.redis.get(key)
         return int(value) if value else 0
 

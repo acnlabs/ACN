@@ -52,7 +52,7 @@ def _make_model(**overrides) -> SubnetModel:
     have to pass every NOT NULL column explicitly — same idiom
     ``test_postgres_subnet_repository_nesting.py`` uses)."""
     defaults: dict = {
-        "subnet_id": "subnet-x",
+        "slug": "subnet-x",
         "name": "x",
         "owner": "agent-owner",
         "description": None,
@@ -62,7 +62,7 @@ def _make_model(**overrides) -> SubnetModel:
         "subnet_metadata": None,
         "harness_url": None,
         "harness_secret": None,
-        "parent_subnet_id": None,
+        "parent_slug": None,
         "lifecycle": "persistent",
         "linked_task_id": None,
         "join_policy": "open",
@@ -81,7 +81,7 @@ def test_subnet_to_model_carries_join_policy():
     factory, _ = _make_session_factory()
     repo = PostgresSubnetRepository(session_factory=factory)
     subnet = Subnet(
-        subnet_id="subnet-x",
+        slug="subnet-x",
         name="x",
         owner="agent-owner",
         is_private=True,
@@ -97,7 +97,7 @@ def test_subnet_to_model_carries_open_for_public_default():
     factory, _ = _make_session_factory()
     repo = PostgresSubnetRepository(session_factory=factory)
     subnet = Subnet(
-        subnet_id="subnet-pub",
+        slug="subnet-pub",
         name="pub",
         owner="agent-owner",
     )
@@ -141,7 +141,7 @@ class TestModelToSubnetNullJoinPolicyAutoUpgrade:
         factory, _ = _make_session_factory()
         repo = PostgresSubnetRepository(session_factory=factory)
         model = _make_model(
-            subnet_id="subnet-broken-pub",
+            slug="subnet-broken-pub",
             is_private=False,
             join_policy=None,  # the pathological case
         )
@@ -162,7 +162,7 @@ class TestModelToSubnetNullJoinPolicyAutoUpgrade:
         factory, _ = _make_session_factory()
         repo = PostgresSubnetRepository(session_factory=factory)
         model = _make_model(
-            subnet_id="subnet-broken-priv",
+            slug="subnet-broken-priv",
             is_private=True,
             join_policy=None,
         )
@@ -191,7 +191,7 @@ async def test_save_update_path_includes_join_policy():
 
     repo = PostgresSubnetRepository(session_factory=factory)
     subnet = Subnet(
-        subnet_id="subnet-existing",
+        slug="subnet-existing",
         name="x",
         owner="agent-owner",
         is_private=True,

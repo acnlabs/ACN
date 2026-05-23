@@ -27,12 +27,12 @@ class ISubnetRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_id(self, subnet_id: str) -> Subnet | None:
+    async def find_by_id(self, slug: str) -> Subnet | None:
         """
         Find subnet by ID
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
 
         Returns:
             Subnet entity or None if not found
@@ -92,13 +92,13 @@ class ISubnetRepository(ABC):
 
     @abstractmethod
     async def delete(
-        self, subnet_id: str, *, session: Any | None = None
+        self, slug: str, *, session: Any | None = None
     ) -> bool:
         """
         Delete a subnet
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
             session: Optional :class:`IUnitOfWork` token. When passed,
                 Postgres impl binds to it (no internal commit / close)
                 so the call participates in the outer transaction; the
@@ -171,12 +171,12 @@ class ISubnetRepository(ABC):
         pass
 
     @abstractmethod
-    async def exists(self, subnet_id: str) -> bool:
+    async def exists(self, slug: str) -> bool:
         """
         Check if subnet exists
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
 
         Returns:
             True if subnet exists
@@ -194,7 +194,7 @@ class ISubnetRepository(ABC):
     # underlying secondary index in the same transaction / pipeline.
 
     @abstractmethod
-    async def find_by_parent(self, parent_subnet_id: str) -> list[Subnet]:
+    async def find_by_parent(self, parent_slug: str) -> list[Subnet]:
         """
         Find all child subnets nested under a given parent.
 
@@ -204,10 +204,10 @@ class ISubnetRepository(ABC):
         parent separately.
 
         Args:
-            parent_subnet_id: Parent subnet identifier
+            parent_slug: Parent subnet identifier
 
         Returns:
-            List of subnets whose ``parent_subnet_id`` equals the
+            List of subnets whose ``parent_slug`` equals the
             argument.
         """
         pass

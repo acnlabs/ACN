@@ -138,7 +138,7 @@ class BroadcastService:
         from_agent: str,
         message: Message,
         target_agents: list[str] | None = None,
-        subnet_id: str | None = None,
+        slug: str | None = None,
         tags: list[str] | None = None,
         strategy: BroadcastStrategy = BroadcastStrategy.PARALLEL,
     ) -> "BroadcastResult":
@@ -167,7 +167,7 @@ class BroadcastService:
         Selector precedence (matches the old HTTP behaviour exactly):
 
         1. ``target_agents`` — explicit list, used verbatim;
-        2. ``subnet_id`` — resolved via
+        2. ``slug`` — resolved via
            ``agent_repository.find_by_subnet``;
         3. ``tags`` — resolved via ``agent_repository.find_by_tags``
            (defaults to ``status="online"``);
@@ -184,7 +184,7 @@ class BroadcastService:
                 (mapped to HTTP 404 by the route).
             message: A2A message to deliver.
             target_agents: Explicit recipient list (highest priority).
-            subnet_id: Restrict fan-out to one subnet.
+            slug: Restrict fan-out to one subnet.
             tags: Restrict fan-out to agents matching tags.
             strategy: Delivery strategy (parallel / sequential /
                 best_effort). See :py:class:`BroadcastStrategy`.
@@ -207,8 +207,8 @@ class BroadcastService:
 
         if target_agents:
             to_ids = list(target_agents)
-        elif subnet_id:
-            agents = await self.agent_repository.find_by_subnet(subnet_id)
+        elif slug:
+            agents = await self.agent_repository.find_by_subnet(slug)
             to_ids = [a.agent_id for a in agents]
         elif tags:
             agents = await self.agent_repository.find_by_tags(tags)
@@ -226,7 +226,7 @@ class BroadcastService:
         if not to_ids:
             logger.warning(
                 "broadcast_no_targets "
-                f"from={from_agent} subnet={subnet_id!r} tags={tags!r}"
+                f"from={from_agent} subnet={slug!r} tags={tags!r}"
             )
             # Empty fan-out still produces a BroadcastResult so callers
             # have a stable shape (and a broadcast_id for the audit

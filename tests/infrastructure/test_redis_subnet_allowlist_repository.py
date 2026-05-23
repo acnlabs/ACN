@@ -46,7 +46,7 @@ async def fake_redis():
 
 def _entry(**overrides) -> SubnetAllowlist:
     defaults: dict = {
-        "subnet_id": "s-1",
+        "slug": "s-1",
         "agent_id": "a-1",
         "added_by": "owner-1",
     }
@@ -74,7 +74,7 @@ class TestAddIdempotency:
     @pytest.mark.asyncio
     async def test_add_writes_set_and_meta_hash(self, fake_redis):
         repo = RedisSubnetAllowlistRepository(fake_redis)
-        await repo.add(_entry(subnet_id="s-x", agent_id="a-x"))
+        await repo.add(_entry(slug="s-x", agent_id="a-x"))
         # SET membership
         assert await fake_redis.sismember(_allowlist_set_key("s-x"), b"a-x")
         # Parallel meta HASH carries the audit fields

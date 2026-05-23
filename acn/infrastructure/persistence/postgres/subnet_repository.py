@@ -61,7 +61,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             "approval" if row.is_private else "open"
         )
         return Subnet(
-            subnet_id=row.subnet_id,
+            slug=row.slug,
             id=row.id,
             name=row.name,
             owner=row.owner,
@@ -73,7 +73,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             metadata=meta,
             harness_url=row.harness_url,
             harness_secret=row.harness_secret,
-            parent_subnet_id=row.parent_subnet_id,
+            parent_slug=row.parent_slug,
             lifecycle=row.lifecycle,
             linked_task_id=row.linked_task_id,
             join_policy=join_policy,
@@ -85,7 +85,7 @@ class PostgresSubnetRepository(ISubnetRepository):
         if created and not created.tzinfo:
             created = created.replace(tzinfo=UTC)
         return SubnetModel(
-            subnet_id=subnet.subnet_id,
+            slug=subnet.slug,
             id=subnet.id,
             name=subnet.name,
             owner=subnet.owner,
@@ -96,7 +96,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             subnet_metadata=subnet.metadata or None,
             harness_url=subnet.harness_url,
             harness_secret=subnet.harness_secret,
-            parent_subnet_id=subnet.parent_subnet_id,
+            parent_slug=subnet.parent_slug,
             lifecycle=subnet.lifecycle,
             linked_task_id=subnet.linked_task_id,
             join_policy=subnet.join_policy,
@@ -110,16 +110,16 @@ class PostgresSubnetRepository(ISubnetRepository):
     async def save(self, subnet: Subnet) -> None:
         model = self._subnet_to_model(subnet)
         async with self._session_factory() as session:
-            existing = await session.get(SubnetModel, subnet.subnet_id)
+            existing = await session.get(SubnetModel, subnet.slug)
             if existing:
                 # Nesting fields are included in the UPDATE so promote
                 # paths (Phase 2) and any future mutation can fall
-                # through correctly. ``parent_subnet_id`` is immutable
+                # through correctly. ``parent_slug`` is immutable
                 # per ADR-0003 §5 — included here only for defence in
                 # depth (service layer rejects mismatched updates).
                 await session.execute(
                     update(SubnetModel)
-                    .where(SubnetModel.subnet_id == subnet.subnet_id)
+                    .where(SubnetModel.slug == subnet.slug)
                     .values(
                         name=model.name,
                         owner=model.owner,
@@ -130,7 +130,7 @@ class PostgresSubnetRepository(ISubnetRepository):
                         subnet_metadata=model.subnet_metadata,
                         harness_url=model.harness_url,
                         harness_secret=model.harness_secret,
-                        parent_subnet_id=model.parent_subnet_id,
+                        parent_slug=model.parent_slug,
                         lifecycle=model.lifecycle,
                         linked_task_id=model.linked_task_id,
                         join_policy=model.join_policy,
@@ -140,9 +140,9 @@ class PostgresSubnetRepository(ISubnetRepository):
                 session.add(model)
             await session.commit()
 
-    async def find_by_id(self, subnet_id: str) -> Subnet | None:
+    async def find_by_id(self, slug: str) -> Subnet | None:
         async with self._session_factory() as session:
-            row = await session.get(SubnetModel, subnet_id)
+            row = await session.get(SubnetModel, slug)
             return self._model_to_subnet(row) if row else None
 
     async def find_all(self) -> list[Subnet]:
@@ -174,11 +174,11 @@ class PostgresSubnetRepository(ISubnetRepository):
             return [self._model_to_subnet(r) for r in result.scalars().all()]
 
     async def delete(
-        self, subnet_id: str, *, session: AsyncSession | None = None
+        self, slug: str, *, session: AsyncSession | None = None
     ) -> bool:
         async with self._session_scope(session) as sess:
             result = await sess.execute(
-                delete(SubnetModel).where(SubnetModel.subnet_id == subnet_id)
+                delete(SubnetModel).where(SubnetModel.slug == slug)
             )
             return result.rowcount > 0
 
@@ -226,29 +226,29 @@ class PostgresSubnetRepository(ISubnetRepository):
             for child_id in child_ids:
                 await session.execute(
                     delete(SubnetModel).where(
-                        SubnetModel.subnet_id == child_id
+                        SubnetModel.slug == child_id
                     )
                 )
             result = await session.execute(
-                delete(SubnetModel).where(SubnetModel.subnet_id == parent_id)
+                delete(SubnetModel).where(SubnetModel.slug == parent_id)
             )
             return result.rowcount > 0
         async with self._session_factory() as own_session, own_session.begin():
             for child_id in child_ids:
                 await own_session.execute(
                     delete(SubnetModel).where(
-                        SubnetModel.subnet_id == child_id
+                        SubnetModel.slug == child_id
                     )
                 )
             result = await own_session.execute(
-                delete(SubnetModel).where(SubnetModel.subnet_id == parent_id)
+                delete(SubnetModel).where(SubnetModel.slug == parent_id)
             )
             return result.rowcount > 0
 
-    async def exists(self, subnet_id: str) -> bool:
+    async def exists(self, slug: str) -> bool:
         async with self._session_factory() as session:
             result = await session.execute(
-                select(SubnetModel.subnet_id).where(SubnetModel.subnet_id == subnet_id)
+                select(SubnetModel.slug).where(SubnetModel.slug == slug)
             )
             return result.scalar() is not None
 
@@ -267,7 +267,7 @@ class PostgresSubnetRepository(ISubnetRepository):
     # Nesting lookups (ADR-0003)
     # ------------------------------------------------------------------
 
-    async def find_by_parent(self, parent_subnet_id: str) -> list[Subnet]:
+    async def find_by_parent(self, parent_slug: str) -> list[Subnet]:
         """Return all child subnets nested under a given parent.
 
         Hits the ``subnets_parent_idx`` partial index for an O(k)
@@ -277,7 +277,7 @@ class PostgresSubnetRepository(ISubnetRepository):
         async with self._session_factory() as session:
             result = await session.execute(
                 select(SubnetModel).where(
-                    SubnetModel.parent_subnet_id == parent_subnet_id
+                    SubnetModel.parent_slug == parent_slug
                 )
             )
             return [self._model_to_subnet(r) for r in result.scalars().all()]

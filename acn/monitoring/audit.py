@@ -129,7 +129,7 @@ class AuditEvent(BaseModel):
     target_type: str | None = Field(None, description="Type: agent, subnet, message")
 
     # Context
-    subnet_id: str | None = Field(None, description="Related subnet ID")
+    slug: str | None = Field(None, description="Related subnet ID")
     message_id: str | None = Field(None, description="Related message ID")
 
     # Details
@@ -222,7 +222,7 @@ class AuditLogger:
         actor_type: str | None = None,
         target_id: str | None = None,
         target_type: str | None = None,
-        subnet_id: str | None = None,
+        slug: str | None = None,
         message_id: str | None = None,
         details: dict[str, Any] | None = None,
         level: AuditLevel = AuditLevel.INFO,
@@ -238,7 +238,7 @@ class AuditLogger:
             actor_type: Type of actor (agent, user, system)
             target_id: ID of the target entity
             target_type: Type of target entity
-            subnet_id: Related subnet ID
+            slug: Related subnet ID
             message_id: Related message ID
             details: Additional event details
             level: Severity level
@@ -259,7 +259,7 @@ class AuditLogger:
             actor_type=actor_type,
             target_id=target_id,
             target_type=target_type,
-            subnet_id=subnet_id,
+            slug=slug,
             message_id=message_id,
             details=details or {},
             source_ip=source_ip,
@@ -299,7 +299,7 @@ class AuditLogger:
     async def log_agent_registered(
         self,
         agent_id: str,
-        subnet_id: str = "public",
+        slug: str = "public",
         tags: list[str] | None = None,
         source_ip: str | None = None,
     ) -> str:
@@ -308,7 +308,7 @@ class AuditLogger:
             event_type=AuditEventType.AGENT_REGISTERED,
             target_id=agent_id,
             target_type="agent",
-            subnet_id=subnet_id,
+            slug=slug,
             details={"tags": tags or []},
             source_ip=source_ip,
         )
@@ -365,7 +365,7 @@ class AuditLogger:
 
     async def log_subnet_created(
         self,
-        subnet_id: str,
+        slug: str,
         name: str,
         created_by: str = "system",
         has_security: bool = False,
@@ -374,16 +374,16 @@ class AuditLogger:
         return await self.log_event(
             event_type=AuditEventType.SUBNET_CREATED,
             actor_id=created_by,
-            target_id=subnet_id,
+            target_id=slug,
             target_type="subnet",
-            subnet_id=subnet_id,
+            slug=slug,
             details={"name": name, "has_security": has_security},
         )
 
     async def log_gateway_connected(
         self,
         agent_id: str,
-        subnet_id: str,
+        slug: str,
         source_ip: str | None = None,
     ) -> str:
         """Log gateway connection"""
@@ -391,14 +391,14 @@ class AuditLogger:
             event_type=AuditEventType.GATEWAY_CONNECTED,
             target_id=agent_id,
             target_type="agent",
-            subnet_id=subnet_id,
+            slug=slug,
             source_ip=source_ip,
         )
 
     async def log_auth_success(
         self,
         agent_id: str,
-        subnet_id: str,
+        slug: str,
         auth_method: str,
     ) -> str:
         """Log successful authentication"""
@@ -406,14 +406,14 @@ class AuditLogger:
             event_type=AuditEventType.SECURITY_AUTH_SUCCESS,
             target_id=agent_id,
             target_type="agent",
-            subnet_id=subnet_id,
+            slug=slug,
             details={"auth_method": auth_method},
         )
 
     async def log_auth_failure(
         self,
         agent_id: str | None,
-        subnet_id: str,
+        slug: str,
         reason: str,
         source_ip: str | None = None,
     ) -> str:
@@ -422,7 +422,7 @@ class AuditLogger:
             event_type=AuditEventType.SECURITY_AUTH_FAILURE,
             target_id=agent_id,
             target_type="agent",
-            subnet_id=subnet_id,
+            slug=slug,
             level=AuditLevel.WARNING,
             details={"reason": reason},
             source_ip=source_ip,
@@ -451,7 +451,7 @@ class AuditLogger:
         event_type: AuditEventType | None = None,
         actor_id: str | None = None,
         target_id: str | None = None,
-        subnet_id: str | None = None,
+        slug: str | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         level: AuditLevel | None = None,
@@ -465,7 +465,7 @@ class AuditLogger:
             event_type: Filter by event type
             actor_id: Filter by actor ID
             target_id: Filter by target ID
-            subnet_id: Filter by subnet ID
+            slug: Filter by subnet ID
             start_time: Start of time range
             end_time: End of time range
             level: Filter by severity level
@@ -507,7 +507,7 @@ class AuditLogger:
                     continue
                 if target_id and event.target_id != target_id:
                     continue
-                if subnet_id and event.subnet_id != subnet_id:
+                if slug and event.slug != slug:
                     continue
                 if level and event.level != level:
                     continue
@@ -626,8 +626,8 @@ class AuditLogger:
             stats["by_level"][level_key] = stats["by_level"].get(level_key, 0) + 1
 
             # Count by subnet
-            if event.subnet_id:
-                stats["by_subnet"][event.subnet_id] = stats["by_subnet"].get(event.subnet_id, 0) + 1
+            if event.slug:
+                stats["by_subnet"][event.slug] = stats["by_subnet"].get(event.slug, 0) + 1
 
         return stats
 
@@ -661,11 +661,11 @@ class AuditLogger:
         if format == "json":
             return json.dumps([e.model_dump() for e in events], indent=2, default=str)
         elif format == "csv":
-            lines = ["id,timestamp,event_type,level,actor_id,target_id,subnet_id"]
+            lines = ["id,timestamp,event_type,level,actor_id,target_id,slug"]
             for event in events:
                 lines.append(
                     f"{event.id},{event.timestamp.isoformat()},{event.event_type.value},"
-                    f"{event.level.value},{event.actor_id or ''},{event.target_id or ''},{event.subnet_id or ''}"
+                    f"{event.level.value},{event.actor_id or ''},{event.target_id or ''},{event.slug or ''}"
                 )
             return "\n".join(lines)
         else:
@@ -772,7 +772,7 @@ def fire_and_forget_event(
     actor_type: str | None = None,
     target_id: str | None = None,
     target_type: str | None = None,
-    subnet_id: str | None = None,
+    slug: str | None = None,
     level: AuditLevel = AuditLevel.INFO,
     details: dict[str, Any] | None = None,
     source_ip: str | None = None,
@@ -808,7 +808,7 @@ def fire_and_forget_event(
                     actor_type=actor_type,
                     target_id=target_id,
                     target_type=target_type,
-                    subnet_id=subnet_id,
+                    slug=slug,
                     level=level,
                     details=details or {},
                     source_ip=source_ip,
@@ -930,7 +930,7 @@ def record_auth_failure(
     actor_id: str | None = None,
     path: str | None = None,
     method: str | None = None,
-    subnet_id: str = "",
+    slug: str = "",
     extra: dict[str, Any] | None = None,
 ) -> None:
     """Best-effort fire-and-forget audit log for any authn/authz failure.
@@ -952,7 +952,7 @@ def record_auth_failure(
         path / method: Request path + method, recorded into ``details`` so
             analysts can pin attacks to a specific endpoint without
             cross-referencing access logs.
-        subnet_id: Subnet context if relevant.
+        slug: Subnet context if relevant.
         extra: Additional structured details merged into ``details``.
     """
     audit = _AUDIT_SINGLETON
@@ -979,7 +979,7 @@ def record_auth_failure(
         audit,
         event_type=AuditEventType.SECURITY_AUTH_FAILURE,
         actor_id=actor_id,
-        subnet_id=subnet_id or None,
+        slug=slug or None,
         level=AuditLevel.WARNING,
         details=details,
         source_ip=source_ip,

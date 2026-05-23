@@ -16,15 +16,15 @@ from acn.services.subnet_service import SubnetService
 
 
 def _make_subnet(
-    subnet_id: str,
+    slug: str,
     owner: str = "alice",
-    parent_subnet_id: str | None = None,
+    parent_slug: str | None = None,
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
         member_agent_ids={owner},
         created_at=datetime.now(UTC),
     )
@@ -43,8 +43,8 @@ class TestDeleteSubnetCascade:
         """
         parent = _make_subnet("parent")
         children = [
-            _make_subnet("child-1", parent_subnet_id="parent"),
-            _make_subnet("child-2", parent_subnet_id="parent"),
+            _make_subnet("child-1", parent_slug="parent"),
+            _make_subnet("child-2", parent_slug="parent"),
         ]
         mock_subnet_repository.find_by_id.return_value = parent
         mock_subnet_repository.find_by_parent.return_value = children
@@ -79,14 +79,14 @@ class TestDeleteSubnetCascade:
         cannot itself have children) — saves a redundant
         ``find_by_parent`` round-trip.
         """
-        child = _make_subnet("child-1", parent_subnet_id="parent")
+        child = _make_subnet("child-1", parent_slug="parent")
         mock_subnet_repository.find_by_id.return_value = child
         mock_subnet_repository.delete.return_value = True
         service = SubnetService(mock_subnet_repository)
 
         await service.delete_subnet("child-1", owner="alice")
 
-        # Cascade only fires when ``parent_subnet_id is None``.
+        # Cascade only fires when ``parent_slug is None``.
         mock_subnet_repository.find_by_parent.assert_not_called()
         mock_subnet_repository.delete_with_children.assert_not_called()
         # Single-row delete path used directly. Session-agnostic per
@@ -104,7 +104,7 @@ class TestDeleteSubnetCascade:
         the parent subnet remains addressable (best-effort guarantee
         from the repo)."""
         parent = _make_subnet("parent")
-        children = [_make_subnet("child-1", parent_subnet_id="parent")]
+        children = [_make_subnet("child-1", parent_slug="parent")]
         mock_subnet_repository.find_by_id.return_value = parent
         mock_subnet_repository.find_by_parent.return_value = children
         mock_subnet_repository.delete_with_children.side_effect = RuntimeError(
@@ -150,7 +150,7 @@ class TestDeleteSubnetCascade:
         # Reserved subnets must have owner="system" (entity
         # invariant), so we build it explicitly here.
         public_subnet = Subnet(
-            subnet_id="public",
+            slug="public",
             name="Public",
             owner="system",
         )

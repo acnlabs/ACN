@@ -84,7 +84,7 @@ async def fake_redis():
 def _make_request(**overrides) -> SubnetJoinRequest:
     defaults: dict = {
         "request_id": "req-1",
-        "subnet_id": "s-1",
+        "slug": "s-1",
         "agent_id": "a-1",
         "kind": "join_request",
         "status": "pending",
@@ -119,7 +119,7 @@ class TestLuaCallContract:
         mock_redis.register_script = MagicMock(return_value=fake_script)
 
         repo = RedisSubnetJoinRequestRepository(mock_redis)
-        req = _make_request(subnet_id="sub-A", agent_id="agt-B", request_id="r-1")
+        req = _make_request(slug="sub-A", agent_id="agt-B", request_id="r-1")
         await repo.save(req)
 
         assert captured["keys"] == [
@@ -154,7 +154,7 @@ class TestLuaCallContract:
 
     @pytest.mark.asyncio
     async def test_create_pending_argv3_is_invitation_composite_key(self):
-        """ARGV[3] is the ``subnet_id:request_id`` composite key
+        """ARGV[3] is the ``slug:request_id`` composite key
         the Lua script SADDs into the per-agent invitations SET.
         The composite layout is the B1 fix — bare request_id storage
         would force ``list_pending_invitations_for_agent`` into an
@@ -171,7 +171,7 @@ class TestLuaCallContract:
         repo = RedisSubnetJoinRequestRepository(mock_redis)
         await repo.save(
             _make_request(
-                subnet_id="sub-A",
+                slug="sub-A",
                 request_id="r-1",
                 kind="invitation",
             )
@@ -195,7 +195,7 @@ class TestLuaCallContract:
         repo = RedisSubnetJoinRequestRepository(mock_redis)
         with pytest.raises(SubnetJoinRequestPendingError) as exc_info:
             await repo.save(_make_request(request_id="my-req-id"))
-        assert exc_info.value.subnet_id == "s-1"
+        assert exc_info.value.slug == "s-1"
         assert exc_info.value.agent_id == "a-1"
 
     @pytest.mark.asyncio
@@ -272,7 +272,7 @@ class TestReadPathsAgainstFakeRedis:
         needing the Lua interpreter."""
         repo = RedisSubnetJoinRequestRepository(fake_redis)
         req = _make_request(
-            subnet_id="s-x", agent_id="a-x", request_id="r-x"
+            slug="s-x", agent_id="a-x", request_id="r-x"
         )
 
         await fake_redis.set(_pending_by_agent_key("s-x", "a-x"), b"r-x")
@@ -284,7 +284,7 @@ class TestReadPathsAgainstFakeRedis:
         found = await repo.find_pending_for("s-x", "a-x")
         assert found is not None
         assert found.request_id == "r-x"
-        assert found.subnet_id == "s-x"
+        assert found.slug == "s-x"
         assert found.is_pending is True
 
     @pytest.mark.asyncio
@@ -323,7 +323,7 @@ class TestReadPathsAgainstFakeRedis:
         self, fake_redis
     ):
         """End-to-end fakeredis: invitee SET stores
-        ``subnet_id:request_id`` composite keys; ``list_pending_*``
+        ``slug:request_id`` composite keys; ``list_pending_*``
         deref's each directly to its subnet HASH without any
         keyspace scan. Pins the B1 perf fix at the integration level
         — not just the Lua call shape."""
@@ -333,7 +333,7 @@ class TestReadPathsAgainstFakeRedis:
         for sub_idx in [1, 2]:
             req = SubnetJoinRequest(
                 request_id=f"r-{sub_idx}",
-                subnet_id=f"s-{sub_idx}",
+                slug=f"s-{sub_idx}",
                 agent_id="agent-X",
                 kind="invitation",
                 status="pending",
@@ -351,14 +351,14 @@ class TestReadPathsAgainstFakeRedis:
 
         rows = await repo.list_pending_invitations_for_agent("agent-X")
         assert len(rows) == 2
-        assert {r.subnet_id for r in rows} == {"s-1", "s-2"}
+        assert {r.slug for r in rows} == {"s-1", "s-2"}
 
     @pytest.mark.asyncio
     async def test_list_pending_invitations_skips_legacy_bare_rid_members(
         self, fake_redis
     ):
         """Defensive path: a stale Slice 2.1 v1 SET member (bare
-        request_id without ``subnet_id:`` prefix) is silently
+        request_id without ``slug:`` prefix) is silently
         skipped rather than triggering the old expensive scan or
         raising a parse error."""
         repo = RedisSubnetJoinRequestRepository(fake_redis)
@@ -387,7 +387,7 @@ class TestReadPathsAgainstFakeRedis:
             ts = datetime.now(UTC)
             kwargs: dict = {
                 "request_id": rid,
-                "subnet_id": "s-1",
+                "slug": "s-1",
                 "agent_id": f"a-{i}",
                 "kind": kind,
                 "status": status,

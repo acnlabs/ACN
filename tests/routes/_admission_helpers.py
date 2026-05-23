@@ -58,14 +58,14 @@ def _make_agent(agent_id: str) -> MagicMock:
 
 
 def _make_subnet(
-    subnet_id: str = SUBNET_ID,
+    slug: str = SUBNET_ID,
     owner: str = OWNER_AGENT_ID,
     join_policy: str = "approval",
     harness_url: str | None = None,
     harness_secret: str | None = None,
 ) -> MagicMock:
     sn = MagicMock()
-    sn.subnet_id = subnet_id
+    sn.slug = slug
     sn.owner = owner
     sn.join_policy = join_policy
     sn.harness_url = harness_url
@@ -78,7 +78,7 @@ def _make_subnet(
 def make_join_request(
     *,
     request_id: str = "req-1",
-    subnet_id: str = SUBNET_ID,
+    slug: str = SUBNET_ID,
     agent_id: str = INVITEE_AGENT_ID,
     kind: str = "join_request",
     status: str = "pending",
@@ -96,7 +96,7 @@ def make_join_request(
     decided_at = datetime.now(UTC) if status != "pending" else None
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind=kind,  # type: ignore[arg-type]
         status=status,  # type: ignore[arg-type]
@@ -109,12 +109,12 @@ def make_join_request(
 
 def make_allowlist_entry(
     *,
-    subnet_id: str = SUBNET_ID,
+    slug: str = SUBNET_ID,
     agent_id: str = INVITEE_AGENT_ID,
     added_by: str = OWNER_AGENT_ID,
 ) -> SubnetAllowlist:
     return SubnetAllowlist(
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         added_by=added_by,
     )
@@ -163,10 +163,10 @@ def stub_subnet_service():
     svc = AsyncMock()
     subnet = _make_subnet()
 
-    async def _get_subnet(subnet_id: str):
-        if subnet_id == SUBNET_ID:
+    async def _get_subnet(slug: str):
+        if slug == SUBNET_ID:
             return subnet
-        raise SubnetNotFoundException(subnet_id)
+        raise SubnetNotFoundException(slug)
 
     svc.get_subnet = AsyncMock(side_effect=_get_subnet)
     svc._subnet = subnet

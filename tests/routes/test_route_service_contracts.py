@@ -480,9 +480,9 @@ class TestSubnetsContract:
         svc = AsyncMock()
         svc.list_subnets = AsyncMock(return_value=[])
         svc.get_subnet = AsyncMock(return_value=MagicMock(
-            subnet_id="subnet-1", name="test", owner="user-1",
+            slug="subnet-1", name="test", owner="user-1",
             is_public=True, member_count=0,
-            model_dump=MagicMock(return_value={"subnet_id": "subnet-1"}),
+            model_dump=MagicMock(return_value={"slug": "subnet-1"}),
         ))
         return svc
 

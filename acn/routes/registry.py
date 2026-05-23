@@ -801,7 +801,7 @@ async def _get_public_subnet_slugs(subnet_service) -> set[str]:
     """
     try:
         public_subnets = await subnet_service.list_public_subnets()
-        return {s.subnet_id for s in public_subnets}
+        return {s.slug for s in public_subnets}
     except Exception:  # noqa: BLE001
         return {"public"}
 
@@ -2314,7 +2314,7 @@ async def unregister_agent(
                 409,
                 details={
                     "agent_id": agent_id,
-                    "owned_subnet_ids": [s.subnet_id for s in owned],
+                    "owned_subnet_ids": [s.slug for s in owned],
                     "hint": "Delete or transfer ownership of these subnets before removing the agent.",
                 },
             )

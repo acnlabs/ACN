@@ -57,17 +57,17 @@ def test_subnet_to_model_carries_nesting_fields():
     factory, _ = _make_session_factory()
     repo = PostgresSubnetRepository(session_factory=factory)
     subnet = Subnet(
-        subnet_id="subnet-child",
+        slug="subnet-child",
         name="child",
         owner="agent-owner",
-        parent_subnet_id="subnet-parent",
+        parent_slug="subnet-parent",
         lifecycle="task_scoped",
         linked_task_id="task-xyz",
     )
 
     model = repo._subnet_to_model(subnet)
 
-    assert model.parent_subnet_id == "subnet-parent"
+    assert model.parent_slug == "subnet-parent"
     assert model.lifecycle == "task_scoped"
     assert model.linked_task_id == "task-xyz"
 
@@ -76,7 +76,7 @@ def test_model_to_subnet_carries_nesting_fields():
     factory, _ = _make_session_factory()
     repo = PostgresSubnetRepository(session_factory=factory)
     model = SubnetModel(
-        subnet_id="subnet-child",
+        slug="subnet-child",
         name="child",
         owner="agent-owner",
         description=None,
@@ -86,7 +86,7 @@ def test_model_to_subnet_carries_nesting_fields():
         subnet_metadata=None,
         harness_url=None,
         harness_secret=None,
-        parent_subnet_id="subnet-parent",
+        parent_slug="subnet-parent",
         lifecycle="task_scoped",
         linked_task_id="task-xyz",
         created_at=datetime.now(UTC),
@@ -94,20 +94,20 @@ def test_model_to_subnet_carries_nesting_fields():
 
     subnet = repo._model_to_subnet(model)
 
-    assert subnet.parent_subnet_id == "subnet-parent"
+    assert subnet.parent_slug == "subnet-parent"
     assert subnet.lifecycle == "task_scoped"
     assert subnet.linked_task_id == "task-xyz"
 
 
 def test_model_to_subnet_defaults_for_legacy_row():
     """Existing rows pre-ADR-0003 carry the new columns as their DB
-    defaults (``parent_subnet_id=NULL``, ``lifecycle='persistent'``,
+    defaults (``parent_slug=NULL``, ``lifecycle='persistent'``,
     ``linked_task_id=NULL``) — the mapper must surface them as
     "top-level persistent" semantics, not raise on missing fields."""
     factory, _ = _make_session_factory()
     repo = PostgresSubnetRepository(session_factory=factory)
     model = SubnetModel(
-        subnet_id="subnet-legacy",
+        slug="subnet-legacy",
         name="legacy",
         owner="agent-owner",
         description=None,
@@ -117,7 +117,7 @@ def test_model_to_subnet_defaults_for_legacy_row():
         subnet_metadata=None,
         harness_url=None,
         harness_secret=None,
-        parent_subnet_id=None,
+        parent_slug=None,
         lifecycle="persistent",
         linked_task_id=None,
         created_at=datetime.now(UTC),
@@ -125,7 +125,7 @@ def test_model_to_subnet_defaults_for_legacy_row():
 
     subnet = repo._model_to_subnet(model)
 
-    assert subnet.parent_subnet_id is None
+    assert subnet.parent_slug is None
     assert subnet.lifecycle == "persistent"
     assert subnet.linked_task_id is None
 
@@ -155,10 +155,10 @@ async def test_save_update_path_includes_nesting_columns():
     repo = PostgresSubnetRepository(session_factory=factory)
 
     subnet = Subnet(
-        subnet_id="subnet-rt",
+        slug="subnet-rt",
         name="rt",
         owner="agent-owner",
-        parent_subnet_id="subnet-parent",
+        parent_slug="subnet-parent",
         lifecycle="task_scoped",
         linked_task_id="task-xyz",
     )
@@ -170,7 +170,7 @@ async def test_save_update_path_includes_nesting_columns():
     assert isinstance(stmt, Update)
     # ``Update`` stores SET targets in ``_values`` (Column → BindParameter)
     set_columns = {col.name for col in stmt._values.keys()}  # type: ignore[attr-defined]
-    assert "parent_subnet_id" in set_columns
+    assert "parent_slug" in set_columns
     assert "lifecycle" in set_columns
     assert "linked_task_id" in set_columns
 
@@ -213,8 +213,8 @@ async def test_find_by_parent_filters_on_parent_subnet_id_column():
     session.execute.assert_awaited_once()
     stmt = session.execute.await_args_list[0].args[0]
     assert isinstance(stmt, Select)
-    assert "parent_subnet_id" in _stmt_column_names(stmt), (
-        f"WHERE clause did not target parent_subnet_id; got {_stmt_column_names(stmt)!r}"
+    assert "parent_slug" in _stmt_column_names(stmt), (
+        f"WHERE clause did not target parent_slug; got {_stmt_column_names(stmt)!r}"
     )
 
 

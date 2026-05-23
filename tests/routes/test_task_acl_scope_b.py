@@ -8,10 +8,10 @@ Three ACL rules introduced in Scope B:
 
   B-A  accept gate: POST /tasks/{id}/accept and POST /tasks/agent/{id}/accept
        reject non-subnet-members with 403 NOT_SUBNET_MEMBER when the task
-       has a ``subnet_id``.
+       has a ``slug``.
 
   B-C  create gate: POST /tasks (and POST /tasks/agent/create) reject a
-       creator who is not a member of the specified ``subnet_id`` with
+       creator who is not a member of the specified ``slug`` with
        403 NOT_SUBNET_MEMBER.
 
 Implementation notes for dev_mode interactions
@@ -70,7 +70,7 @@ def _make_task(
     task_id: str | None = None,
     creator_id: str = _AGENT_A,
     assignee_id: str | None = None,
-    subnet_id: str | None = None,
+    slug: str | None = None,
     submission: str | None = "secret-work",
 ) -> MagicMock:
     t = MagicMock()
@@ -107,7 +107,7 @@ def _make_task(
     t.metadata = {}
     t.submission = submission
     t.submission_artifacts = []
-    t.subnet_id = subnet_id
+    t.slug = slug
     t.max_resubmit_attempts = None
     return t
 
@@ -292,7 +292,7 @@ class TestAcceptGate:
         """Agent that is not in the task's subnet gets 403."""
         _disable_dev_mode(monkeypatch, agent_svc)
 
-        task = _make_task(subnet_id=_SUBNET_ID)
+        task = _make_task(slug=_SUBNET_ID)
         stub_task_service.get_task = AsyncMock(return_value=task)
         stub_task_service.is_subnet_member = AsyncMock(return_value=False)
 
@@ -311,7 +311,7 @@ class TestAcceptGate:
         """Agent that is a subnet member can accept the task."""
         _disable_dev_mode(monkeypatch, agent_svc)
 
-        task = _make_task(creator_id=_AGENT_A, subnet_id=_SUBNET_ID)
+        task = _make_task(creator_id=_AGENT_A, slug=_SUBNET_ID)
         stub_task_service.get_task = AsyncMock(return_value=task)
         stub_task_service.is_subnet_member = AsyncMock(return_value=True)
         stub_task_service.accept_task = AsyncMock(return_value=(task, "part-123"))
@@ -327,8 +327,8 @@ class TestAcceptGate:
         stub_task_service.accept_task.assert_awaited_once()
 
     def test_public_task_can_be_accepted_without_membership(self, stub_task_service):
-        """Public tasks (no subnet_id) require no subnet membership check."""
-        task = _make_task(creator_id=_AGENT_A, subnet_id=None)
+        """Public tasks (no slug) require no subnet membership check."""
+        task = _make_task(creator_id=_AGENT_A, slug=None)
         stub_task_service.get_task = AsyncMock(return_value=task)
         stub_task_service.accept_task = AsyncMock(return_value=(task, None))
 
@@ -346,7 +346,7 @@ class TestAcceptGate:
         """POST /tasks/agent/{id}/accept — non-member gets 403."""
         _disable_dev_mode(monkeypatch, agent_svc)
 
-        task = _make_task(subnet_id=_SUBNET_ID)
+        task = _make_task(slug=_SUBNET_ID)
         stub_task_service.get_task = AsyncMock(return_value=task)
         stub_task_service.is_subnet_member = AsyncMock(return_value=False)
 
@@ -369,12 +369,12 @@ _VALID_TASK_BODY: dict[str, Any] = {
     "description": "A sufficiently long description for the task creation gate test.",
     "deadline_hours": 24,
     "reward": "0",
-    "subnet_id": _SUBNET_ID,
+    "slug": _SUBNET_ID,
 }
 
 
 class TestCreateGate:
-    """POST /tasks — subnet membership required when subnet_id is set."""
+    """POST /tasks — subnet membership required when slug is set."""
 
     def test_non_member_cannot_create_subnet_task(self, monkeypatch, agent_svc, stub_task_service):
         """Agent not in the subnet cannot create a task inside it."""
@@ -397,7 +397,7 @@ class TestCreateGate:
         """Agent in the subnet can create a task."""
         _disable_dev_mode(monkeypatch, agent_svc)
 
-        task = _make_task(creator_id=_AGENT_A, subnet_id=_SUBNET_ID)
+        task = _make_task(creator_id=_AGENT_A, slug=_SUBNET_ID)
         stub_task_service.is_subnet_member = AsyncMock(return_value=True)
         stub_task_service.create_task = AsyncMock(return_value=task)
 
@@ -412,11 +412,11 @@ class TestCreateGate:
         stub_task_service.create_task.assert_awaited_once()
 
     def test_no_subnet_id_skips_membership_check(self, stub_task_service):
-        """Creating a public task (no subnet_id) skips the membership check."""
-        task = _make_task(creator_id=_AGENT_A, subnet_id=None)
+        """Creating a public task (no slug) skips the membership check."""
+        task = _make_task(creator_id=_AGENT_A, slug=None)
         stub_task_service.create_task = AsyncMock(return_value=task)
 
-        body = {k: v for k, v in _VALID_TASK_BODY.items() if k != "subnet_id"}
+        body = {k: v for k, v in _VALID_TASK_BODY.items() if k != "slug"}
         with TestClient(app) as client:
             r = client.post(
                 "/api/v1/tasks",

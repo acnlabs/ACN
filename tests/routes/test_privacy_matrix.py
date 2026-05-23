@@ -27,7 +27,7 @@ Caller classes exercised
 
 Coverage
 --------
-- GET /subnets/{subnet_id} — SubnetInfo vs SubnetStub
+- GET /subnets/{slug} — SubnetInfo vs SubnetStub
 - GET /agents/{agent_id}   — full vs filtered subnet_ids
 - GET /subnets             — per-row rendering check
 """
@@ -94,26 +94,26 @@ def _make_agent(agent_id: str, owner: str, subnet_ids: list[str]) -> MagicMock:
 
 
 def _make_subnet(
-    subnet_id: str,
+    slug: str,
     owner: str,
     *,
     is_private: bool = False,
     members: list[str] | None = None,
-    parent_subnet_id: str | None = None,
+    parent_slug: str | None = None,
 ) -> MagicMock:
     s = MagicMock()
-    s.subnet_id = subnet_id
-    s.id = f"uuid-{subnet_id}"
+    s.slug = slug
+    s.id = f"uuid-{slug}"
     s.owner = owner
     s.is_private = is_private
     s.is_public = not is_private
     s.member_count = len(members or [])
-    s.name = f"Name of {subnet_id}"
+    s.name = f"Name of {slug}"
     s.description = None
     s.security_config = {}
     s.created_at = "2026-01-01T00:00:00Z"
     s.metadata = {}
-    s.parent_subnet_id = parent_subnet_id
+    s.parent_slug = parent_slug
     s.lifecycle = "persistent"
     s._members = members or []
     s.harness_url = None
@@ -181,12 +181,12 @@ def stub_agent_service():
 def stub_subnet_service():
     svc = AsyncMock()
 
-    async def _get_subnet(subnet_id: str):
-        if subnet_id == _PRIV_SUBNET:
+    async def _get_subnet(slug: str):
+        if slug == _PRIV_SUBNET:
             return _subnet_private
-        if subnet_id == _PUB_SUBNET:
+        if slug == _PUB_SUBNET:
             return _subnet_public
-        raise SubnetNotFoundException(subnet_id)
+        raise SubnetNotFoundException(slug)
 
     async def _find_agent_subnets(agent_id: str) -> list:
         result = []
@@ -238,7 +238,7 @@ def _auth(token: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# GET /subnets/{subnet_id} — SubnetInfo vs SubnetStub
+# GET /subnets/{slug} — SubnetInfo vs SubnetStub
 # ---------------------------------------------------------------------------
 
 
@@ -256,8 +256,8 @@ def test_get_private_subnet_full_access(token: str):
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert "subnet_id" in body, "Expected full SubnetInfo (has subnet_id)"
-    assert body.get("subnet_id") == _PRIV_SUBNET
+    assert "slug" in body, "Expected full SubnetInfo (has slug)"
+    assert body.get("slug") == _PRIV_SUBNET
     assert body.get("name") is not None
 
 
@@ -273,7 +273,7 @@ def test_get_private_subnet_anon_gets_stub():
     assert r.status_code == 200, r.text
     body = r.json()
     assert "id" in body
-    assert "subnet_id" not in body, (
+    assert "slug" not in body, (
         f"Private subnet must not leak slug to anon caller: {body}"
     )
 
@@ -312,7 +312,7 @@ def test_get_private_subnet_unrelated_agent_gets_stub(monkeypatch, stub_agent_se
     assert r.status_code == 200, r.text
     body = r.json()
     assert "id" in body
-    assert "subnet_id" not in body, (
+    assert "slug" not in body, (
         f"Private subnet must not leak slug to unrelated agent: {body}"
     )
 
@@ -323,7 +323,7 @@ def test_get_public_subnet_anon_gets_full_info():
         r = client.get(f"/api/v1/subnets/{_PUB_SUBNET}")
 
     assert r.status_code == 200, r.text
-    assert r.json().get("subnet_id") == _PUB_SUBNET
+    assert r.json().get("slug") == _PUB_SUBNET
 
 
 # User JWT tests: dev_mode returns acn:admin for all tokens, so to exercise
@@ -353,7 +353,7 @@ def test_user_jwt_owning_owner_agent_gets_full_info(stub_agent_service):
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert "subnet_id" in body, f"Expected full SubnetInfo, got: {body}"
+    assert "slug" in body, f"Expected full SubnetInfo, got: {body}"
 
 
 def test_user_jwt_owning_member_agent_only_gets_stub(monkeypatch, stub_agent_service):
@@ -395,7 +395,7 @@ def test_user_jwt_owning_member_agent_only_gets_stub(monkeypatch, stub_agent_ser
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert "subnet_id" not in body, (
+    assert "slug" not in body, (
         f"Member-agent owner must NOT get full SubnetInfo, got: {body}"
     )
 
@@ -478,16 +478,16 @@ def test_list_subnets_anon_sees_public_full_and_private_stub():
     assert r.status_code == 200, r.text
     subnets = r.json()["subnets"]
 
-    # Public subnet must appear as a full SubnetInfo (has subnet_id / name).
-    subnet_ids = [s.get("subnet_id") for s in subnets if "subnet_id" in s]
+    # Public subnet must appear as a full SubnetInfo (has slug / name).
+    subnet_ids = [s.get("slug") for s in subnets if "slug" in s]
     assert _PUB_SUBNET in subnet_ids, "Public subnet must appear as SubnetInfo"
 
     # Private subnet must appear as a SubnetStub: present in the list but
-    # with no subnet_id / name field — only the opaque ``id`` UUID.
+    # with no slug / name field — only the opaque ``id`` UUID.
     stub_rows = [s for s in subnets if s.get("is_private") is True]
     assert stub_rows, "Private subnet must appear as SubnetStub (is_private=True)"
     for stub in stub_rows:
-        assert "subnet_id" not in stub or stub.get("subnet_id") is None, (
+        assert "slug" not in stub or stub.get("slug") is None, (
             "SubnetStub must not expose the human-readable slug"
         )
         assert "name" not in stub or stub.get("name") is None, (
@@ -505,7 +505,7 @@ def test_list_subnets_owner_filter_returns_private_full():
 
     assert r.status_code == 200, r.text
     subnets = r.json()["subnets"]
-    private_rows = [s for s in subnets if s.get("subnet_id") == _PRIV_SUBNET]
+    private_rows = [s for s in subnets if s.get("slug") == _PRIV_SUBNET]
     assert private_rows, "Owner agent with ?owner= must see private subnet as SubnetInfo"
 
 
@@ -569,13 +569,13 @@ def test_owned_by_user_self_returns_owned_subnets(stub_agent_service):
 
     assert r.status_code == 200, r.text
     body = r.json()
-    subnet_ids_in_response = [s.get("subnet_id") for s in body["subnets"]]
+    subnet_ids_in_response = [s.get("slug") for s in body["subnets"]]
     # Both subnets are owned by agent-alice, so both should appear
     assert _PRIV_SUBNET in subnet_ids_in_response, (
         "Private subnet owned by user's agent must appear as full SubnetInfo"
     )
-    # All returned rows must be full SubnetInfo (have subnet_id), not SubnetStub
+    # All returned rows must be full SubnetInfo (have slug), not SubnetStub
     for s in body["subnets"]:
-        assert "subnet_id" in s, (
+        assert "slug" in s, (
             f"?owned_by_user= rows must be full SubnetInfo, got stub: {s}"
         )

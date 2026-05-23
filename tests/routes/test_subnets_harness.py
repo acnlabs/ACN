@@ -1,12 +1,12 @@
 """Route-level tests for the pluggable Org Harness endpoints.
 
 Covers:
-- ``PATCH /api/v1/subnets/{subnet_id}/harness`` — owner can register / clear,
+- ``PATCH /api/v1/subnets/{slug}/harness`` — owner can register / clear,
   non-owner gets 403 ``OWNERSHIP_MISMATCH``, missing subnet gets 404.
-- ``POST /api/v1/subnets/{agent_id}/subnets/{subnet_id}`` (join) — when the
+- ``POST /api/v1/subnets/{agent_id}/subnets/{slug}`` (join) — when the
   subnet has a registered harness, ``WebhookService.send_to`` is called with
   the ``agent.joined_subnet`` event.
-- ``DELETE /api/v1/subnets/{agent_id}/subnets/{subnet_id}`` (leave) — same
+- ``DELETE /api/v1/subnets/{agent_id}/subnets/{slug}`` (leave) — same
   contract for ``agent.left_subnet``.
 - Harness-webhook failure during join/leave must NOT surface a 5xx to the
   client.
@@ -61,13 +61,13 @@ def stub_agent_service():
 
 
 def _make_subnet_mock(
-    subnet_id: str = "subnet-1",
+    slug: str = "subnet-1",
     owner: str = "agent-target",
     harness_url: str | None = None,
     harness_secret: str | None = None,
 ):
     sn = MagicMock()
-    sn.subnet_id = subnet_id
+    sn.slug = slug
     sn.owner = owner
     sn.harness_url = harness_url
     sn.harness_secret = harness_secret
@@ -81,10 +81,10 @@ def stub_subnet_service():
     svc = AsyncMock()
     default = _make_subnet_mock()
 
-    async def _get_subnet(subnet_id: str):
-        if subnet_id == "subnet-1":
+    async def _get_subnet(slug: str):
+        if slug == "subnet-1":
             return default
-        raise SubnetNotFoundException(subnet_id)
+        raise SubnetNotFoundException(slug)
 
     svc.get_subnet = AsyncMock(side_effect=_get_subnet)
     svc.add_member = AsyncMock(return_value=None)
@@ -114,10 +114,10 @@ def stub_join_flow_service(stub_subnet_service):
     """
     svc = AsyncMock()
 
-    async def _join_subnet(subnet_id: str, agent_id: str):
-        await stub_subnet_service.get_subnet(subnet_id)
-        await stub_subnet_service.add_member(subnet_id, agent_id)
-        return JoinFlowJoinedOpenResult(subnet_id=subnet_id, agent_id=agent_id)
+    async def _join_subnet(slug: str, agent_id: str):
+        await stub_subnet_service.get_subnet(slug)
+        await stub_subnet_service.add_member(slug, agent_id)
+        return JoinFlowJoinedOpenResult(slug=slug, agent_id=agent_id)
 
     svc.join_subnet = AsyncMock(side_effect=_join_subnet)
     app.dependency_overrides[get_join_flow_service] = lambda: svc
@@ -135,7 +135,7 @@ def _wire(agent_svc, subnet_svc, webhook_svc=None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PATCH /api/v1/subnets/{subnet_id}/harness
+# PATCH /api/v1/subnets/{slug}/harness
 # ---------------------------------------------------------------------------
 
 
@@ -164,14 +164,14 @@ class TestPatchSubnetHarness:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["status"] == "updated"
-        assert body["subnet_id"] == "subnet-1"
+        assert body["slug"] == "subnet-1"
         assert body["harness_url"] == "https://paperclip.example/acn"
         assert body["harness_registered"] is True
         # Secret must NEVER be echoed back over the wire
         assert "harness_secret" not in body
 
         stub_subnet_service.update_harness.assert_awaited_once_with(
-            subnet_id="subnet-1",
+            slug="subnet-1",
             owner="agent-target",
             harness_url="https://paperclip.example/acn",
             harness_secret="topsecret",
@@ -217,7 +217,7 @@ class TestPatchSubnetHarness:
         body = r.json()
         _assert_flat_shape(body)
         assert body["error_code"] == "ownership_mismatch"
-        assert body["details"]["subnet_id"] == "subnet-1"
+        assert body["details"]["slug"] == "subnet-1"
         assert "reason" in body["details"]
 
     def test_missing_subnet_returns_404(
@@ -239,7 +239,7 @@ class TestPatchSubnetHarness:
         body = r.json()
         _assert_flat_shape(body)
         assert body["error_code"] == "subnet_not_found"
-        assert body["details"] == {"subnet_id": "ghost"}
+        assert body["details"] == {"slug": "ghost"}
 
     def test_unauthenticated_does_not_succeed(
         self, stub_agent_service, stub_subnet_service, stub_webhook_service
@@ -288,7 +288,7 @@ class TestJoinLeaveWebhookDelivery:
         assert kw["url"] == "https://h.example/hook"
         assert kw["secret"] == "hs"
         assert kw["event"] == WebhookEventType.AGENT_JOINED_SUBNET
-        assert kw["data"]["subnet_id"] == "subnet-1"
+        assert kw["data"]["slug"] == "subnet-1"
         assert kw["data"]["agent_id"] == "agent-target"
 
     def test_join_without_registered_harness_skips_send_to(

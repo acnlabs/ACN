@@ -65,10 +65,10 @@ from acn.services._no_op_join_flow_event_publisher import (
 # ---------------------------------------------------------------------------
 
 
-def _subnet(subnet_id: str = "s-1", owner: str = "alice") -> Subnet:
+def _subnet(slug: str = "s-1", owner: str = "alice") -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
         created_at=datetime.now(UTC),
     )
@@ -76,13 +76,13 @@ def _subnet(subnet_id: str = "s-1", owner: str = "alice") -> Subnet:
 
 def _pending_request(
     request_id: str = "rq-1",
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     agent_id: str = "bob",
     kind: str = "join_request",
 ) -> SubnetJoinRequest:
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind=kind,
         status="pending",
@@ -176,7 +176,7 @@ class TestNoOpJoinFlowEventPublisher:
                 JoinFlowEventType.INVITATION_ACCEPTED,
                 subnet=_subnet("s-7"),
                 request=_pending_request(
-                    "rq-9", subnet_id="s-7", agent_id="bob", kind="invitation"
+                    "rq-9", slug="s-7", agent_id="bob", kind="invitation"
                 ),
                 trigger="auto_on_join",
                 via="self_join",
@@ -189,7 +189,7 @@ class TestNoOpJoinFlowEventPublisher:
         # ``join_flow_event`` rather than ``event`` — structlog
         # reserves the ``event`` keyword for the log message.
         assert kwargs["join_flow_event"] == "subnet.invitation_accepted"
-        assert kwargs["subnet_id"] == "s-7"
+        assert kwargs["slug"] == "s-7"
         assert kwargs["request_id"] == "rq-9"
         assert kwargs["agent_id"] == "bob"
         assert kwargs["trigger"] == "auto_on_join"
@@ -209,19 +209,19 @@ class TestJoinFlowResultVariants:
     a downstream pattern-match."""
 
     def test_joined_open_branch_1(self) -> None:
-        result = JoinFlowJoinedOpenResult(subnet_id="s-1", agent_id="bob")
-        assert result.subnet_id == "s-1"
+        result = JoinFlowJoinedOpenResult(slug="s-1", agent_id="bob")
+        assert result.slug == "s-1"
         assert result.agent_id == "bob"
 
     def test_joined_as_owner_branch_2(self) -> None:
-        result = JoinFlowJoinedAsOwnerResult(subnet_id="s-1", agent_id="alice")
-        assert result.subnet_id == "s-1"
+        result = JoinFlowJoinedAsOwnerResult(slug="s-1", agent_id="alice")
+        assert result.slug == "s-1"
         assert result.agent_id == "alice"
 
     def test_auto_accepted_invitation_via_self_join_branch_3(self) -> None:
         invite = _pending_request(kind="invitation")
         result = JoinFlowAutoAcceptedInvitationResult(
-            subnet_id="s-1",
+            slug="s-1",
             agent_id="bob",
             invitation=invite,
             via="self_join",
@@ -232,7 +232,7 @@ class TestJoinFlowResultVariants:
     def test_auto_accepted_invitation_via_allowlist_branch_4(self) -> None:
         invite = _pending_request(kind="invitation")
         result = JoinFlowAutoAcceptedInvitationResult(
-            subnet_id="s-1",
+            slug="s-1",
             agent_id="bob",
             invitation=invite,
             via="allowlist",
@@ -242,7 +242,7 @@ class TestJoinFlowResultVariants:
     def test_allowlist_auto_approved_branch_5(self) -> None:
         req = SubnetJoinRequest(
             request_id="rq-1",
-            subnet_id="s-1",
+            slug="s-1",
             agent_id="bob",
             kind="allowlist_auto",
             status="approved",
@@ -250,21 +250,21 @@ class TestJoinFlowResultVariants:
             decided_by="system:allowlist",
             decided_at=datetime.now(UTC),
         )
-        result = JoinFlowAllowlistAutoApprovedResult(subnet_id="s-1", agent_id="bob", request=req)
+        result = JoinFlowAllowlistAutoApprovedResult(slug="s-1", agent_id="bob", request=req)
         assert result.request.kind == "allowlist_auto"
         assert result.request.status == "approved"
 
     def test_pending_branch_6(self) -> None:
         req = _pending_request()
-        result = JoinFlowPendingResult(subnet_id="s-1", agent_id="bob", request=req)
+        result = JoinFlowPendingResult(slug="s-1", agent_id="bob", request=req)
         assert result.request.status == "pending"
 
     def test_variants_are_frozen(self) -> None:
         # Frozen dataclass — protects against accidental mutation
         # at the route ↔ service boundary.
-        result = JoinFlowJoinedOpenResult(subnet_id="s-1", agent_id="bob")
+        result = JoinFlowJoinedOpenResult(slug="s-1", agent_id="bob")
         with pytest.raises((AttributeError, Exception)):
-            result.subnet_id = "s-2"  # type: ignore[misc]
+            result.slug="s-2"  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +277,7 @@ class TestJoinFlowExceptions:
     the route layer's ``_join_flow_error_to_acn`` mapper can
     isinstance-dispatch on the base; the per-subclass attribute
     fields (``existing_request_id`` / ``current_status`` /
-    ``subnet_id`` / ``agent_id``) are what the route echoes into
+    ``slug`` / ``agent_id``) are what the route echoes into
     the 4xx response body."""
 
     def test_join_flow_error_inherits_acn_exception(self) -> None:
@@ -326,13 +326,13 @@ class TestJoinFlowExceptions:
 
     def test_already_member_carries_subnet_and_agent(self) -> None:
         err = AlreadyMemberError("s-1", "bob")
-        assert err.subnet_id == "s-1"
+        assert err.slug == "s-1"
         assert err.agent_id == "bob"
         assert err.reason == "already_member"
 
     def test_allowlist_entry_exists_carries_subnet_and_agent(self) -> None:
         err = AllowlistEntryExistsError("s-1", "bob")
-        assert err.subnet_id == "s-1"
+        assert err.slug == "s-1"
         assert err.agent_id == "bob"
         assert err.reason == "already_on_allowlist"
 

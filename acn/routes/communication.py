@@ -924,7 +924,7 @@ async def broadcast_message(
         result = await broadcast_service.broadcast(
             from_agent=body.from_agent,
             message=message,
-            subnet_id=body.target_subnet,
+            slug=body.target_subnet,
             tags=body.target_tags,
             strategy=strategy,
         )

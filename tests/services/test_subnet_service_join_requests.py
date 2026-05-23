@@ -40,13 +40,13 @@ from acn.services.subnet_service import SubnetService
 
 
 def _subnet(
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     owner: str = "alice",
     members: set[str] | None = None,
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
         created_at=datetime.now(UTC),
         member_agent_ids=members if members is not None else {owner},
@@ -55,12 +55,12 @@ def _subnet(
 
 def _pending_join_request(
     request_id: str = "rq-1",
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     agent_id: str = "bob",
 ) -> SubnetJoinRequest:
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind="join_request",
         status="pending",
@@ -70,14 +70,14 @@ def _pending_join_request(
 
 def _decided_row(
     request_id: str = "rq-1",
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     agent_id: str = "bob",
     status: str = "approved",
     decided_by: str = "alice",
 ) -> SubnetJoinRequest:
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind="join_request",
         status=status,
@@ -189,7 +189,7 @@ class TestApproveJoinRequest:
         # /join-requests/ path returns JOIN_REQUEST_NOT_FOUND.
         wrong_kind = SubnetJoinRequest(
             request_id="rq-1",
-            subnet_id="s-1",
+            slug="s-1",
             agent_id="bob",
             kind="invitation",
             status="pending",
@@ -205,7 +205,7 @@ class TestApproveJoinRequest:
     ) -> None:
         # request_id exists but belongs to a different subnet → 404
         # (no existence leak across subnets).
-        other_subnet_row = _pending_join_request(subnet_id="s-OTHER")
+        other_subnet_row = _pending_join_request(slug="s-OTHER")
         mock_join_repo.find_by_id.return_value = other_subnet_row
         with pytest.raises(JoinRequestNotFoundError):
             await service.approve_join_request("s-1", "rq-1", owner_id="alice")
