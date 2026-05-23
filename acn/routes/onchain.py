@@ -817,10 +817,14 @@ async def post_agent_feedback(
         # Service-layer validation (defense in depth — route-layer
         # checks above should catch the same things, but service
         # might catch corner cases like very-long evidence_uri).
+        # ``reason`` is a static token; raw ``str(e)`` may include
+        # internal field hints we don't want to surface externally
+        # (the full message is preserved in the chained ``from e``
+        # logger output for operators).
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             status_code=400,
-            details={"reason": str(e)},
+            details={"reason": "invalid_request"},
         ) from e
 
     return _event_to_response(event)
@@ -885,10 +889,13 @@ async def post_agent_validation(
             task_metadata=None,
         )
     except ValueError as e:
+        # ``reason`` is a static token (matches ``record_feedback``
+        # error shape); the full message stays on the server side
+        # via the chained ``from e`` for operator triage.
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             status_code=400,
-            details={"reason": str(e)},
+            details={"reason": "invalid_request"},
         ) from e
 
     return _event_to_response(event)
