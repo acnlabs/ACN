@@ -61,7 +61,7 @@ def stub_subnet_service():
         name="workspace-system-001",
     )
 
-    async def _list_public_subnets():
+    async def _list_subnets(owner=None):
         return [user_subnet, system_subnet]
 
     async def _get_subnet(subnet_id: str):
@@ -70,7 +70,8 @@ def stub_subnet_service():
                 return sn
         raise KeyError(subnet_id)
 
-    svc.list_public_subnets = AsyncMock(side_effect=_list_public_subnets)
+    svc.list_subnets = AsyncMock(side_effect=_list_subnets)
+    svc.list_public_subnets = AsyncMock(side_effect=_list_subnets)  # kept for compat
     svc.get_subnet = AsyncMock(side_effect=_get_subnet)
     return svc
 

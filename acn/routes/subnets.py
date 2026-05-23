@@ -464,7 +464,9 @@ async def list_subnets(
                 )
             subnets = await subnet_service.list_subnets(owner=owner)
         else:
-            subnets = await subnet_service.list_public_subnets()
+            # Return all subnets; private ones are downgraded to SubnetStub
+            # per-row below (ACL V6 B5 caller-aware rendering).
+            subnets = await subnet_service.list_subnets()
 
         # Per-row caller-aware rendering (ACL V6 B5).
         # Exception: when ?owned_by_user= is set, all rows are already
