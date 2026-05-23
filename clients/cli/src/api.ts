@@ -11,6 +11,21 @@ export class AcnApiError extends Error {
   }
 }
 
+/** Extract a human-readable detail string from an API error body.
+ *  ACN API shape: { error_code, message, ... }
+ *  Fallback: { detail } (older/third-party), raw string, or JSON dump. */
+function extractDetail(body: unknown): string {
+  if (typeof body !== 'object' || body === null) return String(body);
+  const b = body as Record<string, unknown>;
+  if (typeof b['message'] === 'string') {
+    return typeof b['error_code'] === 'string'
+      ? `${b['error_code']}: ${b['message']}`
+      : b['message'];
+  }
+  if (typeof b['detail'] === 'string') return b['detail'];
+  return JSON.stringify(b);
+}
+
 export async function acnFetch<T>(
   path: string,
   options: RequestInit & { params?: Record<string, string | number | boolean | undefined> } = {}
@@ -39,11 +54,7 @@ export async function acnFetch<T>(
   if (!res.ok) {
     let body: unknown;
     try { body = await res.json(); } catch { body = await res.text(); }
-    const detail =
-      typeof body === 'object' && body !== null && 'detail' in body
-        ? String((body as { detail: unknown }).detail)
-        : String(body);
-    throw new AcnApiError(res.status, body, `HTTP ${res.status}: ${detail}`);
+    throw new AcnApiError(res.status, body, `HTTP ${res.status}: ${extractDetail(body)}`);
   }
 
   if (res.status === 204 || res.headers.get('content-length') === '0') {
