@@ -520,7 +520,7 @@ async def manifest_send(
                 raise ACNHTTPError(
                     ErrorCode.CONTENT_URL_BLOCKED,
                     400,
-                    details={"content_url": body.content_url, "reason": str(e)},
+                    details={"content_url": body.content_url, "reason": "content_url_blocked"},
                 ) from e
             send_kwargs["content_url"] = body.content_url
             if body.content_hash is not None:
@@ -650,7 +650,7 @@ async def send_message(
                 raise ACNHTTPError(
                     ErrorCode.CONTENT_URL_BLOCKED,
                     400,
-                    details={"content_url": body.content_url, "reason": str(e)},
+                    details={"content_url": body.content_url, "reason": "content_url_blocked"},
                 ) from e
             send_kwargs["content_url"] = body.content_url
             if body.content_hash is not None:

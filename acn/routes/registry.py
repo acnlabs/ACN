@@ -1418,6 +1418,12 @@ async def search_agents(
         subnet_service
     )
 
+    # P3-5 / P2-4: non-admin callers are restricted to visibility="real".
+    # Allowing arbitrary visibility values to anonymous callers leaks the
+    # existence of hidden/archived/spam agents.
+    if not is_admin and visibility != "real":
+        visibility = "real"
+
     tag_param = tag or skill  # accept both; `tag` takes precedence
     tag_list = tag_param.split(",") if tag_param else None
 
@@ -1465,7 +1471,9 @@ async def search_agents(
 
 
 @router.post("/{agent_id}/heartbeat")
+@limiter.limit("30/minute")
 async def agent_heartbeat(
+    request: Request,
     agent_id: AgentIdPath,
     agent_info: AgentApiKeyDep,
     agent_service: AgentServiceDep = None,
@@ -2481,10 +2489,11 @@ async def claim_agent(
             details={"agent_id": agent_id},
         ) from e
     except ValueError as e:
+        logger.warning("claim_agent_invalid_request", agent_id=agent_id, error=str(e))
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
-            details={"agent_id": agent_id, "reason": str(e)},
+            details={"agent_id": agent_id, "reason": "invalid_request"},
         ) from e
 
 
