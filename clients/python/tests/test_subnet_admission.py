@@ -112,7 +112,7 @@ class TestAllowlistVerbs:
     @pytest.mark.asyncio
     async def test_subnet_allowlist_list_passes_pagination_params(self):
         request_mock = AsyncMock(
-            return_value={"subnet_id": "squad-1", "entries": []}
+            return_value={"slug": "squad-1", "entries": []}
         )
         client = _make_client_with_stub(request_mock)
 
@@ -120,7 +120,7 @@ class TestAllowlistVerbs:
             "squad-1", limit=50, offset=10
         )
 
-        assert result == {"subnet_id": "squad-1", "entries": []}
+        assert result == {"slug": "squad-1", "entries": []}
         request_mock.assert_awaited_once_with(
             "GET",
             "/api/v1/subnets/squad-1/allowlist",
@@ -193,7 +193,7 @@ class TestJoinRequestVerbs:
     @pytest.mark.asyncio
     async def test_list_defaults_kind_to_join_request(self):
         request_mock = AsyncMock(
-            return_value={"subnet_id": "squad-1", "items": []}
+            return_value={"slug": "squad-1", "items": []}
         )
         client = _make_client_with_stub(request_mock)
 
@@ -208,7 +208,7 @@ class TestJoinRequestVerbs:
     @pytest.mark.asyncio
     async def test_list_passes_status_and_kind_filters(self):
         request_mock = AsyncMock(
-            return_value={"subnet_id": "squad-1", "items": []}
+            return_value={"slug": "squad-1", "items": []}
         )
         client = _make_client_with_stub(request_mock)
 
@@ -326,7 +326,7 @@ class TestInvitationVerbs:
     @pytest.mark.asyncio
     async def test_list_omits_status_when_none(self):
         request_mock = AsyncMock(
-            return_value={"subnet_id": "squad-1", "items": []}
+            return_value={"slug": "squad-1", "items": []}
         )
         client = _make_client_with_stub(request_mock)
 
@@ -341,7 +341,7 @@ class TestInvitationVerbs:
     @pytest.mark.asyncio
     async def test_list_includes_status_filter(self):
         request_mock = AsyncMock(
-            return_value={"subnet_id": "squad-1", "items": []}
+            return_value={"slug": "squad-1", "items": []}
         )
         client = _make_client_with_stub(request_mock)
 

@@ -521,7 +521,7 @@ class ACNClient:
 
             {
                 "status": "updated",
-                "subnet_id": "my-subnet",
+                "slug": "my-subnet",
                 "harness_url": "https://harness.example.com/acn/webhook",
                 "harness_registered": True,
             }
