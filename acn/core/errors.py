@@ -172,6 +172,7 @@ class ErrorCode(StrEnum):
     # status code). See ``manifest.py`` per-route docstrings.
     MANIFEST_ENTRY_NOT_FOUND = "manifest_entry_not_found"
     MANIFEST_CONTENT_NOT_FOUND = "manifest_content_not_found"
+    INBOX_MESSAGE_NOT_FOUND = "inbox_message_not_found"
 
     # ===== Session layer (Phase 3) =====
     SESSION_NOT_FOUND = "session_not_found"
@@ -376,6 +377,10 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.SELF_FOLLOW_FORBIDDEN: "An agent cannot follow itself.",
     ErrorCode.MANIFEST_ENTRY_NOT_FOUND: (
         "The requested manifest entry could not be found."
+    ),
+    ErrorCode.INBOX_MESSAGE_NOT_FOUND: (
+        "The requested inbox message could not be found. "
+        "It may have already been acknowledged or the route_id is incorrect."
     ),
     ErrorCode.SESSION_NOT_FOUND: (
         "The requested session could not be found or has already expired."

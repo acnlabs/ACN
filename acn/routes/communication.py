@@ -1246,7 +1246,7 @@ async def update_inbox_message_status(
         )
         if not updated:
             raise ACNHTTPError(
-                ErrorCode.AGENT_NOT_FOUND,
+                ErrorCode.INBOX_MESSAGE_NOT_FOUND,
                 404,
                 details={"route_id": route_id},
             )
