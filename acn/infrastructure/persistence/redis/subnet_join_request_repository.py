@@ -126,7 +126,7 @@ return 1
 """
 
 
-def _invitation_set_member(subnet_id: str, request_id: str) -> str:
+def _invitation_set_member(slug: str, request_id: str) -> str:
     """The composite key used as a member of
     ``acn:agents:{a}:subnet_invitations``.
 
@@ -142,19 +142,19 @@ def _invitation_set_member(subnet_id: str, request_id: str) -> str:
     separator — so the composite member can never collide with a
     legitimate single-component id.
     """
-    return f"{subnet_id}:{request_id}"
+    return f"{slug}:{request_id}"
 
 
-def _request_hash_key(subnet_id: str, request_id: str) -> str:
-    return f"acn:subnets:{subnet_id}:requests:{request_id}"
+def _request_hash_key(slug: str, request_id: str) -> str:
+    return f"acn:subnets:{slug}:requests:{request_id}"
 
 
-def _pending_by_agent_key(subnet_id: str, agent_id: str) -> str:
-    return f"acn:subnets:{subnet_id}:pending_by_agent:{agent_id}"
+def _pending_by_agent_key(slug: str, agent_id: str) -> str:
+    return f"acn:subnets:{slug}:pending_by_agent:{agent_id}"
 
 
-def _subnet_listing_key(subnet_id: str) -> str:
-    return f"acn:subnets:{subnet_id}:requests"
+def _subnet_listing_key(slug: str) -> str:
+    return f"acn:subnets:{slug}:requests"
 
 
 def _agent_invitations_key(agent_id: str) -> str:
@@ -276,14 +276,14 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         return None
 
     async def find_pending_for(
-        self, subnet_id: str, agent_id: str
+        self, slug: str, agent_id: str
     ) -> SubnetJoinRequest | None:
-        pending_key = _pending_by_agent_key(subnet_id, agent_id)
+        pending_key = _pending_by_agent_key(slug, agent_id)
         request_id = _decode(await self.redis.get(pending_key))
         if not request_id:
             return None
         hash_data = await self.redis.hgetall(
-            _request_hash_key(subnet_id, request_id)
+            _request_hash_key(slug, request_id)
         )
         if not hash_data:
             # Reverse index points at a non-existent HASH — the very
@@ -295,7 +295,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
                 "subnet_join_request: dangling reverse index "
                 "(reverse points at missing HASH)",
                 extra={
-                    "subnet_id": subnet_id,
+                    "slug": slug,
                     "agent_id": agent_id,
                     "request_id": request_id,
                 },
@@ -305,20 +305,20 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
 
     async def list_by_subnet(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         kind: str | None = None,
         status: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[SubnetJoinRequest]:
-        listing_key = _subnet_listing_key(subnet_id)
+        listing_key = _subnet_listing_key(slug)
         request_ids = await self.redis.smembers(listing_key)
         rows: list[SubnetJoinRequest] = []
         for raw_rid in request_ids:
             rid = _decode(raw_rid)
             hash_data = await self.redis.hgetall(
-                _request_hash_key(subnet_id, rid)
+                _request_hash_key(slug, rid)
             )
             if not hash_data:
                 continue
@@ -378,9 +378,9 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
                 # no way to reconstruct the subnet without the
                 # expensive scan we are trying to avoid.
                 continue
-            subnet_id, request_id = member.split(":", 1)
+            _slug, request_id = member.split(":", 1)
             hash_data = await self.redis.hgetall(
-                _request_hash_key(subnet_id, request_id)
+                _request_hash_key(_slug, request_id)
             )
             if not hash_data:
                 continue
@@ -391,7 +391,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         return rows
 
     async def delete_for_subnet(
-        self, subnet_id: str, *, session: object | None = None
+        self, slug: str, *, session: object | None = None
     ) -> int:
         """Cascade-delete all rows for a subnet.
 
@@ -418,7 +418,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         audit log; not gated on by the cascade control flow).
         """
         del session  # explicit ignore — see docstring
-        listing_key = _subnet_listing_key(subnet_id)
+        listing_key = _subnet_listing_key(slug)
         request_ids = await self.redis.smembers(listing_key)
 
         deleted_count = 0
@@ -426,7 +426,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
 
         for raw_rid in request_ids:
             rid = _decode(raw_rid)
-            hash_key = _request_hash_key(subnet_id, rid)
+            hash_key = _request_hash_key(slug, rid)
             try:
                 # Need to read kind + agent_id before deleting the HASH
                 # so we know which secondary indexes to clean up.
@@ -439,7 +439,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
                         pipe.delete(hash_key)
                         if agent_id:
                             pipe.delete(
-                                _pending_by_agent_key(subnet_id, agent_id)
+                                _pending_by_agent_key(slug, agent_id)
                             )
                             if kind == "invitation":
                                 # Composite-key SREM — must match the
@@ -449,7 +449,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
                                 pipe.srem(
                                     _agent_invitations_key(agent_id),
                                     _invitation_set_member(
-                                        subnet_id, rid
+                                        slug, rid
                                     ),
                                 )
                         await pipe.execute()
@@ -467,7 +467,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
             logger.warning(
                 "delete_with_children_partial",
                 extra={
-                    "subnet_id": subnet_id,
+                    "slug": slug,
                     "table": "subnet_join_requests",
                     "failures": partial_failures,
                 },

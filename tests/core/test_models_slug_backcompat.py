@@ -103,29 +103,26 @@ class TestAgentServiceSearchAgentsKwargCompat:
     ``slug=slug`` call site that mock-based route tests fail to
     catch."""
 
-    def test_search_agents_signature_uses_subnet_id_kwarg(self):
+    def test_search_agents_signature_uses_slug_kwarg(self):
+        """Step 2 migrated AgentService.search_agents to use ``slug=``."""
         import inspect
 
         from acn.services.agent_service import AgentService
 
         sig = inspect.signature(AgentService.search_agents)
         params = sig.parameters
-        assert "subnet_id" in params, (
-            "AgentService.search_agents must accept ``subnet_id=`` "
-            "until Step 2 migrates Agent.subnet_ids; routes/subnets.py "
-            "calls it with this kwarg."
+        assert "slug" in params, (
+            "AgentService.search_agents must accept ``slug=`` "
+            "after Step 2 migrates the parameter name."
         )
-        # And it must NOT accept the new name yet — that would mask the
-        # very inconsistency this test pins. Step 2 migrates this; this
-        # assertion is expected to be updated alongside that migration.
-        assert "slug" not in params
+        assert "subnet_id" not in params, (
+            "Legacy ``subnet_id`` parameter removed in Step 2; "
+            "callers should use ``slug=`` now."
+        )
 
     @pytest.mark.asyncio
-    async def test_route_calls_with_subnet_id_kwarg(self):
-        # Real-call regression: mock the service with a strict spec so
-        # an unexpected kwarg raises (the loose ``AsyncMock(return_value=[])``
-        # used elsewhere swallows the error). Imports kept local because
-        # ``agent_service`` constructs are heavy to import.
+    async def test_route_calls_with_slug_kwarg(self):
+        """routes/subnets.py calls search_agents(slug=...) after Step 2."""
         from unittest.mock import AsyncMock
 
         from acn.services.agent_service import AgentService
@@ -133,7 +130,105 @@ class TestAgentServiceSearchAgentsKwargCompat:
         service = AsyncMock(spec=AgentService)
         service.search_agents.return_value = []
 
-        # This is the call shape from routes/subnets.py::get_subnet_agents.
-        await service.search_agents(subnet_id="some-slug")
+        await service.search_agents(slug="some-slug")
 
-        service.search_agents.assert_awaited_once_with(subnet_id="some-slug")
+        service.search_agents.assert_awaited_once_with(slug="some-slug")
+
+
+# ===========================================================================
+# Step 2: Task entity backward compatibility
+# ===========================================================================
+class TestTaskFromDictLegacySubnetId:
+    """Back-compat: Task.from_dict must accept legacy ``subnet_id`` key."""
+
+    def test_subnet_id_key_translated_to_subnet_slug(self):
+        from acn.core.entities import Task, TaskStatus
+
+        data = {
+            "task_id": "t1",
+            "creator_type": "agent",
+            "creator_id": "a1",
+            "creator_name": "Alice",
+            "title": "T",
+            "description": "",
+            "reward": "10",
+            "reward_currency": "credits",
+            "max_participants": 1,
+            "status": TaskStatus.OPEN,
+            "required_tags": [],
+            "subnet_id": "acnlabs-core",
+        }
+        task = Task.from_dict(data)
+        assert task.subnet_slug == "acnlabs-core"
+
+    def test_subnet_slug_key_takes_precedence(self):
+        """subnet_slug wins when both keys are present (shouldn't happen, but safe)."""
+        from acn.core.entities import Task, TaskStatus
+
+        data = {
+            "task_id": "t1",
+            "creator_type": "agent",
+            "creator_id": "a1",
+            "creator_name": "Alice",
+            "title": "T",
+            "description": "",
+            "reward": "10",
+            "reward_currency": "credits",
+            "max_participants": 1,
+            "status": TaskStatus.OPEN,
+            "required_tags": [],
+            "subnet_slug": "correct-slug",
+            "subnet_id": "stale-old-key",
+        }
+        task = Task.from_dict(data)
+        assert task.subnet_slug == "correct-slug"
+
+    def test_no_subnet_gives_none(self):
+        from acn.core.entities import Task, TaskStatus
+
+        data = {
+            "task_id": "t1",
+            "creator_type": "agent",
+            "creator_id": "a1",
+            "creator_name": "Alice",
+            "title": "T",
+            "description": "",
+            "reward": "10",
+            "reward_currency": "credits",
+            "max_participants": 1,
+            "status": TaskStatus.OPEN,
+            "required_tags": [],
+        }
+        task = Task.from_dict(data)
+        assert task.subnet_slug is None
+
+
+class TestTaskCreateRequestLegacySubnetId:
+    """Back-compat: TaskCreateRequest must accept legacy ``subnet_id`` in request body."""
+
+    def test_subnet_id_body_key_translated(self):
+        import os
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
+        from acn.routes.tasks import TaskCreateRequest  # type: ignore[attr-defined]
+
+        req = TaskCreateRequest.model_validate({
+            "title": "Test task",
+            "description": "A meaningful description",
+            "reward": "10",
+            "deadline_hours": 24,
+            "subnet_id": "acnlabs-core",
+        })
+        assert req.subnet_slug == "acnlabs-core"
+
+    def test_subnet_slug_body_key_accepted(self):
+        from acn.routes.tasks import TaskCreateRequest  # type: ignore[attr-defined]
+
+        req = TaskCreateRequest.model_validate({
+            "title": "Test task",
+            "description": "A meaningful description",
+            "reward": "10",
+            "deadline_hours": 24,
+            "subnet_slug": "acnlabs-core",
+        })
+        assert req.subnet_slug == "acnlabs-core"

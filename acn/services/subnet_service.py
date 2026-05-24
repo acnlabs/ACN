@@ -1085,7 +1085,7 @@ class SubnetService:
         request_id: str,
         *,
         expected_kind: Literal["join_request", "invitation"],
-        expected_subnet_id: str | None = None,
+        expected_slug: str | None = None,
     ) -> SubnetJoinRequest:
         """Look up a single request row + enforce kind / subnet binding.
 
@@ -1095,7 +1095,7 @@ class SubnetService:
         This blocks cross-namespace mistakes without leaking the
         existence of the row in the other namespace.
 
-        The optional ``expected_subnet_id`` adds an extra binding check
+        The optional ``expected_slug`` adds an extra binding check
         — Slice 2.3's route layer extracts the subnet from the URL,
         and a request_id that exists but belongs to a different subnet
         MUST return the same 404 (same anti-existence-leak reason).
@@ -1108,7 +1108,7 @@ class SubnetService:
         if (
             row is None
             or row.kind != expected_kind
-            or (expected_subnet_id is not None and row.slug != expected_subnet_id)
+            or (expected_slug is not None and row.slug != expected_slug)
         ):
             if expected_kind == "invitation":
                 raise InvitationNotFoundError(request_id)
@@ -1268,7 +1268,7 @@ class SubnetService:
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
-            expected_subnet_id=slug,
+            expected_slug=slug,
         )
         if not row.is_pending:
             raise JoinRequestAlreadyDecidedError(request_id, row.status)
@@ -1321,7 +1321,7 @@ class SubnetService:
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
-            expected_subnet_id=slug,
+            expected_slug=slug,
         )
         if not row.is_pending:
             raise JoinRequestAlreadyDecidedError(request_id, row.status)
@@ -1362,7 +1362,7 @@ class SubnetService:
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
-            expected_subnet_id=slug,
+            expected_slug=slug,
         )
         if not row.is_pending:
             raise JoinRequestAlreadyDecidedError(request_id, row.status)
@@ -1517,7 +1517,7 @@ class SubnetService:
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_subnet_id=slug,
+            expected_slug=slug,
         )
         if not row.is_pending:
             raise InvitationAlreadyDecidedError(request_id, row.status)
@@ -1563,7 +1563,7 @@ class SubnetService:
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_subnet_id=slug,
+            expected_slug=slug,
         )
         if not row.is_pending:
             raise InvitationAlreadyDecidedError(request_id, row.status)
@@ -1603,7 +1603,7 @@ class SubnetService:
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_subnet_id=slug,
+            expected_slug=slug,
         )
         if not row.is_pending:
             raise InvitationAlreadyDecidedError(request_id, row.status)

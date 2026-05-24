@@ -111,7 +111,7 @@ def _make_task(
     # slug rename; the test parameter is named ``slug`` for parity
     # with the route layer's URL parameter naming, but the value is
     # written to the entity attribute the production code reads.
-    t.subnet_id = slug
+    t.subnet_slug = slug
     t.max_resubmit_attempts = None
     return t
 

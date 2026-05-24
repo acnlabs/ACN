@@ -357,7 +357,7 @@ class AgentService:
         self,
         tags: list[str] | None = None,
         status: str = "online",
-        subnet_id: str | None = None,
+        slug: str | None = None,
     ) -> list[Agent]:
         """
         Search for agents.
@@ -365,7 +365,7 @@ class AgentService:
         Args:
             tags: Required tags (filters agents that have ALL tags)
             status: Agent status filter ("online" | "offline" | "all")
-            subnet_id: Subnet filter
+            slug: Subnet slug filter (renamed from ``subnet_id`` in Step 2)
 
         Returns:
             List of matching agents
@@ -379,8 +379,8 @@ class AgentService:
         an explicit ``POST /heartbeat`` re-stamped ``status='online'``
         in the database.
         """
-        if subnet_id:
-            candidates = await self.repository.find_by_subnet(subnet_id)
+        if slug:
+            candidates = await self.repository.find_by_subnet(slug)
             if tags:
                 candidates = [a for a in candidates if a.has_all_tags(tags)]
         elif tags:
@@ -558,38 +558,38 @@ class AgentService:
         """
         return await self.repository.find_by_owner(owner)
 
-    async def join_subnet(self, agent_id: str, subnet_id: str) -> Agent:
+    async def join_subnet(self, agent_id: str, slug: str) -> Agent:
         """
         Add agent to a subnet
 
         Args:
             agent_id: Agent identifier
-            subnet_id: Subnet identifier
+            slug: Subnet slug
 
         Returns:
             Updated agent entity
         """
         agent = await self.get_agent(agent_id)
-        agent.add_to_subnet(subnet_id)
+        agent.add_to_subnet(slug)
         await self.repository.save(agent)
-        logger.info("agent_joined_subnet", agent_id=agent_id, subnet_id=subnet_id)
+        logger.info("agent_joined_subnet", agent_id=agent_id, slug=slug)
         return agent
 
-    async def leave_subnet(self, agent_id: str, subnet_id: str) -> Agent:
+    async def leave_subnet(self, agent_id: str, slug: str) -> Agent:
         """
         Remove agent from a subnet
 
         Args:
             agent_id: Agent identifier
-            subnet_id: Subnet identifier
+            slug: Subnet slug
 
         Returns:
             Updated agent entity
         """
         agent = await self.get_agent(agent_id)
-        agent.remove_from_subnet(subnet_id)
+        agent.remove_from_subnet(slug)
         await self.repository.save(agent)
-        logger.info("agent_left_subnet", agent_id=agent_id, subnet_id=subnet_id)
+        logger.info("agent_left_subnet", agent_id=agent_id, slug=slug)
         return agent
 
     # ========== Autonomous Agent Methods ==========

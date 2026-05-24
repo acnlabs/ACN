@@ -10,7 +10,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from fastapi import Request as _Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..auth.middleware import verify_token
 from ..config import get_settings
@@ -277,11 +277,17 @@ class TaskCreateRequest(BaseModel):
     group_id: str | None = Field(default=None, max_length=128, description="Link related subtasks into a collaborative group")
 
     # ── Visibility ────────────────────────────────────────
-    # Length matches ``SubnetCreateRequest.subnet_id`` (64). Allowing a
+    # Length matches ``SubnetCreateRequest.slug`` (64). Allowing a
     # wider value here would just defer the rejection to the subnet
-    # lookup — and 65–128 char IDs are guaranteed to miss because the
-    # creation path won't accept them.  Round-2 audit: pin them together.
-    subnet_id: str | None = Field(default=None, max_length=64, description="Restrict task visibility to ACN Subnet members (NULL=public)")
+    # lookup — and 65–128 char slugs are guaranteed to miss because
+    # the creation path won't accept them.  Round-2 audit: pin them together.
+    # Legacy alias ``subnet_id`` accepted on input for backward compat.
+    subnet_slug: str | None = Field(
+        default=None,
+        max_length=64,
+        validation_alias=AliasChoices("subnet_slug", "subnet_id"),
+        description="Restrict task visibility to ACN Subnet members (NULL=public). Legacy alias 'subnet_id' accepted on input.",
+    )
 
     # ── A2UI: Declarative interactive UI ─────────────────────────────────────
     ui_spec: dict | None = Field(
@@ -381,9 +387,18 @@ class TaskResponse(BaseModel):
     # frontend DeliverablesPanel can display the submitted content.
     submission: str | None = None
     submission_artifacts: list[dict] = Field(default_factory=list)
-    subnet_id: str | None = None
+    # Canonical field name after the Step 2 rename.
+    # ``subnet_id`` kept as a backward-compat serialization alias so
+    # existing frontend / SDK clients reading the old key don't break
+    # mid-rollout. Remove alias in Step 3 (frontend update).
+    subnet_slug: str | None = Field(
+        default=None,
+        serialization_alias="subnet_id",
+        description="Subnet slug restricting task visibility (NULL=public).",
+    )
     max_resubmit_attempts: int | None = None
 
+    model_config = ConfigDict(populate_by_name=True)
 
 class ParticipationResponse(BaseModel):
     """Participation response model"""
@@ -443,7 +458,13 @@ class TaskHistoryItem(BaseModel):
 
     # Context
     participation_id: str | None = None
-    subnet_id: str | None = None
+    subnet_slug: str | None = Field(
+        default=None,
+        serialization_alias="subnet_id",
+        description="Subnet slug (legacy alias 'subnet_id' on output; removed in Step 3).",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
 
     # Timestamps
     joined_at: str | None = None
@@ -554,7 +575,7 @@ def _task_to_response(task, *, expose_submission: bool = False) -> TaskResponse:
         ui_spec=(task.metadata or {}).get("ui_spec"),
         submission=task.submission if expose_submission else None,
         submission_artifacts=task.submission_artifacts or [] if expose_submission else [],
-        subnet_id=task.subnet_id,
+        subnet_slug=task.subnet_slug,
         max_resubmit_attempts=task.max_resubmit_attempts,
     )
 
@@ -853,7 +874,7 @@ async def get_task(
     # submission-visibility decision.
     caller_id = await _resolve_caller_identity(request, credentials)
 
-    if task.subnet_id:
+    if task.subnet_slug:
         if not caller_id:
             raise ACNHTTPError(
                 ErrorCode.NOT_SUBNET_MEMBER,
@@ -861,18 +882,18 @@ async def get_task(
                 message="Authentication required to view this task.",
                 details={
                     "task_id": task_id,
-                    "subnet_id": task.subnet_id,
+                    "slug": task.subnet_slug,
                     "reason": "anonymous_caller",
                 },
             )
-        is_member = await task_service.is_subnet_member(task.subnet_id, caller_id)
+        is_member = await task_service.is_subnet_member(task.subnet_slug, caller_id)
         if not is_member:
             raise ACNHTTPError(
                 ErrorCode.NOT_SUBNET_MEMBER,
                 403,
                 details={
                     "task_id": task_id,
-                    "subnet_id": task.subnet_id,
+                    "slug": task.subnet_slug,
                     "agent_id": caller_id,
                     "reason": "not_member",
                 },
@@ -932,16 +953,16 @@ async def create_task(
     # ACL V6 Scope B — subnet membership gate on creation.
     # If the caller specifies a subnet_id, they must be a member of that subnet.
     # internal / admin callers are exempt (they act on behalf of others).
-    if body.subnet_id and auth_type not in ("internal", "dev"):
+    if body.subnet_slug and auth_type not in ("internal", "dev"):
         if "acn:admin" not in payload.get("permissions", []):
-            is_creator_member = await task_service.is_subnet_member(body.subnet_id, token_owner)
+            is_creator_member = await task_service.is_subnet_member(body.subnet_slug, token_owner)
             if not is_creator_member:
                 raise ACNHTTPError(
                     ErrorCode.NOT_SUBNET_MEMBER,
                     403,
                     message="You must be a member of the subnet to create a task within it.",
                     details={
-                        "subnet_id": body.subnet_id,
+                        "slug": body.subnet_slug,
                         "reason": "creator_not_subnet_member",
                     },
                 )
@@ -972,7 +993,7 @@ async def create_task(
             group_id=body.group_id,
             deadline_hours=body.deadline_hours,
             metadata=merged_metadata,
-            subnet_id=body.subnet_id,
+            subnet_slug=body.subnet_slug,
             max_resubmit_attempts=body.max_resubmit_attempts,
         )
 
@@ -1028,15 +1049,15 @@ async def accept_task(
         ) from None
 
     # Gate: private subnet task — caller must be a subnet member.
-    if task.subnet_id and "acn:admin" not in payload.get("permissions", []):
-        is_member = await task_service.is_subnet_member(task.subnet_id, agent_id)
+    if task.subnet_slug and "acn:admin" not in payload.get("permissions", []):
+        is_member = await task_service.is_subnet_member(task.subnet_slug, agent_id)
         if not is_member:
             raise ACNHTTPError(
                 ErrorCode.NOT_SUBNET_MEMBER,
                 403,
                 details={
                     "task_id": task_id,
-                    "subnet_id": task.subnet_id,
+                    "slug": task.subnet_slug,
                     "reason": "not_subnet_member",
                 },
             )
@@ -1289,15 +1310,15 @@ async def list_participations(
         # Internal / admin callers are exempted.
         permissions = payload.get("permissions", [])
         is_internal = payload.get("type") == "internal" or "acn:admin" in permissions
-        if task.subnet_id and not is_internal:
-            is_member = await task_service.is_subnet_member(task.subnet_id, caller_id)
+        if task.subnet_slug and not is_internal:
+            is_member = await task_service.is_subnet_member(task.subnet_slug, caller_id)
             if not is_member:
                 raise ACNHTTPError(
                     ErrorCode.NOT_SUBNET_MEMBER,
                     403,
                     details={
                         "task_id": task_id,
-                        "subnet_id": task.subnet_id,
+                        "slug": task.subnet_slug,
                         "reason": "not_member",
                     },
                 )
@@ -1524,9 +1545,9 @@ async def agent_create_task(
         merged_metadata["ui_spec"] = body.ui_spec
 
     # Subnet membership gate for agent/create (same as POST /tasks).
-    if body.subnet_id:
+    if body.subnet_slug:
         is_creator_member = await task_service.is_subnet_member(
-            body.subnet_id, agent_info["agent_id"]
+            body.subnet_slug, agent_info["agent_id"]
         )
         if not is_creator_member:
             raise ACNHTTPError(
@@ -1534,7 +1555,7 @@ async def agent_create_task(
                 403,
                 message="Agent must be a member of the subnet to create a task within it.",
                 details={
-                    "subnet_id": body.subnet_id,
+                    "slug": body.subnet_slug,
                     "reason": "creator_not_subnet_member",
                 },
             )
@@ -1559,7 +1580,7 @@ async def agent_create_task(
         group_id=body.group_id,
         deadline_hours=body.deadline_hours,
         metadata=merged_metadata,
-        subnet_id=body.subnet_id,  # P1-3: was missing, task was created without subnet context
+        subnet_slug=body.subnet_slug,  # P1-3: was missing, task was created without subnet context
     )
 
     return _task_to_response(task, expose_submission=True)
@@ -1585,9 +1606,9 @@ async def agent_accept_task(
             details={"task_id": task_id},
         ) from None
 
-    if task_entity.subnet_id:
+    if task_entity.subnet_slug:
         is_member = await task_service.is_subnet_member(
-            task_entity.subnet_id, agent_info["agent_id"]
+            task_entity.subnet_slug, agent_info["agent_id"]
         )
         if not is_member:
             raise ACNHTTPError(
@@ -1595,7 +1616,7 @@ async def agent_accept_task(
                 403,
                 details={
                     "task_id": task_id,
-                    "subnet_id": task_entity.subnet_id,
+                    "slug": task_entity.subnet_slug,
                     "reason": "not_subnet_member",
                 },
             )

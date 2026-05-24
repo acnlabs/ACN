@@ -103,7 +103,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
                     added_at=entry.added_at,
                 )
                 .on_conflict_do_nothing(
-                    index_elements=["subnet_id", "agent_id"]
+                    index_elements=["slug", "agent_id"]
                 )
                 .returning(SubnetAllowlistModel.slug)
             )
@@ -113,18 +113,18 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
             # insert; presence of any row means a new entry was created.
             return result.first() is not None
 
-    async def remove(self, subnet_id: str, agent_id: str) -> bool:
+    async def remove(self, slug: str, agent_id: str) -> bool:
         async with self._session_factory() as session:
             result = await session.execute(
                 delete(SubnetAllowlistModel).where(
-                    SubnetAllowlistModel.slug == subnet_id,
+                    SubnetAllowlistModel.slug == slug,
                     SubnetAllowlistModel.agent_id == agent_id,
                 )
             )
             await session.commit()
             return (result.rowcount or 0) > 0
 
-    async def is_member(self, subnet_id: str, agent_id: str) -> bool:
+    async def is_member(self, slug: str, agent_id: str) -> bool:
         """Cold-path membership check for the §join flow's branch 4.
 
         ``SELECT 1 WHERE ... LIMIT 1`` instead of ``SELECT *`` —
@@ -136,7 +136,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
             result = await session.execute(
                 select(SubnetAllowlistModel.slug)
                 .where(
-                    SubnetAllowlistModel.slug == subnet_id,
+                    SubnetAllowlistModel.slug == slug,
                     SubnetAllowlistModel.agent_id == agent_id,
                 )
                 .limit(1)
@@ -144,12 +144,12 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
             return result.scalar() is not None
 
     async def list_for_subnet(
-        self, subnet_id: str, *, limit: int = 100, offset: int = 0
+        self, slug: str, *, limit: int = 100, offset: int = 0
     ) -> list[SubnetAllowlist]:
         async with self._session_factory() as session:
             result = await session.execute(
                 select(SubnetAllowlistModel)
-                .where(SubnetAllowlistModel.slug == subnet_id)
+                .where(SubnetAllowlistModel.slug == slug)
                 .order_by(desc(SubnetAllowlistModel.added_at))
                 .limit(limit)
                 .offset(offset)
@@ -157,7 +157,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
             return [self._model_to_entity(r) for r in result.scalars().all()]
 
     async def delete_for_subnet(
-        self, subnet_id: str, *, session: AsyncSession | None = None
+        self, slug: str, *, session: AsyncSession | None = None
     ) -> int:
         """Cascade-delete all entries for a subnet. Returns count deleted.
 
@@ -171,7 +171,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
         async with self._session_scope(session) as sess:
             result = await sess.execute(
                 delete(SubnetAllowlistModel).where(
-                    SubnetAllowlistModel.slug == subnet_id
+                    SubnetAllowlistModel.slug == slug
                 )
             )
             return result.rowcount or 0

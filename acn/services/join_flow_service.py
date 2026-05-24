@@ -121,7 +121,7 @@ class JoinFlowService:
             event_publisher or NoOpJoinFlowEventPublisher()
         )
 
-    async def join_subnet(self, subnet_id: str, agent_id: str) -> JoinFlowResult:
+    async def join_subnet(self, slug: str, agent_id: str) -> JoinFlowResult:
         """Dispatch the six branches.
 
         Note on branch ordering: ADR §join states "the branch order
@@ -132,25 +132,25 @@ class JoinFlowService:
         takes branch 1 (open) — semantically equivalent (owner is a
         member either way) but the response shape is the "open" 200.
         """
-        subnet = await self._subnet_service.get_subnet(subnet_id)
+        subnet = await self._subnet_service.get_subnet(slug)
 
         # ADR §State machine edges "Agent self-join a subnet they
         # are already in" → 409 ALREADY_MEMBER. Check applies to
         # every branch including open, so we hoist it above the
         # branch dispatch.
         if agent_id in subnet.member_agent_ids:
-            raise AlreadyMemberError(subnet_id, agent_id)
+            raise AlreadyMemberError(slug, agent_id)
 
         # Branch 1 — open subnet, immediate add_member.
         if subnet.join_policy == "open":
-            await self._subnet_service.add_member(subnet_id, agent_id)
+            await self._subnet_service.add_member(slug, agent_id)
             logger.info(
                 "join_flow_branch_open",
-                slug=subnet_id,
+                slug=slug,
                 agent_id=agent_id,
                 branch=1,
             )
-            return JoinFlowJoinedOpenResult(slug=subnet_id, agent_id=agent_id)
+            return JoinFlowJoinedOpenResult(slug=slug, agent_id=agent_id)
 
         # From here on ``join_policy == 'approval'``.
 
@@ -158,26 +158,26 @@ class JoinFlowService:
         # member of their subnet (ADR §State machine edges), so the
         # request table is bypassed entirely.
         if agent_id == subnet.owner:
-            await self._subnet_service.add_member(subnet_id, agent_id)
+            await self._subnet_service.add_member(slug, agent_id)
             logger.info(
                 "join_flow_branch_owner_self_join",
-                slug=subnet_id,
+                slug=slug,
                 agent_id=agent_id,
                 branch=2,
             )
-            return JoinFlowJoinedAsOwnerResult(slug=subnet_id, agent_id=agent_id)
+            return JoinFlowJoinedAsOwnerResult(slug=slug, agent_id=agent_id)
 
         # The three remaining branches all hinge on the pending row
         # / allowlist presence. Compute both up front so the
         # decision tree is a straight ``if/elif`` chain.
-        pending = await self._join_request_repository.find_pending_for(subnet_id, agent_id)
-        is_allowlisted = await self._allowlist_repository.is_member(subnet_id, agent_id)
+        pending = await self._join_request_repository.find_pending_for(slug, agent_id)
+        is_allowlisted = await self._allowlist_repository.is_member(slug, agent_id)
 
         # Branches 3 + 4 — pending invitation auto-accept.
         if pending is not None and pending.kind == "invitation":
             via = "allowlist" if is_allowlisted else "self_join"
             accepted = await self._subnet_service.accept_invitation(
-                subnet_id,
+                slug,
                 pending.request_id,
                 # On the allowlist merge path ADR §"Merge-path event
                 # mapping" pins decided_by='system:allowlist'; on
@@ -190,14 +190,14 @@ class JoinFlowService:
             )
             logger.info(
                 "join_flow_branch_invitation_auto_accept",
-                slug=subnet_id,
+                slug=slug,
                 agent_id=agent_id,
                 invitation_id=accepted.request_id,
                 via=via,
                 branch=4 if is_allowlisted else 3,
             )
             return JoinFlowAutoAcceptedInvitationResult(
-                slug=subnet_id,
+                slug=slug,
                 agent_id=agent_id,
                 invitation=accepted,
                 via=via,
@@ -219,7 +219,7 @@ class JoinFlowService:
         if is_allowlisted:
             request = SubnetJoinRequest(
                 request_id=str(uuid.uuid4()),
-                slug=subnet_id,
+                slug=slug,
                 agent_id=agent_id,
                 kind="allowlist_auto",
                 status="approved",
@@ -228,7 +228,7 @@ class JoinFlowService:
                 decided_at=datetime.now(UTC),
             )
             await self._join_request_repository.save(request)
-            await self._subnet_service.add_member(subnet_id, agent_id)
+            await self._subnet_service.add_member(slug, agent_id)
             # Slice 2.2 emits ``JOIN_APPROVED`` for the auto-approval —
             # branch 5 doesn't go through join_request → approved, it
             # is born approved, so the canonical "approval happened"
@@ -244,13 +244,13 @@ class JoinFlowService:
             )
             logger.info(
                 "join_flow_branch_allowlist_auto_approved",
-                slug=subnet_id,
+                slug=slug,
                 agent_id=agent_id,
                 request_id=request.request_id,
                 branch=5,
             )
             return JoinFlowAllowlistAutoApprovedResult(
-                slug=subnet_id,
+                slug=slug,
                 agent_id=agent_id,
                 request=request,
             )
@@ -260,7 +260,7 @@ class JoinFlowService:
         # member; the owner owes a decision.
         request = SubnetJoinRequest(
             request_id=str(uuid.uuid4()),
-            slug=subnet_id,
+            slug=slug,
             agent_id=agent_id,
             kind="join_request",
             status="pending",
@@ -274,13 +274,13 @@ class JoinFlowService:
         )
         logger.info(
             "join_flow_branch_pending_join_request",
-            slug=subnet_id,
+            slug=slug,
             agent_id=agent_id,
             request_id=request.request_id,
             branch=6,
         )
         return JoinFlowPendingResult(
-            slug=subnet_id,
+            slug=slug,
             agent_id=agent_id,
             request=request,
         )

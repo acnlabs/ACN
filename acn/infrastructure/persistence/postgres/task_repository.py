@@ -140,7 +140,7 @@ class PostgresTaskRepository(ITaskRepository):
             and datetime.fromisoformat(meta["completed_at"]),
             invited_agent_ids=meta.get("invited_agent_ids", []),
             metadata=meta.get("extra_metadata", {}),
-            subnet_id=row.subnet_id,
+            subnet_slug=row.subnet_slug,
             max_resubmit_attempts=meta.get("max_resubmit_attempts"),
             resubmit_count=int(meta.get("resubmit_count", 0)),
         )
@@ -201,7 +201,7 @@ class PostgresTaskRepository(ITaskRepository):
             created_at=_tz(task.created_at) or datetime.now(UTC),
             deadline=_tz(task.deadline),
             task_metadata=extra_meta,
-            subnet_id=task.subnet_id,
+            subnet_slug=task.subnet_slug,
         )
 
     # ---- Participation mapping -----------------------------------------------
@@ -281,7 +281,7 @@ class PostgresTaskRepository(ITaskRepository):
                         required_tags=model.required_tags,
                         deadline=model.deadline,
                         task_metadata=model.task_metadata,
-                        subnet_id=model.subnet_id,
+                        subnet_slug=model.subnet_slug,
                     )
                 )
             else:
@@ -328,7 +328,7 @@ class PostgresTaskRepository(ITaskRepository):
                     required_tags=model.required_tags,
                     deadline=model.deadline,
                     task_metadata=model.task_metadata,
-                    subnet_id=model.subnet_id,
+                    subnet_slug=model.subnet_slug,
                 )
             )
             return result.rowcount == 1
@@ -372,20 +372,20 @@ class PostgresTaskRepository(ITaskRepository):
                 from .subnet_repository import PostgresSubnetRepository
                 subnet_repo = PostgresSubnetRepository(self._session_factory)
                 agent_subnets = await subnet_repo.list_subnets_for_agent(requesting_agent_id)
-                agent_subnet_ids = [s.subnet_id for s in agent_subnets]
-                if agent_subnet_ids:
+                agent_subnet_slugs = [s.slug for s in agent_subnets]
+                if agent_subnet_slugs:
                     stmt = stmt.where(
                         or_(
-                            TaskModel.subnet_id.is_(None),
-                            TaskModel.subnet_id.in_(agent_subnet_ids),
+                            TaskModel.subnet_slug.is_(None),
+                            TaskModel.subnet_slug.in_(agent_subnet_slugs),
                         )
                     )
                 else:
                     # Agent not in any subnet — only public tasks
-                    stmt = stmt.where(TaskModel.subnet_id.is_(None))
+                    stmt = stmt.where(TaskModel.subnet_slug.is_(None))
             else:
                 # Anonymous caller — only public tasks
-                stmt = stmt.where(TaskModel.subnet_id.is_(None))
+                stmt = stmt.where(TaskModel.subnet_slug.is_(None))
             stmt = stmt.order_by(TaskModel.created_at.desc()).limit(limit).offset(offset)
             result = await session.execute(stmt)
             rows = result.scalars().all()

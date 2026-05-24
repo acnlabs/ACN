@@ -146,7 +146,7 @@ class TestAgentService:
 
         service = AgentService(mock_agent_repository)
 
-        agents = await service.search_agents(subnet_id="public")
+        agents = await service.search_agents(slug="public")
 
         assert len(agents) == 1
         assert agents[0].agent_id == sample_agent.agent_id

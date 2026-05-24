@@ -184,19 +184,19 @@ class Agent:
     # dual-source drift the alive-as-single-source refactor eliminates.
     # Callers should ``await agent_service.is_alive(agent.agent_id)``.
 
-    def is_in_subnet(self, subnet_id: str) -> bool:
+    def is_in_subnet(self, slug: str) -> bool:
         """Check if agent belongs to a subnet"""
-        return subnet_id in self.subnet_ids
+        return slug in self.subnet_ids
 
-    def add_to_subnet(self, subnet_id: str) -> None:
+    def add_to_subnet(self, slug: str) -> None:
         """Add agent to a subnet"""
-        if subnet_id not in self.subnet_ids:
-            self.subnet_ids.append(subnet_id)
+        if slug not in self.subnet_ids:
+            self.subnet_ids.append(slug)
 
-    def remove_from_subnet(self, subnet_id: str) -> None:
+    def remove_from_subnet(self, slug: str) -> None:
         """Remove agent from a subnet"""
-        if subnet_id in self.subnet_ids:
-            self.subnet_ids.remove(subnet_id)
+        if slug in self.subnet_ids:
+            self.subnet_ids.remove(slug)
         # Ensure at least one subnet
         if not self.subnet_ids:
             self.subnet_ids = ["public"]

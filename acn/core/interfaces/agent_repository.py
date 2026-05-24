@@ -64,12 +64,12 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_subnet(self, subnet_id: str) -> list[Agent]:
+    async def find_by_subnet(self, slug: str) -> list[Agent]:
         """
         Find all agents in a subnet
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet slug identifier
 
         Returns:
             List of agents in the subnet
@@ -134,12 +134,12 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def count_by_subnet(self, subnet_id: str) -> int:
+    async def count_by_subnet(self, slug: str) -> int:
         """
         Count agents in a subnet
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet slug identifier
 
         Returns:
             Number of agents in the subnet

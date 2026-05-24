@@ -147,8 +147,8 @@ class RedisAgentRepository(IAgentRepository):
             )
 
         # 6. Subnet indices
-        for subnet_id in agent.subnet_ids:
-            await self.redis.sadd(f"acn:subnets:{subnet_id}:agents", agent.agent_id)
+        for slug in agent.subnet_ids:
+            await self.redis.sadd(f"acn:subnets:{slug}:agents", agent.agent_id)
 
         # Clean up old subnet indices
         if existing:
@@ -195,9 +195,9 @@ class RedisAgentRepository(IAgentRepository):
                 agents.append(self._dict_to_agent(agent_dict))
         return agents
 
-    async def find_by_subnet(self, subnet_id: str) -> list[Agent]:
+    async def find_by_subnet(self, slug: str) -> list[Agent]:
         """Find all agents in a subnet"""
-        agent_ids = await self.redis.smembers(f"acn:subnets:{subnet_id}:agents")
+        agent_ids = await self.redis.smembers(f"acn:subnets:{slug}:agents")
         agents = []
         for agent_id in agent_ids:
             agent = await self.find_by_id(agent_id)
@@ -247,8 +247,8 @@ class RedisAgentRepository(IAgentRepository):
             await self.redis.delete(api_key_index)
 
         # Remove from subnet indices
-        for subnet_id in agent.subnet_ids:
-            await self.redis.srem(f"acn:subnets:{subnet_id}:agents", agent_id)
+        for slug in agent.subnet_ids:
+            await self.redis.srem(f"acn:subnets:{slug}:agents", agent_id)
 
         # Remove from owner index
         if agent.owner:
@@ -279,9 +279,9 @@ class RedisAgentRepository(IAgentRepository):
         """Check if agent exists"""
         return await self.redis.exists(f"acn:agents:{agent_id}") > 0
 
-    async def count_by_subnet(self, subnet_id: str) -> int:
+    async def count_by_subnet(self, slug: str) -> int:
         """Count agents in a subnet"""
-        return await self.redis.scard(f"acn:subnets:{subnet_id}:agents")
+        return await self.redis.scard(f"acn:subnets:{slug}:agents")
 
     async def find_by_api_key(self, key_hash: str) -> Agent | None:
         """Find agent by SHA-256 hash of their API key."""

@@ -402,8 +402,8 @@ class RedisTaskRepository(ITaskRepository):
                 continue
 
             # Subnet visibility: public (no subnet_id) or agent is a member
-            if task.subnet_id:
-                if not requesting_agent_id or task.subnet_id not in visible_subnet_ids:
+            if task.subnet_slug:
+                if not requesting_agent_id or task.subnet_slug not in visible_subnet_ids:
                     continue
 
             tasks.append(task)
