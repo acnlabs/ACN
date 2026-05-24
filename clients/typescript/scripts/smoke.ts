@@ -13,9 +13,9 @@
  *  9. submitTask  — sends `submission` (not `submissionContent`)
  * 10. reviewTask  — sends `notes` (not `feedback`)
  * 11. TaskStatus  — assert backend emits one of the documented values
- * 12. joinSubnet  — POST /api/v1/agents/{id}/subnets/{subnet_id} (0.11.2 canonical)
+ * 12. joinSubnet  — POST /api/v1/agents/{id}/subnets/{slug} (canonical)
  * 13. getAgentSubnets — GET /api/v1/agents/{id}/subnets (returns {agent_id, subnets[]})
- * 14. leaveSubnet — DELETE /api/v1/agents/{id}/subnets/{subnet_id}
+ * 14. leaveSubnet — DELETE /api/v1/agents/{id}/subnets/{slug}
  * 15. rotateApiKey (H1) — new key works; old key returns 401; participant
  *     identity (agent_id) survives the rotation (subnet membership intact).
  *
@@ -69,12 +69,12 @@ async function main() {
     name: `smoke-${STAMP}`,
     description: "v0.11.0 SDK smoke test subnet",
   });
-  log("subnet.subnet_id", subnet.subnet_id);
+  log("subnet.slug", subnet.slug);
 
   // ── 4. Register a harness webhook (with secret) — proves PATCH /harness ─
   log("registerSubnetHarness");
   await creatorClient.registerSubnetHarness(
-    subnet.subnet_id,
+    subnet.slug!,
     "http://127.0.0.1:0/webhook",
     "smoke-secret-32-bytes-of-entropy-yes",
   );
@@ -141,26 +141,26 @@ async function main() {
   });
   const joinerClient = new ACNClient({ baseUrl: ACN_URL, apiKey: joiner.api_key });
 
-  log("joinSubnet (canonical /api/v1/agents/{id}/subnets/{subnet_id})");
-  const joinResp = await joinerClient.joinSubnet(joiner.agent_id, subnet.subnet_id);
+  log("joinSubnet (canonical /api/v1/agents/{id}/subnets/{slug})");
+  const joinResp = await joinerClient.joinSubnet(joiner.agent_id, subnet.slug!);
   if ((joinResp as { status?: string }).status !== "joined") {
     throw new Error(`expected joinSubnet status='joined', got ${JSON.stringify(joinResp)}`);
   }
 
   log("getAgentSubnets (canonical /api/v1/agents/{id}/subnets)");
   const subs = await joinerClient.getAgentSubnets(joiner.agent_id);
-  if (!subs.subnets.includes(subnet.subnet_id)) {
-    throw new Error(`getAgentSubnets did not list ${subnet.subnet_id}: ${JSON.stringify(subs)}`);
+  if (!subs.subnets.includes(subnet.slug!)) {
+    throw new Error(`getAgentSubnets did not list ${subnet.slug}: ${JSON.stringify(subs)}`);
   }
 
-  log("leaveSubnet (canonical DELETE /api/v1/agents/{id}/subnets/{subnet_id})");
-  const leaveResp = await joinerClient.leaveSubnet(joiner.agent_id, subnet.subnet_id);
+  log("leaveSubnet (canonical DELETE /api/v1/agents/{id}/subnets/{slug})");
+  const leaveResp = await joinerClient.leaveSubnet(joiner.agent_id, subnet.slug!);
   if ((leaveResp as { status?: string }).status !== "left") {
     throw new Error(`expected leaveSubnet status='left', got ${JSON.stringify(leaveResp)}`);
   }
   const subsAfter = await joinerClient.getAgentSubnets(joiner.agent_id);
-  if (subsAfter.subnets.includes(subnet.subnet_id)) {
-    throw new Error(`getAgentSubnets still has ${subnet.subnet_id} after leave`);
+  if (subsAfter.subnets.includes(subnet.slug!)) {
+    throw new Error(`getAgentSubnets still has ${subnet.slug} after leave`);
   }
 
   // ── 15. rotateApiKey (H1) — agent self-rotation; old key invalidates ───
@@ -170,7 +170,7 @@ async function main() {
   //   does NOT lose subnet membership (the whole point of H1 vs a
   //   re-register: agent_id and bindings must survive).
   log("rotateApiKey — re-join subnet first so we can prove identity survives");
-  await joinerClient.joinSubnet(joiner.agent_id, subnet.subnet_id);
+  await joinerClient.joinSubnet(joiner.agent_id, subnet.slug!);
 
   log("rotateApiKey (H1) — agent self-rotation");
   const rotated = await joinerClient.rotateApiKey(joiner.agent_id);
@@ -194,7 +194,7 @@ async function main() {
   // Subnet membership must be preserved across the rotation — that's
   // the H1 win over "delete + re-register".
   const subsAfterRotate = await rotatedClient.getAgentSubnets(joiner.agent_id);
-  if (!subsAfterRotate.subnets.includes(subnet.subnet_id)) {
+  if (!subsAfterRotate.subnets.includes(subnet.slug!)) {
     throw new Error(
       `subnet membership lost after rotateApiKey: ${JSON.stringify(subsAfterRotate)}`,
     );

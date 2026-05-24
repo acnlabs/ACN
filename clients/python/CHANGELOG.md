@@ -4,6 +4,29 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-24
+
+> Coordinated release with ACN server (Steps 1-3 slug refactor),
+> `@acnlabs/acn-cli` `0.12.0`, and `acn-client` (TypeScript) `0.14.0`.
+
+### Changed — `subnet_id` → `slug` rename (breaking)
+
+- `SubnetInfo.parent_subnet_id` renamed to `parent_slug`.
+  Old wire key `parent_subnet_id` is still accepted via
+  `AliasChoices` for backward-compatible parsing of responses
+  from pre-Step-3 servers.
+- `SubnetCreateRequest.parent_subnet_id` renamed to `parent_slug`.
+  Callers must update keyword argument at construction site.
+- `SubnetInfo.id` now accepts both `slug` (new server wire key) and
+  `subnet_id` (legacy) via `AliasChoices`.
+- `AgentSearchOptions.subnet_id` renamed to `slug`.
+- `ACNClient.list_subnets(parent_subnet_id=...)` parameter renamed
+  to `parent_slug`.
+- `ACNClient.list_children(parent_slug)` — no change (was already
+  `parent_slug` internally).
+- All other `ACNClient` method parameters that previously used
+  `subnet_id` now use `slug`.
+
 ## [0.11.0] - 2026-05-20
 
 > Coordinated release with ACN server `0.11.0`, `@acnlabs/acn-cli` `0.11.0`,

@@ -2,8 +2,8 @@
 
 Pin:
 - ``SubnetInfo`` / ``SubnetCreateRequest`` round-trip the three new
-  nesting fields (parent_subnet_id, lifecycle, linked_task_id).
-- ``Client.list_subnets(parent_subnet_id=...)`` issues the
+  nesting fields (parent_slug, lifecycle, linked_task_id).
+- ``Client.list_subnets(parent_slug=...)`` issues the
   ``?parent=...`` filter on the wire.
 - ``Client.list_children(...)`` hits the dedicated
   ``/api/v1/subnets/{id}/children`` endpoint.
@@ -12,6 +12,8 @@ Pin:
   ``SubnetInfo``.
 - Back-compat: SDKs talking to an older server that omits the new
   fields still parse cleanly (defaults preserved).
+- Back-compat wire: ``parent_subnet_id`` key from older servers is
+  accepted via ``AliasChoices`` and surfaced as ``parent_slug``.
 """
 
 from __future__ import annotations
@@ -26,7 +28,22 @@ from acn_client.models import SubnetCreateRequest, SubnetInfo
 
 
 def _server_subnet_payload(**overrides: Any) -> dict[str, Any]:
-    """Minimal subnet response payload as ACN would emit it."""
+    """Minimal subnet response payload as a current ACN server emits."""
+    base = {
+        "slug": "squad-1",
+        "name": "Squad 1",
+        "owner": "alice",
+        "is_private": False,
+        "parent_slug": "parent-1",
+        "lifecycle": "task_scoped",
+        "linked_task_id": "task-42",
+    }
+    base.update(overrides)
+    return base
+
+
+def _legacy_server_subnet_payload(**overrides: Any) -> dict[str, Any]:
+    """Payload shape from a pre-Step-3 server (uses old wire keys)."""
     base = {
         "subnet_id": "squad-1",
         "name": "Squad 1",
@@ -44,7 +61,7 @@ class TestSubnetInfoNestingFields:
     def test_parses_new_nesting_fields_from_server_payload(self):
         payload = _server_subnet_payload()
         info = SubnetInfo.model_validate(payload)
-        assert info.parent_subnet_id == "parent-1"
+        assert info.parent_slug == "parent-1"
         assert info.lifecycle == "task_scoped"
         assert info.linked_task_id == "task-42"
 
@@ -53,23 +70,29 @@ class TestSubnetInfoNestingFields:
         absent from the JSON. Defaults must preserve a top-level
         persistent subnet shape so legacy consumers don't crash."""
         info = SubnetInfo.model_validate(
-            {"subnet_id": "legacy", "name": "Legacy"}
+            {"slug": "legacy", "name": "Legacy"}
         )
-        assert info.parent_subnet_id is None
+        assert info.parent_slug is None
         assert info.lifecycle == "persistent"
         assert info.linked_task_id is None
+
+    def test_back_compat_old_wire_key_parent_subnet_id(self):
+        """Old server emits ``parent_subnet_id`` — AliasChoices maps
+        it to ``parent_slug`` transparently."""
+        info = SubnetInfo.model_validate(_legacy_server_subnet_payload())
+        assert info.parent_slug == "parent-1"
 
 
 class TestSubnetCreateRequestNestingFields:
     def test_serialises_nesting_fields(self):
         req = SubnetCreateRequest(
             name="Bug Squad",
-            parent_subnet_id="parent-1",
+            parent_slug="parent-1",
             lifecycle="task_scoped",
             linked_task_id="task-42",
         )
         dumped = req.model_dump(exclude_none=True)
-        assert dumped["parent_subnet_id"] == "parent-1"
+        assert dumped["parent_slug"] == "parent-1"
         assert dumped["lifecycle"] == "task_scoped"
         assert dumped["linked_task_id"] == "task-42"
 
@@ -80,7 +103,7 @@ class TestSubnetCreateRequestNestingFields:
         # since it defaults to a non-None string. That's intentional —
         # the server-side default is also ``persistent`` so the value
         # is correct + makes the wire payload self-describing.
-        assert dumped.get("parent_subnet_id") is None
+        assert dumped.get("parent_slug") is None
         assert dumped["lifecycle"] == "persistent"
         assert dumped.get("linked_task_id") is None
 
@@ -103,10 +126,10 @@ class TestSubnetClientMethods:
         )
         client = _make_client_with_stub(request_mock)
 
-        result = await client.list_subnets(parent_subnet_id="parent-1")
+        result = await client.list_subnets(parent_slug="parent-1")
 
         assert len(result) == 1
-        assert result[0].parent_subnet_id == "parent-1"
+        assert result[0].parent_slug == "parent-1"
         request_mock.assert_awaited_once_with(
             "GET", "/api/v1/subnets", params={"parent": "parent-1"}
         )
@@ -130,7 +153,7 @@ class TestSubnetClientMethods:
         request_mock = AsyncMock(
             return_value={
                 "count": 1,
-                "subnets": [_server_subnet_payload(subnet_id="child-1")],
+                "subnets": [_server_subnet_payload(slug="child-1")],
             }
         )
         client = _make_client_with_stub(request_mock)
@@ -174,7 +197,7 @@ class TestCreateSubnetWiresNestingFields:
         await client.create_subnet(
             SubnetCreateRequest(
                 name="Squad",
-                parent_subnet_id="parent-1",
+                parent_slug="parent-1",
                 lifecycle="task_scoped",
                 linked_task_id="task-42",
             )
@@ -183,6 +206,6 @@ class TestCreateSubnetWiresNestingFields:
         request_mock.assert_awaited_once()
         call_kwargs = request_mock.await_args.kwargs
         body = call_kwargs["json"]
-        assert body["parent_subnet_id"] == "parent-1"
+        assert body["parent_slug"] == "parent-1"
         assert body["lifecycle"] == "task_scoped"
         assert body["linked_task_id"] == "task-42"

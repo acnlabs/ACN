@@ -4,6 +4,30 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-24
+
+> Coordinated release with ACN server (Steps 1-3 slug refactor),
+> `acn-client` (Python) `0.12.0`, and `@acnlabs/acn-cli` `0.12.0`.
+
+### Changed — `subnet_id` → `slug` rename (breaking)
+
+- `SubnetInfo.slug` is the new canonical wire-side identifier
+  (replaces `subnet_id`). The old `subnet_id` field is kept as
+  `@deprecated` for one release cycle.
+- `SubnetInfo.parent_slug` replaces `parent_subnet_id`
+  (`parent_subnet_id` kept as `@deprecated`).
+- `SubnetCreateRequest.parent_subnet_id` renamed to `parent_slug`.
+- `SubnetCreateResponse.subnet_id` renamed to `slug`.
+- `AgentSearchOptions.subnet_id` renamed to `slug`.
+- `Task.subnet_id` renamed to `subnet_slug` (matches the server's
+  direct wire field after `serialization_alias` removal).
+- `TaskCreateRequest.subnet_id` renamed to `subnet_slug`.
+- `SubnetAllowlistListResponse`, `SubnetJoinRequestRow`,
+  `SubnetJoinRequestListResponse`, `SubnetInvitationListResponse`:
+  `subnet_id` renamed to `slug`.
+- All `ACNClient` method parameters previously named `subnetId` or
+  `parentSubnetId` are now `slug` / `parentSlug`.
+
 ## [0.13.0] - 2026-05-20
 
 > Coordinated release with ACN server `0.11.0`, `acn-client` (Python) `0.11.0`,

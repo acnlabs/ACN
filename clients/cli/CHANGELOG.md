@@ -4,6 +4,21 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-24
+
+> Coordinated release with ACN server (Steps 1-3 slug refactor),
+> `acn-client` (Python) `0.12.0`, and `acn-client` (TypeScript) `0.14.0`.
+
+### Changed — `subnet_id` → `slug` rename (breaking)
+
+- `subnet create --parent` now sends `parent_slug` in the request
+  body (previously `parent_subnet_id`). Servers older than Step-3
+  will not receive the parent filter — upgrade the server first.
+- Output formatting now reads `subnet.parent_slug` (falls back to
+  `subnet.parent_subnet_id` for pre-Step-3 server responses).
+- `SubnetCreateRequest` interface: `parent_subnet_id` renamed to
+  `parent_slug`; old name kept as `@deprecated`.
+
 ## [0.11.0] - 2026-05-20
 
 > Coordinated release with ACN server `0.11.0`, `acn-client` (Python) `0.11.0`,
