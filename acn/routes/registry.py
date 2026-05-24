@@ -462,7 +462,7 @@ async def dev_register_agent(
             raise ACNHTTPError(
                 ErrorCode.SUBNET_NOT_FOUND,
                 400,
-                details={"subnet_id": subnet_id},
+                details={"slug": subnet_id},
             )
 
     try:
@@ -669,7 +669,7 @@ async def register_agent(
             raise ACNHTTPError(
                 ErrorCode.SUBNET_NOT_FOUND,
                 400,
-                details={"subnet_id": subnet_id},
+                details={"slug": subnet_id},
             )
 
     try:

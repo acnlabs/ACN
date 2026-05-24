@@ -404,5 +404,5 @@ async def load_subnet_or_404(subnet_service: Any, subnet_id: str) -> Subnet:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": subnet_id},
         ) from e
