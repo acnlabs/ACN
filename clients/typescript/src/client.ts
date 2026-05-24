@@ -342,21 +342,21 @@ export class ACNClient {
   }
 
   /** Get subnet by ID */
-  async getSubnet(subnetId: string): Promise<SubnetInfo> {
-    return this.get(`/api/v1/subnets/${subnetId}`);
+  async getSubnet(slug: string): Promise<SubnetInfo> {
+    return this.get(`/api/v1/subnets/${slug}`);
   }
 
   /**
    * List immediate children of a subnet (ADR-0003).
    *
-   * Wraps `GET /api/v1/subnets/{parentSubnetId}/children`. Returns
+   * Wraps `GET /api/v1/subnets/{parentSlug}/children`. Returns
    * `SUBNET_NOT_FOUND` when the parent does not exist. Visibility
    * matches `listSubnets` — private children you cannot see are
    * omitted from the result set.
    */
-  async listChildren(parentSubnetId: string): Promise<SubnetInfo[]> {
+  async listChildren(parentSlug: string): Promise<SubnetInfo[]> {
     const data = await this.get<SubnetChildrenListResponse>(
-      `/api/v1/subnets/${parentSubnetId}/children`,
+      `/api/v1/subnets/${parentSlug}/children`,
     );
     return data.subnets;
   }
@@ -367,18 +367,18 @@ export class ACNClient {
    * Owner-only. Idempotent — promoting an already-persistent subnet
    * returns its current state unchanged.
    */
-  async promoteSubnet(subnetId: string): Promise<SubnetInfo> {
-    return this.post(`/api/v1/subnets/${subnetId}/promote`);
+  async promoteSubnet(slug: string): Promise<SubnetInfo> {
+    return this.post(`/api/v1/subnets/${slug}/promote`);
   }
 
   /** Delete a subnet you own (requires Agent API Key — only the owning agent can delete) */
-  async deleteSubnet(subnetId: string): Promise<{ success: boolean }> {
-    return this.request('DELETE', `/api/v1/subnets/${subnetId}`);
+  async deleteSubnet(slug: string): Promise<{ success: boolean }> {
+    return this.request('DELETE', `/api/v1/subnets/${slug}`);
   }
 
   /** Get agents in a subnet */
-  async getSubnetAgents(subnetId: string): Promise<{ agents: AgentInfo[] }> {
-    return this.get(`/api/v1/subnets/${subnetId}/agents`);
+  async getSubnetAgents(slug: string): Promise<{ agents: AgentInfo[] }> {
+    return this.get(`/api/v1/subnets/${slug}/agents`);
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -395,13 +395,13 @@ export class ACNClient {
   // ──────────────────────────────────────────────────────────────────────
 
   /** Join agent to subnet */
-  async joinSubnet(agentId: string, subnetId: string): Promise<{ success: boolean }> {
-    return this.post(`/api/v1/agents/${agentId}/subnets/${subnetId}`);
+  async joinSubnet(agentId: string, slug: string): Promise<{ success: boolean }> {
+    return this.post(`/api/v1/agents/${agentId}/subnets/${slug}`);
   }
 
   /** Remove agent from subnet */
-  async leaveSubnet(agentId: string, subnetId: string): Promise<{ success: boolean }> {
-    return this.delete(`/api/v1/agents/${agentId}/subnets/${subnetId}`);
+  async leaveSubnet(agentId: string, slug: string): Promise<{ success: boolean }> {
+    return this.delete(`/api/v1/agents/${agentId}/subnets/${slug}`);
   }
 
   /** Get agent's subnets */
@@ -431,7 +431,7 @@ export class ACNClient {
   // ----- Allowlist (owner-only, 3 verbs) ---------------------------------
 
   /**
-   * Pre-authorise `agentId` on `subnetId`'s allowlist (owner only).
+   * Pre-authorise `agentId` on `slug`'s allowlist (owner only).
    *
    * Allowlisted agents skip the approval queue: their next
    * `joinSubnet` lands in branch 4 (allowlist hit) and becomes an
@@ -442,16 +442,16 @@ export class ACNClient {
    * silently no-op'd).
    */
   async subnetAllowlistAdd(
-    subnetId: string,
+    slug: string,
     agentId: string,
   ): Promise<SubnetAllowlistEntry> {
-    return this.post(`/api/v1/subnets/${subnetId}/allowlist`, {
+    return this.post(`/api/v1/subnets/${slug}/allowlist`, {
       agent_id: agentId,
     });
   }
 
   /**
-   * Remove `agentId` from `subnetId`'s allowlist (owner only).
+   * Remove `agentId` from `slug`'s allowlist (owner only).
    *
    * Idempotent — removing an entry that doesn't exist still
    * returns 204. Per ADR-0004 §"Allowlist mutation does not
@@ -459,28 +459,28 @@ export class ACNClient {
    * membership for agents already admitted via the allowlist.
    */
   async subnetAllowlistRemove(
-    subnetId: string,
+    slug: string,
     agentId: string,
   ): Promise<void> {
-    await this.delete(`/api/v1/subnets/${subnetId}/allowlist/${agentId}`);
+    await this.delete(`/api/v1/subnets/${slug}/allowlist/${agentId}`);
   }
 
   /**
-   * List `subnetId`'s allowlist entries (owner only).
+   * List `slug`'s allowlist entries (owner only).
    *
    * Owner-only by design — the allowlist is a privacy-sensitive
    * trust signal and exposing it publicly would leak relationship
    * metadata.
    */
   async subnetAllowlistList(
-    subnetId: string,
+    slug: string,
     options?: { limit?: number; offset?: number },
   ): Promise<SubnetAllowlistListResponse> {
     const params: Record<string, number> = {
       limit: options?.limit ?? 100,
       offset: options?.offset ?? 0,
     };
-    return this.get(`/api/v1/subnets/${subnetId}/allowlist`, params);
+    return this.get(`/api/v1/subnets/${slug}/allowlist`, params);
   }
 
   // ----- Join requests (4 verbs: 3 owner-side + 1 applicant-side) --------
@@ -497,12 +497,12 @@ export class ACNClient {
    * Optional `note` (≤500 chars) is recorded on the audit row.
    */
   async subnetJoinRequestApprove(
-    subnetId: string,
+    slug: string,
     requestId: string,
     options?: { note?: string },
   ): Promise<SubnetJoinRequestRow> {
     return this.post(
-      `/api/v1/subnets/${subnetId}/join-requests/${requestId}/approve`,
+      `/api/v1/subnets/${slug}/join-requests/${requestId}/approve`,
       options?.note !== undefined ? { note: options.note } : undefined,
     );
   }
@@ -513,12 +513,12 @@ export class ACNClient {
    * No membership change. `subnet.join_rejected` webhook fires.
    */
   async subnetJoinRequestReject(
-    subnetId: string,
+    slug: string,
     requestId: string,
     options?: { note?: string },
   ): Promise<SubnetJoinRequestRow> {
     return this.post(
-      `/api/v1/subnets/${subnetId}/join-requests/${requestId}/reject`,
+      `/api/v1/subnets/${slug}/join-requests/${requestId}/reject`,
       options?.note !== undefined ? { note: options.note } : undefined,
     );
   }
@@ -530,19 +530,19 @@ export class ACNClient {
    * the request. `subnet.join_withdrawn` webhook fires.
    */
   async subnetJoinRequestWithdraw(
-    subnetId: string,
+    slug: string,
     requestId: string,
     options?: { note?: string },
   ): Promise<SubnetJoinRequestRow> {
     return this.request(
       'DELETE',
-      `/api/v1/subnets/${subnetId}/join-requests/${requestId}`,
+      `/api/v1/subnets/${slug}/join-requests/${requestId}`,
       options?.note !== undefined ? { body: { note: options.note } } : undefined,
     );
   }
 
   /**
-   * Owner lists join_request / allowlist_auto rows for `subnetId`.
+   * Owner lists join_request / allowlist_auto rows for `slug`.
    *
    * `kind` defaults to `'join_request'`; pass `'allowlist_auto'`
    * to inspect synthesised allowlist-hit audit rows. Server
@@ -550,7 +550,7 @@ export class ACNClient {
    * use `subnetInvitationList` instead.
    */
   async subnetJoinRequestList(
-    subnetId: string,
+    slug: string,
     options?: SubnetJoinRequestListOptions,
   ): Promise<SubnetJoinRequestListResponse> {
     const params: Record<string, string | number> = {
@@ -559,7 +559,7 @@ export class ACNClient {
       offset: options?.offset ?? 0,
     };
     if (options?.status !== undefined) params.status = options.status;
-    return this.get(`/api/v1/subnets/${subnetId}/join-requests`, params);
+    return this.get(`/api/v1/subnets/${slug}/join-requests`, params);
   }
 
   // ----- Invitations (5 + 1 verbs) ---------------------------------------
@@ -577,13 +577,13 @@ export class ACNClient {
    * Discriminate on `auto_resolved` to dispatch.
    */
   async subnetInvitationSend(
-    subnetId: string,
+    slug: string,
     agentId: string,
     options?: { note?: string },
   ): Promise<SubnetInvitationSendResponse> {
     const body: Record<string, string> = { agent_id: agentId };
     if (options?.note !== undefined) body.note = options.note;
-    return this.post(`/api/v1/subnets/${subnetId}/invitations`, body);
+    return this.post(`/api/v1/subnets/${slug}/invitations`, body);
   }
 
   /**
@@ -595,12 +595,12 @@ export class ACNClient {
    * webhook fires.
    */
   async subnetInvitationAccept(
-    subnetId: string,
+    slug: string,
     requestId: string,
     options?: { note?: string },
   ): Promise<SubnetJoinRequestRow> {
     return this.post(
-      `/api/v1/subnets/${subnetId}/invitations/${requestId}/accept`,
+      `/api/v1/subnets/${slug}/invitations/${requestId}/accept`,
       options?.note !== undefined ? { note: options.note } : undefined,
     );
   }
@@ -612,12 +612,12 @@ export class ACNClient {
    * fires.
    */
   async subnetInvitationReject(
-    subnetId: string,
+    slug: string,
     requestId: string,
     options?: { note?: string },
   ): Promise<SubnetJoinRequestRow> {
     return this.post(
-      `/api/v1/subnets/${subnetId}/invitations/${requestId}/reject`,
+      `/api/v1/subnets/${slug}/invitations/${requestId}/reject`,
       options?.note !== undefined ? { note: options.note } : undefined,
     );
   }
@@ -630,25 +630,25 @@ export class ACNClient {
    * consumers can tell "owner gave up" from "invitee said no".
    */
   async subnetInvitationCancel(
-    subnetId: string,
+    slug: string,
     requestId: string,
     options?: { note?: string },
   ): Promise<SubnetJoinRequestRow> {
     return this.request(
       'DELETE',
-      `/api/v1/subnets/${subnetId}/invitations/${requestId}`,
+      `/api/v1/subnets/${slug}/invitations/${requestId}`,
       options?.note !== undefined ? { body: { note: options.note } } : undefined,
     );
   }
 
   /**
-   * Owner lists invitation rows for `subnetId`.
+   * Owner lists invitation rows for `slug`.
    *
    * Owner-only — invitees use `agentSubnetInvitations` for their
    * own cross-subnet view.
    */
   async subnetInvitationList(
-    subnetId: string,
+    slug: string,
     options?: SubnetInvitationListOptions,
   ): Promise<SubnetInvitationListResponse> {
     const params: Record<string, string | number> = {
@@ -656,7 +656,7 @@ export class ACNClient {
       offset: options?.offset ?? 0,
     };
     if (options?.status !== undefined) params.status = options.status;
-    return this.get(`/api/v1/subnets/${subnetId}/invitations`, params);
+    return this.get(`/api/v1/subnets/${slug}/invitations`, params);
   }
 
   /**
@@ -1489,11 +1489,11 @@ export class ACNClient {
    * Pass `harnessUrl: null` to deregister.
    */
   async registerSubnetHarness(
-    subnetId: string,
+    slug: string,
     harnessUrl: string | null,
     harnessSecret?: string | null,
   ): Promise<void> {
-    await this.request('PATCH', `/api/v1/subnets/${subnetId}/harness`, {
+    await this.request('PATCH', `/api/v1/subnets/${slug}/harness`, {
       body: {
         harness_url: harnessUrl,
         harness_secret: harnessSecret ?? null,
