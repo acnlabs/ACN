@@ -103,7 +103,7 @@ class PostgresSubnetAllowlistRepository(ISubnetAllowlistRepository):
                     added_at=entry.added_at,
                 )
                 .on_conflict_do_nothing(
-                    index_elements=["subnet_id", "agent_id"]
+                    index_elements=["slug", "agent_id"]
                 )
                 .returning(SubnetAllowlistModel.slug)
             )

@@ -558,38 +558,38 @@ class AgentService:
         """
         return await self.repository.find_by_owner(owner)
 
-    async def join_subnet(self, agent_id: str, subnet_id: str) -> Agent:
+    async def join_subnet(self, agent_id: str, slug: str) -> Agent:
         """
         Add agent to a subnet
 
         Args:
             agent_id: Agent identifier
-            subnet_id: Subnet identifier
+            slug: Subnet slug
 
         Returns:
             Updated agent entity
         """
         agent = await self.get_agent(agent_id)
-        agent.add_to_subnet(subnet_id)
+        agent.add_to_subnet(slug)
         await self.repository.save(agent)
-        logger.info("agent_joined_subnet", agent_id=agent_id, subnet_id=subnet_id)
+        logger.info("agent_joined_subnet", agent_id=agent_id, slug=slug)
         return agent
 
-    async def leave_subnet(self, agent_id: str, subnet_id: str) -> Agent:
+    async def leave_subnet(self, agent_id: str, slug: str) -> Agent:
         """
         Remove agent from a subnet
 
         Args:
             agent_id: Agent identifier
-            subnet_id: Subnet identifier
+            slug: Subnet slug
 
         Returns:
             Updated agent entity
         """
         agent = await self.get_agent(agent_id)
-        agent.remove_from_subnet(subnet_id)
+        agent.remove_from_subnet(slug)
         await self.repository.save(agent)
-        logger.info("agent_left_subnet", agent_id=agent_id, subnet_id=subnet_id)
+        logger.info("agent_left_subnet", agent_id=agent_id, slug=slug)
         return agent
 
     # ========== Autonomous Agent Methods ==========
