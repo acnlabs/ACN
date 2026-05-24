@@ -16,7 +16,7 @@
  *   `createSubnet` and is omitted when not set (back-compat for
  *   legacy callers).
  * - `SubnetCreateRequest` ADR-0003 nesting fields
- *   (`parent_subnet_id`, `lifecycle`, `linked_task_id`)
+ *   (`parent_slug`, `lifecycle`, `linked_task_id`)
  *   round-trip through `createSubnet` and are all omitted when
  *   not set (back-compat for legacy callers).
  * - `listChildren` / `promoteSubnet` issue the ADR-0003
@@ -75,7 +75,7 @@ describe('SubnetCreateRequest.join_policy', () => {
   it('serialises join_policy when set', async () => {
     const { client, calls } = setupFetchStub(201, {
       success: true,
-      subnet_id: 'gated',
+      slug: 'gated',
       message: 'ok',
     });
     await client.createSubnet({ name: 'Gated', join_policy: 'approval' });
@@ -87,7 +87,7 @@ describe('SubnetCreateRequest.join_policy', () => {
   it('omits join_policy from body when not set (back-compat)', async () => {
     const { client, calls } = setupFetchStub(201, {
       success: true,
-      subnet_id: 'open',
+      slug: 'open',
       message: 'ok',
     });
     await client.createSubnet({ name: 'Open' });
@@ -102,24 +102,24 @@ describe('SubnetCreateRequest.join_policy', () => {
 // ---------------------------------------------------------------------------
 
 describe('SubnetCreateRequest ADR-0003 nesting', () => {
-  it('serialises parent_subnet_id for nested subnets', async () => {
+  it('serialises parent_slug for nested subnets', async () => {
     const { client, calls } = setupFetchStub(201, {
       success: true,
-      subnet_id: 'child',
+      slug: 'child',
       message: 'ok',
     });
     await client.createSubnet({
       name: 'Child',
-      parent_subnet_id: 'top-level',
+      parent_slug: 'top-level',
     });
     const body = readBody(calls[0].init) as Record<string, unknown>;
-    expect(body.parent_subnet_id).toBe('top-level');
+    expect(body.parent_slug).toBe('top-level');
   });
 
   it('serialises lifecycle + linked_task_id together for task-scoped subnets', async () => {
     const { client, calls } = setupFetchStub(201, {
       success: true,
-      subnet_id: 'scoped',
+      slug: 'scoped',
       message: 'ok',
     });
     await client.createSubnet({
@@ -135,13 +135,13 @@ describe('SubnetCreateRequest ADR-0003 nesting', () => {
   it('omits all nesting fields from body when not set (back-compat)', async () => {
     const { client, calls } = setupFetchStub(201, {
       success: true,
-      subnet_id: 'flat',
+      slug: 'flat',
       message: 'ok',
     });
     await client.createSubnet({ name: 'Flat' });
     const body = readBody(calls[0].init) as Record<string, unknown>;
     expect(body).toStrictEqual({ name: 'Flat' });
-    expect(body).not.toHaveProperty('parent_subnet_id');
+    expect(body).not.toHaveProperty('parent_slug');
     expect(body).not.toHaveProperty('lifecycle');
     expect(body).not.toHaveProperty('linked_task_id');
   });
@@ -155,10 +155,10 @@ function serverSubnetPayload(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    subnet_id: 'squad-1',
+    slug: 'squad-1',
     name: 'Squad 1',
     owner: 'alice',
-    parent_subnet_id: 'parent-1',
+    parent_slug: 'parent-1',
     lifecycle: 'task_scoped',
     linked_task_id: 'task-42',
     ...overrides,
@@ -167,7 +167,7 @@ function serverSubnetPayload(
 
 describe('ADR-0003 listChildren / promoteSubnet', () => {
   it('listChildren GETs /subnets/{parent}/children and returns subnets array', async () => {
-    const child = serverSubnetPayload({ subnet_id: 'child-1' });
+    const child = serverSubnetPayload({ slug: 'child-1' });
     const { client, calls } = setupFetchStub(200, {
       count: 1,
       subnets: [child],
@@ -176,7 +176,7 @@ describe('ADR-0003 listChildren / promoteSubnet', () => {
     const children = await client.listChildren('parent-1');
 
     expect(children).toHaveLength(1);
-    expect(children[0].subnet_id).toBe('child-1');
+    expect(children[0].slug).toBe('child-1');
     expect(calls).toHaveLength(1);
     expect(calls[0].init.method).toBe('GET');
     expect(calls[0].url.pathname).toBe('/api/v1/subnets/parent-1/children');
@@ -230,7 +230,7 @@ describe('subnet allowlist', () => {
 
   it('subnetAllowlistList passes pagination params', async () => {
     const { client, calls } = setupFetchStub(200, {
-      subnet_id: 'squad-1',
+      slug: 'squad-1',
       entries: [],
     });
     await client.subnetAllowlistList('squad-1', { limit: 50, offset: 10 });
@@ -287,7 +287,7 @@ describe('subnet join requests', () => {
 
   it('subnetJoinRequestList defaults kind to join_request', async () => {
     const { client, calls } = setupFetchStub(200, {
-      subnet_id: 'squad-1',
+      slug: 'squad-1',
       items: [],
     });
     await client.subnetJoinRequestList('squad-1');
@@ -302,7 +302,7 @@ describe('subnet join requests', () => {
 
   it('subnetJoinRequestList passes status + allowlist_auto kind', async () => {
     const { client, calls } = setupFetchStub(200, {
-      subnet_id: 'squad-1',
+      slug: 'squad-1',
       items: [],
     });
     await client.subnetJoinRequestList('squad-1', {
@@ -397,7 +397,7 @@ describe('subnet invitations', () => {
 
   it('subnetInvitationList omits status when none and uses default pagination', async () => {
     const { client, calls } = setupFetchStub(200, {
-      subnet_id: 'squad-1',
+      slug: 'squad-1',
       items: [],
     });
     await client.subnetInvitationList('squad-1');
@@ -409,7 +409,7 @@ describe('subnet invitations', () => {
 
   it('subnetInvitationList includes status filter', async () => {
     const { client, calls } = setupFetchStub(200, {
-      subnet_id: 'squad-1',
+      slug: 'squad-1',
       items: [],
     });
     await client.subnetInvitationList('squad-1', { status: 'pending' });

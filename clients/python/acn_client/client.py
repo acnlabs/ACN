@@ -436,24 +436,24 @@ class ACNClient:
         )
 
     async def list_subnets(
-        self, parent_subnet_id: str | None = None
+        self, parent_slug: str | None = None
     ) -> list[SubnetInfo]:
         """List subnets.
 
         Args:
-            parent_subnet_id: When set, filter to immediate children
+            parent_slug: When set, filter to immediate children
                 of the given parent (ADR-0003). The server applies
                 the same ACL as the unfiltered list — private
                 children not visible to this client are silently
                 omitted.
         """
         params: dict[str, str] | None = None
-        if parent_subnet_id is not None:
-            params = {"parent": parent_subnet_id}
+        if parent_slug is not None:
+            params = {"parent": parent_slug}
         data = await self._request("GET", "/api/v1/subnets", params=params)
         return [SubnetInfo.model_validate(s) for s in data.get("subnets", [])]
 
-    async def list_children(self, parent_subnet_id: str) -> list[SubnetInfo]:
+    async def list_children(self, parent_slug: str) -> list[SubnetInfo]:
         """List immediate children of a subnet (ADR-0003).
 
         Convenience wrapper over the dedicated
@@ -463,47 +463,47 @@ class ACNClient:
         non-visible private children are omitted.
         """
         data = await self._request(
-            "GET", f"/api/v1/subnets/{parent_subnet_id}/children"
+            "GET", f"/api/v1/subnets/{parent_slug}/children"
         )
         return [SubnetInfo.model_validate(s) for s in data.get("subnets", [])]
 
-    async def promote_subnet(self, subnet_id: str) -> SubnetInfo:
+    async def promote_subnet(self, slug: str) -> SubnetInfo:
         """Promote a ``task_scoped`` subnet to ``persistent`` (ADR-0003).
 
         Owner-only. Idempotent — promoting an already-persistent
         subnet returns its current state unchanged.
         """
-        data = await self._request("POST", f"/api/v1/subnets/{subnet_id}/promote")
+        data = await self._request("POST", f"/api/v1/subnets/{slug}/promote")
         return SubnetInfo.model_validate(data)
 
-    async def get_subnet(self, subnet_id: str) -> SubnetInfo:
+    async def get_subnet(self, slug: str) -> SubnetInfo:
         """Get subnet by ID"""
-        data = await self._request("GET", f"/api/v1/subnets/{subnet_id}")
+        data = await self._request("GET", f"/api/v1/subnets/{slug}")
         return SubnetInfo.model_validate(data)
 
-    async def delete_subnet(self, subnet_id: str) -> dict[str, Any]:
+    async def delete_subnet(self, slug: str) -> dict[str, Any]:
         """Delete a subnet you own (requires Agent API Key — only the owning agent can delete)."""
         return await self._request(
             "DELETE",
-            f"/api/v1/subnets/{subnet_id}",
+            f"/api/v1/subnets/{slug}",
         )
 
-    async def get_subnet_agents(self, subnet_id: str) -> list[AgentInfo]:
+    async def get_subnet_agents(self, slug: str) -> list[AgentInfo]:
         """Get agents in a subnet"""
-        data = await self._request("GET", f"/api/v1/subnets/{subnet_id}/agents")
+        data = await self._request("GET", f"/api/v1/subnets/{slug}/agents")
         return [AgentInfo.model_validate(a) for a in data.get("agents", [])]
 
-    async def join_subnet(self, agent_id: str, subnet_id: str) -> dict[str, Any]:
+    async def join_subnet(self, agent_id: str, slug: str) -> dict[str, Any]:
         """Join agent to subnet"""
-        return await self._request("POST", f"/api/v1/agents/{agent_id}/subnets/{subnet_id}")
+        return await self._request("POST", f"/api/v1/agents/{agent_id}/subnets/{slug}")
 
-    async def leave_subnet(self, agent_id: str, subnet_id: str) -> dict[str, Any]:
+    async def leave_subnet(self, agent_id: str, slug: str) -> dict[str, Any]:
         """Remove agent from subnet"""
-        return await self._request("DELETE", f"/api/v1/agents/{agent_id}/subnets/{subnet_id}")
+        return await self._request("DELETE", f"/api/v1/agents/{agent_id}/subnets/{slug}")
 
     async def set_subnet_harness(
         self,
-        subnet_id: str,
+        slug: str,
         harness_url: str | None,
         harness_secret: str | None = None,
     ) -> dict[str, Any]:
@@ -529,7 +529,7 @@ class ACNClient:
         Example::
 
             await client.set_subnet_harness(
-                subnet_id="my-subnet",
+                slug="my-subnet",
                 harness_url="https://paperclip.example.com/acn/webhook",
                 harness_secret="your-hmac-secret",
             )
@@ -538,7 +538,7 @@ class ACNClient:
         """
         return await self._request(
             "PATCH",
-            f"/api/v1/subnets/{subnet_id}/harness",
+            f"/api/v1/subnets/{slug}/harness",
             json={"harness_url": harness_url, "harness_secret": harness_secret},
         )
 
@@ -563,16 +563,16 @@ class ACNClient:
     #
     # All methods return raw ``dict[str, Any]`` (matching server's
     # un-typed JSON responses); list endpoints return paginated
-    # ``{ subnet_id|agent_id, items|entries }`` envelopes.
+    # ``{ slug|agent_id, items|entries }`` envelopes.
 
     # ----- Allowlist (owner-only, 3 verbs) ---------------------------------
 
     async def subnet_allowlist_add(
         self,
-        subnet_id: str,
+        slug: str,
         agent_id: str,
     ) -> dict[str, Any]:
-        """Pre-authorise ``agent_id`` on ``subnet_id``'s allowlist (owner only).
+        """Pre-authorise ``agent_id`` on ``slug``'s allowlist (owner only).
 
         Allowlisted agents skip the approval queue: their next
         ``join_subnet`` call lands in branch 4 (allowlist hit) and
@@ -585,16 +585,16 @@ class ACNClient:
         """
         return await self._request(
             "POST",
-            f"/api/v1/subnets/{subnet_id}/allowlist",
+            f"/api/v1/subnets/{slug}/allowlist",
             json={"agent_id": agent_id},
         )
 
     async def subnet_allowlist_remove(
         self,
-        subnet_id: str,
+        slug: str,
         agent_id: str,
     ) -> None:
-        """Remove ``agent_id`` from ``subnet_id``'s allowlist (owner only).
+        """Remove ``agent_id`` from ``slug``'s allowlist (owner only).
 
         Idempotent — removing an entry that doesn't exist still
         returns 204. Per ADR-0004 §"Allowlist mutation does not
@@ -605,26 +605,26 @@ class ACNClient:
         """
         await self._request(
             "DELETE",
-            f"/api/v1/subnets/{subnet_id}/allowlist/{agent_id}",
+            f"/api/v1/subnets/{slug}/allowlist/{agent_id}",
         )
         return None
 
     async def subnet_allowlist_list(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """List ``subnet_id``'s allowlist entries (owner only).
+        """List ``slug``'s allowlist entries (owner only).
 
         Owner-only by design — the allowlist is a privacy-sensitive
-        trust signal. Returns ``{ subnet_id, entries: [...] }``;
+        trust signal. Returns ``{ slug, entries: [...] }``;
         each entry carries ``agent_id``, ``added_by``, ``added_at``.
         """
         return await self._request(
             "GET",
-            f"/api/v1/subnets/{subnet_id}/allowlist",
+            f"/api/v1/subnets/{slug}/allowlist",
             params={"limit": limit, "offset": offset},
         )
 
@@ -632,7 +632,7 @@ class ACNClient:
 
     async def subnet_join_request_approve(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         note: str | None = None,
@@ -652,13 +652,13 @@ class ACNClient:
             body["note"] = note
         return await self._request(
             "POST",
-            f"/api/v1/subnets/{subnet_id}/join-requests/{request_id}/approve",
+            f"/api/v1/subnets/{slug}/join-requests/{request_id}/approve",
             json=body or None,
         )
 
     async def subnet_join_request_reject(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         note: str | None = None,
@@ -674,13 +674,13 @@ class ACNClient:
             body["note"] = note
         return await self._request(
             "POST",
-            f"/api/v1/subnets/{subnet_id}/join-requests/{request_id}/reject",
+            f"/api/v1/subnets/{slug}/join-requests/{request_id}/reject",
             json=body or None,
         )
 
     async def subnet_join_request_withdraw(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         note: str | None = None,
@@ -696,20 +696,20 @@ class ACNClient:
             body["note"] = note
         return await self._request(
             "DELETE",
-            f"/api/v1/subnets/{subnet_id}/join-requests/{request_id}",
+            f"/api/v1/subnets/{slug}/join-requests/{request_id}",
             json=body or None,
         )
 
     async def subnet_join_request_list(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         kind: str = "join_request",
         status: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Owner lists join_request / allowlist_auto rows for ``subnet_id``.
+        """Owner lists join_request / allowlist_auto rows for ``slug``.
 
         ``kind`` defaults to ``"join_request"``; pass
         ``"allowlist_auto"`` to inspect the audit rows synthesised
@@ -726,7 +726,7 @@ class ACNClient:
             params["status"] = status
         return await self._request(
             "GET",
-            f"/api/v1/subnets/{subnet_id}/join-requests",
+            f"/api/v1/subnets/{slug}/join-requests",
             params=params,
         )
 
@@ -734,7 +734,7 @@ class ACNClient:
 
     async def subnet_invitation_send(
         self,
-        subnet_id: str,
+        slug: str,
         agent_id: str,
         *,
         note: str | None = None,
@@ -765,13 +765,13 @@ class ACNClient:
             body["note"] = note
         return await self._request(
             "POST",
-            f"/api/v1/subnets/{subnet_id}/invitations",
+            f"/api/v1/subnets/{slug}/invitations",
             json=body,
         )
 
     async def subnet_invitation_accept(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         note: str | None = None,
@@ -788,13 +788,13 @@ class ACNClient:
             body["note"] = note
         return await self._request(
             "POST",
-            f"/api/v1/subnets/{subnet_id}/invitations/{request_id}/accept",
+            f"/api/v1/subnets/{slug}/invitations/{request_id}/accept",
             json=body or None,
         )
 
     async def subnet_invitation_reject(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         note: str | None = None,
@@ -810,13 +810,13 @@ class ACNClient:
             body["note"] = note
         return await self._request(
             "POST",
-            f"/api/v1/subnets/{subnet_id}/invitations/{request_id}/reject",
+            f"/api/v1/subnets/{slug}/invitations/{request_id}/reject",
             json=body or None,
         )
 
     async def subnet_invitation_cancel(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         note: str | None = None,
@@ -834,22 +834,22 @@ class ACNClient:
             body["note"] = note
         return await self._request(
             "DELETE",
-            f"/api/v1/subnets/{subnet_id}/invitations/{request_id}",
+            f"/api/v1/subnets/{slug}/invitations/{request_id}",
             json=body or None,
         )
 
     async def subnet_invitation_list(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         status: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Owner lists invitation rows for ``subnet_id``.
+        """Owner lists invitation rows for ``slug``.
 
         Owner-only — invitees use :meth:`agent_subnet_invitations`
-        for their own cross-subnet view. Returns ``{ subnet_id,
+        for their own cross-subnet view. Returns ``{ slug,
         items: [...] }``.
         """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
@@ -857,7 +857,7 @@ class ACNClient:
             params["status"] = status
         return await self._request(
             "GET",
-            f"/api/v1/subnets/{subnet_id}/invitations",
+            f"/api/v1/subnets/{slug}/invitations",
             params=params,
         )
 
@@ -1576,7 +1576,7 @@ class ACNClient:
             task_id, task_title, task_type, task_description, role,
             status, submission, review_notes, rejection_reason,
             resubmit_count, reward, reward_currency,
-            participation_id, subnet_id,
+            participation_id, slug,
             joined_at, submitted_at, completed_at.
         """
         response = await self._client.get(

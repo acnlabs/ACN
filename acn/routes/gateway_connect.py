@@ -1,6 +1,6 @@
 """Subnet gateway WebSocket — binds ``SubnetManager.handle_connection``.
 
-Exposes ``/gateway/connect/{subnet_id}/{agent_id}`` on the root ``app``.
+Exposes ``/gateway/connect/{slug}/{agent_id}`` on the root ``app``.
 Clients must immediately send the REGISTER JSON frame documented in
 ``SubnetManager``. Inbound heartbeat frames refresh Redis ``alive`` TTL via
 implicit heartbeat when ``SubnetManager`` receives ``agent_service`` from
@@ -57,10 +57,10 @@ def _extract_gateway_credentials(websocket: WebSocket) -> dict | None:
     return None
 
 
-@router.websocket("/gateway/connect/{subnet_id}/{agent_id}")
+@router.websocket("/gateway/connect/{slug}/{agent_id}")
 async def gateway_connect(
     websocket: WebSocket,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_id: AgentIdPath,
     subnet_manager: SubnetManager = Depends(get_subnet_manager),
 ):
@@ -84,9 +84,9 @@ async def gateway_connect(
         # can detect abuse patterns.
         logger.info(
             "gateway_connect_unauthenticated",
-            subnet_id=subnet_id,
+            slug=slug,
             agent_id=agent_id,
         )
     await subnet_manager.handle_connection(
-        websocket, subnet_id, agent_id, credentials=credentials
+        websocket, slug, agent_id, credentials=credentials
     )
