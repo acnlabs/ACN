@@ -4,7 +4,7 @@ import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 
 interface SubnetInfo {
-  subnet_id: string;
+  slug: string;
   name: string;
   owner?: string;
   description?: string;
@@ -15,7 +15,8 @@ interface SubnetInfo {
   metadata?: Record<string, unknown>;
   // ADR-0003 nesting fields (optional + back-compat default
   // tolerant — older servers may omit them).
-  parent_subnet_id?: string | null;
+  parent_slug?: string | null;
+  /** @deprecated */ parent_subnet_id?: string | null;
   lifecycle?: 'persistent' | 'task_scoped';
   linked_task_id?: string | null;
 }
@@ -27,7 +28,7 @@ interface SubnetListResponse {
 
 interface SubnetCreateResponse {
   status: string;
-  subnet_id: string;
+  slug: string;
   is_public: boolean;
   gateway_a2a_url: string;
   gateway_ws_url: string;
@@ -54,7 +55,7 @@ type SubnetJoinRequestStatus =
 
 interface SubnetJoinRequestDTO {
   request_id: string;
-  subnet_id: string;
+  slug: string;
   agent_id: string;
   kind: SubnetJoinRequestKind;
   status: SubnetJoinRequestStatus;
@@ -66,24 +67,24 @@ interface SubnetJoinRequestDTO {
 }
 
 interface SubnetAllowlistEntryDTO {
-  subnet_id: string;
+  slug: string;
   agent_id: string;
   added_by: string;
   added_at: string | null;
 }
 
 interface JoinRequestListResponse {
-  subnet_id: string;
+  slug: string;
   items: SubnetJoinRequestDTO[];
 }
 
 interface InvitationListResponse {
-  subnet_id: string;
+  slug: string;
   items: SubnetJoinRequestDTO[];
 }
 
 interface AllowlistListResponse {
-  subnet_id: string;
+  slug: string;
   entries: SubnetAllowlistEntryDTO[];
 }
 
@@ -98,23 +99,23 @@ interface AgentInvitationsResponse {
 // on body shape (not HTTP status, which the fetch wrapper doesn't expose).
 // All variants carry ``subnet_id`` + ``agent_id``.
 type JoinResponseBody =
-  | { status: 'joined'; subnet_id: string; agent_id: string } // branches 1+2
+  | { status: 'joined'; slug: string; agent_id: string } // branches 1+2
   | {
       auto_resolved: true;
       resolved_kind: 'invitation';
-      subnet_id: string;
+      slug: string;
       agent_id: string;
       invitation_id: string;
       via: 'self_join' | 'allowlist';
     } // branches 3+4
   | {
-      subnet_id: string;
+      slug: string;
       agent_id: string;
       request_id: string;
       via: 'allowlist';
     } // branch 5
   | {
-      subnet_id: string;
+      slug: string;
       agent_id: string;
       request_id: string;
       status: 'pending';
@@ -125,7 +126,7 @@ type JoinResponseBody =
 // or the merge path where the target already had a pending join_request.
 type InviteResponseBody =
   | {
-      subnet_id: string;
+      slug: string;
       agent_id: string;
       invitation_id: string;
       status: 'pending';
@@ -133,7 +134,7 @@ type InviteResponseBody =
   | {
       auto_resolved: true;
       resolved_kind: 'join_request';
-      subnet_id: string;
+      slug: string;
       agent_id: string;
       request_id: string;
     };
@@ -168,7 +169,7 @@ function formatJoinRequest(r: SubnetJoinRequestDTO, index?: number): string {
   const prefix = index !== undefined ? `[${index + 1}] ` : '';
   const lines = [
     `${prefix}${r.request_id}  [${r.kind} / ${r.status}]`,
-    `  Subnet     : ${r.subnet_id}`,
+    `  Subnet     : ${r.slug}`,
     `  Agent      : ${r.agent_id}`,
     `  InitiatedBy: ${r.initiated_by}`,
   ];
@@ -257,12 +258,12 @@ function formatInviteResponse(
 function formatSubnet(s: SubnetInfo, index?: number): string {
   const prefix = index !== undefined ? `[${index + 1}] ` : '';
   const privacy = s.is_private ? ' [private]' : ' [public]';
-  const lines = [`${prefix}${s.subnet_id}${privacy}`, `  Name  : ${s.name}`];
+  const lines = [`${prefix}${s.slug}${privacy}`, `  Name  : ${s.name}`];
   if (s.owner) lines.push(`  Owner : ${s.owner}`);
   if (s.description) lines.push(`  Desc  : ${s.description}`);
   if (s.created_at) lines.push(`  Since : ${s.created_at}`);
-  if (s.parent_subnet_id) {
-    lines.push(`  Parent: ${s.parent_subnet_id}`);
+  if (s.parent_slug ?? s.parent_subnet_id) {
+    lines.push(`  Parent: ${s.parent_slug ?? s.parent_subnet_id}`);
   }
   if (s.lifecycle && s.lifecycle !== 'persistent') {
     const task = s.linked_task_id ? ` (task=${s.linked_task_id})` : '';
@@ -354,7 +355,7 @@ export function subnetCommand(): Command {
     .description('List agents in a subnet')
     .action(async (subnetId: string) => {
       try {
-        const res = await acnGet<{ subnet_id: string; agents: unknown[]; count: number }>(
+        const res = await acnGet<{ slug: string; agents: unknown[]; count: number }>(
           `/subnets/${subnetId}/agents`
         );
         const count = res.count ?? (res.agents ?? []).length;
@@ -390,7 +391,7 @@ export function subnetCommand(): Command {
     .action(async (subnetId: string, opts: { agentId?: string }) => {
       const agentId = opts.agentId ?? requireAgentId();
       try {
-        const res = await acnDelete<{ status: string; agent_id: string; subnet_id: string }>(
+        const res = await acnDelete<{ status: string; agent_id: string; slug: string }>(
           `/agents/${agentId}/subnets/${subnetId}`
         );
         output(res, `Left subnet ${subnetId} (status: ${res.status})`);
@@ -484,16 +485,16 @@ export function subnetCommand(): Command {
           name: opts.name,
           is_private: !!opts.private,
         };
-        if (opts.id) body.subnet_id = opts.id;
+        if (opts.id) body.slug = opts.id;
         if (opts.description) body.description = opts.description;
         if (joinPolicy !== undefined) body.join_policy = joinPolicy;
-        if (opts.parent) body.parent_subnet_id = opts.parent;
+        if (opts.parent) body.parent_slug = opts.parent;
         body.lifecycle = lifecycle;
         if (opts.task) body.linked_task_id = opts.task;
         try {
           const res = await acnPost<SubnetCreateResponse>('/subnets', body);
           const lines = [
-            `Subnet created: ${res.subnet_id}`,
+            `Subnet created: ${res.slug}`,
             `  Visibility : ${res.is_public ? 'public' : 'private'}`,
             `  Gateway A2A: ${res.gateway_a2a_url}`,
             `  Gateway WS : ${res.gateway_ws_url}`,
@@ -528,7 +529,7 @@ export function subnetCommand(): Command {
         const lifecycle = res.lifecycle ?? 'persistent';
         output(
           res,
-          `Subnet ${res.subnet_id} lifecycle=${lifecycle}` +
+          `Subnet ${res.slug} lifecycle=${lifecycle}` +
             (res.linked_task_id ? ` (still linked to task ${res.linked_task_id})` : '')
         );
       } catch (err) {
@@ -546,10 +547,10 @@ export function subnetCommand(): Command {
         process.exit(1);
       }
       try {
-        const res = await acnDelete<{ status: string; subnet_id: string }>(
+        const res = await acnDelete<{ status: string; slug: string }>(
           `/subnets/${subnetId}`
         );
-        output(res, `Subnet ${res.subnet_id} ${res.status}`);
+        output(res, `Subnet ${res.slug} ${res.status}`);
       } catch (err) {
         handleError(err);
       }
@@ -643,7 +644,7 @@ export function subnetCommand(): Command {
         }>(`/agents/${agentId}/subnets`);
         const subnetIds = subs.subnets ?? [];
         const aggregated: Array<{
-          subnet_id: string;
+          slug: string;
           request: SubnetJoinRequestDTO;
         }> = [];
         for (const sid of subnetIds) {
@@ -652,7 +653,7 @@ export function subnetCommand(): Command {
               `/subnets/${sid}/join-requests?status=pending&kind=join_request`
             );
             for (const r of res.items ?? []) {
-              aggregated.push({ subnet_id: sid, request: r });
+              aggregated.push({ slug: sid, request: r });
             }
           } catch {
             // Owner-only — silently skip non-owned subnets (per
@@ -1065,7 +1066,7 @@ export function subnetCommand(): Command {
             `/subnets/${subnetId}/allowlist/${opts.agentId}`
           );
           output(
-            { subnet_id: subnetId, agent_id: opts.agentId, removed: true },
+            { slug: subnetId, agent_id: opts.agentId, removed: true },
             `removed ${opts.agentId} from allowlist of subnet ${subnetId}`
           );
         } catch (err) {
@@ -1095,7 +1096,7 @@ export function subnetCommand(): Command {
       try {
         const res = await acnPatch<{
           status: string;
-          subnet_id: string;
+          slug: string;
           harness_url: string | null;
           harness_registered: boolean;
         }>(`/subnets/${subnetId}/harness`, {
@@ -1103,7 +1104,7 @@ export function subnetCommand(): Command {
           harness_secret: opts.secret ?? null,
         });
         const lines = [
-          `Harness registered on subnet ${res.subnet_id}`,
+          `Harness registered on subnet ${res.slug}`,
           `  URL       : ${res.harness_url}`,
           `  Signed    : ${opts.secret ? 'yes (HMAC-SHA256)' : 'no (unsigned)'}`,
         ];
@@ -1125,14 +1126,14 @@ export function subnetCommand(): Command {
       try {
         const res = await acnPatch<{
           status: string;
-          subnet_id: string;
+          slug: string;
           harness_url: string | null;
           harness_registered: boolean;
         }>(`/subnets/${subnetId}/harness`, {
           harness_url: null,
           harness_secret: null,
         });
-        output(res, `Harness unregistered from subnet ${res.subnet_id}`);
+        output(res, `Harness unregistered from subnet ${res.slug}`);
       } catch (err) {
         handleError(err);
       }
