@@ -7,12 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.12.0] - 2026-05-24
+## [0.14.0] - 2026-05-24
 
-Coordinated release: server **0.12.0**, Python SDK **0.13.0**, TypeScript SDK
-**0.15.0**, CLI **@acnlabs/acn-cli** **0.13.0**, agent skill **0.16.0**.
+Coordinated release: server **0.14.0**, Python SDK **0.12.0**, TypeScript SDK
+**0.14.0**, CLI **@acnlabs/acn-cli** **0.12.0**, agent skill **0.16.0**.
 
-Publish by tagging `v0.12.0` on `main` (triggers `.github/workflows/release.yml`).
+Publish by tagging `v0.14.0` on `main` (triggers `.github/workflows/release.yml`).
 
 ### Added — CLI
 
