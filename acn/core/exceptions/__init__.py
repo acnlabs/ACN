@@ -185,12 +185,12 @@ class AlreadyMemberError(JoinFlowError):
     See ADR §State machine edges for both cases.
     """
 
-    def __init__(self, subnet_id: str, agent_id: str) -> None:
-        self.slug = subnet_id
+    def __init__(self, slug: str, agent_id: str) -> None:
+        self.slug = slug
         self.agent_id = agent_id
         super().__init__(
             "already_member",
-            f"agent {agent_id} is already a member of subnet {subnet_id}",
+            f"agent {agent_id} is already a member of subnet {slug}",
         )
 
 
@@ -201,12 +201,12 @@ class AllowlistEntryExistsError(JoinFlowError):
     add path raises; ADR §"Allowlist endpoints" pins the 409 here.
     """
 
-    def __init__(self, subnet_id: str, agent_id: str) -> None:
-        self.slug = subnet_id
+    def __init__(self, slug: str, agent_id: str) -> None:
+        self.slug = slug
         self.agent_id = agent_id
         super().__init__(
             "already_on_allowlist",
-            f"agent {agent_id} is already on subnet {subnet_id}'s allowlist",
+            f"agent {agent_id} is already on subnet {slug}'s allowlist",
         )
 
 
