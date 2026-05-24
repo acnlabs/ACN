@@ -289,7 +289,7 @@ class TestCreateTaskHarnessSnapshot:
             reward="0",
             reward_currency="credits",
             max_participants=1,
-            subnet_id="sn-paperclip",
+            subnet_slug="sn-paperclip",
         )
 
         assert task.metadata.get("harness_url") == "https://paperclip.example/acn"
@@ -312,7 +312,7 @@ class TestCreateTaskHarnessSnapshot:
             reward="0",
             reward_currency="credits",
             max_participants=1,
-            subnet_id="sn-plain",
+            subnet_slug="sn-plain",
         )
 
         assert "harness_url" not in task.metadata
@@ -330,7 +330,7 @@ class TestCreateTaskHarnessSnapshot:
             reward="0",
             reward_currency="credits",
             max_participants=1,
-            subnet_id=None,
+            subnet_slug=None,
         )
 
         assert "harness_url" not in task.metadata
@@ -353,7 +353,7 @@ class TestCreateTaskHarnessSnapshot:
             reward="0",
             reward_currency="credits",
             max_participants=1,
-            subnet_id="sn-paperclip",
+            subnet_slug="sn-paperclip",
         )
         # Task still created, harness simply not snapshotted
         assert "harness_url" not in task.metadata
@@ -380,7 +380,7 @@ class TestCreateTaskHarnessSnapshot:
             reward_currency="credits",
             max_participants=1,
             metadata=caller_metadata,
-            subnet_id="sn-paperclip",
+            subnet_slug="sn-paperclip",
         )
 
         assert caller_metadata == {"foo": "bar"}  # unchanged
@@ -409,7 +409,7 @@ def _make_task_with_harness(**overrides) -> Task:
         "reward": "0",
         "reward_currency": "credits",
         "max_participants": 1,
-        "subnet_id": "sn-paperclip",
+        "subnet_slug": "sn-paperclip",
         "metadata": metadata,
         "status": TaskStatus.IN_PROGRESS,
     }
