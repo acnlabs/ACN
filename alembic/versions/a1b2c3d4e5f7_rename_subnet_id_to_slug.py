@@ -1,6 +1,6 @@
 """rename subnets.subnet_id → slug, parent_subnet_id → parent_slug
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: a1b2c3d4e5f7
 Revises: 2b3c4d5e6f7a
 Create Date: 2026-05-23
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "a1b2c3d4e5f6"
+revision: str = "a1b2c3d4e5f7"
 down_revision: str | None = "2b3c4d5e6f7a"
 branch_labels = None
 depends_on = None
