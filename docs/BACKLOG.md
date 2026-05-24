@@ -643,13 +643,9 @@ P1 H3 已经把 task 状态机的 `complete_task` / `reject_task` / `cancel_task
 
 影响文件：`acn/services/billing_service.py`、`acn/core/interfaces/billing_repository.py`、`acn/infrastructure/persistence/postgres/billing_repository.py`、`acn/infrastructure/persistence/redis/billing_repository.py`（如存在）。
 
-### `submit_task` 单参与者路径未走 CAS
+### ~~`submit_task` 单参与者路径未走 CAS~~ ✅ Done (重复条目，见上方 ✅ 条目)
 
-H3 sprint 中只覆盖了 `complete_task` / `reject_task` / `cancel_task`。`submit_task` 单参与者分支（`task.submit()` 或 `task.resubmit()`）还是无条件 `await self.repository.save(task)`。两个并发 submit 会双触发 escrow.submit_v2 + 双 activity record。风险偏低（assignee 单一，并发概率小），但为状态机一致性也应该 CAS 化。
-
-修法：取 `expected_status = IN_PROGRESS or REJECTED`（按当前 status 分支决定），然后 `compare_and_save(task, expected_status)`，CAS 输了走 `get_task` 幂等返回。
-
-影响文件：`acn/services/task_service.py` `submit_task`。
+已实现：`task_service.py` `submit_task` 单参与者路径在第 718 行捕获 `expected_status`，调用 `compare_and_save(task, expected_status=expected_status)`。与上方 2026-05-05 的 ✅ 条目完全一致，本条为重复记录。
 
 ### Dependency 阶段失败请求不被限流（H7 延伸）
 
