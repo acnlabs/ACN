@@ -144,7 +144,7 @@ class TestCreateSubnetNestingInvariants:
         """Child creator must be parent owner or parent member."""
         mock_subnet_repository.exists.return_value = False
         mock_subnet_repository.find_by_id.return_value = _make_parent_subnet(
-            subnet_id="parent-1",
+            slug="parent-1",
             owner="alice",
             members={"alice"},  # mallory is NOT a parent member
         )
@@ -152,10 +152,10 @@ class TestCreateSubnetNestingInvariants:
 
         with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
-                subnet_id="child-1",
+                slug="child-1",
                 name="Squad",
                 owner="mallory",
-                parent_subnet_id="parent-1",
+                parent_slug="parent-1",
             )
         assert exc.value.reason == REASON_NOT_PARENT_MEMBER
         mock_subnet_repository.save.assert_not_called()
@@ -266,20 +266,20 @@ class TestCreateSubnetNestingInvariants:
         """Parent member (not owner) may create a child subnet."""
         mock_subnet_repository.exists.return_value = False
         mock_subnet_repository.find_by_id.return_value = _make_parent_subnet(
-            subnet_id="parent-1",
+            slug="parent-1",
             owner="alice",
             members={"alice", "bob"},
         )
         service = SubnetService(mock_subnet_repository)
 
         subnet = await service.create_subnet(
-            subnet_id="squad-2",
+            slug="squad-2",
             name="Bug Squad 2",
             owner="bob",
-            parent_subnet_id="parent-1",
+            parent_slug="parent-1",
         )
 
-        assert subnet.parent_subnet_id == "parent-1"
+        assert subnet.parent_slug == "parent-1"
         assert "bob" in subnet.member_agent_ids
         mock_subnet_repository.save.assert_awaited_once()
 
