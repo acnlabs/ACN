@@ -207,8 +207,8 @@ class TestTaskCreateRequestLegacySubnetId:
     """Back-compat: TaskCreateRequest must accept legacy ``subnet_id`` in request body."""
 
     def test_subnet_id_body_key_translated(self):
-        import sys
         import os
+        import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
         from acn.routes.tasks import TaskCreateRequest  # type: ignore[attr-defined]
 
