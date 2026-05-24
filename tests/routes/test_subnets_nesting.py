@@ -1,14 +1,15 @@
 """Route-level contract tests for ADR-0003 Phase 2.
 
-Pins the five ``INVALID_REQUEST`` rejection variants on
+Pins the six subnet-create invariant rejection variants on
 ``POST /api/v1/subnets``, the new ``GET /api/v1/subnets?parent=<id>``
 filter, the new ``GET /api/v1/subnets/{id}/children`` endpoint, and
 the new ``POST /api/v1/subnets/{id}/promote`` endpoint.
 
-Each rejection variant pins ``error_code = "invalid_request"`` AND a
-stable ``details.reason`` string that the CLI / SDK error parsers
-match against — these names are part of the public contract and
-shouldn't drift.
+Each rejection variant pins its expected ``error_code`` (mostly
+``invalid_request``, with ``not_parent_member`` mapped to
+``not_subnet_member``) AND a stable ``details.reason`` string that
+the CLI / SDK error parsers match against — these names are part of
+the public contract and shouldn't drift.
 """
 
 from __future__ import annotations
@@ -97,7 +98,7 @@ def _wire(agent_svc, subnet_svc) -> None:
 
 
 # ---------------------------------------------------------------------------
-# POST /api/v1/subnets — five rejection variants + happy path
+# POST /api/v1/subnets — invariant rejection variants + happy path
 # ---------------------------------------------------------------------------
 
 
@@ -106,10 +107,9 @@ _REASON_ERROR_CODE_MAP: dict[str, tuple[int, str]] = {
     REASON_PARENT_NOT_FOUND: (400, "invalid_request"),
     REASON_PARENT_IS_RESERVED: (400, "invalid_request"),
     REASON_PARENT_IS_NESTED: (400, "invalid_request"),
+    REASON_NOT_PARENT_MEMBER: (403, "not_subnet_member"),
     REASON_TASK_SCOPED_REQUIRES_LINKED_TASK: (400, "invalid_request"),
     REASON_LINKED_TASK_NOT_FOUND: (400, "invalid_request"),
-    # not_parent_member maps to 403 NOT_SUBNET_MEMBER, see the
-    # admin_add_subnet_member test below.
 }
 
 
@@ -132,8 +132,12 @@ def test_create_subnet_invariant_rejection(reason, stub_agent_service):
     # Send a body shape that *could* plausibly produce each reason —
     # the stub raises regardless, but a realistic payload helps the
     # contract test document each variant's intended call site.
-    if reason in {REASON_PARENT_NOT_FOUND, REASON_PARENT_IS_RESERVED,
-                  REASON_PARENT_IS_NESTED}:
+    if reason in {
+        REASON_PARENT_NOT_FOUND,
+        REASON_PARENT_IS_RESERVED,
+        REASON_PARENT_IS_NESTED,
+        REASON_NOT_PARENT_MEMBER,
+    }:
         body["parent_slug"] = "some-parent"
     if reason == REASON_TASK_SCOPED_REQUIRES_LINKED_TASK:
         body["lifecycle"] = "task_scoped"

@@ -251,6 +251,8 @@ class SubnetService:
           (defence in depth) any subnet whose owner is ``system``.
         - Parent's own ``parent_slug`` must be ``None`` (single-
           layer cap) — ``parent_is_nested``.
+        - Child creator must be the parent owner or one of the
+          parent's current members — ``not_parent_member``.
         - ``lifecycle == "task_scoped"`` requires
           ``linked_task_id`` to be set — ``task_scoped_requires_linked_task``.
         - ``linked_task_id`` must reference an existing task when a
@@ -295,7 +297,7 @@ class SubnetService:
 
         Raises:
             ValueError: If subnet already exists
-            SubnetInvariantError: On any of the five ADR-0003 invariant
+            SubnetInvariantError: On any ADR-0003 invariant
                 rejections, or the ADR-0004
                 ``visibility_policy_conflict`` rejection.
         """
@@ -351,6 +353,13 @@ class SubnetService:
                     REASON_PARENT_IS_NESTED,
                     f"Parent subnet '{parent_slug}' is itself nested; "
                     "single-layer cap enforced",
+                )
+            # Child-subnet ACL: only the parent owner or a current parent
+            # member may create a child under that parent.
+            if owner != parent.owner and owner not in parent.member_agent_ids:
+                raise SubnetInvariantError(
+                    REASON_NOT_PARENT_MEMBER,
+                    "child subnet creator must be the parent owner or a parent member",
                 )
 
         if linked_task_id is not None and self.task_repository is not None:
@@ -412,17 +421,10 @@ class SubnetService:
         # time so harness bootstrap (create_subnet → register_harness →
         # create_task) works without a follow-up join_subnet hack.
         #
-        # Child-subnet edge case: the membership-subset invariant
-        # (``add_member`` rejects non-parent members) is *not* tripped
-        # here because the owner-add bypasses ``SubnetService.add_member``
-        # by calling the entity method directly. For a child subnet to
-        # be useful, the owner must already be a parent member —
-        # otherwise the only person who can do anything in the squad
-        # (the owner) cannot widen its membership. We deliberately do
-        # NOT enforce this at create-time: an owner who creates a
-        # child subnet they're not in is a valid governance pattern
-        # (delegated admin), and the membership-subset invariant
-        # naturally limits what they can do afterward.
+        # Child-subnet ACL is enforced above (owner must be parent owner
+        # or parent member). We still bypass ``add_member`` here because
+        # this is the initial owner bootstrap write, not a membership
+        # mutation requested against an existing child subnet.
         subnet.add_member(owner)
 
         logger.info(

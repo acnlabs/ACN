@@ -48,7 +48,7 @@ def _make_parent_subnet(
 
 
 # ---------------------------------------------------------------------------
-# create_subnet — five invariant rejections
+# create_subnet — invariant rejections
 # ---------------------------------------------------------------------------
 
 
@@ -136,6 +136,29 @@ class TestCreateSubnetNestingInvariants:
                 parent_slug="mid-level",
             )
         assert exc.value.reason == REASON_PARENT_IS_NESTED
+
+    @pytest.mark.asyncio
+    async def test_parent_acl_rejects_creator_outside_parent(
+        self, mock_subnet_repository: ISubnetRepository
+    ):
+        """Child creator must be parent owner or parent member."""
+        mock_subnet_repository.exists.return_value = False
+        mock_subnet_repository.find_by_id.return_value = _make_parent_subnet(
+            slug="parent-1",
+            owner="alice",
+            members={"alice"},  # mallory is NOT a parent member
+        )
+        service = SubnetService(mock_subnet_repository)
+
+        with pytest.raises(SubnetInvariantError) as exc:
+            await service.create_subnet(
+                slug="child-1",
+                name="Squad",
+                owner="mallory",
+                parent_slug="parent-1",
+            )
+        assert exc.value.reason == REASON_NOT_PARENT_MEMBER
+        mock_subnet_repository.save.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_task_scoped_requires_linked_task(
@@ -234,6 +257,30 @@ class TestCreateSubnetNestingInvariants:
         assert subnet.linked_task_id == "task-42"
         # Owner-as-member invariant preserved for child subnets too.
         assert "alice" in subnet.member_agent_ids
+        mock_subnet_repository.save.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_happy_path_child_subnet_created_by_parent_member(
+        self, mock_subnet_repository: ISubnetRepository
+    ):
+        """Parent member (not owner) may create a child subnet."""
+        mock_subnet_repository.exists.return_value = False
+        mock_subnet_repository.find_by_id.return_value = _make_parent_subnet(
+            slug="parent-1",
+            owner="alice",
+            members={"alice", "bob"},
+        )
+        service = SubnetService(mock_subnet_repository)
+
+        subnet = await service.create_subnet(
+            slug="squad-2",
+            name="Bug Squad 2",
+            owner="bob",
+            parent_slug="parent-1",
+        )
+
+        assert subnet.parent_slug == "parent-1"
+        assert "bob" in subnet.member_agent_ids
         mock_subnet_repository.save.assert_awaited_once()
 
 
