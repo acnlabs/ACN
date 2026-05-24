@@ -206,7 +206,7 @@ async def add_to_allowlist(
 
     logger.info(
         "subnet_allowlist_added_via_http",
-        subnet_id=subnet_id,
+        slug=subnet_id,
         agent_id=body.agent_id,
         added_by=agent_info["agent_id"],
     )
@@ -253,7 +253,7 @@ async def remove_from_allowlist(
 
     logger.info(
         "subnet_allowlist_removed_via_http",
-        subnet_id=subnet_id,
+        slug=subnet_id,
         agent_id=agent_id,
         removed_by=agent_info["agent_id"],
     )
@@ -416,7 +416,7 @@ async def withdraw_join_request(
         row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
-            expected_subnet_id=subnet_id,
+            expected_slug=subnet_id,
         )
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e
@@ -600,7 +600,7 @@ async def accept_invitation(
         row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_subnet_id=subnet_id,
+            expected_slug=subnet_id,
         )
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e
@@ -626,7 +626,7 @@ async def accept_invitation(
         logger.warning(
             "accept_invitation_back_ref_failed_agent_not_found",
             agent_id=agent_info["agent_id"],
-            subnet_id=subnet_id,
+            slug=subnet_id,
         )
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
@@ -637,7 +637,7 @@ async def accept_invitation(
         logger.error(
             "accept_invitation_back_ref_failed",
             agent_id=agent_info["agent_id"],
-            subnet_id=subnet_id,
+            slug=subnet_id,
             error=str(e),
             exc_info=True,
         )
@@ -652,13 +652,13 @@ async def accept_invitation(
             logger.info(
                 "accept_invitation_rollback_ok",
                 agent_id=agent_info["agent_id"],
-                subnet_id=subnet_id,
+                slug=subnet_id,
             )
         except Exception as rollback_err:  # noqa: BLE001
             logger.error(
                 "accept_invitation_rollback_failed",
                 agent_id=agent_info["agent_id"],
-                subnet_id=subnet_id,
+                slug=subnet_id,
                 rollback_error=str(rollback_err),
             )
         raise HTTPException(
@@ -690,7 +690,7 @@ async def reject_invitation(
         row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_subnet_id=subnet_id,
+            expected_slug=subnet_id,
         )
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e

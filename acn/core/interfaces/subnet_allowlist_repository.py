@@ -53,7 +53,7 @@ class ISubnetAllowlistRepository(ABC):
         """
 
     @abstractmethod
-    async def remove(self, subnet_id: str, agent_id: str) -> bool:
+    async def remove(self, slug: str, agent_id: str) -> bool:
         """Drop ``(subnet_id, agent_id)`` from the allowlist.
 
         Idempotent: removing an absent pair is a no-op. Removing
@@ -69,7 +69,7 @@ class ISubnetAllowlistRepository(ABC):
         """
 
     @abstractmethod
-    async def is_member(self, subnet_id: str, agent_id: str) -> bool:
+    async def is_member(self, slug: str, agent_id: str) -> bool:
         """Check whether ``agent_id`` is on ``subnet_id``'s allowlist.
 
         Cold-path consultation point for the §join flow's branch 4.
@@ -80,7 +80,7 @@ class ISubnetAllowlistRepository(ABC):
 
     @abstractmethod
     async def list_for_subnet(
-        self, subnet_id: str, *, limit: int = 100, offset: int = 0
+        self, slug: str, *, limit: int = 100, offset: int = 0
     ) -> list[SubnetAllowlist]:
         """List allowlist entries for one subnet, most-recent first.
 
@@ -91,7 +91,7 @@ class ISubnetAllowlistRepository(ABC):
 
     @abstractmethod
     async def delete_for_subnet(
-        self, subnet_id: str, *, session: Any | None = None
+        self, slug: str, *, session: Any | None = None
     ) -> int:
         """Cascade-delete all entries for a subnet. Returns count deleted.
 

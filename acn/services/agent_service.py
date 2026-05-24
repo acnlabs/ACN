@@ -357,7 +357,7 @@ class AgentService:
         self,
         tags: list[str] | None = None,
         status: str = "online",
-        subnet_id: str | None = None,
+        slug: str | None = None,
     ) -> list[Agent]:
         """
         Search for agents.
@@ -365,7 +365,7 @@ class AgentService:
         Args:
             tags: Required tags (filters agents that have ALL tags)
             status: Agent status filter ("online" | "offline" | "all")
-            subnet_id: Subnet filter
+            slug: Subnet slug filter (renamed from ``subnet_id`` in Step 2)
 
         Returns:
             List of matching agents
@@ -379,8 +379,8 @@ class AgentService:
         an explicit ``POST /heartbeat`` re-stamped ``status='online'``
         in the database.
         """
-        if subnet_id:
-            candidates = await self.repository.find_by_subnet(subnet_id)
+        if slug:
+            candidates = await self.repository.find_by_subnet(slug)
             if tags:
                 candidates = [a for a in candidates if a.has_all_tags(tags)]
         elif tags:

@@ -176,7 +176,7 @@ class TaskService:
         group_id: str | None = None,
         deadline_hours: int | None = None,
         metadata: dict | None = None,
-        subnet_id: str | None = None,
+        subnet_slug: str | None = None,
         max_resubmit_attempts: int | None = None,
     ) -> Task:
         """
@@ -230,13 +230,13 @@ class TaskService:
         # bound to the harness that owned them at creation, which is the
         # desired guarantee for any orchestrator that has already taken over.
         metadata = dict(metadata) if metadata else {}
-        if subnet_id and self.subnet_repository:
+        if subnet_slug and self.subnet_repository:
             try:
-                parent_subnet = await self.subnet_repository.find_by_id(subnet_id)
+                parent_subnet = await self.subnet_repository.find_by_id(subnet_slug)
             except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "task_create_subnet_harness_snapshot_failed",
-                    subnet_id=subnet_id,
+                    subnet_slug=subnet_slug,
                     error=str(e),
                 )
                 parent_subnet = None
@@ -268,7 +268,7 @@ class TaskService:
             group_id=group_id,
             deadline=deadline,
             metadata=metadata or {},
-            subnet_id=subnet_id,
+            subnet_slug=subnet_slug,
             max_resubmit_attempts=max_resubmit_attempts,
         )
 
@@ -385,10 +385,10 @@ class TaskService:
             raise PermissionError("Creator cannot accept their own task")
 
         # ---- Subnet access control ----
-        if task.subnet_id:
+        if task.subnet_slug:
             if not self.subnet_repository:
                 raise PermissionError("Subnet access control not configured")
-            subnet = await self.subnet_repository.find_by_id(task.subnet_id)
+            subnet = await self.subnet_repository.find_by_id(task.subnet_slug)
             if not subnet:
                 raise PermissionError("Task subnet not found or deleted")
             if agent_id not in (subnet.member_agent_ids or set()):
@@ -1852,7 +1852,7 @@ class TaskService:
                 "reward": task.reward,
                 "reward_currency": task.reward_currency,
                 "participation_id": None,
-                "slug": task.subnet_id,
+                "slug": task.subnet_slug,
                 "joined_at": task.assigned_at.isoformat() if task.assigned_at else None,
                 "submitted_at": task.submitted_at.isoformat() if task.submitted_at else None,
                 "completed_at": task.completed_at.isoformat() if task.completed_at else None,
@@ -1888,7 +1888,7 @@ class TaskService:
                 "reward": task.reward,
                 "reward_currency": task.reward_currency,
                 "participation_id": p.participation_id,
-                "slug": task.subnet_id,
+                "slug": task.subnet_slug,
                 "joined_at": p.joined_at.isoformat() if p.joined_at else None,
                 "submitted_at": p.submitted_at.isoformat() if p.submitted_at else None,
                 "completed_at": p.completed_at.isoformat() if p.completed_at else None,
@@ -1901,11 +1901,11 @@ class TaskService:
         results.sort(key=_sort_key, reverse=True)
         return results[:limit]
 
-    async def is_subnet_member(self, subnet_id: str, agent_id: str) -> bool:
+    async def is_subnet_member(self, slug: str, agent_id: str) -> bool:
         """Check whether an agent is a member of the given subnet."""
         if not self.subnet_repository:
             return False
-        subnet = await self.subnet_repository.find_by_id(subnet_id)
+        subnet = await self.subnet_repository.find_by_id(slug)
         if not subnet:
             return False
         return agent_id in (subnet.member_agent_ids or set())
@@ -1974,7 +1974,7 @@ class TaskService:
                 logger.info(
                     "task_scoped_subnet_dissolved",
                     task_id=task_id,
-                    subnet_id=subnet.slug,
+                    subnet_slug=subnet.slug,
                 )
             except SubnetNotFoundException:
                 # Concurrent dissolve already won — treat as success
@@ -1982,13 +1982,13 @@ class TaskService:
                 logger.debug(
                     "task_scoped_cascade_subnet_already_gone",
                     task_id=task_id,
-                    subnet_id=subnet.slug,
+                    subnet_slug=subnet.slug,
                 )
             except Exception as exc:  # noqa: BLE001 - best-effort cleanup
                 logger.warning(
                     "task_scoped_cascade_failed",
                     task_id=task_id,
-                    subnet_id=subnet.slug,
+                    subnet_slug=subnet.slug,
                     error=str(exc),
                 )
 
@@ -2016,7 +2016,7 @@ class TaskService:
             "reward": task.reward,
             "reward_currency": task.reward_currency,
             "max_participants": task.max_participants,
-            "slug": task.subnet_id,
+            "slug": task.subnet_slug,
         }
 
         try:
@@ -2044,7 +2044,7 @@ class TaskService:
                 logger.warning(
                     "task_harness_webhook_failed",
                     task_id=task.task_id,
-                    subnet_id=task.subnet_id,
+                    subnet_slug=task.subnet_slug,
                     webhook_event=event.value if hasattr(event, "value") else str(event),
                     error=str(e),
                 )
@@ -2067,7 +2067,7 @@ class TaskService:
         payload = {
             "status": task.status.value,
             "creator_id": task.creator_id,
-            "slug": task.subnet_id,
+            "slug": task.subnet_slug,
             "participation_id": participation.participation_id,
             "participant_id": participation.participant_id,
             "participant_name": participation.participant_name,
@@ -2101,7 +2101,7 @@ class TaskService:
                 logger.warning(
                     "task_harness_participation_webhook_failed",
                     task_id=task.task_id,
-                    subnet_id=task.subnet_id,
+                    subnet_slug=task.subnet_slug,
                     webhook_event=event.value if hasattr(event, "value") else str(event),
                     error=str(e),
                 )

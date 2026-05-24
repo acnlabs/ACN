@@ -60,7 +60,12 @@ class TaskModel(Base):
     )
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     task_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
-    subnet_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    # Python attribute and DB column both named ``subnet_slug`` after
+    # migration ``b1c2d3e4f5a6_rename_cross_table_subnet_id_to_subnet_slug``.
+    # The explicit column name override is kept for safety until all
+    # environments have run the migration; remove the "subnet_slug" string
+    # arg once the rename is confirmed deployed everywhere.
+    subnet_slug: Mapped[str | None] = mapped_column("subnet_slug", String(100), nullable=True, index=True)
 
     __table_args__ = (
         Index("ix_tasks_mode", "mode"),
@@ -638,7 +643,9 @@ class SubnetJoinRequestModel(Base):
     # use ``uuid.UUID`` rather than the lower-case-hex string the rest of
     # the codebase passes around.
     request_id: Mapped[str] = mapped_column(String, primary_key=True)
-    slug: Mapped[str] = mapped_column("subnet_id", String, nullable=False)
+    # DB column renamed from ``subnet_id`` → ``slug`` in migration
+    # ``b1c2d3e4f5a6_rename_cross_table_subnet_id_to_subnet_slug``.
+    slug: Mapped[str] = mapped_column("slug", String, nullable=False)
     agent_id: Mapped[str] = mapped_column(String, nullable=False)
     # ``length=16`` mirrors the ADR data-model table for ``kind``; the
     # three legal values (``join_request`` is the longest at 13 chars)
@@ -672,7 +679,7 @@ class SubnetJoinRequestModel(Base):
         # cache layer.
         Index(
             "subnet_join_requests_pending_unique",
-            "subnet_id",
+            "slug",
             "agent_id",
             unique=True,
             postgresql_where=text("status = 'pending'"),
@@ -680,8 +687,8 @@ class SubnetJoinRequestModel(Base):
         # Owner-facing listing path:
         # ``GET /subnets/{s}/join-requests`` and ``/invitations``. The
         # filter on ``kind`` / ``status`` is application-side; the index
-        # only needs ``subnet_id`` to seek.
-        Index("ix_subnet_join_requests_subnet_id", "subnet_id"),
+        # only needs ``slug`` to seek.
+        Index("ix_subnet_join_requests_slug", "slug"),
         # Invitee-facing listing path:
         # ``GET /agents/{a}/subnet-invitations``. Composite predicate
         # selects the pending invitations the agent must decide; partial
@@ -716,7 +723,9 @@ class SubnetJoinRequestModel(Base):
 class SubnetAllowlistModel(Base):
     __tablename__ = "subnet_allowlist"
 
-    slug: Mapped[str] = mapped_column("subnet_id", String, nullable=False)
+    # DB column renamed from ``subnet_id`` → ``slug`` in migration
+    # ``b1c2d3e4f5a6_rename_cross_table_subnet_id_to_subnet_slug``.
+    slug: Mapped[str] = mapped_column("slug", String, nullable=False)
     # ``agent_id`` references ``agents.agent_id`` — but **no FK**. Symmetric
     # with ``subnet_join_requests``: ADR §"Cascade deletion" makes the
     # cascade manual for observability, and the route-layer existence
@@ -735,7 +744,7 @@ class SubnetAllowlistModel(Base):
     )
 
     __table_args__ = (
-        PrimaryKeyConstraint("subnet_id", "agent_id"),
+        PrimaryKeyConstraint("slug", "agent_id"),
         # Reverse lookup: "which subnets is agent X preauthorised on?"
         # — used by the agent-facing dashboard view; ops-only today,
         # cheap enough to keep around for future API surfaces.

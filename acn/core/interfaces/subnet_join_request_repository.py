@@ -71,7 +71,7 @@ class ISubnetJoinRequestRepository(ABC):
 
     @abstractmethod
     async def find_pending_for(
-        self, subnet_id: str, agent_id: str
+        self, slug: str, agent_id: str
     ) -> SubnetJoinRequest | None:
         """Return the unique pending row for ``(subnet_id, agent_id)``, if any.
 
@@ -92,7 +92,7 @@ class ISubnetJoinRequestRepository(ABC):
     @abstractmethod
     async def list_by_subnet(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         kind: str | None = None,
         status: str | None = None,
@@ -129,7 +129,7 @@ class ISubnetJoinRequestRepository(ABC):
 
     @abstractmethod
     async def delete_for_subnet(
-        self, subnet_id: str, *, session: Any | None = None
+        self, slug: str, *, session: Any | None = None
     ) -> int:
         """Cascade-delete all rows for a subnet. Returns count deleted.
 

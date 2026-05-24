@@ -403,7 +403,7 @@ class TestTasksFlatErrorSchemaCrossModule:
         """
         target = MagicMock()
         # Task entity attribute is still ``subnet_id`` (Step 2).
-        target.subnet_id = "subnet-private"
+        target.subnet_slug = "subnet-private"
         target.creator_id = "user-1"
         stub_task_service_for_followup.get_task = AsyncMock(return_value=target)
         _wire(stub_task_service_for_followup, stub_agent_service)
@@ -439,7 +439,7 @@ class TestTasksFlatErrorSchemaCrossModule:
         target = MagicMock()
         # See ``test_get_task_private_subnet_anonymous_returns_not_subnet_member``
         # — task entity attribute is still ``subnet_id`` until Step 2.
-        target.subnet_id = "subnet-private"
+        target.subnet_slug = "subnet-private"
         target.creator_id = "user-1"
         stub_task_service_for_followup.get_task = AsyncMock(return_value=target)
         stub_task_service_for_followup.is_subnet_member = AsyncMock(

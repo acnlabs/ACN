@@ -51,7 +51,7 @@ def _public_task() -> SimpleNamespace:
     must match the entity attribute the production code reads."""
     return SimpleNamespace(
         task_id="task-public",
-        subnet_id=None,
+        subnet_slug=None,
         creator_id="creator-1",
         creator_name="Creator",
         creator_type="human",
@@ -98,7 +98,7 @@ def _private_task(slug: str = "sn-1") -> SimpleNamespace:
     t = _public_task()
     t.task_id = "task-private"
     # See ``_public_task`` — entity attribute is still ``subnet_id``.
-    t.subnet_id = slug
+    t.subnet_slug = slug
     return t
 
 

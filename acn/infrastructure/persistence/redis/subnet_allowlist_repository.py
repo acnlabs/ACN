@@ -47,12 +47,12 @@ from ._hash_utils import normalize_hash as _normalize_hash
 logger = logging.getLogger(__name__)
 
 
-def _allowlist_set_key(subnet_id: str) -> str:
-    return f"acn:subnets:{subnet_id}:allowlist"
+def _allowlist_set_key(slug: str) -> str:
+    return f"acn:subnets:{slug}:allowlist"
 
 
-def _allowlist_meta_key(subnet_id: str, agent_id: str) -> str:
-    return f"acn:subnets:{subnet_id}:allowlist_meta:{agent_id}"
+def _allowlist_meta_key(slug: str, agent_id: str) -> str:
+    return f"acn:subnets:{slug}:allowlist_meta:{agent_id}"
 
 
 class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
@@ -92,7 +92,7 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         await self.redis.hset(meta_key, mapping=entry.to_dict())  # type: ignore[misc]
         return added_count > 0
 
-    async def remove(self, subnet_id: str, agent_id: str) -> bool:
+    async def remove(self, slug: str, agent_id: str) -> bool:
         """Remove from the SET and DEL the meta HASH.
 
         Returns ``True`` iff the SET membership was actually
@@ -101,23 +101,23 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         cleanup. A crash between them leaves an orphan meta HASH
         that the cascade deletion path sweeps later.
         """
-        set_key = _allowlist_set_key(subnet_id)
-        meta_key = _allowlist_meta_key(subnet_id, agent_id)
+        set_key = _allowlist_set_key(slug)
+        meta_key = _allowlist_meta_key(slug, agent_id)
 
         removed_count = await self.redis.srem(set_key, agent_id)
         await self.redis.delete(meta_key)
         return removed_count > 0
 
-    async def is_member(self, subnet_id: str, agent_id: str) -> bool:
+    async def is_member(self, slug: str, agent_id: str) -> bool:
         """O(1) SISMEMBER check; the hot path for the §join flow."""
         return bool(
             await self.redis.sismember(
-                _allowlist_set_key(subnet_id), agent_id
+                _allowlist_set_key(slug), agent_id
             )
         )
 
     async def list_for_subnet(
-        self, subnet_id: str, *, limit: int = 100, offset: int = 0
+        self, slug: str, *, limit: int = 100, offset: int = 0
     ) -> list[SubnetAllowlist]:
         """List allowlist entries for a subnet, most-recent first.
 
@@ -127,13 +127,13 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         cache-only crash artefact (see class docstring's "write
         atomicity" section).
         """
-        set_key = _allowlist_set_key(subnet_id)
+        set_key = _allowlist_set_key(slug)
         agent_ids = await self.redis.smembers(set_key)
 
         entries: list[SubnetAllowlist] = []
         for raw_aid in agent_ids:
             aid = _decode(raw_aid)
-            meta_key = _allowlist_meta_key(subnet_id, aid)
+            meta_key = _allowlist_meta_key(slug, aid)
             hash_data = await self.redis.hgetall(meta_key)
             if not hash_data:
                 # SET-only orphan; cache crash artefact. Don't fabricate
@@ -148,7 +148,7 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         return entries[offset : offset + limit]
 
     async def delete_for_subnet(
-        self, subnet_id: str, *, session: object | None = None
+        self, slug: str, *, session: object | None = None
     ) -> int:
         """Cascade-delete all allowlist entries for a subnet.
 
@@ -168,7 +168,7 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         Returns the count of meta HASHes actually deleted.
         """
         del session  # explicit ignore — see docstring
-        set_key = _allowlist_set_key(subnet_id)
+        set_key = _allowlist_set_key(slug)
         agent_ids = await self.redis.smembers(set_key)
 
         deleted_count = 0
@@ -176,7 +176,7 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
 
         for raw_aid in agent_ids:
             aid = _decode(raw_aid)
-            meta_key = _allowlist_meta_key(subnet_id, aid)
+            meta_key = _allowlist_meta_key(slug, aid)
             try:
                 await self.redis.delete(meta_key)
                 deleted_count += 1
@@ -189,7 +189,7 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
             logger.warning(
                 "delete_with_children_partial",
                 extra={
-                    "subnet_id": subnet_id,
+                    "slug": slug,
                     "table": "subnet_allowlist",
                     "failures": partial_failures,
                 },

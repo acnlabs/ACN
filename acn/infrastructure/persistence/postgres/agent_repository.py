@@ -196,12 +196,12 @@ class PostgresAgentRepository(IAgentRepository):
             result = await session.execute(select(AgentModel))
             return [self._model_to_agent(r) for r in result.scalars().all()]
 
-    async def find_by_subnet(self, subnet_id: str) -> list[Agent]:
+    async def find_by_subnet(self, slug: str) -> list[Agent]:
         """Agents whose subnet_ids array contains the given subnet_id."""
         async with self._session_factory() as session:
             result = await session.execute(
                 select(AgentModel).where(
-                    AgentModel.subnet_ids.contains(cast([subnet_id], ARRAY(String)))
+                    AgentModel.subnet_ids.contains(cast([slug], ARRAY(String)))
                 )
             )
             return [self._model_to_agent(r) for r in result.scalars().all()]
@@ -254,8 +254,8 @@ class PostgresAgentRepository(IAgentRepository):
                 if row.owner:
                     await self._redis.srem(f"acn:agents:by_owner:{row.owner}", agent_id)
                 await self._redis.srem("acn:agents:unclaimed", agent_id)
-                for subnet_id in (row.subnet_ids or []):
-                    await self._redis.srem(f"acn:subnets:{subnet_id}:agents", agent_id)
+                for slug in (row.subnet_ids or []):
+                    await self._redis.srem(f"acn:subnets:{slug}:agents", agent_id)
 
         return deleted
 
@@ -266,11 +266,11 @@ class PostgresAgentRepository(IAgentRepository):
             )
             return result.scalar() is not None
 
-    async def count_by_subnet(self, subnet_id: str) -> int:
+    async def count_by_subnet(self, slug: str) -> int:
         async with self._session_factory() as session:
             result = await session.execute(
                 select(func.count()).where(
-                    AgentModel.subnet_ids.contains(cast([subnet_id], ARRAY(String)))
+                    AgentModel.subnet_ids.contains(cast([slug], ARRAY(String)))
                 )
             )
             return result.scalar() or 0

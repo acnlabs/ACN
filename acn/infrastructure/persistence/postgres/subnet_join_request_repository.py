@@ -38,12 +38,12 @@ class SubnetJoinRequestPendingError(Exception):
     ``INVITATION_PENDING``); the route layer maps the token to the
     appropriate envelope per ADR §HTTP status code conventions."""
 
-    def __init__(self, subnet_id: str, agent_id: str) -> None:
+    def __init__(self, slug: str, agent_id: str) -> None:
         super().__init__(
             f"pending join request already exists for "
-            f"(slug={subnet_id!r}, agent_id={agent_id!r})"
+            f"(slug={slug!r}, agent_id={agent_id!r})"
         )
-        self.slug = subnet_id
+        self.slug = slug
         self.agent_id = agent_id
 
 
@@ -182,12 +182,12 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
             return self._model_to_entity(row) if row else None
 
     async def find_pending_for(
-        self, subnet_id: str, agent_id: str
+        self, slug: str, agent_id: str
     ) -> SubnetJoinRequest | None:
         async with self._session_factory() as session:
             result = await session.execute(
                 select(SubnetJoinRequestModel).where(
-                    SubnetJoinRequestModel.slug == subnet_id,
+                    SubnetJoinRequestModel.slug == slug,
                     SubnetJoinRequestModel.agent_id == agent_id,
                     SubnetJoinRequestModel.status == "pending",
                 )
@@ -197,7 +197,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
 
     async def list_by_subnet(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         kind: str | None = None,
         status: str | None = None,
@@ -206,7 +206,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
     ) -> list[SubnetJoinRequest]:
         async with self._session_factory() as session:
             stmt = select(SubnetJoinRequestModel).where(
-                SubnetJoinRequestModel.slug == subnet_id
+                SubnetJoinRequestModel.slug == slug
             )
             if kind is not None:
                 stmt = stmt.where(SubnetJoinRequestModel.kind == kind)
@@ -236,7 +236,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
             return [self._model_to_entity(r) for r in result.scalars().all()]
 
     async def delete_for_subnet(
-        self, subnet_id: str, *, session: AsyncSession | None = None
+        self, slug: str, *, session: AsyncSession | None = None
     ) -> int:
         """Cascade-delete all rows for a subnet. Returns count deleted.
 
@@ -267,7 +267,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         async with self._session_scope(session) as sess:
             result = await sess.execute(
                 delete(SubnetJoinRequestModel).where(
-                    SubnetJoinRequestModel.slug == subnet_id
+                    SubnetJoinRequestModel.slug == slug
                 )
             )
             return result.rowcount or 0

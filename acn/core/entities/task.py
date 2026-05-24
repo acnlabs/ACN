@@ -269,8 +269,11 @@ class Task:
     # Collaboration
     group_id: str | None = None  # Link related subtasks into a collaborative group
 
-    # Visibility — NULL means public; set to an ACN Subnet ID to restrict to members only
-    subnet_id: str | None = None
+    # Visibility — NULL means public; set to a subnet slug to restrict to members.
+    # Renamed from ``subnet_id`` in Step 2 of the slug-rename migration.
+    # DB column renamed ``tasks.subnet_id`` → ``subnet_slug`` via
+    # migration ``b1c2d3e4f5a6``.
+    subnet_slug: str | None = None
 
     # Max resubmit attempts per participation. None = unlimited.
     # Org Harnesses use this to prevent infinite grader-retry loops.
@@ -569,7 +572,7 @@ class Task:
             "deadline": self.deadline.isoformat() if self.deadline else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "metadata": self.metadata,
-            "subnet_id": self.subnet_id,
+            "subnet_slug": self.subnet_slug,
             "max_resubmit_attempts": self.max_resubmit_attempts,
             "resubmit_count": self.resubmit_count,
         }
@@ -615,5 +618,12 @@ class Task:
         # Default completion_mode for tasks created before this field existed
         if "completion_mode" not in data:
             data["completion_mode"] = "independent"
+
+        # Back-compat: rows serialised before the slug rename used ``subnet_id``.
+        # Accept both keys; ``subnet_slug`` wins when both are present.
+        if "subnet_id" in data and "subnet_slug" not in data:
+            data["subnet_slug"] = data.pop("subnet_id")
+        elif "subnet_id" in data:
+            data.pop("subnet_id")
 
         return cls(**data)
