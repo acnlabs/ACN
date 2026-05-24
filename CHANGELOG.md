@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-24
+
+Coordinated release: server **0.12.0**, Python SDK **0.13.0**, TypeScript SDK
+**0.15.0**, CLI **@acnlabs/acn-cli** **0.13.0**, agent skill **0.16.0**.
+
+Publish by tagging `v0.12.0` on `main` (triggers `.github/workflows/release.yml`).
+
 ### Added — CLI
 
 - **`acn tasks create --subnet <slug>`** (#135) — create subnet-scoped tasks from the CLI.
@@ -30,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`inbox_message_not_found`** — new `ErrorCode` for PATCH /history when the
   `route_id` is not in the inbox (replaces the semantically incorrect
   `agent_not_found` that would otherwise have been used).
+
+### Added — SDK
+
+- **Python SDK** — `TaskCreateRequest.subnet_slug`, `ack_inbox()`, `update_inbox_message_status()`,
+  `KNOWN_INBOX_MESSAGE_STATUSES` constant (ADR-0005 compliant).
+- **TypeScript SDK** — `ackInbox()`, `updateInboxMessageStatus()` (status typed as `string`),
+  `KNOWN_INBOX_MESSAGE_STATUSES` constant exported from index.
 
 ## [0.11.0] - 2026-05-20
 
