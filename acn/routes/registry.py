@@ -457,12 +457,12 @@ async def dev_register_agent(
     subnet_ids = request.get_subnet_ids()
 
     # Validate subnets
-    for subnet_id in subnet_ids:
-        if subnet_id != "public" and not subnet_manager.subnet_exists(subnet_id):
+    for slug in subnet_ids:
+        if slug != "public" and not subnet_manager.subnet_exists(slug):
             raise ACNHTTPError(
                 ErrorCode.SUBNET_NOT_FOUND,
                 400,
-                details={"slug": subnet_id},
+                details={"slug": slug},
             )
 
     try:
@@ -664,12 +664,12 @@ async def register_agent(
     subnet_ids = request.get_subnet_ids()
 
     # Validate subnets
-    for subnet_id in subnet_ids:
-        if subnet_id != "public" and not subnet_manager.subnet_exists(subnet_id):
+    for slug in subnet_ids:
+        if slug != "public" and not subnet_manager.subnet_exists(slug):
             raise ACNHTTPError(
                 ErrorCode.SUBNET_NOT_FOUND,
                 400,
-                details={"slug": subnet_id},
+                details={"slug": slug},
             )
 
     try:
