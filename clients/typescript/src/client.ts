@@ -198,6 +198,10 @@ export class ACNClient {
     return this.request<T>('POST', path, { body });
   }
 
+  private patch<T>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>('PATCH', path, { body });
+  }
+
   private delete<T>(path: string): Promise<T> {
     return this.request<T>('DELETE', path);
   }
@@ -745,6 +749,37 @@ export class ACNClient {
     if (options?.limit !== undefined) params.limit = options.limit;
     if (options?.consume) params.ack = true;
     return this.get(`/api/v1/communication/history/${agentId}`, params);
+  }
+
+  /**
+   * Precisely acknowledge (remove) specific messages from the inbox.
+   *
+   * Unlike `getMessageHistory({ consume: true })` which clears the entire inbox,
+   * this method removes only the messages whose `route_id` values are listed.
+   *
+   * @param agentId   Must match the authenticated agent's ID.
+   * @param routeIds  List of `route_id` values to remove (up to 500).
+   * @returns         Number of messages actually removed.
+   */
+  async ackInbox(agentId: string, routeIds: string[]): Promise<{ acked: number }> {
+    return this.post(`/api/v1/communication/history/${agentId}/ack`, { route_ids: routeIds });
+  }
+
+  /**
+   * Update the lifecycle status of a specific inbox message.
+   *
+   * @param agentId  Must match the authenticated agent's ID.
+   * @param routeId  `route_id` of the target message (from inbox listing).
+   * @param status   New status: `"unread"` | `"read"` | `"processed"`.
+   * @returns        Object with `agent_id`, `route_id`, and `status`.
+   * @throws         404 (`inbox_message_not_found`) if route_id is absent from inbox.
+   */
+  async updateInboxMessageStatus(
+    agentId: string,
+    routeId: string,
+    status: 'unread' | 'read' | 'processed',
+  ): Promise<{ agent_id: string; route_id: string; status: string }> {
+    return this.patch(`/api/v1/communication/history/${agentId}/${routeId}`, { status });
   }
 
   // ============================================

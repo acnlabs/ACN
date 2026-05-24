@@ -1002,6 +1002,59 @@ class ACNClient:
         messages: list[dict[str, Any]] = data.get("messages", [])
         return messages
 
+    async def ack_inbox(
+        self,
+        agent_id: str,
+        route_ids: list[str],
+    ) -> int:
+        """Precisely acknowledge (remove) specific messages from the inbox.
+
+        Unlike ``get_message_history(consume=True)`` which deletes the entire
+        inbox, this method removes only the messages whose ``route_id`` values
+        are listed — useful when processing messages in batches.
+
+        Args:
+            agent_id: Agent whose inbox to update (must match authenticated agent).
+            route_ids: List of ``route_id`` values to remove (up to 500).
+
+        Returns:
+            Number of messages actually removed.
+        """
+        data = await self._request(
+            "POST",
+            f"/api/v1/communication/history/{agent_id}/ack",
+            json={"route_ids": route_ids},
+        )
+        return int(data.get("acked", 0))
+
+    async def update_inbox_message_status(
+        self,
+        agent_id: str,
+        route_id: str,
+        status: str,
+    ) -> dict[str, Any]:
+        """Update the lifecycle status of a specific inbox message.
+
+        Allowed status values: ``"unread"``, ``"read"``, ``"processed"``.
+
+        Args:
+            agent_id: Agent whose inbox to update (must match authenticated agent).
+            route_id: ``route_id`` of the target message (from inbox listing).
+            status: New status. Accepted: ``"unread"``, ``"read"``, ``"processed"``.
+
+        Returns:
+            Dict with ``agent_id``, ``route_id``, and ``status`` keys.
+
+        Raises:
+            ACNError: 404 (``inbox_message_not_found``) if the route_id is absent
+                from the inbox; 403 if the API key does not match ``agent_id``.
+        """
+        return await self._request(
+            "PATCH",
+            f"/api/v1/communication/history/{agent_id}/{route_id}",
+            json={"status": status},
+        )
+
     # ============================================
     # Manifest Queue (Phase 2/3)
     # ============================================

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — CLI
+
+- **`acn tasks create --subnet <slug>`** (#135) — create subnet-scoped tasks from the CLI.
+  The `--subnet` option maps to the existing `subnet_slug` field on `POST /tasks/agent/create`;
+  the server enforces subnet membership for the calling agent. `subnet_slug` is also
+  surfaced in `acn tasks get` / `acn tasks list` output when present.
+
+### Added — Communication
+
+- **Inbox message lifecycle status** (#136) — each inbox message now carries a
+  `status` field (`"unread"` | `"read"` | `"processed"`). New messages are
+  stamped `"unread"` at delivery time; the previous binary model (keep or delete)
+  is unchanged — `GET /history` and `POST /history/ack` behave identically.
+- **`PATCH /api/v1/communication/history/{agent_id}/{route_id}`** — update the
+  status of a specific inbox message. Accepts `{"status": "read" | "processed" | "unread"}`.
+  Returns 404 (`inbox_message_not_found`) when the `route_id` is absent from
+  the inbox. Enforces agent-key ownership (403 otherwise). Rate-limited 120/min.
+
+### Added — Error codes
+
+- **`inbox_message_not_found`** — new `ErrorCode` for PATCH /history when the
+  `route_id` is not in the inbox (replaces the semantically incorrect
+  `agent_not_found` that would otherwise have been used).
+
 ## [0.11.0] - 2026-05-20
 
 Coordinated release: server **0.11.0**, Python SDK **0.11.0**, TypeScript SDK

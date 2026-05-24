@@ -697,6 +697,15 @@ class TaskCreateRequest(BaseModel):
         description="Max resubmits per participant after rejection. None=unlimited.",
     )
 
+    # ── Subnet scoping ────────────────────────────────────
+    subnet_slug: str | None = Field(
+        default=None,
+        description=(
+            "Restrict task visibility and participation to members of this subnet. "
+            "The caller must be a member of the subnet. None = public task."
+        ),
+    )
+
     # ── Extension ─────────────────────────────────────────
     metadata: dict = Field(default_factory=dict)
 
