@@ -627,7 +627,7 @@ class ReputationEventModel(Base):
 # future ADR is free to add the FK once cascade observability is no
 # longer a design goal.
 #
-# The unique partial index on ``(subnet_id, agent_id) WHERE status='pending'``
+# The unique partial index on ``(slug, agent_id) WHERE status='pending'``
 # is the schema-level enforcement of the "at most one pending per
 # (subnet, agent) across all kinds" invariant that the §join branch table
 # relies on. Without it, a self-join racing an invitation could create

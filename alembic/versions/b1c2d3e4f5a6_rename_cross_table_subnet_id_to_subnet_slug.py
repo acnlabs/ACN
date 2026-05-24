@@ -1,7 +1,7 @@
 """rename tasks.subnet_id → subnet_slug; allowlist/join_requests .subnet_id → slug
 
 Revision ID: b1c2d3e4f5a6
-Revises: a1b2c3d4e5f6
+Revises: a1b2c3d4e5f7
 Create Date: 2026-05-24
 
 Step 2 of the slug-rename migration (ADR slug rename).
