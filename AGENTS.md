@@ -53,6 +53,15 @@ uv run uvicorn acn.api:app --host 0.0.0.0 --port 8000 --reload
 
 API docs available at: http://localhost:8000/docs (only when `ENABLE_DOCS=true`)
 
+### Dev setup gotchas
+
+- **`docker-compose.yml` Redis does not expose port 6379 to the host** — it is internal to the Docker network. If `docker-compose up -d redis` leaves tests unable to connect, run Redis directly: `docker run -d --name acn-redis -p 6379:6379 redis:7-alpine redis-server --appendonly yes`
+- **`docker-compose.yml` requires `GF_SECURITY_ADMIN_PASSWORD`** to be set even when only starting the `redis` service (Compose interpolates all variables). Export it or use the standalone `docker run` command above.
+- **`INTERNAL_API_TOKEN` must be ≥ 32 characters** — the app refuses to start with a shorter value.
+- **`ESCROW_ENABLED=false` is required for local dev** unless you have a running AgentPlanet Backend pointed at by `BACKEND_URL`.
+- **`ruff check .` is the lint gate** — `ruff format --check` may report pre-existing formatting issues in the repo; only `ruff check` is enforced in CI.
+- **`pytest` has no `--timeout` flag** (`pytest-timeout` is not installed) — tests complete in ≈50 s without it.
+
 ---
 
 ## Run Commands
