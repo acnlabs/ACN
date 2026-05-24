@@ -11,7 +11,14 @@ from uuid import uuid4
 
 from a2a.compat.v0_3.types import AgentCard as A2AAgentCard  # type: ignore[import-untyped]
 from a2a.compat.v0_3.types import AgentSkill as A2AAgentSkill  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 # Re-export SDK types as canonical Agent Card / Skill for ACN
 AgentCard = A2AAgentCard
@@ -271,7 +278,15 @@ class AgentRegisterRequest(BaseModel):
         return v
 
     def get_subnet_ids(self) -> list[str]:
-        """Get effective subnet IDs (handles backward compatibility)"""
+        """Get effective subnet IDs (handles backward compatibility).
+
+        ``subnet_ids`` (plural) is the canonical input. The legacy
+        ``subnet_id`` (singular) is still accepted so older clients
+        that pre-date multi-subnet membership keep working — its value
+        is wrapped into a single-element list. Defaults to ``["public"]``
+        so registration without any subnet hint joins the platform's
+        always-on public subnet.
+        """
         if self.subnet_ids:
             return self.subnet_ids
         if self.subnet_id:
@@ -349,9 +364,9 @@ class SubnetInfo(BaseModel):
     - If no security_schemes: subnet is public (no auth required)
     """
 
-    subnet_id: str = Field(..., description="Canonical subnet identifier (human-readable, used in API paths and references)")
+    slug: str = Field(..., description="URL-safe human-readable identifier used in API paths (e.g. 'acnlabs-core'). Immutable after creation.")
     # Opaque UUID identifier. Surfaced for use cases where the human-
-    # readable subnet_id should not appear (e.g. anonymous SubnetStub
+    # readable slug should not appear (e.g. anonymous SubnetStub
     # responses for private subnets). Defaults to a fresh ``uuid4()`` so
     # in-memory / synthetic constructions (subnet_manager bootstrap, test
     # fixtures, manifest snapshots) don't have to plumb an ID through —
@@ -403,21 +418,21 @@ class SubnetInfo(BaseModel):
         False, description="Whether an Org Harness is registered for this subnet"
     )
 
-    # ADR-0003 nesting fields. ``parent_subnet_id`` is immutable
-    # after creation (no PATCH route exposes it). ``lifecycle`` is
-    # surfaced so consumers can render "auto-dissolving" UX hints
-    # and so prospective joiners can avoid task_scoped squads
-    # they'd rather not be auto-removed from.
+    # ADR-0003 nesting fields. ``parent_slug`` is immutable after
+    # creation (no PATCH route exposes it). ``lifecycle`` is surfaced so
+    # consumers can render "auto-dissolving" UX hints and so prospective
+    # joiners can avoid task_scoped squads they'd rather not be auto-
+    # removed from.
     #
-    # Privacy (ACL V6 / issue #114 B6): ``parent_subnet_id`` (the
-    # human-readable slug) is intentionally suppressed in API responses
-    # from ``_subnet_entity_to_info`` — the route always emits ``None``.
-    # Suppressing the slug prevents a public child subnet from leaking
-    # its private parent's naming convention to anonymous callers.
+    # Privacy (ACL V6 / issue #114 B6): ``parent_slug`` (the human-
+    # readable slug of the parent) is intentionally suppressed in API
+    # responses from ``_subnet_entity_to_info`` — the route always emits
+    # ``None``. Suppressing the slug prevents a public child subnet from
+    # leaking its private parent's naming convention to anonymous callers.
     # Consumers needing the parent relationship use ``parent_id``
     # (the opaque UUID below) and call ``GET /subnets/{parent_id}``
     # to resolve the slug under their own access level.
-    parent_subnet_id: str | None = Field(
+    parent_slug: str | None = Field(
         None,
         description=(
             "Deprecated — always None in responses from the routes layer "
@@ -492,11 +507,11 @@ class SubnetCreateRequest(BaseModel):
 
     Examples:
         # Public subnet (no auth)
-        {"subnet_id": "public-demo", "name": "Public Demo"}
+        {"slug": "public-demo", "name": "Public Demo"}
 
         # Bearer token auth
         {
-            "subnet_id": "team-a",
+            "slug": "team-a",
             "name": "Team A",
             "security_schemes": {
                 "bearer": {"type": "http", "scheme": "bearer"}
@@ -505,7 +520,7 @@ class SubnetCreateRequest(BaseModel):
 
         # API Key auth
         {
-            "subnet_id": "team-b",
+            "slug": "team-b",
             "name": "Team B",
             "security_schemes": {
                 "key": {"type": "apiKey", "in": "header", "name": "X-Subnet-Key"}
@@ -513,13 +528,25 @@ class SubnetCreateRequest(BaseModel):
         }
     """
 
-    subnet_id: str | None = Field(
+    slug: str | None = Field(
         None,
         min_length=1,
         max_length=64,
-        description="Unique subnet identifier. Optional — ACN auto-generates `subnet-{slug}-{rand6}` when omitted.",
+        # Accept the legacy ``subnet_id`` body field so older clients
+        # that pre-date the slug rename keep working: their value lands
+        # in ``slug`` rather than being silently dropped (which would
+        # make the route auto-generate a different identifier than the
+        # caller intended). Removed in a future major version once SDKs
+        # have rolled forward.
+        validation_alias=AliasChoices("slug", "subnet_id"),
+        description="URL-safe subnet identifier (e.g. 'acnlabs-core'). Optional — auto-generated when omitted. Legacy alias 'subnet_id' is also accepted on input.",
     )
-    name: str = Field(..., min_length=1, max_length=128, description="Subnet name")
+    name: str | None = Field(
+        None,
+        min_length=1,
+        max_length=128,
+        description="Display name shown in UIs. May contain spaces and Unicode. Defaults to slug when omitted.",
+    )
     description: str | None = Field(None, max_length=500, description="Subnet description")
     is_private: bool = Field(False, description="Whether this is a private subnet")
     security_schemes: dict[str, dict] | None = Field(
@@ -533,13 +560,18 @@ class SubnetCreateRequest(BaseModel):
 
     # ADR-0003 nesting params — all optional, defaults preserve
     # legacy "flat top-level persistent subnet" semantics.
-    parent_subnet_id: str | None = Field(
+    parent_slug: str | None = Field(
         None,
         min_length=1,
         max_length=64,
+        # Same legacy-alias treatment as ``slug`` above — keeps clients
+        # that still send ``parent_subnet_id`` in the create body
+        # functional during the rename rollout.
+        validation_alias=AliasChoices("parent_slug", "parent_subnet_id"),
         description=(
-            "Parent subnet ID for nested subnets (ADR-0003). Single-layer cap: "
-            "the parent itself must be top-level. Immutable after creation."
+            "Parent subnet slug for nested subnets (ADR-0003). Single-layer cap: "
+            "the parent itself must be top-level. Immutable after creation. "
+            "Legacy alias 'parent_subnet_id' is also accepted on input."
         ),
     )
     lifecycle: Literal["persistent", "task_scoped"] = Field(
@@ -599,7 +631,7 @@ class SubnetCreateResponse(BaseModel):
     """Response after creating a subnet"""
 
     status: str = Field(..., description="Creation status")
-    subnet_id: str = Field(..., description="Subnet ID")
+    slug: str = Field(..., description="URL-safe subnet identifier")
     is_public: bool = Field(..., description="Whether subnet is public (no auth required)")
     security_schemes: dict | None = Field(None, description="Configured security schemes")
     gateway_ws_url: str = Field(..., description="WebSocket URL for agents to connect")

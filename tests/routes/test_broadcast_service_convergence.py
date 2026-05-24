@@ -178,7 +178,7 @@ class TestBroadcastRouteUsesBroadcastService:
         broadcast_svc.broadcast.assert_awaited_once()
         kwargs = broadcast_svc.broadcast.await_args.kwargs
         assert kwargs["from_agent"] == "agent-a"
-        assert kwargs["subnet_id"] == "subnet-eu"
+        assert kwargs["slug"] == "subnet-eu"
         assert kwargs.get("tags") is None
         assert kwargs.get("target_agents") is None
 
@@ -218,7 +218,7 @@ class TestBroadcastRouteUsesBroadcastService:
         broadcast_svc.broadcast.assert_awaited_once()
         kwargs = broadcast_svc.broadcast.await_args.kwargs
         assert kwargs["tags"] == ["frontend", "review"]
-        assert kwargs.get("subnet_id") is None
+        assert kwargs.get("slug") is None
         assert kwargs.get("target_agents") is None
 
     def test_strategy_is_case_insensitive(self):

@@ -1,6 +1,6 @@
 """ACL V6 B8 — ?confirm=true safety guard on destructive DELETE endpoints.
 
-Both ``DELETE /api/v1/subnets/{subnet_id}`` and
+Both ``DELETE /api/v1/subnets/{slug}`` and
 ``DELETE /api/v1/agents/{agent_id}`` now require ``?confirm=true``.
 Omitting it or passing ``?confirm=false`` must return ``400 INVALID_REQUEST``
 with a hint in ``details``, leaving the resource untouched.
@@ -22,9 +22,9 @@ from acn.routes.dependencies import get_agent_service, get_subnet_service
 # ---------------------------------------------------------------------------
 
 
-def _make_subnet(subnet_id: str = "subnet-1", owner: str = "agent-owner") -> MagicMock:
+def _make_subnet(slug: str = "subnet-1", owner: str = "agent-owner") -> MagicMock:
     s = MagicMock()
-    s.subnet_id = subnet_id
+    s.slug = slug
     s.owner = owner
     s.is_private = False
     s.is_public = True
@@ -34,7 +34,7 @@ def _make_subnet(subnet_id: str = "subnet-1", owner: str = "agent-owner") -> Mag
     s.security_config = {}
     s.created_at = "2026-01-01T00:00:00Z"
     s.metadata = {}
-    s.parent_subnet_id = None
+    s.parent_slug = None
     s.lifecycle = "persistent"
     return s
 
@@ -70,10 +70,10 @@ def stub_subnet_service():
     svc = AsyncMock()
     subnet = _make_subnet()
 
-    async def _get_subnet(subnet_id: str):
-        if subnet_id == "subnet-1":
+    async def _get_subnet(slug: str):
+        if slug == "subnet-1":
             return subnet
-        raise SubnetNotFoundException(subnet_id)
+        raise SubnetNotFoundException(slug)
 
     svc.get_subnet = AsyncMock(side_effect=_get_subnet)
     svc.delete_subnet = AsyncMock(return_value=True)
@@ -107,7 +107,7 @@ def _fake_require_permission(sub: str, permissions: list[str] | None = None):
 
 
 # ---------------------------------------------------------------------------
-# DELETE /subnets/{subnet_id}
+# DELETE /subnets/{slug}
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +145,7 @@ class TestDeleteSubnetConfirmGuard:
             )
 
         assert r.status_code == 200, r.text
-        assert r.json() == {"status": "deleted", "subnet_id": "subnet-1"}
+        assert r.json() == {"status": "deleted", "slug": "subnet-1"}
         stub_subnet_service.delete_subnet.assert_awaited_once_with("subnet-1", "agent-owner")
 
     def test_missing_confirm_does_not_call_service(self, stub_subnet_service):

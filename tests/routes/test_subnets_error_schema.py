@@ -34,22 +34,22 @@ Coverage choice rationale
   endpoint shapes that together touch every distinct ``raise … from
   …`` style and every migrated ``ErrorCode``:
 
-  * ``GET /subnets/{subnet_id}`` — the simplest ``except … from e``
+  * ``GET /subnets/{slug}`` — the simplest ``except … from e``
     re-raise, the public discovery 404 surface for SDK clients.
-  * ``GET /subnets/{subnet_id}/agents`` — same domain exception
+  * ``GET /subnets/{slug}/agents`` — same domain exception
     re-raise but with an *early-out* ``try`` block that wraps a
     single ``await``; the rest of the handler runs at top-level.
     Pins that the migration didn't accidentally widen the ``try``.
-  * ``POST /subnets/{agent_id}/subnets/{subnet_id}`` (403 path) —
+  * ``POST /subnets/{agent_id}/subnets/{slug}`` (403 path) —
     the ``if agent_info[...] != agent_id: raise`` shape (raise at
     function top-level, not in any ``try``). One of three identical
     ``API_KEY_AGENT_MISMATCH`` sites; representative coverage.
-  * ``POST /subnets/{agent_id}/subnets/{subnet_id}`` (404 subnet) —
+  * ``POST /subnets/{agent_id}/subnets/{slug}`` (404 subnet) —
     the *first* ``try`` block of a multi-try handler raises
     ``ACNHTTPError`` from ``SubnetNotFoundException`` before the
     second ``try`` runs. Pins that mid-handler ``ACNHTTPError``
     propagates without being swallowed by a *later* catch-all.
-  * ``POST /subnets/{agent_id}/subnets/{subnet_id}`` (404 agent) —
+  * ``POST /subnets/{agent_id}/subnets/{slug}`` (404 agent) —
     the *last* ``try`` block reraises ``ACNHTTPError`` from
     ``AgentNotFoundException``; the surrounding ``except Exception``
     catch-all is the one that *would* swallow the new exception
@@ -138,7 +138,7 @@ def stub_subnet_service():
     svc = AsyncMock()
 
     target_subnet = MagicMock()
-    target_subnet.subnet_id = "subnet-1"
+    target_subnet.slug="subnet-1"
     target_subnet.name = "test"
     target_subnet.owner = "user-1"
     target_subnet.is_private = False
@@ -149,10 +149,10 @@ def stub_subnet_service():
     target_subnet.created_at = "2025-01-01T00:00:00Z"
     target_subnet.metadata = {}
 
-    async def _get_subnet(subnet_id: str):
-        if subnet_id == "subnet-1":
+    async def _get_subnet(slug: str):
+        if slug == "subnet-1":
             return target_subnet
-        raise SubnetNotFoundException(subnet_id)
+        raise SubnetNotFoundException(slug)
 
     svc.get_subnet = AsyncMock(side_effect=_get_subnet)
     svc.add_member = AsyncMock(return_value=None)
@@ -170,10 +170,10 @@ def stub_join_flow_service(stub_subnet_service):
     """
     svc = AsyncMock()
 
-    async def _join_subnet(subnet_id: str, agent_id: str):
-        await stub_subnet_service.get_subnet(subnet_id)
-        await stub_subnet_service.add_member(subnet_id, agent_id)
-        return JoinFlowJoinedOpenResult(subnet_id=subnet_id, agent_id=agent_id)
+    async def _join_subnet(slug: str, agent_id: str):
+        await stub_subnet_service.get_subnet(slug)
+        await stub_subnet_service.add_member(slug, agent_id)
+        return JoinFlowJoinedOpenResult(slug=slug, agent_id=agent_id)
 
     svc.join_subnet = AsyncMock(side_effect=_join_subnet)
     app.dependency_overrides[get_join_flow_service] = lambda: svc
@@ -206,7 +206,7 @@ class TestSubnetsFlatErrorSchema:
         body = r.json()
         _assert_flat_shape(body)
         assert body["error_code"] == "subnet_not_found"
-        assert body["details"] == {"subnet_id": "subnet-missing"}
+        assert body["details"] == {"slug": "subnet-missing"}
         assert r.headers.get("X-Request-ID") == body["request_id"]
 
     def test_get_subnet_agents_404_early_out(
@@ -226,12 +226,12 @@ class TestSubnetsFlatErrorSchema:
         body = r.json()
         _assert_flat_shape(body)
         assert body["error_code"] == "subnet_not_found"
-        assert body["details"] == {"subnet_id": "subnet-missing"}
+        assert body["details"] == {"slug": "subnet-missing"}
 
     def test_join_subnet_403_api_key_agent_mismatch(
         self, stub_agent_service, stub_subnet_service
     ):
-        """``POST /api/v1/subnets/{path_agent}/subnets/{subnet_id}``
+        """``POST /api/v1/subnets/{path_agent}/subnets/{slug}``
         — the ``if agent_info[...] != agent_id: raise`` top-level
         check. Cross-tenant joins must surface the path/key tuple
         in ``details`` so the SDK can show "you tried to join with
@@ -277,12 +277,12 @@ class TestSubnetsFlatErrorSchema:
         body = r.json()
         _assert_flat_shape(body)
         assert body["error_code"] == "subnet_not_found"
-        assert body["details"] == {"subnet_id": "subnet-missing"}
+        assert body["details"] == {"slug": "subnet-missing"}
 
     def test_join_subnet_404_agent_inside_catchall_try(
         self, stub_agent_service, stub_subnet_service
     ):
-        """``POST /subnets/{agent}/subnets/{subnet_id}`` —
+        """``POST /subnets/{agent}/subnets/{slug}`` —
         ``join_subnet`` raises ``AgentNotFoundException`` *inside*
         a ``try`` whose final clause is a catch-all
         ``except Exception``. The ``ACNHTTPError`` is raised from
@@ -323,7 +323,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         representative test per site so each site's
         ``details.reason`` and field set is pinned independently —
         unlike registry's `replace_all=true` cohorts, the subnets
-        sites differ in payload shape (``subnet_id`` vs
+        sites differ in payload shape (``slug`` vs
         ``requested_owner`` vs free-form ``reason``) so per-site
         pinning is more useful here.
 
@@ -361,7 +361,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
                 "/api/v1/subnets",
                 headers={"Authorization": "Bearer owner-key"},
                 json={
-                    "subnet_id": "test-subnet",
+                    "slug": "test-subnet",
                     "name": "Test Subnet",
                 },
             )
@@ -449,7 +449,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         """
         stub_subnet_service.get_subnet.side_effect = None
         target_subnet = MagicMock()
-        target_subnet.subnet_id = "subnet-private"
+        target_subnet.slug="subnet-private"
         target_subnet.owner = "user-1"
         target_subnet.is_private = True
         target_subnet.member_agent_ids = set()
@@ -464,7 +464,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         body = r.json()
         assert body["agents"] == []
         assert body["count"] == 0
-        assert body["subnet_id"] == "subnet-private"
+        assert body["slug"] == "subnet-private"
 
     def test_get_subnet_agents_private_cross_tenant_returns_empty_list(
         self, stub_agent_service, stub_subnet_service, monkeypatch
@@ -479,7 +479,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         """
         stub_subnet_service.get_subnet.side_effect = None
         target_subnet = MagicMock()
-        target_subnet.subnet_id = "subnet-private"
+        target_subnet.slug="subnet-private"
         target_subnet.owner = "user-1"
         target_subnet.is_private = True
         target_subnet.member_agent_ids = set()
@@ -503,14 +503,14 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         body = r.json()
         assert body["agents"] == []
         assert body["count"] == 0
-        assert body["subnet_id"] == "subnet-private"
+        assert body["slug"] == "subnet-private"
 
     def test_delete_subnet_permission_error_returns_ownership_mismatch(
         self, stub_agent_service, stub_subnet_service
     ):
         """``DELETE /api/v1/subnets/{id}`` when the service raises
         ``PermissionError`` — pins ``OWNERSHIP_MISMATCH`` with
-        ``subnet_id`` and the underlying reason in ``details``.
+        ``slug`` and the underlying reason in ``details``.
 
         Auth note
             ``delete_subnet`` is now gated by ``AgentApiKeyDep``;
@@ -537,7 +537,7 @@ class TestSubnetsFlatErrorSchemaCrossModule:
         _assert_flat_shape(body)
         assert body["error_code"] == "ownership_mismatch"
         assert body["details"] == {
-            "subnet_id": "subnet-1",
+            "slug": "subnet-1",
             "reason": "owner_mismatch",
         }
 
@@ -629,7 +629,7 @@ class TestSubnetsCatchAllDefence:
         with TestClient(app) as client:
             r = client.post(
                 "/api/v1/subnets/",
-                json={"subnet_id": "sn-x", "name": "x", "owner": "o"},
+                json={"slug": "sn-x", "name": "x", "owner": "o"},
                 headers={"Authorization": "Bearer owner-key"},
             )
 

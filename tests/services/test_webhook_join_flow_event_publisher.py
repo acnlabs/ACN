@@ -8,7 +8,7 @@ Pins the adapter contract documented at the top of
 2. **1-1 enum mapping** — every ``JoinFlowEventType`` resolves to
    the matching ``WebhookEventType`` member (string value preserved).
 3. **Payload shape** — the ``data`` block carries the canonical
-   ADR §"Payload shape" fields verbatim, including ``parent_subnet_id``
+   ADR §"Payload shape" fields verbatim, including ``parent_slug``
    from ADR-0003 nesting.
 4. **Never raise** — transport exceptions are caught and logged; the
    adapter returns ``None`` so the calling service-layer state
@@ -40,16 +40,16 @@ from acn.services.webhook_join_flow_event_publisher import (
 
 def _make_subnet(
     *,
-    subnet_id: str = "subnet-1",
-    parent_subnet_id: str | None = None,
+    slug: str = "subnet-1",
+    parent_slug: str | None = None,
     harness_url: str | None = "https://harness.example/webhook",
     harness_secret: str | None = "s3cr3t",
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner="alice",
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
         member_agent_ids={"alice"},
         harness_url=harness_url,
         harness_secret=harness_secret,
@@ -60,7 +60,7 @@ def _make_subnet(
 def _make_join_request(
     *,
     request_id: str = "req-1",
-    subnet_id: str = "subnet-1",
+    slug: str = "subnet-1",
     agent_id: str = "bob",
     kind: str = "join_request",
     status: str = "pending",
@@ -75,7 +75,7 @@ def _make_join_request(
     )
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind=kind,  # type: ignore[arg-type]
         status=status,  # type: ignore[arg-type]
@@ -207,7 +207,7 @@ class TestPayloadShape:
     async def test_top_level_subnet_sets_parent_to_null(
         self, publisher, webhook_service
     ):
-        subnet = _make_subnet(parent_subnet_id=None)
+        subnet = _make_subnet(parent_slug=None)
         request = _make_join_request()
 
         await publisher.publish(
@@ -215,30 +215,30 @@ class TestPayloadShape:
         )
 
         data = webhook_service.send_to.await_args.kwargs["data"]
-        assert data["parent_subnet_id"] is None
+        assert data["parent_slug"] is None
 
     @pytest.mark.asyncio
     async def test_child_subnet_propagates_parent_id(
         self, publisher, webhook_service
     ):
-        subnet = _make_subnet(subnet_id="squad-1", parent_subnet_id="parent-1")
-        request = _make_join_request(subnet_id="squad-1")
+        subnet = _make_subnet(slug="squad-1", parent_slug="parent-1")
+        request = _make_join_request(slug="squad-1")
 
         await publisher.publish(
             JoinFlowEventType.JOIN_REQUESTED, subnet=subnet, request=request
         )
 
         data = webhook_service.send_to.await_args.kwargs["data"]
-        assert data["parent_subnet_id"] == "parent-1"
+        assert data["parent_slug"] == "parent-1"
 
     @pytest.mark.asyncio
     async def test_data_block_carries_all_adr_fields(
         self, publisher, webhook_service
     ):
-        subnet = _make_subnet(subnet_id="subnet-X", parent_subnet_id="parent-X")
+        subnet = _make_subnet(slug="subnet-X", parent_slug="parent-X")
         request = _make_join_request(
             request_id="req-X",
-            subnet_id="subnet-X",
+            slug="subnet-X",
             agent_id="bob",
             kind="invitation",
             status="approved",
@@ -256,10 +256,10 @@ class TestPayloadShape:
 
         data = webhook_service.send_to.await_args.kwargs["data"]
         assert data == {
-            "subnet_id": "subnet-X",
+            "slug": "subnet-X",
             "agent_id": "bob",
             "request_id": "req-X",
-            "parent_subnet_id": "parent-X",
+            "parent_slug": "parent-X",
             "kind": "invitation",
             "initiated_by": "alice",
             "decided_by": "bob",
@@ -301,10 +301,10 @@ class TestPayloadShape:
         self, publisher, webhook_service
     ):
         """ADR-0003 convention: ``WebhookPayload.task_id`` is set to
-        the subnet_id for non-payment events so Harnesses keying on
+        the slug for non-payment events so Harnesses keying on
         the wrapper field still route correctly."""
-        subnet = _make_subnet(subnet_id="subnet-route-1")
-        request = _make_join_request(subnet_id="subnet-route-1")
+        subnet = _make_subnet(slug="subnet-route-1")
+        request = _make_join_request(slug="subnet-route-1")
 
         await publisher.publish(
             JoinFlowEventType.JOIN_REQUESTED, subnet=subnet, request=request

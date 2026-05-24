@@ -92,7 +92,7 @@ class TestTaskCreateRequest:
             TaskCreateRequest(**self._base(required_tags=["t"] * 21))
 
     def test_subnet_id_caps_at_64_matching_subnet_create(self) -> None:
-        """Round-2 audit: ``subnet_id`` must align with ``SubnetCreateRequest``.
+        """Round-2 audit: ``slug`` must align with ``SubnetCreateRequest``.
 
         The subnet create path enforces ``max_length=64``; allowing 128
         here only let through values that were guaranteed to miss the
@@ -101,13 +101,18 @@ class TestTaskCreateRequest:
 
         from acn.models import SubnetCreateRequest
 
-        subnet_create_max = SubnetCreateRequest.model_fields["subnet_id"].metadata
+        subnet_create_max = SubnetCreateRequest.model_fields["slug"].metadata
         max_len = next(
             (m.max_length for m in subnet_create_max if hasattr(m, "max_length")),
             None,
         )
-        assert max_len == 64, "anchor: SubnetCreateRequest.subnet_id should still be 64"
+        assert max_len == 64, "anchor: SubnetCreateRequest.slug should still be 64"
 
+        # ``TaskCreateRequest.subnet_id`` keeps the legacy field name
+        # until Step 2 of the slug rename migrates the cross-entity
+        # references (``Task.subnet_id``); the cap should match the
+        # subnet's ``slug`` field even while the request field name
+        # has not been renamed yet.
         TaskCreateRequest(**self._base(subnet_id="s" * 64))
         with pytest.raises(ValidationError):
             TaskCreateRequest(**self._base(subnet_id="s" * 65))

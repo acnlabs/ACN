@@ -212,15 +212,15 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         self, request: SubnetJoinRequest, hash_pairs: list[str]
     ) -> None:
         keys = [
-            _pending_by_agent_key(request.subnet_id, request.agent_id),
-            _request_hash_key(request.subnet_id, request.request_id),
-            _subnet_listing_key(request.subnet_id),
+            _pending_by_agent_key(request.slug, request.agent_id),
+            _request_hash_key(request.slug, request.request_id),
+            _subnet_listing_key(request.slug),
             _agent_invitations_key(request.agent_id),
         ]
         args = [
             request.request_id,
             request.kind,
-            _invitation_set_member(request.subnet_id, request.request_id),
+            _invitation_set_member(request.slug, request.request_id),
             *hash_pairs,
         ]
         script = self._get_create_pending_script()
@@ -231,7 +231,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         existing_id = _decode(result[1])
         if outcome == "exists" and existing_id != request.request_id:
             raise SubnetJoinRequestPendingError(
-                request.subnet_id, request.agent_id
+                request.slug, request.agent_id
             )
         # 'exists' + same id is idempotent re-save (no-op for the
         # service layer — it's safe to retry create on transient
@@ -241,14 +241,14 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         self, request: SubnetJoinRequest, hash_pairs: list[str]
     ) -> None:
         keys = [
-            _pending_by_agent_key(request.subnet_id, request.agent_id),
-            _request_hash_key(request.subnet_id, request.request_id),
+            _pending_by_agent_key(request.slug, request.agent_id),
+            _request_hash_key(request.slug, request.request_id),
             _agent_invitations_key(request.agent_id),
         ]
         args = [
             request.request_id,
             request.kind,
-            _invitation_set_member(request.subnet_id, request.request_id),
+            _invitation_set_member(request.slug, request.request_id),
             *hash_pairs,
         ]
         script = self._get_decide_script()

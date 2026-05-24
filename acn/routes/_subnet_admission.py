@@ -88,7 +88,7 @@ def _require_owner(agent_info: dict, subnet: Subnet) -> None:
             ErrorCode.SUBNET_NOT_OWNER,
             403,
             details={
-                "subnet_id": subnet.subnet_id,
+                "slug": subnet.slug,
                 "owner": subnet.owner,
                 "caller": agent_info["agent_id"],
             },
@@ -191,7 +191,7 @@ def _map_join_flow_error(exc: JoinFlowError) -> ACNHTTPError:
             ErrorCode.ALREADY_MEMBER,
             409,
             details={
-                "subnet_id": exc.subnet_id,
+                "slug": exc.slug,
                 "agent_id": exc.agent_id,
             },
         )
@@ -200,7 +200,7 @@ def _map_join_flow_error(exc: JoinFlowError) -> ACNHTTPError:
             ErrorCode.ALREADY_ON_ALLOWLIST,
             409,
             details={
-                "subnet_id": exc.subnet_id,
+                "slug": exc.slug,
                 "agent_id": exc.agent_id,
             },
         )
@@ -244,7 +244,7 @@ def serialize_join_request(row: SubnetJoinRequest) -> dict[str, Any]:
     """JSON-ready response payload for a ``SubnetJoinRequest`` row."""
     return {
         "request_id": row.request_id,
-        "subnet_id": row.subnet_id,
+        "slug": row.slug,
         "agent_id": row.agent_id,
         "kind": row.kind,
         "status": row.status,
@@ -259,7 +259,7 @@ def serialize_join_request(row: SubnetJoinRequest) -> dict[str, Any]:
 def serialize_allowlist_entry(entry: SubnetAllowlist) -> dict[str, Any]:
     """JSON-ready response payload for a ``SubnetAllowlist`` entry."""
     return {
-        "subnet_id": entry.subnet_id,
+        "slug": entry.slug,
         "agent_id": entry.agent_id,
         "added_by": entry.added_by,
         "added_at": _iso_or_none(entry.added_at),
@@ -290,7 +290,7 @@ def join_flow_result_to_response(result: JoinFlowResult) -> tuple[int, dict[str,
         # Branch 1 — open subnet.
         return 200, {
             "status": "joined",
-            "subnet_id": result.subnet_id,
+            "slug": result.slug,
             "agent_id": result.agent_id,
         }
 
@@ -300,7 +300,7 @@ def join_flow_result_to_response(result: JoinFlowResult) -> tuple[int, dict[str,
         # but doesn't need to for any downstream logic.
         return 200, {
             "status": "joined",
-            "subnet_id": result.subnet_id,
+            "slug": result.slug,
             "agent_id": result.agent_id,
         }
 
@@ -313,7 +313,7 @@ def join_flow_result_to_response(result: JoinFlowResult) -> tuple[int, dict[str,
         return 200, {
             "auto_resolved": True,
             "resolved_kind": "invitation",
-            "subnet_id": result.subnet_id,
+            "slug": result.slug,
             "agent_id": result.agent_id,
             "invitation_id": result.invitation.request_id,
             "via": result.via,
@@ -325,7 +325,7 @@ def join_flow_result_to_response(result: JoinFlowResult) -> tuple[int, dict[str,
         # its request_id so the caller can correlate audit log
         # readings.
         return 200, {
-            "subnet_id": result.subnet_id,
+            "slug": result.slug,
             "agent_id": result.agent_id,
             "request_id": result.request.request_id,
             "via": "allowlist",
@@ -335,7 +335,7 @@ def join_flow_result_to_response(result: JoinFlowResult) -> tuple[int, dict[str,
         # Branch 6 — fall-through pending join_request. 202 because
         # the caller is not yet a member; the owner owes a decision.
         return 202, {
-            "subnet_id": result.subnet_id,
+            "slug": result.slug,
             "agent_id": result.agent_id,
             "request_id": result.request.request_id,
             "status": "pending",
@@ -365,7 +365,7 @@ def invite_agent_result_to_response(
     """
     if isinstance(result, InviteAgentSentResult):
         return 202, {
-            "subnet_id": result.subnet_id,
+            "slug": result.slug,
             "agent_id": result.agent_id,
             "invitation_id": result.invitation.request_id,
             "status": "pending",
@@ -375,7 +375,7 @@ def invite_agent_result_to_response(
         return 200, {
             "auto_resolved": True,
             "resolved_kind": "join_request",
-            "subnet_id": result.subnet_id,
+            "slug": result.slug,
             "agent_id": result.agent_id,
             "request_id": result.request.request_id,
         }
@@ -404,5 +404,5 @@ async def load_subnet_or_404(subnet_service: Any, subnet_id: str) -> Subnet:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": subnet_id},
         ) from e

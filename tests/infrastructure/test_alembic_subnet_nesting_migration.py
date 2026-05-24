@@ -17,6 +17,12 @@ What we check
 - The partial-index ``postgresql_where`` clauses target the right
   column (``parent_subnet_id IS NOT NULL`` /
   ``linked_task_id IS NOT NULL``).
+
+Naming note: this migration runs *before* the Step 1 rename
+(``a1b2c3d4e5f6_rename_subnet_id_to_slug``), so the column added
+here is the original ``parent_subnet_id``. The rename migration
+later renames it to ``parent_slug``; tests for *that* migration
+assert the new name. Don't conflate the two.
 """
 
 import importlib.util
@@ -73,6 +79,7 @@ def test_upgrade_adds_three_columns_and_two_indexes(migration_module):
         call.args[1].name for call in column_calls
     ]
     assert column_names == [
+        # Pre-rename column name — see file-header naming note.
         "parent_subnet_id",
         "lifecycle",
         "linked_task_id",
@@ -123,6 +130,7 @@ def test_upgrade_indexes_use_partial_where_on_correct_columns(migration_module):
         if c.args[0] == "subnets_parent_idx"
     )
     where_clause = parent_idx_call.kwargs["postgresql_where"]
+    # Pre-rename column name — see file-header naming note.
     assert "parent_subnet_id IS NOT NULL" in str(where_clause), (
         f"subnets_parent_idx WHERE clause wrong: {where_clause}"
     )
@@ -183,5 +191,6 @@ def test_downgrade_drops_columns_in_reverse_of_upgrade(migration_module):
     assert column_names == [
         "linked_task_id",
         "lifecycle",
+        # Pre-rename column name — see file-header naming note.
         "parent_subnet_id",
     ], f"unexpected downgrade() column order: {column_names!r}"

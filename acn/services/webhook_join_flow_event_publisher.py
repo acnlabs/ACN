@@ -36,7 +36,7 @@ Contracts pinned here:
 
 4. **Payload shape matches ADR §"Payload shape".** The ``data`` block
    is the canonical
-   ``{subnet_id, agent_id, request_id, parent_subnet_id, kind,
+   ``{subnet_id, agent_id, request_id, parent_slug, kind,
    initiated_by, decided_by, trigger, via}``
    dict. ``task_id`` on the wrapping :class:`WebhookPayload` is set to
    the ``subnet_id`` (Harnesses key on subnet, not on a payment task);
@@ -116,7 +116,7 @@ class WebhookJoinFlowEventPublisher(IJoinFlowEventPublisher):
             logger.debug(
                 "join_flow_webhook_skipped_no_harness",
                 join_flow_event=event.value,
-                subnet_id=subnet.subnet_id,
+                slug=subnet.slug,
                 request_id=request.request_id,
             )
             return
@@ -133,16 +133,16 @@ class WebhookJoinFlowEventPublisher(IJoinFlowEventPublisher):
             logger.error(
                 "join_flow_webhook_unmapped_event",
                 join_flow_event=event.value,
-                subnet_id=subnet.subnet_id,
+                slug=subnet.slug,
                 request_id=request.request_id,
             )
             return
 
         data = {
-            "subnet_id": subnet.subnet_id,
+            "slug": subnet.slug,
             "agent_id": request.agent_id,
             "request_id": request.request_id,
-            "parent_subnet_id": subnet.parent_subnet_id,
+            "parent_slug": subnet.parent_slug,
             "kind": request.kind,
             "initiated_by": request.initiated_by,
             "decided_by": request.decided_by,
@@ -157,16 +157,16 @@ class WebhookJoinFlowEventPublisher(IJoinFlowEventPublisher):
                 event=wire_event,
                 # ADR-0003 convention — task_id on the wrapping
                 # :class:`WebhookPayload` carries the subnet_id for
-                # non-payment events. Harnesses key on ``data.subnet_id``
+                # non-payment events. Harnesses key on ``data.slug``
                 # directly so this is a transport-only field.
-                task_id=subnet.subnet_id,
+                task_id=subnet.slug,
                 data=data,
             )
         except Exception as exc:  # noqa: BLE001 — see class docstring.
             logger.error(
                 "join_flow_webhook_delivery_failed",
                 join_flow_event=event.value,
-                subnet_id=subnet.subnet_id,
+                slug=subnet.slug,
                 request_id=request.request_id,
                 error=str(exc),
                 exc_info=True,

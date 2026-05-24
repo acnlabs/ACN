@@ -1,7 +1,7 @@
 """JoinFlowService — six-branch decision tree tests (ADR-0004 Slice 2.2).
 
 Each of the six branches in ADR §"POST /api/v1/agents/{agent_id}/
-subnets/{subnet_id} (join entry)" is verified with its happy path
+subnets/{slug} (join entry)" is verified with its happy path
 plus the relevant ``State machine edges`` markers from the ADR.
 
 Branch matrix:
@@ -57,15 +57,15 @@ from acn.services.subnet_service import SubnetService
 
 
 def _subnet(
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     owner: str = "alice",
     join_policy: str = "approval",
     members: set[str] | None = None,
     is_private: bool = False,
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
         is_private=is_private,
         join_policy=join_policy,
@@ -76,12 +76,12 @@ def _subnet(
 
 def _pending_invitation(
     request_id: str = "inv-1",
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     agent_id: str = "bob",
 ) -> SubnetJoinRequest:
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind="invitation",
         status="pending",
@@ -91,12 +91,12 @@ def _pending_invitation(
 
 def _pending_join_request(
     request_id: str = "rq-OLD",
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     agent_id: str = "bob",
 ) -> SubnetJoinRequest:
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind="join_request",
         status="pending",
@@ -184,7 +184,7 @@ class TestBranch1Open:
         result = await service.join_subnet("s-1", "bob")
 
         assert isinstance(result, JoinFlowJoinedOpenResult)
-        assert result.subnet_id == "s-1"
+        assert result.slug == "s-1"
         assert result.agent_id == "bob"
 
         # NO row created in subnet_join_requests.

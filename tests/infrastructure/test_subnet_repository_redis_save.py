@@ -81,7 +81,7 @@ async def test_save_serialises_is_private_as_string_not_bool() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     subnet = Subnet(
-        subnet_id="subnet-test-1",
+        slug="subnet-test-1",
         name="test",
         owner="agent-owner",
         is_private=True,
@@ -118,7 +118,7 @@ async def test_save_round_trip_preserves_is_private() -> None:
     cases: list[tuple[bool, str]] = [(True, "approval"), (False, "open")]
     for is_private, join_policy in cases:
         subnet = Subnet(
-            subnet_id=f"subnet-rt-{is_private}",
+            slug=f"subnet-rt-{is_private}",
             name="rt",
             owner="agent-owner",
             is_private=is_private,
@@ -140,7 +140,7 @@ async def test_save_normalises_none_fields_to_empty_string() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     subnet = Subnet(
-        subnet_id="subnet-none",
+        slug="subnet-none",
         name="nones",
         owner="agent-owner",
         description=None,
@@ -155,3 +155,121 @@ async def test_save_normalises_none_fields_to_empty_string() -> None:
     assert mapping["description"] == ""
     assert mapping["harness_url"] == ""
     assert mapping["harness_secret"] == ""
+
+
+class TestDictToSubnetLegacyKeyCompat:
+    """``_dict_to_subnet`` must hydrate Redis HASHes that pre-date the
+    ``subnet_id`` → ``slug`` rename. Without legacy-key fall-through,
+    the first read after a rolling deploy raises ``KeyError: 'slug'``
+    on every existing subnet — a hard failure for Redis-only
+    deployments because the entity-layer ``from_dict`` translation is
+    bypassed by the manually-constructed dict path here.
+
+    These tests run against the real :class:`RedisSubnetRepository`
+    and bypass the network entirely (``_dict_to_subnet`` is a pure
+    function on a HASH dict), so they reliably catch a regression
+    that mock-based round-trip tests cannot.
+    """
+
+    def _make_repo(self) -> RedisSubnetRepository:
+        return RedisSubnetRepository(redis_client=AsyncMock())
+
+    def test_legacy_subnet_id_key_is_accepted(self):
+        repo = self._make_repo()
+        legacy_hash = {
+            "subnet_id": "legacy-net",
+            "name": "Legacy",
+            "owner": "alice",
+            "is_private": "False",
+            "description": "",
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "lifecycle": "persistent",
+            "linked_task_id": "",
+            "security_config": "{}",
+            "metadata": "{}",
+            "member_agent_ids": "[]",
+            "harness_url": "",
+            "harness_secret": "",
+        }
+
+        subnet = repo._dict_to_subnet(legacy_hash)
+
+        assert subnet.slug == "legacy-net"
+
+    def test_legacy_parent_subnet_id_key_is_accepted(self):
+        repo = self._make_repo()
+        legacy_hash = {
+            "subnet_id": "child-net",
+            "parent_subnet_id": "parent-net",
+            "name": "Child",
+            "owner": "alice",
+            "is_private": "False",
+            "description": "",
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "lifecycle": "persistent",
+            "linked_task_id": "",
+            "security_config": "{}",
+            "metadata": "{}",
+            "member_agent_ids": "[]",
+            "harness_url": "",
+            "harness_secret": "",
+        }
+
+        subnet = repo._dict_to_subnet(legacy_hash)
+
+        assert subnet.slug == "child-net"
+        assert subnet.parent_slug == "parent-net"
+
+    def test_new_keys_take_precedence_when_both_present(self):
+        # Mid-rollout shape: a HASH that's been re-saved (has ``slug``)
+        # but still carries the legacy ``subnet_id`` field from a
+        # previous reader that round-tripped through an older repo.
+        # The new key wins so the entity reflects the canonical name.
+        repo = self._make_repo()
+        mixed_hash = {
+            "slug": "new-name",
+            "subnet_id": "old-name",
+            "parent_slug": "new-parent",
+            "parent_subnet_id": "old-parent",
+            "name": "Mixed",
+            "owner": "alice",
+            "is_private": "False",
+            "description": "",
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "lifecycle": "persistent",
+            "linked_task_id": "",
+            "security_config": "{}",
+            "metadata": "{}",
+            "member_agent_ids": "[]",
+            "harness_url": "",
+            "harness_secret": "",
+        }
+
+        subnet = repo._dict_to_subnet(mixed_hash)
+
+        assert subnet.slug == "new-name"
+        assert subnet.parent_slug == "new-parent"
+
+    def test_completely_missing_slug_keys_raises_key_error(self):
+        # If neither key is present the HASH is corrupt; failing fast
+        # with a descriptive ``KeyError`` is preferable to letting an
+        # empty string flow into the entity (which would then trip the
+        # ``slug cannot be empty`` invariant with a less obvious trace).
+        repo = self._make_repo()
+        broken_hash = {
+            "name": "Broken",
+            "owner": "alice",
+            "is_private": "False",
+            "description": "",
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "lifecycle": "persistent",
+            "linked_task_id": "",
+            "security_config": "{}",
+            "metadata": "{}",
+            "member_agent_ids": "[]",
+            "harness_url": "",
+            "harness_secret": "",
+        }
+
+        with pytest.raises(KeyError, match="slug.*subnet_id"):
+            repo._dict_to_subnet(broken_hash)

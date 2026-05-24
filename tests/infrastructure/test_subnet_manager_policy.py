@@ -74,7 +74,7 @@ def _build_manager_with_connected_agent(
     agent_service: AsyncMock,
     redis_client: AsyncMock,
     policy_service: PolicyCheckService | None,
-    subnet_id: str = "public",
+    slug: str = "public",
     agent_id: str = "agent-b",
 ) -> tuple[SubnetManager, MagicMock]:
     """Construct a SubnetManager with one fake connection installed.
@@ -92,11 +92,11 @@ def _build_manager_with_connected_agent(
     websocket.send_json = AsyncMock()
     connection = GatewayConnection(
         connection_id="conn-1",
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         websocket=websocket,
     )
-    manager._subnets[subnet_id].connections[agent_id] = connection
+    manager._subnets[slug].connections[agent_id] = connection
     return manager, websocket
 
 

@@ -3,7 +3,7 @@
 Phase 2 Group C #9 / review v2 P1 #7 added a high-level ``broadcast()``
 method on top of the existing ``send`` / ``send_by_tag`` API so the HTTP
 routes can hit one entry-point that handles sender existence checks,
-selector-based target resolution (``target_agents`` / ``subnet_id`` /
+selector-based target resolution (``target_agents`` / ``slug`` /
 ``tags`` / all-agents fallback), and sender auto-filter — all the
 business logic that used to live in ``MessageService.broadcast_message``.
 
@@ -216,13 +216,13 @@ class TestSenderExistence:
 
 
 # --------------------------------------------------------------------------- #
-# 3. Selector precedence — target_agents > subnet_id > tags > all
+# 3. Selector precedence — target_agents > slug > tags > all
 # --------------------------------------------------------------------------- #
 
 
 class TestSelectorPrecedence:
     """The unified entry has four target-resolution paths. Precedence
-    is documented in the docstring as ``target_agents > subnet_id >
+    is documented in the docstring as ``target_agents > slug >
     tags > all``. These tests pin that contract: when multiple
     selectors are passed, only the highest-priority one drives
     resolution, and the lower-priority repository methods are NOT
@@ -242,7 +242,7 @@ class TestSelectorPrecedence:
             from_agent="agent-sender",
             message=_make_message(),
             target_agents=["agent-a", "agent-b"],
-            subnet_id="ignored-subnet",
+            slug="ignored-subnet",
             tags=["ignored-tag"],
         )
 
@@ -266,7 +266,7 @@ class TestSelectorPrecedence:
         result = await svc.broadcast(
             from_agent="agent-sender",
             message=_make_message(),
-            subnet_id="subnet-1",
+            slug="subnet-1",
             tags=["frontend"],
         )
 
@@ -347,7 +347,7 @@ class TestSenderAutoFilter:
         result = await svc.broadcast(
             from_agent="agent-self",
             message=_make_message(),
-            subnet_id="subnet-x",
+            slug="subnet-x",
         )
 
         assert set(result.results.keys()) == {"agent-other"}

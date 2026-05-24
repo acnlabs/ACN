@@ -54,7 +54,7 @@ class TestAddToAllowlist:
 
         assert r.status_code == 201, r.text
         body = r.json()
-        assert body["subnet_id"] == SUBNET_ID
+        assert body["slug"] == SUBNET_ID
         assert body["agent_id"] == INVITEE_AGENT_ID
         assert body["added_by"] == "agent-owner"
         subnet_svc.add_allowlist.assert_awaited_once()
@@ -112,7 +112,7 @@ class TestAddToAllowlist:
         assert r.status_code == 409
         body = r.json()
         assert body["error_code"] == "already_on_allowlist"
-        assert body["details"]["subnet_id"] == SUBNET_ID
+        assert body["details"]["slug"] == SUBNET_ID
         assert body["details"]["agent_id"] == INVITEE_AGENT_ID
 
     def test_missing_body_returns_422(self, wire):
@@ -204,7 +204,7 @@ class TestListAllowlist:
 
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["subnet_id"] == SUBNET_ID
+        assert body["slug"] == SUBNET_ID
         assert len(body["entries"]) == 2
         assert {e["agent_id"] for e in body["entries"]} == {"agent-a", "agent-b"}
 
@@ -216,7 +216,7 @@ class TestListAllowlist:
             )
 
         assert r.status_code == 200
-        assert r.json() == {"subnet_id": SUBNET_ID, "entries": []}
+        assert r.json() == {"slug": SUBNET_ID, "entries": []}
 
     def test_non_owner_gets_403(self, wire):
         """ADR §"GET /subnets/{s}/allowlist is owner-only deliberately"."""

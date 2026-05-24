@@ -48,13 +48,13 @@ from acn.services.subnet_service import SubnetService
 
 
 def _subnet(
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     owner: str = "alice",
     members: set[str] | None = None,
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
         created_at=datetime.now(UTC),
         member_agent_ids=members if members is not None else {owner},
@@ -63,13 +63,13 @@ def _subnet(
 
 def _pending_invitation(
     request_id: str = "inv-1",
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     agent_id: str = "bob",
     initiated_by: str = "alice",
 ) -> SubnetJoinRequest:
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind="invitation",
         status="pending",
@@ -79,12 +79,12 @@ def _pending_invitation(
 
 def _pending_join_request(
     request_id: str = "rq-1",
-    subnet_id: str = "s-1",
+    slug: str = "s-1",
     agent_id: str = "bob",
 ) -> SubnetJoinRequest:
     return SubnetJoinRequest(
         request_id=request_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         kind="join_request",
         status="pending",
@@ -156,7 +156,7 @@ class TestInviteAgentNormalPath:
 
         with pytest.raises(AlreadyMemberError) as exc_info:
             await service.invite_agent("s-1", "bob", owner_id="alice")
-        assert exc_info.value.subnet_id == "s-1"
+        assert exc_info.value.slug == "s-1"
         assert exc_info.value.agent_id == "bob"
 
     @pytest.mark.asyncio
@@ -292,7 +292,7 @@ class TestAcceptInvitation:
     ) -> None:
         decided = SubnetJoinRequest(
             request_id="inv-1",
-            subnet_id="s-1",
+            slug="s-1",
             agent_id="bob",
             kind="invitation",
             status="approved",
@@ -370,7 +370,7 @@ class TestCancelInvitation:
     ) -> None:
         decided = SubnetJoinRequest(
             request_id="inv-1",
-            subnet_id="s-1",
+            slug="s-1",
             agent_id="bob",
             kind="invitation",
             status="rejected",

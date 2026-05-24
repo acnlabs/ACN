@@ -76,7 +76,7 @@ class SubnetJoinRequest:
     """
 
     request_id: str
-    subnet_id: str
+    slug: str
     agent_id: str
     kind: Literal["join_request", "invitation", "allowlist_auto"]
     status: Literal["pending", "approved", "rejected", "withdrawn"]
@@ -102,8 +102,8 @@ class SubnetJoinRequest:
         """
         if not self.request_id:
             raise ValueError("request_id cannot be empty")
-        if not self.subnet_id:
-            raise ValueError("subnet_id cannot be empty")
+        if not self.slug:
+            raise ValueError("slug cannot be empty")
         if not self.agent_id:
             raise ValueError("agent_id cannot be empty")
         if not self.initiated_by:
@@ -169,7 +169,7 @@ class SubnetJoinRequest:
 
     @property
     def is_pending(self) -> bool:
-        """True iff this row blocks future ``(subnet_id, agent_id)``
+        """True iff this row blocks future ``(slug, agent_id)``
         request creation under the unique partial index
         ``WHERE status='pending'``."""
         return self.status == "pending"
@@ -195,7 +195,7 @@ class SubnetJoinRequest:
         """
         return {
             "request_id": self.request_id,
-            "subnet_id": self.subnet_id,
+            "slug": self.slug,
             "agent_id": self.agent_id,
             "kind": self.kind,
             "status": self.status,
@@ -218,7 +218,7 @@ class SubnetJoinRequest:
         decided_at_raw = data.get("decided_at") or None
         return cls(
             request_id=data["request_id"],
-            subnet_id=data["subnet_id"],
+            slug=data.get("slug") or data.get("subnet_id", ""),
             agent_id=data["agent_id"],
             kind=data["kind"],
             status=data["status"],

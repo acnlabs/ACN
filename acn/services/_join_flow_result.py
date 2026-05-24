@@ -46,7 +46,7 @@ class JoinFlowJoinedOpenResult:
     returns ``200 {status: "joined", ...}``.
     """
 
-    subnet_id: str
+    slug: str
     agent_id: str
 
 
@@ -60,7 +60,7 @@ class JoinFlowJoinedAsOwnerResult:
     fast path. Route layer returns ``200 {status: "joined", ...}``.
     """
 
-    subnet_id: str
+    slug: str
     agent_id: str
 
 
@@ -78,7 +78,7 @@ class JoinFlowAutoAcceptedInvitationResult:
     "invitation", invitation_id, via}``.
     """
 
-    subnet_id: str
+    slug: str
     agent_id: str
     invitation: SubnetJoinRequest
     via: Literal["self_join", "allowlist"]
@@ -93,7 +93,7 @@ class JoinFlowAllowlistAutoApprovedResult:
     layer returns ``200 {request_id, via: "allowlist", ...}``.
     """
 
-    subnet_id: str
+    slug: str
     agent_id: str
     request: SubnetJoinRequest
 
@@ -106,7 +106,7 @@ class JoinFlowPendingResult:
     Route layer returns ``202 {request_id, status: "pending"}``.
     """
 
-    subnet_id: str
+    slug: str
     agent_id: str
     request: SubnetJoinRequest
 
@@ -137,7 +137,7 @@ class InviteAgentSentResult:
     ``202 {invitation_id}``.
     """
 
-    subnet_id: str
+    slug: str
     agent_id: str
     invitation: SubnetJoinRequest
 
@@ -158,7 +158,7 @@ class InviteAgentMergedToApprovedJoinRequestResult:
     resolved_kind: "join_request", request_id}``.
     """
 
-    subnet_id: str
+    slug: str
     agent_id: str
     request: SubnetJoinRequest
 

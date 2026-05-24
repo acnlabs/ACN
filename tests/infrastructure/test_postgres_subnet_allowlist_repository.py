@@ -36,7 +36,7 @@ def _make_session_factory():
 
 def _make_entry(**overrides) -> SubnetAllowlist:
     defaults: dict = {
-        "subnet_id": "s-1",
+        "slug": "s-1",
         "agent_id": "a-1",
         "added_by": "owner-1",
     }
@@ -54,13 +54,13 @@ def test_model_to_entity_round_trip():
     repo = PostgresSubnetAllowlistRepository(session_factory=factory)
     ts = datetime.now(UTC)
     model = SubnetAllowlistModel(
-        subnet_id="s-1",
+        slug="s-1",
         agent_id="a-1",
         added_by="owner-1",
         added_at=ts,
     )
     entity = repo._model_to_entity(model)
-    assert entity.subnet_id == "s-1"
+    assert entity.slug == "s-1"
     assert entity.agent_id == "a-1"
     assert entity.added_by == "owner-1"
     assert entity.added_at == ts
@@ -74,7 +74,7 @@ def test_model_to_entity_round_trip():
 class TestAddIdempotency:
     @pytest.mark.asyncio
     async def test_new_insert_returns_true(self):
-        """``RETURNING subnet_id`` produces a row → new insert."""
+        """``RETURNING slug`` produces a row → new insert."""
         factory, session = _make_session_factory()
         execute_result = MagicMock()
         # ``.first()`` returns a non-None row when ON CONFLICT didn't fire.

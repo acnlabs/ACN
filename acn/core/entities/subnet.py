@@ -17,7 +17,7 @@ _LIFECYCLE_VALUES: frozenset[str] = frozenset({"persistent", "task_scoped"})
 # future third mode (e.g. "invite_only", "paid") extends this set and the
 # ``__post_init__`` validator picks it up automatically.
 _JOIN_POLICY_VALUES: frozenset[str] = frozenset({"open", "approval"})
-_RESERVED_SUBNET_IDS: frozenset[str] = frozenset({"public", "system"})
+_RESERVED_SLUGS: frozenset[str] = frozenset({"public", "system"})
 
 
 @dataclass
@@ -32,19 +32,31 @@ class Subnet:
 
     Identifiers
     -----------
-    ``subnet_id`` — the canonical, human-readable identifier. Stable
-        primary key in Postgres, used in every API path, agent
-        ``subnet_ids`` array, ``tasks.subnet_id`` reference, Redis index,
-        CLI, and SDK. Examples: ``"public"``, ``"acnlabs-core"``,
-        ``"subnet-team-alpha-7f3a9c"``.
+    ``slug`` — the URL-safe, human-readable identifier. Stable primary key
+        in Postgres (column ``subnets.slug``), used in every API path,
+        Redis index, CLI, and SDK. Examples: ``"public"``,
+        ``"acnlabs-core"``, ``"team-alpha-7f3a9c"``.
+
+        Cross-entity columns that *carry* a slug value but whose Python
+        attribute / DB column are still named ``subnet_id`` (Step 2 of
+        the rename migration): ``Agent.subnet_ids``, ``Task.subnet_id``,
+        ``SubnetJoinRequest`` / ``SubnetAllowlist`` ORM rows
+        (Python attribute is ``slug`` since Step 1, DB column stays
+        ``subnet_id`` until Step 2's column-rename migration ships).
     ``id`` — opaque UUID, server-generated. Surfaced only in
         ``SubnetInfo.id`` and ``SubnetStub.id`` so anonymous callers
-        receive a non-revealing identifier when they hit the discoverable-
-        private-subnet stub path. NOT used for lookups, foreign keys, or
-        membership arrays — those continue to key off ``subnet_id``.
+        receive a non-revealing identifier. NOT used for lookups, foreign
+        keys, or membership arrays — those continue to key off ``slug``.
+
+    Display name
+    ------------
+    ``name`` — free-text display name shown in UIs. May contain spaces,
+        uppercase letters, and Unicode. Defaults to ``slug`` at creation
+        time so legacy callers that never supply a separate display name
+        keep the old behaviour.
     """
 
-    subnet_id: str
+    slug: str
     name: str
     owner: str
     description: str | None = None
@@ -61,7 +73,7 @@ class Subnet:
     id: str = field(default_factory=lambda: str(uuid4()))
     # Nesting fields (ADR-0003). All optional; defaults preserve legacy
     # "flat top-level subnet" semantics.
-    parent_subnet_id: str | None = None
+    parent_slug: str | None = None
     lifecycle: Literal["persistent", "task_scoped"] = "persistent"
     linked_task_id: str | None = None
     # Join admission policy (ADR-0004). Decouples admission control from
@@ -80,29 +92,29 @@ class Subnet:
 
     def __post_init__(self):
         """Validate invariants"""
-        if not self.subnet_id:
-            raise ValueError("subnet_id cannot be empty")
+        if not self.slug:
+            raise ValueError("slug cannot be empty")
         if not self.name:
             raise ValueError("name cannot be empty")
         if not self.owner:
             raise ValueError("owner cannot be empty")
-        # Reserved subnet IDs
-        if self.subnet_id in _RESERVED_SUBNET_IDS:
+        # Reserved slugs
+        if self.slug in _RESERVED_SLUGS:
             if self.owner != "system":
-                raise ValueError(f"Subnet '{self.subnet_id}' is reserved for system use")
+                raise ValueError(f"Subnet '{self.slug}' is reserved for system use")
             # Reserved subnets can never participate in nesting — neither
-            # as a child (would let attackers slot platform-owned IDs into
+            # as a child (would let attackers slot platform-owned slugs into
             # a hierarchy) nor with a task-bound lifecycle (would let a
             # task termination auto-dissolve a platform-level subnet,
             # breaking the implicit "always-on" guarantee that callers
             # depend on for `public`).
-            if self.parent_subnet_id is not None:
+            if self.parent_slug is not None:
                 raise ValueError(
-                    f"Reserved subnet '{self.subnet_id}' cannot have a parent_subnet_id"
+                    f"Reserved subnet '{self.slug}' cannot have a parent_slug"
                 )
             if self.lifecycle == "task_scoped":
                 raise ValueError(
-                    f"Reserved subnet '{self.subnet_id}' cannot be task_scoped"
+                    f"Reserved subnet '{self.slug}' cannot be task_scoped"
                 )
 
         # ADR-0003 entity-layer invariants.
@@ -128,7 +140,7 @@ class Subnet:
             )
         # ``is_private=True`` implies ``join_policy="approval"`` — the
         # combination ``private + open`` is the status-quo "private but
-        # joinable by anyone who knows the id" bug that ADR-0004 closes.
+        # joinable by anyone who knows the slug" bug that ADR-0004 closes.
         # Rejecting at construction time means no service / route caller
         # can produce or load a row in that state; the same combination
         # received over the wire (``POST /api/v1/subnets`` body) is
@@ -136,7 +148,7 @@ class Subnet:
         # ``details.reason="visibility_policy_conflict"``.
         if self.is_private and self.join_policy == "open":
             raise ValueError(
-                f"subnet '{self.subnet_id}' configuration invalid: "
+                f"subnet '{self.slug}' configuration invalid: "
                 f"is_private=True requires join_policy='approval' "
                 f"(reason=visibility_policy_conflict)"
             )
@@ -185,7 +197,7 @@ class Subnet:
         for internal use (e.g. snapshotting onto Task.metadata).
         """
         out = {
-            "subnet_id": self.subnet_id,
+            "slug": self.slug,
             "id": self.id,
             "name": self.name,
             "owner": self.owner,
@@ -196,7 +208,7 @@ class Subnet:
             "created_at": self.created_at.isoformat(),
             "metadata": self.metadata,
             "harness_url": self.harness_url,
-            "parent_subnet_id": self.parent_subnet_id,
+            "parent_slug": self.parent_slug,
             "lifecycle": self.lifecycle,
             "linked_task_id": self.linked_task_id,
             "join_policy": self.join_policy,
@@ -248,4 +260,18 @@ class Subnet:
         # ADR-0004 legacy auto-upgrade — see docstring above.
         if "join_policy" not in data and data.get("is_private") is True:
             data["join_policy"] = "approval"
+        # Back-compat: old serialised dicts used ``subnet_id`` and
+        # ``parent_subnet_id`` before the slug rename. Translate on
+        # read so Redis-cached rows survive the migration without a
+        # backfill. ``data.pop`` (not ``setdefault``) so the legacy
+        # key never reaches ``cls(**data)`` — the dataclass would
+        # otherwise reject it as an unexpected keyword argument.
+        if "subnet_id" in data and "slug" not in data:
+            data["slug"] = data.pop("subnet_id")
+        elif "subnet_id" in data:
+            data.pop("subnet_id")
+        if "parent_subnet_id" in data and "parent_slug" not in data:
+            data["parent_slug"] = data.pop("parent_subnet_id")
+        elif "parent_subnet_id" in data:
+            data.pop("parent_subnet_id")
         return cls(**data)

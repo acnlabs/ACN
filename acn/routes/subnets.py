@@ -89,7 +89,7 @@ def _subnet_entity_to_info(subnet, *, parent_uuid: str | None = None) -> SubnetI
 
     ADR-0003 hierarchy fields:
     - ``parent_id`` carries the parent subnet's **opaque UUID** (ACL V6
-      B6). The human-readable ``parent_subnet_id`` slug is intentionally
+      B6). The human-readable ``parent_slug`` slug is intentionally
       suppressed to prevent a public child subnet from leaking its
       private parent's naming convention to anonymous callers. Callers
       pass the resolved UUID via the ``parent_uuid`` keyword argument;
@@ -99,13 +99,13 @@ def _subnet_entity_to_info(subnet, *, parent_uuid: str | None = None) -> SubnetI
     - ``harness_secret`` stays write-only — never exposed.
     """
     return SubnetInfo(
-        subnet_id=subnet.subnet_id,
+        slug=subnet.slug,
         # Defensive ``getattr``: legacy ``MagicMock`` test stubs that
         # predate the ``id`` field would otherwise return a fresh mock
-        # object instead of a string. Falls back to ``subnet.subnet_id``
+        # object instead of a string. Falls back to ``subnet.slug``
         # so the response is always well-formed; production entities
         # always carry the real UUID.
-        id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.subnet_id,
+        id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.slug,
         name=subnet.name,
         owner=subnet.owner,
         description=subnet.description,
@@ -115,8 +115,8 @@ def _subnet_entity_to_info(subnet, *, parent_uuid: str | None = None) -> SubnetI
         metadata=subnet.metadata,
         harness_url=subnet.harness_url,
         harness_registered=subnet.harness_url is not None,
-        # parent_subnet_id (slug) is always None in API responses — ACL V6 B6.
-        parent_subnet_id=None,
+        # parent_slug (slug) is always None in API responses — ACL V6 B6.
+        parent_slug=None,
         parent_id=parent_uuid,
         lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
         linked_task_id=_coerce_optional_str(
@@ -131,12 +131,12 @@ async def _resolve_parent_uuid(
 ) -> str | None:
     """Return the parent subnet's opaque UUID, or None if top-level / orphaned.
 
-    Resolves the slug stored in ``subnet.parent_subnet_id`` to the stable
+    Resolves the slug stored in ``subnet.parent_slug`` to the stable
     UUID needed by ``_subnet_entity_to_info`` (ACL V6 B6).  Silently
     degrades to ``None`` on lookup failure so orphaned references don't
     surface a 500 to callers.
     """
-    parent_slug = _coerce_optional_str(getattr(subnet, "parent_subnet_id", None))
+    parent_slug = _coerce_optional_str(getattr(subnet, "parent_slug", None))
     if not parent_slug:
         return None
     try:
@@ -220,12 +220,12 @@ _nesting_error_to_acn = _invariant_error_to_acn
 
 
 def _generate_subnet_id(name: str) -> str:
-    """Generate a compact, unique subnet_id from a human-readable name.
+    """Generate a compact, unique slug from a human-readable name.
 
     Format: ``subnet-{slug}-{rand6}`` where slug is a lowercased, hyphen-
     delimited form of ``name`` truncated to 32 chars. Total length is
     bounded by ``len("subnet-") + 32 + 1 + 6 = 46`` — comfortably inside
-    ``SubnetCreateRequest.subnet_id``'s ``max_length=64``.
+    ``SubnetCreateRequest.slug``'s ``max_length=64``.
     """
     slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:32] or "subnet"
     return f"subnet-{slug}-{secrets.token_hex(3)}"
@@ -259,10 +259,13 @@ async def create_subnet(
         security_cfg = body.security_config or (
             dict(body.security_schemes) if body.security_schemes else {}
         )
-        subnet_id = body.subnet_id or _generate_subnet_id(body.name)
+        slug = body.slug or _generate_subnet_id(body.name or "subnet")
+        # ``name`` is optional in SubnetCreateRequest; default to slug so
+        # the entity-layer invariant (name != empty) is always satisfied.
+        name = body.name or slug
         subnet = await subnet_service.create_subnet(
-            subnet_id=subnet_id,
-            name=body.name,
+            slug=slug,
+            name=name,
             owner=owner,
             description=body.description,
             is_private=body.is_private,
@@ -271,7 +274,7 @@ async def create_subnet(
             # ADR-0003 nesting fields — service-layer validates the
             # five invariant variants and raises ``SubnetInvariantError``
             # with a stable ``reason`` string.
-            parent_subnet_id=body.parent_subnet_id,
+            parent_slug=body.parent_slug,
             lifecycle=body.lifecycle,
             linked_task_id=body.linked_task_id,
             # ADR-0004 admission policy. ``None`` (the default) lets
@@ -287,21 +290,21 @@ async def create_subnet(
         # agent-side write fails (preserves the "create is atomic" contract
         # callers expect).
         try:
-            await agent_service.join_subnet(owner, subnet.subnet_id)
+            await agent_service.join_subnet(owner, subnet.slug)
         except Exception as join_error:  # noqa: BLE001 - rollback path
             logger.error(
                 "subnet_owner_join_failed_rolling_back",
-                subnet_id=subnet.subnet_id,
+                slug=subnet.slug,
                 owner=owner,
                 error=str(join_error),
                 exc_info=True,
             )
             try:
-                await subnet_service.delete_subnet(subnet.subnet_id, owner)
+                await subnet_service.delete_subnet(subnet.slug, owner)
             except Exception as rollback_error:  # noqa: BLE001
                 logger.error(
                     "subnet_creation_rollback_failed",
-                    subnet_id=subnet.subnet_id,
+                    slug=subnet.slug,
                     error=str(rollback_error),
                     exc_info=True,
                 )
@@ -312,14 +315,14 @@ async def create_subnet(
 
         # Generate gateway URLs
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
-        gateway_a2a_url = f"{base_url}/gateway/a2a/{subnet.subnet_id}"
-        gateway_ws_url = f"{base_url}/gateway/ws/{subnet.subnet_id}"
+        gateway_a2a_url = f"{base_url}/gateway/a2a/{subnet.slug}"
+        gateway_ws_url = f"{base_url}/gateway/ws/{subnet.slug}"
 
-        logger.info("subnet_created", subnet_id=subnet.subnet_id, owner=owner)
+        logger.info("subnet_created", slug=subnet.slug, owner=owner)
 
         return SubnetCreateResponse(
             status="created",
-            subnet_id=subnet.subnet_id,
+            slug=subnet.slug,
             is_public=not subnet.is_private,
             gateway_ws_url=gateway_ws_url,
             gateway_a2a_url=gateway_a2a_url,
@@ -412,7 +415,7 @@ async def list_subnets(
                 caller_payload.get("sub") or None if caller_payload else None
             )
             subnets = await subnet_service.list_children(
-                parent_subnet_id=parent,
+                parent_slug=parent,
                 requester_id=requester_id,
             )
         elif owned_by_user is not None:
@@ -473,9 +476,9 @@ async def list_subnets(
 
         # Batch-resolve all parent UUIDs in a single pass to avoid N+1 queries.
         parent_ids_needed = {
-            getattr(s, "parent_subnet_id", None)
+            getattr(s, "parent_slug", None)
             for s in subnets_page
-            if getattr(s, "parent_subnet_id", None)
+            if getattr(s, "parent_slug", None)
         }
         parent_uuid_map: dict[str, str | None] = {}
         for pid in parent_ids_needed:
@@ -486,7 +489,7 @@ async def list_subnets(
                 parent_uuid_map[pid] = None
 
         def _get_parent_uuid(s) -> str | None:
-            pid = getattr(s, "parent_subnet_id", None)
+            pid = getattr(s, "parent_slug", None)
             if not pid:
                 return None
             return parent_uuid_map.get(pid)
@@ -509,7 +512,7 @@ async def list_subnets(
                 # Private subnet the caller cannot see in full → SubnetStub.
                 subnet_infos.append(
                     SubnetStub(
-                        id=_coerce_optional_str(getattr(s, "id", None)) or s.subnet_id,
+                        id=_coerce_optional_str(getattr(s, "id", None)) or s.slug,
                         is_private=True,
                         parent_id=parent_uuid,
                         lifecycle=_coerce_lifecycle(
@@ -528,9 +531,9 @@ async def list_subnets(
         raise HTTPException(status_code=500, detail="Failed to list subnets") from e
 
 
-@router.get("/{subnet_id}")
+@router.get("/{slug}")
 async def get_subnet(
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
@@ -556,7 +559,7 @@ async def get_subnet(
           ``description``, ``harness_url``, and ``security_schemes`` are
           omitted.
 
-        Rationale: a private subnet's ``subnet_id`` is already
+        Rationale: a private subnet's ``slug`` is already
         discoverable through public agent listings, so existence-hiding
         provides no real security.  Surfacing hierarchy metadata lets
         graph clients draw correct topology without leaking sensitive
@@ -576,12 +579,12 @@ async def get_subnet(
         (404).
     """
     try:
-        subnet = await subnet_service.get_subnet(subnet_id)
+        subnet = await subnet_service.get_subnet(slug)
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
 
     # Resolve parent UUID once — used by both SubnetStub and SubnetInfo
@@ -594,13 +597,13 @@ async def get_subnet(
     # Private subnet — check authorisation.
     # Unauthenticated or unauthorised callers receive a SubnetStub
     # carrying only the **opaque UUID** plus structural metadata.
-    # The human-readable subnet_id slug is intentionally NOT exposed:
+    # The human-readable slug slug is intentionally NOT exposed:
     # naming patterns like ``acnlabs-core`` would otherwise leak
     # organisational structure to anyone who happens to know an
     # agent_id that's a member.
     def _stub() -> SubnetStub:
         return SubnetStub(
-            id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.subnet_id,
+            id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.slug,
             is_private=True,
             parent_id=parent_uuid,
             lifecycle=_coerce_lifecycle(getattr(subnet, "lifecycle", "persistent")),
@@ -621,9 +624,9 @@ async def get_subnet(
     return _subnet_entity_to_info(subnet, parent_uuid=parent_uuid)
 
 
-@router.get("/{subnet_id}/children")
+@router.get("/{slug}/children")
 async def get_subnet_children(
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
@@ -646,12 +649,12 @@ async def get_subnet_children(
     try:
         # Verify the parent itself exists so callers don't silently
         # paper over typos. Service ACL still filters the result set.
-        await subnet_service.get_subnet(subnet_id)
+        await subnet_service.get_subnet(slug)
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
 
     try:
@@ -666,7 +669,7 @@ async def get_subnet_children(
             caller_payload.get("sub") or None if caller_payload else None
         )
         children = await subnet_service.list_children(
-            parent_subnet_id=subnet_id,
+            parent_slug=slug,
             requester_id=requester_id,
         )
 
@@ -685,7 +688,7 @@ async def get_subnet_children(
                 parent_uuid = await _resolve_parent_uuid(s, subnet_service)
                 subnet_infos.append(
                     SubnetStub(
-                        id=_coerce_optional_str(getattr(s, "id", None)) or s.subnet_id,
+                        id=_coerce_optional_str(getattr(s, "id", None)) or s.slug,
                         is_private=True,
                         parent_id=parent_uuid,
                         lifecycle=_coerce_lifecycle(
@@ -702,7 +705,7 @@ async def get_subnet_children(
     except Exception as e:
         logger.error(
             "get_subnet_children_failed",
-            subnet_id=subnet_id,
+            slug=slug,
             error=str(e),
             exc_info=True,
         )
@@ -711,11 +714,11 @@ async def get_subnet_children(
         ) from e
 
 
-@router.post("/{subnet_id}/promote")
+@router.post("/{slug}/promote")
 @limiter.limit("10/minute")
 async def promote_subnet(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
 ):
@@ -735,7 +738,7 @@ async def promote_subnet(
     owner = agent_info["agent_id"]
     try:
         subnet = await subnet_service.promote_to_persistent(
-            subnet_id=subnet_id,
+            slug=slug,
             owner=owner,
         )
         return _subnet_entity_to_info(subnet)
@@ -743,13 +746,13 @@ async def promote_subnet(
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
     except PermissionError as e:
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"subnet_id": subnet_id, "reason": "owner_mismatch"},
+            details={"slug": slug, "reason": "owner_mismatch"},
         ) from e
     except ACNHTTPError:
         raise
@@ -758,16 +761,16 @@ async def promote_subnet(
     except Exception as e:
         logger.error(
             "promote_subnet_failed",
-            subnet_id=subnet_id,
+            slug=slug,
             error=str(e),
             exc_info=True,
         )
         raise HTTPException(status_code=500, detail="Failed to promote subnet") from e
 
 
-@router.get("/{subnet_id}/agents")
+@router.get("/{slug}/agents")
 async def get_subnet_agents(
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Security(_optional_bearer),
     subnet_service: SubnetServiceDep = None,
@@ -791,17 +794,17 @@ async def get_subnet_agents(
       private-subnet membership queries.
     """
     try:
-        subnet = await subnet_service.get_subnet(subnet_id)
+        subnet = await subnet_service.get_subnet(slug)
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
 
     # For private subnets, check caller access.  For public subnets this
     # block is skipped entirely — the member list is openly visible.
-    _empty_response = {"subnet_id": subnet_id, "agents": [], "count": 0}
+    _empty_response = {"slug": slug, "agents": [], "count": 0}
     if getattr(subnet, "is_private", False):
         if not credentials:
             return _empty_response
@@ -813,7 +816,12 @@ async def get_subnet_agents(
             return _empty_response
 
     try:
-        agents = await agent_service.search_agents(subnet_id=subnet_id)
+        # ``AgentService.search_agents`` keeps its parameter named
+        # ``subnet_id=`` until Step 2 of the slug rename migrates the
+        # cross-entity references (Agent.subnet_ids, Task.subnet_id).
+        # The argument *value* is the slug — only the keyword name
+        # has not been renamed yet.
+        agents = await agent_service.search_agents(subnet_id=slug)
 
         from .registry import _agent_entities_to_infos
 
@@ -821,7 +829,7 @@ async def get_subnet_agents(
             agents, agent_service=agent_service, strip_sensitive=True
         )
 
-        return {"subnet_id": subnet_id, "agents": agent_infos, "count": len(agent_infos)}
+        return {"slug": slug, "agents": agent_infos, "count": len(agent_infos)}
     except ACNHTTPError:
         raise
     except HTTPException:
@@ -851,11 +859,11 @@ async def get_subnet_agents(
 
 
 @router.post(
-    "/{agent_id}/subnets/{subnet_id}",
+    "/{agent_id}/subnets/{slug}",
     deprecated=True,
     summary="[Deprecated] Agent joins a subnet",
     description=(
-        "**Deprecated.** Use `POST /api/v1/agents/{agent_id}/subnets/{subnet_id}` "
+        "**Deprecated.** Use `POST /api/v1/agents/{agent_id}/subnets/{slug}` "
         "instead. This path will be removed after telemetry shows zero traffic "
         "for one full release cycle. Behaviour is identical."
     ),
@@ -864,23 +872,23 @@ async def get_subnet_agents(
 async def join_subnet(
     request: Request,
     agent_id: AgentIdPath,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
     webhook_service: WebhookServiceDep = None,
     join_flow_service: JoinFlowServiceDep = None,
 ):
-    """[Deprecated] Use POST /api/v1/agents/{agent_id}/subnets/{subnet_id}."""
+    """[Deprecated] Use POST /api/v1/agents/{agent_id}/subnets/{slug}."""
     logger.warning(
         "deprecated_route_called",
-        path="/api/v1/subnets/{agent_id}/subnets/{subnet_id}",
-        canonical="/api/v1/agents/{agent_id}/subnets/{subnet_id}",
+        path="/api/v1/subnets/{agent_id}/subnets/{slug}",
+        canonical="/api/v1/agents/{agent_id}/subnets/{slug}",
         agent_id=agent_id,
     )
     return await do_join_subnet(
         agent_id=agent_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_info=agent_info,
         subnet_service=subnet_service,
         agent_service=agent_service,
@@ -890,11 +898,11 @@ async def join_subnet(
 
 
 @router.delete(
-    "/{agent_id}/subnets/{subnet_id}",
+    "/{agent_id}/subnets/{slug}",
     deprecated=True,
     summary="[Deprecated] Agent leaves a subnet",
     description=(
-        "**Deprecated.** Use `DELETE /api/v1/agents/{agent_id}/subnets/{subnet_id}` "
+        "**Deprecated.** Use `DELETE /api/v1/agents/{agent_id}/subnets/{slug}` "
         "instead. Behaviour is identical."
     ),
 )
@@ -902,22 +910,22 @@ async def join_subnet(
 async def leave_subnet(
     request: Request,
     agent_id: AgentIdPath,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
     webhook_service: WebhookServiceDep = None,
 ):
-    """[Deprecated] Use DELETE /api/v1/agents/{agent_id}/subnets/{subnet_id}."""
+    """[Deprecated] Use DELETE /api/v1/agents/{agent_id}/subnets/{slug}."""
     logger.warning(
         "deprecated_route_called",
-        path="/api/v1/subnets/{agent_id}/subnets/{subnet_id}",
-        canonical="/api/v1/agents/{agent_id}/subnets/{subnet_id}",
+        path="/api/v1/subnets/{agent_id}/subnets/{slug}",
+        canonical="/api/v1/agents/{agent_id}/subnets/{slug}",
         agent_id=agent_id,
     )
     return await do_leave_subnet(
         agent_id=agent_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_info=agent_info,
         subnet_service=subnet_service,
         agent_service=agent_service,
@@ -964,11 +972,11 @@ class UpdateHarnessRequest(BaseModel):
         return v
 
 
-@router.patch("/{subnet_id}/harness")
+@router.patch("/{slug}/harness")
 @limiter.limit("20/minute")
 async def update_subnet_harness(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     body: UpdateHarnessRequest,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
@@ -979,7 +987,7 @@ async def update_subnet_harness(
     """
     try:
         subnet = await subnet_service.update_harness(
-            subnet_id=subnet_id,
+            slug=slug,
             owner=agent_info["agent_id"],
             harness_url=body.harness_url,
             harness_secret=body.harness_secret,
@@ -988,18 +996,18 @@ async def update_subnet_harness(
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
     except PermissionError as e:
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"subnet_id": subnet_id, "reason": "owner_mismatch"},
+            details={"slug": slug, "reason": "owner_mismatch"},
         ) from e
 
     return {
         "status": "updated",
-        "subnet_id": subnet.subnet_id,
+        "slug": subnet.slug,
         "harness_url": subnet.harness_url,
         "harness_registered": subnet.harness_url is not None,
     }
@@ -1033,11 +1041,11 @@ async def get_agent_subnets(
     )
 
 
-@router.delete("/{subnet_id}")
+@router.delete("/{slug}")
 @limiter.limit("10/minute")
 async def delete_subnet(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     confirm: bool = Query(
@@ -1060,7 +1068,7 @@ async def delete_subnet(
             ErrorCode.INVALID_REQUEST,
             400,
             details={
-                "subnet_id": subnet_id,
+                "slug": slug,
                 "hint": "Add ?confirm=true to confirm this destructive operation.",
             },
         )
@@ -1068,19 +1076,19 @@ async def delete_subnet(
     owner = agent_info["agent_id"]
 
     try:
-        success = await subnet_service.delete_subnet(subnet_id, owner)
+        success = await subnet_service.delete_subnet(slug, owner)
         if success:
-            logger.info("subnet_deleted", subnet_id=subnet_id, owner=owner)
+            logger.info("subnet_deleted", slug=slug, owner=owner)
             fire_and_forget_event(
                 get_audit_singleton(),
                 event_type=AuditEventType.SUBNET_DELETED,
                 actor_id=owner,
                 actor_type="agent",
-                target_id=subnet_id,
+                target_id=slug,
                 target_type="subnet",
                 details={"confirmed": True},
             )
-            return {"status": "deleted", "subnet_id": subnet_id}
+            return {"status": "deleted", "slug": slug}
         else:
             # This in-try raise is now correctly propagated thanks to the
             # ``except HTTPException: raise`` defence below (added by the
@@ -1094,14 +1102,14 @@ async def delete_subnet(
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
     except PermissionError as e:
-        logger.warning("delete_subnet_permission_denied", subnet_id=subnet_id, error=str(e))
+        logger.warning("delete_subnet_permission_denied", slug=slug, error=str(e))
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
-            details={"subnet_id": subnet_id, "reason": "owner_mismatch"},
+            details={"slug": slug, "reason": "owner_mismatch"},
         ) from e
     except ACNHTTPError:
         raise
@@ -1122,9 +1130,9 @@ async def delete_subnet(
 # =============================================================================
 
 
-@router.post("/{subnet_id}/members/{agent_id}", tags=["subnets-internal"])
+@router.post("/{slug}/members/{agent_id}", tags=["subnets-internal"])
 async def admin_add_subnet_member(
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_id: AgentIdPath,
     payload: dict = Depends(require_internal_or_permission("acn:admin")),
     subnet_service: SubnetServiceDep = None,
@@ -1136,21 +1144,21 @@ async def admin_add_subnet_member(
     Returns 404 silently if the subnet does not exist (best-effort).
     """
     try:
-        await subnet_service.add_member(subnet_id, agent_id)
-        logger.info("admin_subnet_member_added", subnet_id=subnet_id, agent_id=agent_id)
-        return {"status": "added", "subnet_id": subnet_id, "agent_id": agent_id}
+        await subnet_service.add_member(slug, agent_id)
+        logger.info("admin_subnet_member_added", slug=slug, agent_id=agent_id)
+        return {"status": "added", "slug": slug, "agent_id": agent_id}
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
     except SubnetInvariantError as e:
         # ADR-0003 child-subnet membership-subset rejection
         # propagated even through the internal admin path — keeps
         # the invariant uniformly enforced regardless of caller.
         raise _invariant_error_to_acn(
-            e, extra_details={"subnet_id": subnet_id, "agent_id": agent_id}
+            e, extra_details={"slug": slug, "agent_id": agent_id}
         ) from e
     except ACNHTTPError:
         raise
@@ -1161,9 +1169,9 @@ async def admin_add_subnet_member(
         raise HTTPException(status_code=500, detail="Failed to add subnet member") from e
 
 
-@router.delete("/{subnet_id}/members/{agent_id}", tags=["subnets-internal"])
+@router.delete("/{slug}/members/{agent_id}", tags=["subnets-internal"])
 async def admin_remove_subnet_member(
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_id: AgentIdPath,
     payload: dict = Depends(require_internal_or_permission("acn:admin")),
     subnet_service: SubnetServiceDep = None,
@@ -1175,14 +1183,14 @@ async def admin_remove_subnet_member(
     Returns 404 silently if the subnet does not exist (best-effort).
     """
     try:
-        await subnet_service.remove_member(subnet_id, agent_id)
-        logger.info("admin_subnet_member_removed", subnet_id=subnet_id, agent_id=agent_id)
-        return {"status": "removed", "subnet_id": subnet_id, "agent_id": agent_id}
+        await subnet_service.remove_member(slug, agent_id)
+        logger.info("admin_subnet_member_removed", slug=slug, agent_id=agent_id)
+        return {"status": "removed", "slug": slug, "agent_id": agent_id}
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
     except ACNHTTPError:
         raise

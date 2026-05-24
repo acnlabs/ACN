@@ -47,7 +47,7 @@ def subnet_service(mock_subnet_repo):
 
 def _make_subnet(**overrides) -> Subnet:
     defaults = {
-        "subnet_id": "sn-paperclip",
+        "slug": "sn-paperclip",
         "name": "Paperclip Subnet",
         "owner": "agent-owner",
     }
@@ -61,7 +61,7 @@ class TestSubnetServiceUpdateHarness:
         mock_subnet_repo.find_by_id.return_value = sn
 
         result = await subnet_service.update_harness(
-            subnet_id="sn-paperclip",
+            slug="sn-paperclip",
             owner="agent-owner",
             harness_url="https://paperclip.example.com/acn/webhook",
             harness_secret="s3cr3t",
@@ -76,7 +76,7 @@ class TestSubnetServiceUpdateHarness:
         mock_subnet_repo.find_by_id.return_value = sn
 
         result = await subnet_service.update_harness(
-            subnet_id="sn-paperclip",
+            slug="sn-paperclip",
             owner="agent-owner",
             harness_url=None,
             harness_secret=None,
@@ -92,7 +92,7 @@ class TestSubnetServiceUpdateHarness:
 
         with pytest.raises(PermissionError, match="Owner mismatch"):
             await subnet_service.update_harness(
-                subnet_id="sn-paperclip",
+                slug="sn-paperclip",
                 owner="agent-hacker",
                 harness_url="https://evil.example",
                 harness_secret="pwn",
@@ -104,7 +104,7 @@ class TestSubnetServiceUpdateHarness:
         mock_subnet_repo.find_by_id.return_value = sn
 
         await subnet_service.update_harness(
-            subnet_id="sn-paperclip",
+            slug="sn-paperclip",
             owner="system",
             harness_url="https://platform-managed.example",
             harness_secret=None,
@@ -115,7 +115,7 @@ class TestSubnetServiceUpdateHarness:
         mock_subnet_repo.find_by_id.return_value = None
         with pytest.raises(SubnetNotFoundException):
             await subnet_service.update_harness(
-                subnet_id="nope",
+                slug="nope",
                 owner="agent-owner",
                 harness_url="https://x",
                 harness_secret=None,
@@ -172,7 +172,7 @@ class TestWebhookServiceSendTo:
             secret="topsecret",
             event=WebhookEventType.AGENT_JOINED_SUBNET,
             task_id="sn-1",
-            data={"subnet_id": "sn-1", "agent_id": "agent-007"},
+            data={"slug": "sn-1", "agent_id": "agent-007"},
             retry_count=1,
             retry_delay=0,
         )
@@ -196,7 +196,7 @@ class TestWebhookServiceSendTo:
             secret=None,
             event=WebhookEventType.AGENT_LEFT_SUBNET,
             task_id="sn-1",
-            data={"subnet_id": "sn-1", "agent_id": "agent-007"},
+            data={"slug": "sn-1", "agent_id": "agent-007"},
             retry_count=1,
             retry_delay=0,
         )
@@ -429,8 +429,8 @@ class TestNotifyWebhookDualDelivery:
         send_event_kwargs = webhook.send_event.await_args.kwargs
         assert send_event_kwargs["event"] == WebhookEventType.TASK_ACCEPTED
         assert send_event_kwargs["task_id"] == "t-harness-1"
-        # payload includes subnet_id so receivers can correlate
-        assert send_event_kwargs["data"]["subnet_id"] == "sn-paperclip"
+        # payload includes slug so receivers can correlate
+        assert send_event_kwargs["data"]["slug"] == "sn-paperclip"
 
         webhook.send_to.assert_awaited_once()
         send_to_kwargs = webhook.send_to.await_args.kwargs

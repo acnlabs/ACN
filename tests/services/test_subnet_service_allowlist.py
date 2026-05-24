@@ -34,10 +34,10 @@ from acn.services._no_op_join_flow_event_publisher import (
 from acn.services.subnet_service import SubnetService
 
 
-def _subnet(subnet_id: str = "s-1", owner: str = "alice") -> Subnet:
+def _subnet(slug: str = "s-1", owner: str = "alice") -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
         created_at=datetime.now(UTC),
         member_agent_ids={owner},
@@ -85,13 +85,13 @@ class TestAddAllowlist:
     ) -> None:
         entry = await service.add_allowlist("s-1", "bob", added_by="alice")
 
-        assert entry.subnet_id == "s-1"
+        assert entry.slug == "s-1"
         assert entry.agent_id == "bob"
         assert entry.added_by == "alice"
         mock_allowlist_repo.add.assert_awaited_once()
         saved = mock_allowlist_repo.add.await_args.args[0]
         assert isinstance(saved, SubnetAllowlist)
-        assert saved.subnet_id == "s-1"
+        assert saved.slug == "s-1"
         assert saved.agent_id == "bob"
 
     @pytest.mark.asyncio
@@ -104,7 +104,7 @@ class TestAddAllowlist:
         with pytest.raises(AllowlistEntryExistsError) as exc_info:
             await service.add_allowlist("s-1", "bob", added_by="alice")
 
-        assert exc_info.value.subnet_id == "s-1"
+        assert exc_info.value.slug == "s-1"
         assert exc_info.value.agent_id == "bob"
         assert exc_info.value.reason == "already_on_allowlist"
 
@@ -184,13 +184,13 @@ class TestListAllowlist:
     ) -> None:
         entries = [
             SubnetAllowlist(
-                subnet_id="s-1",
+                slug="s-1",
                 agent_id="bob",
                 added_by="alice",
                 added_at=datetime.now(UTC),
             ),
             SubnetAllowlist(
-                subnet_id="s-1",
+                slug="s-1",
                 agent_id="carol",
                 added_by="alice",
                 added_at=datetime.now(UTC),

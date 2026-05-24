@@ -131,7 +131,7 @@ class IJoinFlowEventPublisher(ABC):
             event: One of the eight ``JoinFlowEventType`` members.
             subnet: The ``Subnet`` entity the event is scoped to.
                 Implementations read ``harness_url`` /
-                ``harness_secret`` / ``parent_subnet_id`` from here
+                ``harness_secret`` / ``parent_slug`` from here
                 — Slice 2.2 callers must pass the freshly-fetched
                 subnet so a webhook fired off a stale snapshot
                 doesn't address a deleted Harness.

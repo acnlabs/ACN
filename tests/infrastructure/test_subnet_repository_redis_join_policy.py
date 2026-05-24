@@ -73,7 +73,7 @@ async def test_save_writes_join_policy_as_string() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     subnet = Subnet(
-        subnet_id="subnet-jp-1",
+        slug="subnet-jp-1",
         name="JP",
         owner="agent-owner",
         is_private=True,
@@ -105,7 +105,7 @@ async def test_save_round_trip_preserves_join_policy() -> None:
     ]
     for is_private, join_policy in legal_pairs:
         subnet = Subnet(
-            subnet_id=f"subnet-rt-{is_private}-{join_policy}",
+            slug=f"subnet-rt-{is_private}-{join_policy}",
             name="rt",
             owner="agent-owner",
             is_private=is_private,
@@ -125,7 +125,7 @@ def test_dict_to_subnet_legacy_public_row_defaults_to_open() -> None:
     invariant accepts it."""
     repo = RedisSubnetRepository(AsyncMock())
     legacy_public = {
-        "subnet_id": "subnet-legacy-pub",
+        "slug": "subnet-legacy-pub",
         "name": "Legacy",
         "owner": "agent-1",
         "is_private": "False",
@@ -148,7 +148,7 @@ def test_dict_to_subnet_legacy_private_row_auto_upgrades_to_approval() -> None:
     migration window."""
     repo = RedisSubnetRepository(AsyncMock())
     legacy_private = {
-        "subnet_id": "subnet-legacy-priv",
+        "slug": "subnet-legacy-priv",
         "name": "LegacyPriv",
         "owner": "agent-1",
         "is_private": "True",
@@ -170,7 +170,7 @@ def test_dict_to_subnet_empty_join_policy_treated_as_missing() -> None:
     private => approval, otherwise open."""
     repo = RedisSubnetRepository(AsyncMock())
     private_empty = {
-        "subnet_id": "subnet-empty-priv",
+        "slug": "subnet-empty-priv",
         "name": "EmptyPriv",
         "owner": "agent-1",
         "is_private": "True",
@@ -184,7 +184,7 @@ def test_dict_to_subnet_empty_join_policy_treated_as_missing() -> None:
     assert subnet.join_policy == "approval"
 
     public_empty = {**private_empty}
-    public_empty["subnet_id"] = "subnet-empty-pub"
+    public_empty["slug"] = "subnet-empty-pub"
     public_empty["is_private"] = "False"
     subnet_pub = repo._dict_to_subnet(public_empty)
     assert subnet_pub.join_policy == "open"

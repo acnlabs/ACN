@@ -3,7 +3,7 @@
 H6 fenced off body-side abuse with per-string ``max_length`` and a 1 MiB
 total body cap. Path / query parameters were left unbounded because
 Starlette's URL parser caps headers at ~64 KB anyway — but a ~60 KB
-``subnet_id`` still flows downstream into Redis keys, SQL ``WHERE``
+``slug`` still flows downstream into Redis keys, SQL ``WHERE``
 clauses, and audit log structured fields.
 
 After the fix, FastAPI's ``Path(..., max_length=N)`` returns ``422`` for
@@ -71,17 +71,17 @@ def client() -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# subnet_id (subnets routes)
+# slug (subnets routes)
 # ---------------------------------------------------------------------------
 
 
 def test_subnet_id_oversize_is_422(client: TestClient):
-    """``GET /subnets/{subnet_id}`` must reject 60 KB ids before the
+    """``GET /subnets/{slug}`` must reject 60 KB ids before the
     service layer sees them — no Redis lookups, no SQL WHERE."""
     oversize = "x" * (MAX_SUBNET_ID_LEN + 1)
     resp = client.get(f"/api/v1/subnets/{oversize}")
     assert resp.status_code == 422, (
-        f"oversize subnet_id ({len(oversize)} chars) must return 422; got "
+        f"oversize slug ({len(oversize)} chars) must return 422; got "
         f"{resp.status_code}: {resp.text[:200]}"
     )
     body = resp.json()
@@ -120,9 +120,9 @@ def test_agent_id_oversize_on_registry_route_is_422(client: TestClient):
 
 def test_agent_id_oversize_on_subnet_internal_route_is_422(client: TestClient):
     """Internal subnet membership routes also enforce the cap."""
-    subnet_id = "valid"
+    slug = "valid"
     oversize_agent = "a" * (MAX_AGENT_ID_LEN + 1)
-    resp = client.post(f"/api/v1/subnets/{subnet_id}/members/{oversize_agent}")
+    resp = client.post(f"/api/v1/subnets/{slug}/members/{oversize_agent}")
     assert resp.status_code == 422
 
 
@@ -167,12 +167,12 @@ def test_task_id_at_boundary_passes_validation(client: TestClient):
 
 def test_subnet_id_cap_matches_postgres_schema():
     """``MAX_SUBNET_ID_LEN`` must not exceed the Postgres ``String(100)``
-    constraint on ``tasks.subnet_id`` — otherwise an oversize id slips
+    constraint on ``tasks.slug`` — otherwise an oversize id slips
     past the route layer and 500s on PG insert.
     """
     assert MAX_SUBNET_ID_LEN == 100, (
         f"MAX_SUBNET_ID_LEN={MAX_SUBNET_ID_LEN} no longer matches the "
-        "tasks.subnet_id Postgres VARCHAR(100); update either the cap or "
+        "tasks.slug Postgres VARCHAR(100); update either the cap or "
         "the schema, but keep them in lockstep."
     )
 

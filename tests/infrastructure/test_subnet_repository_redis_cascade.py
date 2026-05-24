@@ -112,7 +112,7 @@ async def test_delete_with_children_child_failure_raises_and_skips_parent(
     )
     record = partial_records[0]
     assert record.levelname == "WARNING"
-    assert getattr(record, "parent_subnet_id", None) == "parent-1"
+    assert getattr(record, "parent_slug", None) == "parent-1"
     assert getattr(record, "child_subnet_id", None) == "child-2"
     assert getattr(record, "reason", None) == "child_delete_returned_false"
 

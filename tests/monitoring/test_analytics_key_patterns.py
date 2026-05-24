@@ -8,7 +8,7 @@ Before the fix:
        `acn:subnets:info:{id}`.
     - `_count_agents_in_subnet` scanned every agent and filtered in Python;
        the authoritative source is already the set
-       `acn:subnets:{subnet_id}:agents`.
+       `acn:subnets:{slug}:agents`.
 
 These made `get_agent_stats`, `get_subnet_stats`, and every health-check
 consumer return permanently-zero data without raising any error.

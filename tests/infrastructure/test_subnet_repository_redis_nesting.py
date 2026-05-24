@@ -87,10 +87,10 @@ async def test_save_child_subnet_adds_to_children_index() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     child = Subnet(
-        subnet_id="subnet-child",
+        slug="subnet-child",
         name="child",
         owner="agent-owner",
-        parent_subnet_id="subnet-parent",
+        parent_slug="subnet-parent",
     )
 
     await repo.save(child)
@@ -109,10 +109,10 @@ async def test_save_task_scoped_subnet_adds_to_linked_task_index() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     scoped = Subnet(
-        subnet_id="subnet-scoped",
+        slug="subnet-scoped",
         name="scoped",
         owner="agent-owner",
-        parent_subnet_id="subnet-parent",
+        parent_slug="subnet-parent",
         lifecycle="task_scoped",
         linked_task_id="task-xyz",
     )
@@ -136,7 +136,7 @@ async def test_save_top_level_subnet_does_not_touch_nesting_indexes() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     flat = Subnet(
-        subnet_id="subnet-flat",
+        slug="subnet-flat",
         name="flat",
         owner="agent-owner",
     )
@@ -166,7 +166,7 @@ async def test_delete_child_subnet_removes_from_children_index() -> None:
     # Wire ``find_by_id`` (via hgetall) to return a stored child row
     # so ``delete`` actually proceeds past its existence guard.
     redis.hgetall.return_value = {
-        "subnet_id": "subnet-child",
+        "slug": "subnet-child",
         "name": "child",
         "owner": "agent-owner",
         "is_private": "False",
@@ -176,7 +176,7 @@ async def test_delete_child_subnet_removes_from_children_index() -> None:
         "description": "",
         "harness_url": "",
         "harness_secret": "",
-        "parent_subnet_id": "subnet-parent",
+        "parent_slug": "subnet-parent",
         "lifecycle": "persistent",
         "linked_task_id": "",
     }
@@ -198,7 +198,7 @@ async def test_delete_task_scoped_subnet_removes_from_linked_task_index() -> Non
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     redis.hgetall.return_value = {
-        "subnet_id": "subnet-scoped",
+        "slug": "subnet-scoped",
         "name": "scoped",
         "owner": "agent-owner",
         "is_private": "False",
@@ -208,7 +208,7 @@ async def test_delete_task_scoped_subnet_removes_from_linked_task_index() -> Non
         "description": "",
         "harness_url": "",
         "harness_secret": "",
-        "parent_subnet_id": "subnet-parent",
+        "parent_slug": "subnet-parent",
         "lifecycle": "task_scoped",
         "linked_task_id": "task-xyz",
     }
@@ -241,7 +241,7 @@ async def test_find_by_parent_reads_children_index_and_hydrates() -> None:
     # same payload comes back for both subnet IDs; ``find_by_parent``
     # only cares that hydration happens, not which row is which.
     redis.hgetall.return_value = {
-        "subnet_id": "subnet-a",
+        "slug": "subnet-a",
         "name": "a",
         "owner": "agent-owner",
         "is_private": "False",
@@ -251,7 +251,7 @@ async def test_find_by_parent_reads_children_index_and_hydrates() -> None:
         "description": "",
         "harness_url": "",
         "harness_secret": "",
-        "parent_subnet_id": "subnet-parent",
+        "parent_slug": "subnet-parent",
         "lifecycle": "persistent",
         "linked_task_id": "",
     }
@@ -268,7 +268,7 @@ async def test_find_by_linked_task_reads_index_and_hydrates() -> None:
     repo = RedisSubnetRepository(redis)
     redis.smembers.return_value = {"subnet-scoped"}
     redis.hgetall.return_value = {
-        "subnet_id": "subnet-scoped",
+        "slug": "subnet-scoped",
         "name": "scoped",
         "owner": "agent-owner",
         "is_private": "False",
@@ -278,7 +278,7 @@ async def test_find_by_linked_task_reads_index_and_hydrates() -> None:
         "description": "",
         "harness_url": "",
         "harness_secret": "",
-        "parent_subnet_id": "subnet-parent",
+        "parent_slug": "subnet-parent",
         "lifecycle": "task_scoped",
         "linked_task_id": "task-xyz",
     }
@@ -311,10 +311,10 @@ async def test_save_round_trip_preserves_nesting_fields() -> None:
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     scoped = Subnet(
-        subnet_id="subnet-rt",
+        slug="subnet-rt",
         name="rt",
         owner="agent-owner",
-        parent_subnet_id="subnet-parent",
+        parent_slug="subnet-parent",
         lifecycle="task_scoped",
         linked_task_id="task-rt",
     )
@@ -325,21 +325,21 @@ async def test_save_round_trip_preserves_nesting_fields() -> None:
     mapping = kwargs["mapping"]
     loaded = repo._dict_to_subnet(mapping)
 
-    assert loaded.parent_subnet_id == "subnet-parent"
+    assert loaded.parent_slug == "subnet-parent"
     assert loaded.lifecycle == "task_scoped"
     assert loaded.linked_task_id == "task-rt"
 
 
 def test_dict_to_subnet_tolerates_legacy_rows_without_nesting_keys() -> None:
     """A Redis row written before ADR-0003 contains no
-    ``parent_subnet_id`` / ``lifecycle`` / ``linked_task_id`` keys.
+    ``parent_slug`` / ``lifecycle`` / ``linked_task_id`` keys.
     ``_dict_to_subnet`` must fall through to entity defaults rather
     than ``KeyError`` — otherwise upgrading the binary against an
     un-migrated Redis would crash on first read."""
     redis = _make_redis_mock()
     repo = RedisSubnetRepository(redis)
     legacy = {
-        "subnet_id": "subnet-legacy",
+        "slug": "subnet-legacy",
         "name": "legacy",
         "owner": "agent-owner",
         "is_private": "False",
@@ -353,6 +353,6 @@ def test_dict_to_subnet_tolerates_legacy_rows_without_nesting_keys() -> None:
 
     subnet = repo._dict_to_subnet(legacy)
 
-    assert subnet.parent_subnet_id is None
+    assert subnet.parent_slug is None
     assert subnet.lifecycle == "persistent"
     assert subnet.linked_task_id is None

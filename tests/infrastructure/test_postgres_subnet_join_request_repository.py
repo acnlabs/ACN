@@ -57,7 +57,7 @@ def _make_session_factory():
 def _make_request(**overrides) -> SubnetJoinRequest:
     defaults: dict = {
         "request_id": "req-1",
-        "subnet_id": "s-1",
+        "slug": "s-1",
         "agent_id": "a-1",
         "kind": "join_request",
         "status": "pending",
@@ -73,7 +73,7 @@ def _make_model(**overrides) -> SubnetJoinRequestModel:
     paths have to pass every NOT NULL column explicitly."""
     defaults: dict = {
         "request_id": "req-1",
-        "subnet_id": "s-1",
+        "slug": "s-1",
         "agent_id": "a-1",
         "kind": "join_request",
         "status": "pending",
@@ -158,7 +158,7 @@ class TestMapper:
 class TestPendingCollisionTranslation:
     """THE defence: the partial-index violation must surface as
     ``SubnetJoinRequestPendingError`` with the colliding
-    ``(subnet_id, agent_id)``, NOT as a raw sqlalchemy
+    ``(slug, agent_id)``, NOT as a raw sqlalchemy
     ``IntegrityError``. The service layer matches on the domain
     exception to surface ``409`` with the stable reason token; if a
     future refactor swallows the translation, every duplicate
@@ -182,8 +182,8 @@ class TestPendingCollisionTranslation:
 
         repo = PostgresSubnetJoinRequestRepository(session_factory=factory)
         with pytest.raises(SubnetJoinRequestPendingError) as exc_info:
-            await repo.save(_make_request(subnet_id="s-x", agent_id="a-x"))
-        assert exc_info.value.subnet_id == "s-x"
+            await repo.save(_make_request(slug="s-x", agent_id="a-x"))
+        assert exc_info.value.slug == "s-x"
         assert exc_info.value.agent_id == "a-x"
         # Rollback must have been called before the translated raise
         # — otherwise the failed transaction stays open and the next
@@ -201,7 +201,7 @@ class TestPendingCollisionTranslation:
         session.get = AsyncMock(return_value=None)
         orig = MagicMock()
         orig.__str__ = lambda self: (
-            'null value in column "subnet_id" violates not-null constraint'
+            'null value in column "slug" violates not-null constraint'
         )
         session.commit = AsyncMock(
             side_effect=IntegrityError("INSERT ...", {}, orig)

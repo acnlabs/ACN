@@ -73,18 +73,18 @@ def _make_task(
 
 
 def _make_subnet(
-    subnet_id: str,
+    slug: str,
     *,
     owner: str = "alice",
     lifecycle: str = "task_scoped",
     linked_task_id: str | None = "task-42",
-    parent_subnet_id: str | None = "parent-1",
+    parent_slug: str | None = "parent-1",
 ) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner=owner,
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
         lifecycle=lifecycle,  # type: ignore[arg-type]
         linked_task_id=linked_task_id,
         member_agent_ids={owner},

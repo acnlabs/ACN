@@ -41,9 +41,9 @@ class SubnetJoinRequestPendingError(Exception):
     def __init__(self, subnet_id: str, agent_id: str) -> None:
         super().__init__(
             f"pending join request already exists for "
-            f"(subnet_id={subnet_id!r}, agent_id={agent_id!r})"
+            f"(slug={subnet_id!r}, agent_id={agent_id!r})"
         )
-        self.subnet_id = subnet_id
+        self.slug = subnet_id
         self.agent_id = agent_id
 
 
@@ -84,7 +84,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
     def _model_to_entity(self, row: SubnetJoinRequestModel) -> SubnetJoinRequest:
         return SubnetJoinRequest(
             request_id=row.request_id,
-            subnet_id=row.subnet_id,
+            slug=row.slug,
             agent_id=row.agent_id,
             kind=row.kind,  # type: ignore[arg-type]
             status=row.status,  # type: ignore[arg-type]
@@ -100,7 +100,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
     ) -> SubnetJoinRequestModel:
         return SubnetJoinRequestModel(
             request_id=request.request_id,
-            subnet_id=request.subnet_id,
+            slug=request.slug,
             agent_id=request.agent_id,
             kind=request.kind,
             status=request.status,
@@ -148,7 +148,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
                     # ``initiated_by`` are immutable in practice (the entity
                     # state machine never rewrites them on a transition) but
                     # included here for completeness / defence in depth.
-                    existing.subnet_id = request.subnet_id
+                    existing.slug = request.slug
                     existing.agent_id = request.agent_id
                     existing.kind = request.kind
                     existing.status = request.status
@@ -172,7 +172,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
                     e.orig
                 ) or "subnet_join_requests_pending_unique" in str(e):
                     raise SubnetJoinRequestPendingError(
-                        request.subnet_id, request.agent_id
+                        request.slug, request.agent_id
                     ) from e
                 raise
 
@@ -187,7 +187,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         async with self._session_factory() as session:
             result = await session.execute(
                 select(SubnetJoinRequestModel).where(
-                    SubnetJoinRequestModel.subnet_id == subnet_id,
+                    SubnetJoinRequestModel.slug == subnet_id,
                     SubnetJoinRequestModel.agent_id == agent_id,
                     SubnetJoinRequestModel.status == "pending",
                 )
@@ -206,7 +206,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
     ) -> list[SubnetJoinRequest]:
         async with self._session_factory() as session:
             stmt = select(SubnetJoinRequestModel).where(
-                SubnetJoinRequestModel.subnet_id == subnet_id
+                SubnetJoinRequestModel.slug == subnet_id
             )
             if kind is not None:
                 stmt = stmt.where(SubnetJoinRequestModel.kind == kind)
@@ -267,7 +267,7 @@ class PostgresSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         async with self._session_scope(session) as sess:
             result = await sess.execute(
                 delete(SubnetJoinRequestModel).where(
-                    SubnetJoinRequestModel.subnet_id == subnet_id
+                    SubnetJoinRequestModel.slug == subnet_id
                 )
             )
             return result.rowcount or 0

@@ -721,7 +721,8 @@ class ACNAgentExecutor(AgentExecutor):
         await self._send_status(event_queue, context, TaskState.working, "Routing through subnet")
 
         params = self._extract_data_from_message(message)
-        subnet_id = params.get("subnet_id")
+        # Accept both "slug" (new) and "subnet_id" (legacy back-compat).
+        subnet_id = params.get("slug") or params.get("subnet_id")
         agent_id = params.get("agent_id")
         message_content = params.get("message", {})
 
@@ -729,8 +730,8 @@ class ACNAgentExecutor(AgentExecutor):
             await self._send_status(
                 event_queue,
                 context,
-                TaskState.failed,
-                "subnet_id and agent_id required",
+                TaskState.rejected,
+                "slug and agent_id required",
                 final=True,
             )
             return
@@ -756,6 +757,14 @@ class ACNAgentExecutor(AgentExecutor):
                     DataPart(
                         data={
                             "response": response,
+                            # Emit both keys symmetrically with the
+                            # input contract: ``slug`` is the canonical
+                            # field after the rename, ``subnet_id`` is
+                            # kept as a legacy alias so existing A2A
+                            # clients reading the artifact don't break
+                            # mid-rollout. Either key carries the same
+                            # slug value.
+                            "slug": subnet_id,
                             "subnet_id": subnet_id,
                             "agent_id": agent_id,
                         }

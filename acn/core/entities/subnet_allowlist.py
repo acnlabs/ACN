@@ -1,6 +1,6 @@
 """SubnetAllowlist Domain Entity (ADR-0004 Phase 2 Slice 2.1).
 
-A single ``(subnet_id, agent_id)`` entry in the subnet's
+A single ``(slug, agent_id)`` entry in the subnet's
 admission-allowlist. Distinct from ``IAllowlistRepository`` (which
 governs **agent-to-agent communication** under
 ``communication_policy.mode=allowlist``) — this entity governs
@@ -30,9 +30,9 @@ from datetime import UTC, datetime
 
 @dataclass
 class SubnetAllowlist:
-    """A single preauthorised ``(subnet_id, agent_id)`` admission entry."""
+    """A single preauthorised ``(slug, agent_id)`` admission entry."""
 
-    subnet_id: str
+    slug: str
     agent_id: str
     added_by: str
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -41,8 +41,8 @@ class SubnetAllowlist:
         """Enforce non-empty identity fields.
 
         Schema-level constraints (composite PK on
-        ``(subnet_id, agent_id)``, FK against ``agents.agent_id``,
-        existence-check on ``subnet_id``) live at the persistence
+        ``(slug, agent_id)``, FK against ``agents.agent_id``,
+        existence-check on ``slug``) live at the persistence
         layer; the entity only rejects the structurally impossible
         shapes (empty strings) that the schema's NOT NULL doesn't
         catch.
@@ -56,8 +56,8 @@ class SubnetAllowlist:
         a ``system:<reason>`` actor (matches the convention
         ``SubnetJoinRequest.SYSTEM_ALLOWLIST_ACTOR`` uses).
         """
-        if not self.subnet_id:
-            raise ValueError("subnet_id cannot be empty")
+        if not self.slug:
+            raise ValueError("slug cannot be empty")
         if not self.agent_id:
             raise ValueError("agent_id cannot be empty")
         if not self.added_by:
@@ -77,7 +77,7 @@ class SubnetAllowlist:
         SINTERSTORE the membership for batch operations).
         """
         return {
-            "subnet_id": self.subnet_id,
+            "slug": self.slug,
             "agent_id": self.agent_id,
             "added_by": self.added_by,
             "added_at": self.added_at.isoformat(),
@@ -93,7 +93,7 @@ class SubnetAllowlist:
         missing ``added_by`` or ``added_at`` is a corrupt record,
         not a backward-compat case."""
         return cls(
-            subnet_id=data["subnet_id"],
+            slug=data.get("slug") or data.get("subnet_id", ""),
             agent_id=data["agent_id"],
             added_by=data["added_by"],
             added_at=datetime.fromisoformat(data["added_at"]),

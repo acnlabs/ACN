@@ -76,7 +76,7 @@ settings = get_settings()
 # slugs). Numbers chosen to align with the Postgres VARCHAR widths in the
 # schema where present, otherwise sized at ~3× typical id length so a
 # legacy/exotic id format doesn't regress.
-MAX_SUBNET_ID_LEN: int = 100  # matches Postgres String(100) on tasks.subnet_id
+MAX_SUBNET_ID_LEN: int = 100  # matches Postgres String(100) on tasks.slug
 MAX_AGENT_ID_LEN: int = 128
 MAX_TASK_ID_LEN: int = 128
 MAX_PARTICIPATION_ID_LEN: int = 128
@@ -169,7 +169,7 @@ def _record_auth_failure(
         actor_id=actor_id,
         path=path,
         method=method,
-        subnet_id=subnet_id,
+        slug=subnet_id,
         extra=extra,
     )
 

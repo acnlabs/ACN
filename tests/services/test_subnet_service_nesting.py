@@ -26,10 +26,10 @@ from acn.services.subnet_service import (
 
 
 def _make_parent_subnet(
-    subnet_id: str = "parent",
+    slug: str = "parent",
     owner: str = "alice",
     members: set[str] | None = None,
-    parent_subnet_id: str | None = None,
+    parent_slug: str | None = None,
 ) -> Subnet:
     """Build a parent ``Subnet`` entity for repository mocks.
 
@@ -38,11 +38,11 @@ def _make_parent_subnet(
     """
     members = members or {owner}
     return Subnet(
-        subnet_id=subnet_id,
-        name=f"Subnet {subnet_id}",
+        slug=slug,
+        name=f"Subnet {slug}",
         owner=owner,
         member_agent_ids=members,
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
         created_at=datetime.now(UTC),
     )
 
@@ -61,10 +61,10 @@ class TestCreateSubnetNestingInvariants:
 
         with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
-                subnet_id="child-1",
+                slug="child-1",
                 name="Squad",
                 owner="alice",
-                parent_subnet_id="missing-parent",
+                parent_slug="missing-parent",
             )
         assert exc.value.reason == REASON_PARENT_NOT_FOUND
         mock_subnet_repository.save.assert_not_called()
@@ -81,15 +81,15 @@ class TestCreateSubnetNestingInvariants:
         # Wire find_by_id to return a stub so the ID check is what
         # rejects, not the existence check.
         mock_subnet_repository.find_by_id.return_value = _make_parent_subnet(
-            subnet_id="public", owner="system"
+            slug="public", owner="system"
         )
 
         with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
-                subnet_id="child-1",
+                slug="child-1",
                 name="Squad",
                 owner="alice",
-                parent_subnet_id="public",
+                parent_slug="public",
             )
         assert exc.value.reason == REASON_PARENT_IS_RESERVED
 
@@ -102,16 +102,16 @@ class TestCreateSubnetNestingInvariants:
         ``public``/``system`` list (future reserved subnets)."""
         mock_subnet_repository.exists.return_value = False
         mock_subnet_repository.find_by_id.return_value = _make_parent_subnet(
-            subnet_id="custom-system-subnet", owner="system"
+            slug="custom-system-subnet", owner="system"
         )
         service = SubnetService(mock_subnet_repository)
 
         with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
-                subnet_id="child-1",
+                slug="child-1",
                 name="Squad",
                 owner="alice",
-                parent_subnet_id="custom-system-subnet",
+                parent_slug="custom-system-subnet",
             )
         assert exc.value.reason == REASON_PARENT_IS_RESERVED
 
@@ -122,18 +122,18 @@ class TestCreateSubnetNestingInvariants:
         """Single-layer cap — the parent must itself be top-level."""
         mock_subnet_repository.exists.return_value = False
         mock_subnet_repository.find_by_id.return_value = _make_parent_subnet(
-            subnet_id="mid-level",
+            slug="mid-level",
             owner="alice",
-            parent_subnet_id="grand-parent",
+            parent_slug="grand-parent",
         )
         service = SubnetService(mock_subnet_repository)
 
         with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
-                subnet_id="grandchild",
+                slug="grandchild",
                 name="Too deep",
                 owner="alice",
-                parent_subnet_id="mid-level",
+                parent_slug="mid-level",
             )
         assert exc.value.reason == REASON_PARENT_IS_NESTED
 
@@ -146,7 +146,7 @@ class TestCreateSubnetNestingInvariants:
 
         with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
-                subnet_id="task-squad",
+                slug="task-squad",
                 name="Task Squad",
                 owner="alice",
                 lifecycle="task_scoped",
@@ -161,7 +161,7 @@ class TestCreateSubnetNestingInvariants:
         self, mock_subnet_repository: ISubnetRepository
     ):
         mock_subnet_repository.exists.return_value = False
-        # We allow parent_subnet_id=None for this case — the
+        # We allow parent_slug=None for this case — the
         # linked_task_id check is independent of parenting.
         mock_task_repository = AsyncMock(spec=ITaskRepository)
         mock_task_repository.exists.return_value = False
@@ -171,7 +171,7 @@ class TestCreateSubnetNestingInvariants:
 
         with pytest.raises(SubnetInvariantError) as exc:
             await service.create_subnet(
-                subnet_id="task-squad",
+                slug="task-squad",
                 name="Task Squad",
                 owner="alice",
                 lifecycle="task_scoped",
@@ -195,7 +195,7 @@ class TestCreateSubnetNestingInvariants:
 
         # No exception even though no task repository is wired.
         subnet = await service.create_subnet(
-            subnet_id="task-squad",
+            slug="task-squad",
             name="Task Squad",
             owner="alice",
             lifecycle="task_scoped",
@@ -212,7 +212,7 @@ class TestCreateSubnetNestingInvariants:
         """Valid nested + task_scoped create — service writes through."""
         mock_subnet_repository.exists.return_value = False
         mock_subnet_repository.find_by_id.return_value = _make_parent_subnet(
-            subnet_id="parent-1", owner="alice", members={"alice", "bob"}
+            slug="parent-1", owner="alice", members={"alice", "bob"}
         )
         mock_task_repository = AsyncMock(spec=ITaskRepository)
         mock_task_repository.exists.return_value = True
@@ -221,15 +221,15 @@ class TestCreateSubnetNestingInvariants:
         )
 
         subnet = await service.create_subnet(
-            subnet_id="squad-1",
+            slug="squad-1",
             name="Bug Squad",
             owner="alice",
-            parent_subnet_id="parent-1",
+            parent_slug="parent-1",
             lifecycle="task_scoped",
             linked_task_id="task-42",
         )
 
-        assert subnet.parent_subnet_id == "parent-1"
+        assert subnet.parent_slug == "parent-1"
         assert subnet.lifecycle == "task_scoped"
         assert subnet.linked_task_id == "task-42"
         # Owner-as-member invariant preserved for child subnets too.
@@ -250,17 +250,17 @@ class TestAddMemberMembershipSubset:
         """``add_member`` on a child subnet rejects agents who aren't
         already members of the parent (ADR-0003 §A invariant 2)."""
         child = _make_parent_subnet(
-            subnet_id="child-1",
+            slug="child-1",
             owner="alice",
-            parent_subnet_id="parent-1",
+            parent_slug="parent-1",
         )
         parent = _make_parent_subnet(
-            subnet_id="parent-1",
+            slug="parent-1",
             owner="alice",
             members={"alice"},  # bob is NOT in the parent
         )
         # find_by_id called twice: once for ``get_subnet(child)``,
-        # once for ``find_by_id(parent_subnet_id)`` inside add_member.
+        # once for ``find_by_id(parent_slug)`` inside add_member.
         mock_subnet_repository.find_by_id.side_effect = [child, parent]
         service = SubnetService(mock_subnet_repository)
 
@@ -274,12 +274,12 @@ class TestAddMemberMembershipSubset:
         self, mock_subnet_repository: ISubnetRepository
     ):
         child = _make_parent_subnet(
-            subnet_id="child-1",
+            slug="child-1",
             owner="alice",
-            parent_subnet_id="parent-1",
+            parent_slug="parent-1",
         )
         parent = _make_parent_subnet(
-            subnet_id="parent-1",
+            slug="parent-1",
             owner="alice",
             members={"alice", "bob"},  # bob IS in the parent
         )
@@ -299,9 +299,9 @@ class TestAddMemberMembershipSubset:
         add rather than silently bypass the subset invariant. Ops
         should ``delete_subnet`` the orphan."""
         child = _make_parent_subnet(
-            subnet_id="child-1",
+            slug="child-1",
             owner="alice",
-            parent_subnet_id="parent-gone",
+            parent_slug="parent-gone",
         )
         mock_subnet_repository.find_by_id.side_effect = [child, None]
         service = SubnetService(mock_subnet_repository)
@@ -315,7 +315,7 @@ class TestAddMemberMembershipSubset:
         self, mock_subnet_repository: ISubnetRepository
     ):
         """Top-level subnets (no parent) skip the subset check entirely."""
-        top = _make_parent_subnet(subnet_id="top", owner="alice")
+        top = _make_parent_subnet(slug="top", owner="alice")
         mock_subnet_repository.find_by_id.return_value = top
         service = SubnetService(mock_subnet_repository)
 
@@ -341,15 +341,15 @@ class TestListChildrenACL:
         """
         children = [
             Subnet(
-                subnet_id="public-child",
+                slug="public-child",
                 name="Public",
                 owner="alice",
                 is_private=False,
-                parent_subnet_id="parent-1",
+                parent_slug="parent-1",
                 member_agent_ids={"alice"},
             ),
             Subnet(
-                subnet_id="private-child",
+                slug="private-child",
                 name="Private",
                 owner="alice",
                 is_private=True,
@@ -357,7 +357,7 @@ class TestListChildrenACL:
                 # ``join_policy='approval'``; the entity invariant
                 # rejects the legacy ``private + open`` combination.
                 join_policy="approval",
-                parent_subnet_id="parent-1",
+                parent_slug="parent-1",
                 member_agent_ids={"alice"},
             ),
         ]
@@ -365,7 +365,7 @@ class TestListChildrenACL:
         service = SubnetService(mock_subnet_repository)
 
         result = await service.list_children("parent-1", requester_id=None)
-        ids = {c.subnet_id for c in result}
+        ids = {c.slug for c in result}
         # Service now returns all children; route applies per-row V6 rendering.
         assert ids == {"public-child", "private-child"}
 
@@ -377,22 +377,22 @@ class TestListChildrenACL:
         at the route layer (per-row SubnetStub vs SubnetInfo)."""
         children = [
             Subnet(
-                subnet_id="private-mine",
+                slug="private-mine",
                 name="Mine",
                 owner="alice",
                 is_private=True,
                 # ADR-0004 invariant: see "private-child" above.
                 join_policy="approval",
-                parent_subnet_id="parent-1",
+                parent_slug="parent-1",
                 member_agent_ids={"alice", "bob"},
             ),
             Subnet(
-                subnet_id="private-theirs",
+                slug="private-theirs",
                 name="Theirs",
                 owner="carol",
                 is_private=True,
                 join_policy="approval",
-                parent_subnet_id="parent-1",
+                parent_slug="parent-1",
                 member_agent_ids={"carol"},
             ),
         ]
@@ -400,7 +400,7 @@ class TestListChildrenACL:
         service = SubnetService(mock_subnet_repository)
 
         result = await service.list_children("parent-1", requester_id="bob")
-        ids = {c.subnet_id for c in result}
+        ids = {c.slug for c in result}
         # Service returns all; route renders private-theirs as Stub for bob.
         assert ids == {"private-mine", "private-theirs"}
 
@@ -428,10 +428,10 @@ class TestPromoteToPersistent:
         self, mock_subnet_repository: ISubnetRepository
     ):
         subnet = Subnet(
-            subnet_id="squad-1",
+            slug="squad-1",
             name="Squad",
             owner="alice",
-            parent_subnet_id="parent-1",
+            parent_slug="parent-1",
             lifecycle="task_scoped",
             linked_task_id="task-42",
         )
@@ -450,7 +450,7 @@ class TestPromoteToPersistent:
     ):
         """Idempotent — no repository write, no error."""
         subnet = Subnet(
-            subnet_id="persistent-1",
+            slug="persistent-1",
             name="Persistent",
             owner="alice",
             lifecycle="persistent",
@@ -469,10 +469,10 @@ class TestPromoteToPersistent:
         self, mock_subnet_repository: ISubnetRepository
     ):
         subnet = Subnet(
-            subnet_id="squad-1",
+            slug="squad-1",
             name="Squad",
             owner="alice",
-            parent_subnet_id="parent-1",
+            parent_slug="parent-1",
             lifecycle="task_scoped",
             linked_task_id="task-42",
         )
@@ -499,10 +499,10 @@ class TestPromoteToPersistent:
         # Repository ``find_by_id`` is only called once — for the
         # subnet being promoted. The parent is never fetched.
         subnet = Subnet(
-            subnet_id="squad-1",
+            slug="squad-1",
             name="Squad",
             owner="alice",
-            parent_subnet_id="parent-1",
+            parent_slug="parent-1",
             lifecycle="task_scoped",
             linked_task_id="task-42",
         )

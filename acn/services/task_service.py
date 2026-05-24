@@ -1852,7 +1852,7 @@ class TaskService:
                 "reward": task.reward,
                 "reward_currency": task.reward_currency,
                 "participation_id": None,
-                "subnet_id": task.subnet_id,
+                "slug": task.subnet_id,
                 "joined_at": task.assigned_at.isoformat() if task.assigned_at else None,
                 "submitted_at": task.submitted_at.isoformat() if task.submitted_at else None,
                 "completed_at": task.completed_at.isoformat() if task.completed_at else None,
@@ -1888,7 +1888,7 @@ class TaskService:
                 "reward": task.reward,
                 "reward_currency": task.reward_currency,
                 "participation_id": p.participation_id,
-                "subnet_id": task.subnet_id,
+                "slug": task.subnet_id,
                 "joined_at": p.joined_at.isoformat() if p.joined_at else None,
                 "submitted_at": p.submitted_at.isoformat() if p.submitted_at else None,
                 "completed_at": p.completed_at.isoformat() if p.completed_at else None,
@@ -1969,12 +1969,12 @@ class TaskService:
                 continue
             try:
                 await self.subnet_service.delete_subnet(
-                    subnet.subnet_id, owner="system"
+                    subnet.slug, owner="system"
                 )
                 logger.info(
                     "task_scoped_subnet_dissolved",
                     task_id=task_id,
-                    subnet_id=subnet.subnet_id,
+                    subnet_id=subnet.slug,
                 )
             except SubnetNotFoundException:
                 # Concurrent dissolve already won — treat as success
@@ -1982,13 +1982,13 @@ class TaskService:
                 logger.debug(
                     "task_scoped_cascade_subnet_already_gone",
                     task_id=task_id,
-                    subnet_id=subnet.subnet_id,
+                    subnet_id=subnet.slug,
                 )
             except Exception as exc:  # noqa: BLE001 - best-effort cleanup
                 logger.warning(
                     "task_scoped_cascade_failed",
                     task_id=task_id,
-                    subnet_id=subnet.subnet_id,
+                    subnet_id=subnet.slug,
                     error=str(exc),
                 )
 
@@ -2016,7 +2016,7 @@ class TaskService:
             "reward": task.reward,
             "reward_currency": task.reward_currency,
             "max_participants": task.max_participants,
-            "subnet_id": task.subnet_id,
+            "slug": task.subnet_id,
         }
 
         try:
@@ -2067,7 +2067,7 @@ class TaskService:
         payload = {
             "status": task.status.value,
             "creator_id": task.creator_id,
-            "subnet_id": task.subnet_id,
+            "slug": task.subnet_id,
             "participation_id": participation.participation_id,
             "participant_id": participation.participant_id,
             "participant_name": participation.participant_name,

@@ -3,7 +3,7 @@
 The old implementation tried to read `acn:subnets:all` (never written
 anywhere) and `acn:subnet:{sid}` (wrong key — the real one is
 `acn:subnets:info:{sid}`). That made `visible_subnet_ids` permanently
-empty, so every task with a non-null `subnet_id` was invisible to
+empty, so every task with a non-null `slug` was invisible to
 every agent — i.e. private subnets were functionally broken.
 
 The new implementation uses the agent's own `subnet_ids` field, read
@@ -87,7 +87,7 @@ async def test_private_subnet_task_hidden_from_non_member():
 
 @pytest.mark.asyncio
 async def test_public_task_always_visible_even_without_requesting_agent():
-    """Tasks with no subnet_id (public) bypass the visibility check."""
+    """Tasks with no slug (public) bypass the visibility check."""
     t = _make_task(subnet_id=None)
     repo, fake_redis = _make_repo(
         task_by_id={"task-001": t},

@@ -24,11 +24,11 @@ def _now() -> datetime:
 class TestIdentityInvariants:
     @pytest.mark.parametrize(
         "field_name",
-        ["subnet_id", "agent_id", "added_by"],
+        ["slug", "agent_id", "added_by"],
     )
     def test_empty_identity_field_raises(self, field_name: str) -> None:
         kwargs: dict = {
-            "subnet_id": "s1",
+            "slug": "s1",
             "agent_id": "a1",
             "added_by": "owner-1",
         }
@@ -38,11 +38,11 @@ class TestIdentityInvariants:
 
     def test_canonical_construction_accepted(self) -> None:
         entry = SubnetAllowlist(
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             added_by="owner-1",
         )
-        assert entry.subnet_id == "s1"
+        assert entry.slug == "s1"
         assert entry.agent_id == "a1"
         assert entry.added_by == "owner-1"
         assert entry.added_at.tzinfo is not None  # default UTC-aware
@@ -52,7 +52,7 @@ class TestSerializationRoundTrip:
     def test_round_trip_preserves_all_fields(self) -> None:
         added_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         original = SubnetAllowlist(
-            subnet_id="s1",
+            slug="s1",
             agent_id="a1",
             added_by="owner-1",
             added_at=added_at,
@@ -69,7 +69,7 @@ class TestSerializationRoundTrip:
         with pytest.raises(KeyError):
             SubnetAllowlist.from_dict(
                 {
-                    "subnet_id": "s1",
+                    "slug": "s1",
                     "agent_id": "a1",
                     # no added_by
                     "added_at": _now().isoformat(),

@@ -43,7 +43,7 @@ logger = structlog.get_logger()
 
 
 def _subnet_parent_id(subnet: object) -> str | None:
-    """Extract ``Subnet.parent_subnet_id`` defensively.
+    """Extract ``Subnet.parent_slug`` defensively.
 
     ADR-0003 Phase 3 — the field is added to the join/leave webhook
     payload's ``data`` block. Legacy ``MagicMock``-based test stubs
@@ -53,7 +53,7 @@ def _subnet_parent_id(subnet: object) -> str | None:
     shape) instead of leaking a non-JSON-serialisable mock into
     webhook bodies.
     """
-    raw = getattr(subnet, "parent_subnet_id", None)
+    raw = getattr(subnet, "parent_slug", None)
     return raw if isinstance(raw, str) else None
 
 
@@ -76,14 +76,14 @@ def _require_self(agent_info: dict, path_agent_id: str) -> None:
 async def do_join_subnet(
     *,
     agent_id: str,
-    subnet_id: str,
+    slug: str,
     agent_info: dict,
     subnet_service: SubnetService,
     agent_service: AgentService,
     webhook_service: WebhookService | None,
     join_flow_service: JoinFlowService,
 ) -> JSONResponse:
-    """Join `agent_id` into `subnet_id` via the ADR-0004 §join six-branch flow.
+    """Join `agent_id` into `slug` via the ADR-0004 §join six-branch flow.
 
     ADR-0004 Phase 2 Slice 2.3 rewrite — the legacy direct
     ``add_member + agent_service.join_subnet`` path is now a
@@ -101,7 +101,7 @@ async def do_join_subnet(
 
     - ``subnet.member_agent_ids`` gains ``agent_id``
       (already done inside ``join_flow_service.join_subnet``).
-    - ``agent.subnet_ids`` gains ``subnet_id`` (written here — the
+    - ``agent.subnet_ids`` gains ``slug`` (written here — the
       service layer deliberately leaves the back-reference to the
       route layer per ADR §"Why a separate service").
     - ``agent.joined_subnet`` Org Harness webhook fires best-effort.
@@ -113,12 +113,12 @@ async def do_join_subnet(
     # parent-membership pre-check and the webhook payload, so a
     # single fetch covers both.
     try:
-        subnet = await subnet_service.get_subnet(subnet_id)
+        subnet = await subnet_service.get_subnet(slug)
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
 
     # ADR-0003 child-subnet pre-check. The service layer
@@ -129,11 +129,11 @@ async def do_join_subnet(
     # pre-check, branches 5 and 6 would create a row before
     # ``add_member`` raises, leaving an orphan audit-trail entry
     # for a join that never happened.
-    parent_subnet_id = _subnet_parent_id(subnet)
-    if parent_subnet_id is not None:
+    parent_slug = _subnet_parent_id(subnet)
+    if parent_slug is not None:
         parent = None
         try:
-            parent = await subnet_service.get_subnet(parent_subnet_id)
+            parent = await subnet_service.get_subnet(parent_slug)
         except SubnetNotFoundException:
             pass
         if parent is None or agent_id not in parent.member_agent_ids:
@@ -142,9 +142,9 @@ async def do_join_subnet(
                 403,
                 details={
                     "reason": REASON_NOT_PARENT_MEMBER,
-                    "subnet_id": subnet_id,
+                    "slug": slug,
                     "agent_id": agent_id,
-                    "parent_subnet_id": parent_subnet_id,
+                    "parent_slug": parent_slug,
                 },
             )
 
@@ -155,7 +155,7 @@ async def do_join_subnet(
     # no-op stub until Slice 2.4). All we do here is translate the
     # result into HTTP shape and add the agent-side back-reference.
     try:
-        result = await join_flow_service.join_subnet(subnet_id, agent_id)
+        result = await join_flow_service.join_subnet(slug, agent_id)
     except AlreadyMemberError as e:
         # ADR §State machine edges "Agent self-join a subnet they
         # are already in" → 409 ALREADY_MEMBER. Bubble through the
@@ -177,7 +177,7 @@ async def do_join_subnet(
             403,
             details={
                 "reason": nest_err.reason,
-                "subnet_id": subnet_id,
+                "slug": slug,
                 "agent_id": agent_id,
             },
         ) from nest_err
@@ -208,17 +208,17 @@ async def do_join_subnet(
     # performed — those audit rows are valid history of the
     # successful service-layer decision.
     try:
-        await agent_service.join_subnet(agent_id, subnet_id)
+        await agent_service.join_subnet(agent_id, slug)
     except AgentNotFoundException as e:
         # Agent disappeared between auth and join — improbable
         # but possible if the agent was deleted concurrently.
         try:
-            await subnet_service.remove_member(subnet_id, agent_id)
+            await subnet_service.remove_member(slug, agent_id)
         except Exception as rollback_err:  # noqa: BLE001
             logger.warning(
                 "join_subnet_back_ref_rollback_failed",
                 agent_id=agent_id,
-                subnet_id=subnet_id,
+                slug=slug,
                 error=str(rollback_err),
             )
         raise ACNHTTPError(
@@ -229,18 +229,18 @@ async def do_join_subnet(
     except Exception as e:  # noqa: BLE001
         # Same half-joined recovery; treat as 500.
         try:
-            await subnet_service.remove_member(subnet_id, agent_id)
+            await subnet_service.remove_member(slug, agent_id)
         except Exception as rollback_err:  # noqa: BLE001
             logger.warning(
                 "join_subnet_back_ref_rollback_failed",
                 agent_id=agent_id,
-                subnet_id=subnet_id,
+                slug=slug,
                 error=str(rollback_err),
             )
         logger.error(
             "join_subnet_back_ref_failed",
             agent_id=agent_id,
-            subnet_id=subnet_id,
+            slug=slug,
             error=str(e),
             exc_info=True,
         )
@@ -249,7 +249,7 @@ async def do_join_subnet(
     logger.info(
         "agent_joined_subnet",
         agent_id=agent_id,
-        subnet_id=subnet_id,
+        slug=slug,
         branch=type(result).__name__,
     )
 
@@ -265,17 +265,17 @@ async def do_join_subnet(
                 url=subnet.harness_url,
                 secret=subnet.harness_secret,
                 event=WebhookEventType.AGENT_JOINED_SUBNET,
-                task_id=subnet_id,
+                task_id=slug,
                 data={
-                    "subnet_id": subnet_id,
+                    "slug": slug,
                     "agent_id": agent_id,
-                    "parent_subnet_id": parent_subnet_id,
+                    "parent_slug": parent_slug,
                 },
             )
         except Exception as e:  # noqa: BLE001 - never break join on webhook failure
             logger.warning(
                 "subnet_harness_webhook_failed",
-                subnet_id=subnet_id,
+                slug=slug,
                 agent_id=agent_id,
                 webhook_event="agent.joined_subnet",
                 error=str(e),
@@ -287,27 +287,27 @@ async def do_join_subnet(
 async def do_leave_subnet(
     *,
     agent_id: str,
-    subnet_id: str,
+    slug: str,
     agent_info: dict,
     subnet_service: SubnetService,
     agent_service: AgentService,
     webhook_service: WebhookService | None,
 ) -> dict:
-    """Leave `subnet_id`. Mirrors `do_join_subnet` semantics."""
+    """Leave `slug`. Mirrors `do_join_subnet` semantics."""
     _require_self(agent_info, agent_id)
 
     # Capture subnet up-front so we still know the harness_url even if the
     # subnet later gets unmodified (it doesn't, but keeps symmetry with join).
     try:
-        subnet = await subnet_service.get_subnet(subnet_id)
+        subnet = await subnet_service.get_subnet(slug)
     except SubnetNotFoundException:
         subnet = None  # let downstream raise the canonical error
 
     try:
-        await agent_service.leave_subnet(agent_id, subnet_id)
-        await subnet_service.remove_member(subnet_id, agent_id)
+        await agent_service.leave_subnet(agent_id, slug)
+        await subnet_service.remove_member(slug, agent_id)
 
-        logger.info("agent_left_subnet", agent_id=agent_id, subnet_id=subnet_id)
+        logger.info("agent_left_subnet", agent_id=agent_id, slug=slug)
 
         if subnet and subnet.harness_url and webhook_service is not None:
             try:
@@ -315,26 +315,26 @@ async def do_leave_subnet(
                     url=subnet.harness_url,
                     secret=subnet.harness_secret,
                     event=WebhookEventType.AGENT_LEFT_SUBNET,
-                    task_id=subnet_id,
+                    task_id=slug,
                     data={
-                        "subnet_id": subnet_id,
+                        "slug": slug,
                         "agent_id": agent_id,
                         # ADR-0003 Phase 3 — see do_join_subnet for
                         # the contract; symmetric on leave so
                         # harnesses get hierarchy on both edges.
-                        "parent_subnet_id": _subnet_parent_id(subnet),
+                        "parent_slug": _subnet_parent_id(subnet),
                     },
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "subnet_harness_webhook_failed",
-                    subnet_id=subnet_id,
+                    slug=slug,
                     agent_id=agent_id,
                     webhook_event="agent.left_subnet",
                     error=str(e),
                 )
 
-        return {"status": "left", "agent_id": agent_id, "subnet_id": subnet_id}
+        return {"status": "left", "agent_id": agent_id, "slug": slug}
     except AgentNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
@@ -345,7 +345,7 @@ async def do_leave_subnet(
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"subnet_id": subnet_id},
+            details={"slug": slug},
         ) from e
     except ACNHTTPError:
         raise

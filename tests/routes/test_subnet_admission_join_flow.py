@@ -1,9 +1,9 @@
 """Route tests for ADR-0004 Slice 2.3 join-entry six-branch decision tree.
 
-Covers ``POST /api/v1/agents/{agent_id}/subnets/{subnet_id}`` —
+Covers ``POST /api/v1/agents/{agent_id}/subnets/{slug}`` —
 the rewritten join handler that now dispatches via
 ``JoinFlowService.join_subnet``. The six branches per ADR §"POST
-/api/v1/agents/{agent_id}/subnets/{subnet_id} (join entry)":
+/api/v1/agents/{agent_id}/subnets/{slug} (join entry)":
 
   1. open subnet → 200 ``{status: "joined"}``
   2. approval subnet, caller == owner → 200 ``{status: "joined"}``
@@ -65,7 +65,7 @@ class TestBranch1OpenSubnet:
     def test_open_subnet_returns_200_joined(self, wire):
         agent_svc, _, _, jfs = wire
         jfs.join_subnet.return_value = JoinFlowJoinedOpenResult(
-            subnet_id=SUBNET_ID,
+            slug=SUBNET_ID,
             agent_id=INVITEE_AGENT_ID,
         )
 
@@ -76,7 +76,7 @@ class TestBranch1OpenSubnet:
         body = r.json()
         assert body == {
             "status": "joined",
-            "subnet_id": SUBNET_ID,
+            "slug": SUBNET_ID,
             "agent_id": INVITEE_AGENT_ID,
         }
         # Back-reference must be written on every 200 branch.
@@ -88,7 +88,7 @@ class TestBranch2OwnerSelfJoin:
         # Owner authenticates as themselves and joins their own subnet.
         agent_svc, _, _, jfs = wire
         jfs.join_subnet.return_value = JoinFlowJoinedAsOwnerResult(
-            subnet_id=SUBNET_ID,
+            slug=SUBNET_ID,
             agent_id=OWNER_AGENT_ID,
         )
 
@@ -112,7 +112,7 @@ class TestBranch3SelfJoinWithPendingInvitation:
             request_id="inv-self", kind="invitation"
         )
         jfs.join_subnet.return_value = JoinFlowAutoAcceptedInvitationResult(
-            subnet_id=SUBNET_ID,
+            slug=SUBNET_ID,
             agent_id=INVITEE_AGENT_ID,
             invitation=invitation,
             via="self_join",
@@ -137,7 +137,7 @@ class TestBranch4AllowlistAndPendingInvitation:
             request_id="inv-merged", kind="invitation"
         )
         jfs.join_subnet.return_value = JoinFlowAutoAcceptedInvitationResult(
-            subnet_id=SUBNET_ID,
+            slug=SUBNET_ID,
             agent_id=INVITEE_AGENT_ID,
             invitation=invitation,
             via="allowlist",
@@ -169,7 +169,7 @@ class TestBranch5AllowlistAutoApproved:
             decided_by="system:allowlist",
         )
         jfs.join_subnet.return_value = JoinFlowAllowlistAutoApprovedResult(
-            subnet_id=SUBNET_ID,
+            slug=SUBNET_ID,
             agent_id=INVITEE_AGENT_ID,
             request=auto_row,
         )
@@ -189,7 +189,7 @@ class TestBranch6PendingJoinRequest:
         agent_svc, _, _, jfs = wire
         pending = make_join_request(request_id="req-pending")
         jfs.join_subnet.return_value = JoinFlowPendingResult(
-            subnet_id=SUBNET_ID,
+            slug=SUBNET_ID,
             agent_id=INVITEE_AGENT_ID,
             request=pending,
         )
@@ -219,7 +219,7 @@ class TestErrorSurfaces:
         assert r.status_code == 409, r.text
         body = r.json()
         assert body["error_code"] == "already_member"
-        assert body["details"]["subnet_id"] == SUBNET_ID
+        assert body["details"]["slug"] == SUBNET_ID
         assert body["details"]["agent_id"] == INVITEE_AGENT_ID
 
     def test_path_agent_mismatch_returns_403_before_dispatch(self, wire):

@@ -78,8 +78,8 @@ class RedisSubnetAllowlistRepository(ISubnetAllowlistRepository):
         wins). Operators that care about original attribution
         should read PG, not Redis.
         """
-        set_key = _allowlist_set_key(entry.subnet_id)
-        meta_key = _allowlist_meta_key(entry.subnet_id, entry.agent_id)
+        set_key = _allowlist_set_key(entry.slug)
+        meta_key = _allowlist_meta_key(entry.slug, entry.agent_id)
 
         # SADD must run before the HSET so a failure between them
         # leaves the safer of the two crash states (HASH missing,

@@ -103,14 +103,14 @@ def _routing_message(*, target_agent: str, content: str = "hi") -> Message:
     )
 
 
-def _subnet_routing_message(*, subnet_id: str, agent_id: str) -> Message:
+def _subnet_routing_message(*, slug: str, agent_id: str) -> Message:
     return Message(
         role=Role.user,
         message_id="msg-1",
         parts=[
             DataPart(
                 data={
-                    "subnet_id": subnet_id,
+                    "slug": slug,
                     "agent_id": agent_id,
                     "message": {"text": "hi"},
                 }
@@ -284,7 +284,7 @@ class TestHandleSubnetRoutingPolicyRejected:
         eq = _make_event_queue()
 
         await executor._handle_subnet_routing(
-            _subnet_routing_message(subnet_id="net-1", agent_id="closed-agent"),
+            _subnet_routing_message(slug="net-1", agent_id="closed-agent"),
             _make_context(),
             eq,
         )
@@ -316,7 +316,7 @@ class TestHandleSubnetRoutingPolicyRejected:
         eq = _make_event_queue()
 
         await executor._handle_subnet_routing(
-            _subnet_routing_message(subnet_id="net-1", agent_id="closed-agent"),
+            _subnet_routing_message(slug="net-1", agent_id="closed-agent"),
             _make_context(),
             eq,
         )
@@ -332,7 +332,7 @@ class TestHandleSubnetRoutingPolicyRejected:
         eq = _make_event_queue()
 
         await executor._handle_subnet_routing(
-            _subnet_routing_message(subnet_id="net-1", agent_id="some-agent"),
+            _subnet_routing_message(slug="net-1", agent_id="some-agent"),
             _make_context(),
             eq,
         )
@@ -398,7 +398,7 @@ class TestPolicyRejectedIncrementsMetric:
         eq = _make_event_queue()
 
         await executor._handle_subnet_routing(
-            _subnet_routing_message(subnet_id="net-1", agent_id="closed-agent"),
+            _subnet_routing_message(slug="net-1", agent_id="closed-agent"),
             _make_context(),
             eq,
         )

@@ -227,14 +227,14 @@ class SubnetService:
 
     async def create_subnet(
         self,
-        subnet_id: str,
+        slug: str,
         name: str,
         owner: str,
         description: str | None = None,
         is_private: bool = False,
         security_config: dict | None = None,
         metadata: dict | None = None,
-        parent_subnet_id: str | None = None,
+        parent_slug: str | None = None,
         lifecycle: Literal["persistent", "task_scoped"] = "persistent",
         linked_task_id: str | None = None,
         join_policy: Literal["open", "approval"] | None = None,
@@ -244,12 +244,12 @@ class SubnetService:
 
         ADR-0003 invariants enforced when nesting params are set:
 
-        - ``parent_subnet_id`` must reference an existing subnet —
+        - ``parent_slug`` must reference an existing subnet —
           ``parent_not_found``.
         - Parent must not be reserved (``public``/``system``) —
           ``parent_is_reserved``. Catches both reserved IDs and
           (defence in depth) any subnet whose owner is ``system``.
-        - Parent's own ``parent_subnet_id`` must be ``None`` (single-
+        - Parent's own ``parent_slug`` must be ``None`` (single-
           layer cap) — ``parent_is_nested``.
         - ``lifecycle == "task_scoped"`` requires
           ``linked_task_id`` to be set — ``task_scoped_requires_linked_task``.
@@ -277,14 +277,14 @@ class SubnetService:
           as-is and persisted on the entity.
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
             name: Subnet name
             owner: Subnet owner
             description: Subnet description
             is_private: Whether subnet is private
             security_config: Security configuration
             metadata: Additional metadata
-            parent_subnet_id: Optional parent subnet ID (ADR-0003)
+            parent_slug: Optional parent subnet ID (ADR-0003)
             lifecycle: ``"persistent"`` (default) or ``"task_scoped"``
             linked_task_id: Required when ``lifecycle == "task_scoped"``
             join_policy: ``"open"`` / ``"approval"`` / ``None``
@@ -311,8 +311,8 @@ class SubnetService:
             )
 
         # Check if subnet already exists
-        if await self.repository.exists(subnet_id):
-            raise ValueError(f"Subnet {subnet_id} already exists")
+        if await self.repository.exists(slug):
+            raise ValueError(f"Subnet {slug} already exists")
 
         # --- ADR-0003 nesting validations -----------------------------
         # Entity-layer already enforces lifecycle ↔ linked_task_id
@@ -329,27 +329,27 @@ class SubnetService:
                 "lifecycle='task_scoped' requires linked_task_id",
             )
 
-        if parent_subnet_id is not None:
-            parent = await self.repository.find_by_id(parent_subnet_id)
+        if parent_slug is not None:
+            parent = await self.repository.find_by_id(parent_slug)
             if parent is None:
                 raise SubnetInvariantError(
                     REASON_PARENT_NOT_FOUND,
-                    f"Parent subnet '{parent_subnet_id}' does not exist",
+                    f"Parent subnet '{parent_slug}' does not exist",
                 )
             # ADR-0003 §A invariant 5 — reserved subnets cannot be
             # parents. Catch by ID *and* (defensively) by owner: the
             # ``system`` owner literal is the platform escape hatch
             # and any subnet under it is treated as platform-owned.
-            if parent_subnet_id in {"public", "system"} or parent.owner == "system":
+            if parent_slug in {"public", "system"} or parent.owner == "system":
                 raise SubnetInvariantError(
                     REASON_PARENT_IS_RESERVED,
-                    f"Parent subnet '{parent_subnet_id}' is reserved",
+                    f"Parent subnet '{parent_slug}' is reserved",
                 )
             # Single-layer cap — parent must itself be top-level.
-            if parent.parent_subnet_id is not None:
+            if parent.parent_slug is not None:
                 raise SubnetInvariantError(
                     REASON_PARENT_IS_NESTED,
-                    f"Parent subnet '{parent_subnet_id}' is itself nested; "
+                    f"Parent subnet '{parent_slug}' is itself nested; "
                     "single-layer cap enforced",
                 )
 
@@ -393,14 +393,14 @@ class SubnetService:
                 )
 
         subnet = Subnet(
-            subnet_id=subnet_id,
+            slug=slug,
             name=name,
             owner=owner,
             description=description,
             is_private=is_private,
             security_config=security_config or {},
             metadata=metadata or {},
-            parent_subnet_id=parent_subnet_id,
+            parent_slug=parent_slug,
             lifecycle=lifecycle,
             linked_task_id=linked_task_id,
             join_policy=effective_join_policy,
@@ -427,10 +427,10 @@ class SubnetService:
 
         logger.info(
             "create_subnet",
-            subnet_id=subnet_id,
+            slug=slug,
             name=name,
             owner=owner,
-            parent_subnet_id=parent_subnet_id,
+            parent_slug=parent_slug,
             lifecycle=lifecycle,
             linked_task_id=linked_task_id,
             join_policy=effective_join_policy,
@@ -438,12 +438,12 @@ class SubnetService:
         await self.repository.save(subnet)
         return subnet
 
-    async def get_subnet(self, subnet_id: str) -> Subnet:
+    async def get_subnet(self, slug: str) -> Subnet:
         """
         Get subnet by ID
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
 
         Returns:
             Subnet entity
@@ -451,9 +451,9 @@ class SubnetService:
         Raises:
             SubnetNotFoundException: If subnet not found
         """
-        subnet = await self.repository.find_by_id(subnet_id)
+        subnet = await self.repository.find_by_id(slug)
         if not subnet:
-            raise SubnetNotFoundException(f"Subnet {subnet_id} not found")
+            raise SubnetNotFoundException(f"Subnet {slug} not found")
         return subnet
 
     async def list_subnets(self, owner: str | None = None) -> list[Subnet]:
@@ -490,7 +490,7 @@ class SubnetService:
 
     async def list_children(
         self,
-        parent_subnet_id: str,
+        parent_slug: str,
         *,
         requester_id: str | None = None,
     ) -> list[Subnet]:
@@ -505,7 +505,7 @@ class SubnetService:
         no existence leak.
 
         Args:
-            parent_subnet_id: Parent subnet identifier
+            parent_slug: Parent subnet identifier
             requester_id: Authenticated caller's ``agent_id`` (or
                 ``None`` for anonymous / pre-auth contexts)
 
@@ -519,9 +519,9 @@ class SubnetService:
         # for private-unauthorised) — same as list_subnets.
         # requester_id is kept in signature for backward compat but is
         # no longer used here.
-        return await self.repository.find_by_parent(parent_subnet_id)
+        return await self.repository.find_by_parent(parent_slug)
 
-    async def delete_subnet(self, subnet_id: str, owner: str) -> bool:
+    async def delete_subnet(self, slug: str, owner: str) -> bool:
         """
         Delete a subnet, cascading to children when it has any
         (ADR-0003 §A invariant 4).
@@ -570,7 +570,7 @@ class SubnetService:
         delete success.
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
             owner: Owner identifier (or ``"system"`` for cascade)
 
         Returns:
@@ -588,7 +588,7 @@ class SubnetService:
                 child preserved. Caller treats both backend-specific
                 exception types as "cascade aborted, retry-safe".
         """
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
 
         # Authorization check — owner of the subnet, or platform.
         if subnet.owner != owner and owner != "system":
@@ -598,8 +598,8 @@ class SubnetService:
         # primitives. Cascade hook still uses ``owner="system"`` to
         # delete *child* subnets, which is fine (children are never
         # reserved per ADR-0003 §7).
-        if subnet_id in ["public", "system"]:
-            raise PermissionError(f"Cannot delete system subnet: {subnet_id}")
+        if slug in ["public", "system"]:
+            raise PermissionError(f"Cannot delete system subnet: {slug}")
 
         # Cascade to children when this is a top-level subnet. Single-
         # layer cap guarantees ``find_by_parent`` doesn't itself need
@@ -608,13 +608,13 @@ class SubnetService:
         # individual ``delete()`` calls (issue #54).
         #
         # Issue #56: before removing any subnet record, clear the
-        # ``subnet_id`` back-reference from each member's
+        # ``slug`` back-reference from each member's
         # ``agent.subnet_ids`` set. Doing this **before** the delete
         # means a partial-failure cascade leaves agents pointing at
         # subnets that still exist (recoverable) rather than at
         # subnets that have already been deleted (orphan dust).
-        if subnet.parent_subnet_id is None:
-            children = await self.repository.find_by_parent(subnet_id)
+        if subnet.parent_slug is None:
+            children = await self.repository.find_by_parent(slug)
             if children:
                 # Clear back-references for every child first, then
                 # the parent. Order mirrors the cascade delete order
@@ -622,27 +622,27 @@ class SubnetService:
                 # Stays outside the UoW transaction by design — see
                 # method docstring §"Agent back-reference cleanup".
                 for child in children:
-                    await self._clear_agent_back_references(child.subnet_id, child.member_agent_ids)
-                await self._clear_agent_back_references(subnet_id, subnet.member_agent_ids)
-                child_ids = [c.subnet_id for c in children]
+                    await self._clear_agent_back_references(child.slug, child.member_agent_ids)
+                await self._clear_agent_back_references(slug, subnet.member_agent_ids)
+                child_ids = [c.slug for c in children]
                 logger.info(
                     "delete_subnet_cascade",
-                    parent_subnet_id=subnet_id,
+                    parent_slug=slug,
                     child_subnet_ids=child_ids,
                     child_count=len(child_ids),
                 )
-                return await self._run_cascade_delete(subnet_id, subnet_to_delete_with=children)
+                return await self._run_cascade_delete(slug, subnet_to_delete_with=children)
 
         # No-cascade path: child subnet direct-delete OR top-level
         # subnet with zero children. Either way, clean up this one
         # subnet's back-references then drop the record.
-        await self._clear_agent_back_references(subnet_id, subnet.member_agent_ids)
-        logger.info("delete_subnet", subnet_id=subnet_id)
-        return await self._run_cascade_delete(subnet_id, subnet_to_delete_with=None)
+        await self._clear_agent_back_references(slug, subnet.member_agent_ids)
+        logger.info("delete_subnet", slug=slug)
+        return await self._run_cascade_delete(slug, subnet_to_delete_with=None)
 
     async def _run_cascade_delete(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         subnet_to_delete_with: list[Subnet] | None,
     ) -> bool:
@@ -668,23 +668,23 @@ class SubnetService:
 
         - ``None`` → single subnet (no children, OR a child subnet
           deleted directly). Final DELETE is
-          ``self.repository.delete(subnet_id, session=...)``.
+          ``self.repository.delete(slug, session=...)``.
         - non-empty list → parent with children. Final DELETE is
           ``self.repository.delete_with_children(parent_id,
-          [c.subnet_id for c in children], session=...)``. The
+          [c.slug for c in children], session=...)``. The
           join-policy artifact sweep runs for every child AND the
           parent inside the same transaction.
         """
         if self.unit_of_work is not None:
             async with self.unit_of_work.transaction() as session:
                 return await self._cascade_delete_body(
-                    subnet_id, subnet_to_delete_with, session=session
+                    slug, subnet_to_delete_with, session=session
                 )
-        return await self._cascade_delete_body(subnet_id, subnet_to_delete_with, session=None)
+        return await self._cascade_delete_body(slug, subnet_to_delete_with, session=None)
 
     async def _cascade_delete_body(
         self,
-        subnet_id: str,
+        slug: str,
         subnet_to_delete_with: list[Subnet] | None,
         *,
         session: object | None,
@@ -701,18 +701,18 @@ class SubnetService:
         """
         if subnet_to_delete_with is not None:
             children = subnet_to_delete_with
-            child_ids = [c.subnet_id for c in children]
+            child_ids = [c.slug for c in children]
             for child in children:
-                await self._cascade_join_policy_artifacts(child.subnet_id, session=session)
-            await self._cascade_join_policy_artifacts(subnet_id, session=session)
-            return await self.repository.delete_with_children(subnet_id, child_ids, session=session)
-        await self._cascade_join_policy_artifacts(subnet_id, session=session)
-        return await self.repository.delete(subnet_id, session=session)
+                await self._cascade_join_policy_artifacts(child.slug, session=session)
+            await self._cascade_join_policy_artifacts(slug, session=session)
+            return await self.repository.delete_with_children(slug, child_ids, session=session)
+        await self._cascade_join_policy_artifacts(slug, session=session)
+        return await self.repository.delete(slug, session=session)
 
     async def _cascade_join_policy_artifacts(
-        self, subnet_id: str, *, session: object | None = None
+        self, slug: str, *, session: object | None = None
     ) -> None:
-        """Sweep ADR-0004 join_requests + allowlist for ``subnet_id``.
+        """Sweep ADR-0004 join_requests + allowlist for ``slug``.
 
         Called from ``_cascade_delete_body`` BEFORE the subnet
         HASH / row delete. Either repository raising
@@ -746,29 +746,29 @@ class SubnetService:
         """
         if self.join_request_repository is not None:
             deleted = await self.join_request_repository.delete_for_subnet(
-                subnet_id, session=session
+                slug, session=session
             )
             if deleted:
                 logger.info(
                     "delete_subnet_cascade_join_requests",
-                    subnet_id=subnet_id,
+                    slug=slug,
                     deleted_count=deleted,
                 )
         if self.allowlist_repository is not None:
-            deleted = await self.allowlist_repository.delete_for_subnet(subnet_id, session=session)
+            deleted = await self.allowlist_repository.delete_for_subnet(slug, session=session)
             if deleted:
                 logger.info(
                     "delete_subnet_cascade_allowlist",
-                    subnet_id=subnet_id,
+                    slug=slug,
                     deleted_count=deleted,
                 )
 
     async def _clear_agent_back_references(
         self,
-        subnet_id: str,
+        slug: str,
         member_agent_ids: set[str],
     ) -> None:
-        """Remove ``subnet_id`` from each member's
+        """Remove ``slug`` from each member's
         ``agent.subnet_ids`` set (issue #56).
 
         Best-effort with a structured summary log: per-agent failure
@@ -784,11 +784,11 @@ class SubnetService:
         - ``agent_repository`` was not wired (legacy test fixtures)
         - ``member_agent_ids`` is empty (orphan or just-created subnet)
         - An individual agent no longer exists (already deleted)
-        - The agent doesn't carry ``subnet_id`` in its ``subnet_ids``
+        - The agent doesn't carry ``slug`` in its ``subnet_ids``
           (already cleaned by an earlier explicit ``leave_subnet``)
 
         Args:
-            subnet_id: Subnet being deleted; this id will be removed
+            slug: Subnet being deleted; this id will be removed
                 from every visited agent's ``subnet_ids``.
             member_agent_ids: Snapshot of the subnet's members at
                 the moment of delete. May contain ids whose agents
@@ -804,9 +804,9 @@ class SubnetService:
                 agent = await self.agent_repository.find_by_id(agent_id)
                 if agent is None:
                     continue
-                if subnet_id not in agent.subnet_ids:
+                if slug not in agent.subnet_ids:
                     continue
-                agent.remove_from_subnet(subnet_id)
+                agent.remove_from_subnet(slug)
                 await self.agent_repository.save(agent)
                 cleaned += 1
             except Exception as exc:  # noqa: BLE001 — best-effort
@@ -815,7 +815,7 @@ class SubnetService:
                 # ``leave_subnet`` for the affected pair.
                 logger.warning(
                     "subnet_back_reference_cleanup_failed",
-                    subnet_id=subnet_id,
+                    slug=slug,
                     agent_id=agent_id,
                     error=str(exc),
                 )
@@ -823,23 +823,23 @@ class SubnetService:
 
         logger.info(
             "subnet_back_reference_cleanup",
-            subnet_id=subnet_id,
+            slug=slug,
             member_count=len(member_agent_ids),
             cleaned=cleaned,
             failed=failed,
         )
 
-    async def add_member(self, subnet_id: str, agent_id: str) -> Subnet:
+    async def add_member(self, slug: str, agent_id: str) -> Subnet:
         """
         Add an agent to a subnet.
 
         ADR-0003 §A invariant 2 — when the subnet is a child
-        (``parent_subnet_id is not None``), the agent must already be
+        (``parent_slug is not None``), the agent must already be
         a member of the parent. Surfaced with
         ``reason="not_parent_member"``.
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
             agent_id: Agent identifier
 
         Returns:
@@ -849,10 +849,10 @@ class SubnetService:
             SubnetInvariantError: If subnet is a child and ``agent_id``
                 is not a member of the parent.
         """
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
 
-        if subnet.parent_subnet_id is not None:
-            parent = await self.repository.find_by_id(subnet.parent_subnet_id)
+        if subnet.parent_slug is not None:
+            parent = await self.repository.find_by_id(subnet.parent_slug)
             # If the parent has been deleted while this child still
             # exists (orphan), reject the add — adding members to a
             # dangling child would silently bypass the subset
@@ -861,59 +861,59 @@ class SubnetService:
                 raise SubnetInvariantError(
                     REASON_NOT_PARENT_MEMBER,
                     f"Agent '{agent_id}' is not a member of parent subnet "
-                    f"'{subnet.parent_subnet_id}'",
+                    f"'{subnet.parent_slug}'",
                 )
 
         subnet.add_member(agent_id)
         await self.repository.save(subnet)
-        logger.info("subnet_member_added", subnet_id=subnet_id, agent_id=agent_id)
+        logger.info("subnet_member_added", slug=slug, agent_id=agent_id)
         return subnet
 
-    async def remove_member(self, subnet_id: str, agent_id: str) -> Subnet:
+    async def remove_member(self, slug: str, agent_id: str) -> Subnet:
         """
         Remove an agent from a subnet
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
             agent_id: Agent identifier
 
         Returns:
             Updated subnet entity
         """
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
         subnet.remove_member(agent_id)
         await self.repository.save(subnet)
-        logger.info("subnet_member_removed", subnet_id=subnet_id, agent_id=agent_id)
+        logger.info("subnet_member_removed", slug=slug, agent_id=agent_id)
         return subnet
 
-    async def get_member_count(self, subnet_id: str) -> int:
+    async def get_member_count(self, slug: str) -> int:
         """
         Get number of members in a subnet
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
 
         Returns:
             Number of members
         """
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
         return subnet.get_member_count()
 
-    async def exists(self, subnet_id: str) -> bool:
+    async def exists(self, slug: str) -> bool:
         """
         Check if subnet exists
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
 
         Returns:
             True if subnet exists
         """
-        return await self.repository.exists(subnet_id)
+        return await self.repository.exists(slug)
 
     async def update_harness(
         self,
-        subnet_id: str,
+        slug: str,
         owner: str,
         harness_url: str | None,
         harness_secret: str | None,
@@ -927,7 +927,7 @@ class SubnetService:
         webhook payloads delivered to ``harness_url``.
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
             owner: Authenticated agent making the request (for authz)
             harness_url: External webhook URL (or None to clear)
             harness_secret: HMAC secret (optional; None disables signing)
@@ -939,7 +939,7 @@ class SubnetService:
             SubnetNotFoundException: If subnet not found
             PermissionError: If owner mismatch
         """
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
 
         if subnet.owner != owner and owner != "system":
             raise PermissionError(f"Owner mismatch: {owner} != {subnet.owner}")
@@ -949,7 +949,7 @@ class SubnetService:
         await self.repository.save(subnet)
         logger.info(
             "subnet_harness_updated",
-            subnet_id=subnet_id,
+            slug=slug,
             has_url=harness_url is not None,
             has_secret=harness_secret is not None,
         )
@@ -957,7 +957,7 @@ class SubnetService:
 
     async def promote_to_persistent(
         self,
-        subnet_id: str,
+        slug: str,
         owner: str,
     ) -> Subnet:
         """
@@ -978,7 +978,7 @@ class SubnetService:
           (Redis pipeline SREM's the old ``by_linked_task`` entry).
 
         Args:
-            subnet_id: Subnet identifier
+            slug: Subnet identifier
             owner: Authenticated agent making the request
 
         Returns:
@@ -989,7 +989,7 @@ class SubnetService:
             SubnetNotFoundException: If subnet not found
             PermissionError: If owner mismatch
         """
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
 
         if subnet.owner != owner and owner != "system":
             raise PermissionError(f"Owner mismatch: {owner} != {subnet.owner}")
@@ -1000,7 +1000,7 @@ class SubnetService:
             # precondition check, per ADR semantic decision #2.
             logger.info(
                 "subnet_promote_noop",
-                subnet_id=subnet_id,
+                slug=slug,
                 owner=owner,
                 reason="already_persistent",
             )
@@ -1020,7 +1020,7 @@ class SubnetService:
         await self.repository.save(promoted)
         logger.info(
             "subnet_promoted_to_persistent",
-            subnet_id=subnet_id,
+            slug=slug,
             owner=owner,
         )
         return promoted
@@ -1108,7 +1108,7 @@ class SubnetService:
         if (
             row is None
             or row.kind != expected_kind
-            or (expected_subnet_id is not None and row.subnet_id != expected_subnet_id)
+            or (expected_subnet_id is not None and row.slug != expected_subnet_id)
         ):
             if expected_kind == "invitation":
                 raise InvitationNotFoundError(request_id)
@@ -1150,9 +1150,9 @@ class SubnetService:
     # ---- allowlist (no webhook — config, not lifecycle) --------------
 
     async def add_allowlist(
-        self, subnet_id: str, agent_id: str, *, added_by: str
+        self, slug: str, agent_id: str, *, added_by: str
     ) -> SubnetAllowlist:
-        """Pre-authorise ``agent_id`` for ``subnet_id``'s admission allowlist.
+        """Pre-authorise ``agent_id`` for ``slug``'s admission allowlist.
 
         Idempotency: ``IRepo.add`` returns ``False`` on a duplicate
         pair; we surface this as :class:`AllowlistEntryExistsError`
@@ -1166,7 +1166,7 @@ class SubnetService:
         configuration changes do not emit webhooks).
 
         Args:
-            subnet_id: Target subnet identifier (must exist).
+            slug: Target subnet identifier (must exist).
             agent_id: Agent to pre-authorise (route layer has already
                 verified the agent_id exists in the registry per ADR
                 §"SubnetAllowlist schema").
@@ -1177,27 +1177,27 @@ class SubnetService:
             SubnetNotFoundException: Target subnet missing.
             AllowlistEntryExistsError: Pair already on the allowlist.
         """
-        await self.get_subnet(subnet_id)
+        await self.get_subnet(slug)
         repo = self._require_allowlist_repo()
         entry = SubnetAllowlist(
-            subnet_id=subnet_id,
+            slug=slug,
             agent_id=agent_id,
             added_by=added_by,
             added_at=datetime.now(UTC),
         )
         inserted = await repo.add(entry)
         if not inserted:
-            raise AllowlistEntryExistsError(subnet_id, agent_id)
+            raise AllowlistEntryExistsError(slug, agent_id)
         logger.info(
             "subnet_allowlist_added",
-            subnet_id=subnet_id,
+            slug=slug,
             agent_id=agent_id,
             added_by=added_by,
         )
         return entry
 
-    async def remove_allowlist(self, subnet_id: str, agent_id: str, *, remover: str) -> bool:
-        """Remove ``(subnet_id, agent_id)`` from the admission allowlist.
+    async def remove_allowlist(self, slug: str, agent_id: str, *, remover: str) -> bool:
+        """Remove ``(slug, agent_id)`` from the admission allowlist.
 
         Idempotent per ADR §"Allowlist endpoints" — removing an absent
         pair returns ``False`` (the route layer still returns 204).
@@ -1207,12 +1207,12 @@ class SubnetService:
         :meth:`add_allowlist`; no rows reference it (the removed row
         is, by definition, gone).
         """
-        await self.get_subnet(subnet_id)
+        await self.get_subnet(slug)
         repo = self._require_allowlist_repo()
-        removed = await repo.remove(subnet_id, agent_id)
+        removed = await repo.remove(slug, agent_id)
         logger.info(
             "subnet_allowlist_removed",
-            subnet_id=subnet_id,
+            slug=slug,
             agent_id=agent_id,
             remover=remover,
             existed=removed,
@@ -1221,7 +1221,7 @@ class SubnetService:
 
     async def list_allowlist(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         limit: int = 100,
         offset: int = 0,
@@ -1234,15 +1234,15 @@ class SubnetService:
         ``_require_owner`` enforces the policy; internal callers
         (e.g. the cascade pre-flight) read without restriction.
         """
-        await self.get_subnet(subnet_id)
+        await self.get_subnet(slug)
         repo = self._require_allowlist_repo()
-        return await repo.list_for_subnet(subnet_id, limit=limit, offset=offset)
+        return await repo.list_for_subnet(slug, limit=limit, offset=offset)
 
     # ---- join_request lifecycle (owner approve / reject; applicant withdraw)
 
     async def approve_join_request(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         owner_id: str,
@@ -1264,11 +1264,11 @@ class SubnetService:
         the cascade-style UoW) requires PG-only deployments. Issue
         captured separately if it surfaces in production.
         """
-        await self.get_subnet(subnet_id)
+        await self.get_subnet(slug)
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
-            expected_subnet_id=subnet_id,
+            expected_subnet_id=slug,
         )
         if not row.is_pending:
             raise JoinRequestAlreadyDecidedError(request_id, row.status)
@@ -1280,10 +1280,10 @@ class SubnetService:
             note=row.note,
         )
         # ``add_member`` returns the post-mutation Subnet entity so
-        # the webhook ``parent_subnet_id`` / ``harness_url`` snapshot
+        # the webhook ``parent_slug`` / ``harness_url`` snapshot
         # is consistent with the just-applied membership change. No
         # need for a second ``get_subnet`` round-trip.
-        subnet = await self.add_member(subnet_id, row.agent_id)
+        subnet = await self.add_member(slug, row.agent_id)
         await self.event_publisher.publish(
             JoinFlowEventType.JOIN_APPROVED,
             subnet=subnet,
@@ -1292,7 +1292,7 @@ class SubnetService:
         )
         logger.info(
             "subnet_join_request_approved",
-            subnet_id=subnet_id,
+            slug=slug,
             request_id=request_id,
             agent_id=row.agent_id,
             owner_id=owner_id,
@@ -1302,7 +1302,7 @@ class SubnetService:
 
     async def reject_join_request(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         owner_id: str,
@@ -1317,11 +1317,11 @@ class SubnetService:
         # Single ``get_subnet`` covers the 404 pre-check AND the
         # webhook payload — reject doesn't mutate subnet membership,
         # so the entity snapshot stays valid for the event emit.
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
-            expected_subnet_id=subnet_id,
+            expected_subnet_id=slug,
         )
         if not row.is_pending:
             raise JoinRequestAlreadyDecidedError(request_id, row.status)
@@ -1336,7 +1336,7 @@ class SubnetService:
         )
         logger.info(
             "subnet_join_request_rejected",
-            subnet_id=subnet_id,
+            slug=slug,
             request_id=request_id,
             owner_id=owner_id,
         )
@@ -1344,7 +1344,7 @@ class SubnetService:
 
     async def withdraw_join_request(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         applicant_id: str,
@@ -1358,11 +1358,11 @@ class SubnetService:
         (DELETE /join-requests/{rid}) and emits ``JOIN_WITHDRAWN``.
         """
         # See ``reject_join_request`` for the single-fetch reasoning.
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
-            expected_subnet_id=subnet_id,
+            expected_subnet_id=slug,
         )
         if not row.is_pending:
             raise JoinRequestAlreadyDecidedError(request_id, row.status)
@@ -1380,7 +1380,7 @@ class SubnetService:
         )
         logger.info(
             "subnet_join_request_withdrawn",
-            subnet_id=subnet_id,
+            slug=slug,
             request_id=request_id,
             applicant_id=applicant_id,
         )
@@ -1390,7 +1390,7 @@ class SubnetService:
 
     async def invite_agent(
         self,
-        subnet_id: str,
+        slug: str,
         target_agent_id: str,
         *,
         owner_id: str,
@@ -1422,12 +1422,12 @@ class SubnetService:
         The pending-join-request collision is the merge path above,
         NOT a 409 — that's the asymmetry ADR §"Merge path" pins.
         """
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
         if target_agent_id in subnet.member_agent_ids:
-            raise AlreadyMemberError(subnet_id, target_agent_id)
+            raise AlreadyMemberError(slug, target_agent_id)
 
         repo = self._require_join_repo()
-        existing = await repo.find_pending_for(subnet_id, target_agent_id)
+        existing = await repo.find_pending_for(slug, target_agent_id)
         if existing is not None:
             if existing.kind == "invitation":
                 # Duplicate invitation — ADR §State machine edges
@@ -1437,20 +1437,20 @@ class SubnetService:
                 # Merge path — invite collapses into auto-approval
                 # of the agent's pending ask.
                 approved = await self.approve_join_request(
-                    subnet_id,
+                    slug,
                     existing.request_id,
                     owner_id=owner_id,
                     trigger="auto_on_invite",
                 )
                 logger.info(
                     "subnet_invitation_merged_into_join_request",
-                    subnet_id=subnet_id,
+                    slug=slug,
                     request_id=approved.request_id,
                     agent_id=target_agent_id,
                     owner_id=owner_id,
                 )
                 return InviteAgentMergedToApprovedJoinRequestResult(
-                    subnet_id=subnet_id,
+                    slug=slug,
                     agent_id=target_agent_id,
                     request=approved,
                 )
@@ -1458,13 +1458,13 @@ class SubnetService:
             # approved); reaching this branch means data corruption,
             # not a state-machine edge. Fail loud.
             raise RuntimeError(
-                f"pending row for ({subnet_id}, {target_agent_id}) has "
+                f"pending row for ({slug}, {target_agent_id}) has "
                 f"unexpected kind={existing.kind!r}"
             )
 
         invitation = SubnetJoinRequest(
             request_id=self._new_request_id(),
-            subnet_id=subnet_id,
+            slug=slug,
             agent_id=target_agent_id,
             kind="invitation",
             status="pending",
@@ -1479,20 +1479,20 @@ class SubnetService:
         )
         logger.info(
             "subnet_invitation_sent",
-            subnet_id=subnet_id,
+            slug=slug,
             invitation_id=invitation.request_id,
             target_agent_id=target_agent_id,
             owner_id=owner_id,
         )
         return InviteAgentSentResult(
-            subnet_id=subnet_id,
+            slug=slug,
             agent_id=target_agent_id,
             invitation=invitation,
         )
 
     async def accept_invitation(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         invitee_id: str,
@@ -1513,11 +1513,11 @@ class SubnetService:
         passing the right value here is what makes the
         ``"system:allowlist"`` token surface in the payload.
         """
-        await self.get_subnet(subnet_id)
+        await self.get_subnet(slug)
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_subnet_id=subnet_id,
+            expected_subnet_id=slug,
         )
         if not row.is_pending:
             raise InvitationAlreadyDecidedError(request_id, row.status)
@@ -1528,7 +1528,7 @@ class SubnetService:
         )
         # See ``approve_join_request`` for the same add_member →
         # webhook ordering reasoning.
-        subnet = await self.add_member(subnet_id, row.agent_id)
+        subnet = await self.add_member(slug, row.agent_id)
         await self.event_publisher.publish(
             JoinFlowEventType.INVITATION_ACCEPTED,
             subnet=subnet,
@@ -1538,7 +1538,7 @@ class SubnetService:
         )
         logger.info(
             "subnet_invitation_accepted",
-            subnet_id=subnet_id,
+            slug=slug,
             invitation_id=request_id,
             invitee_id=invitee_id,
             trigger=trigger,
@@ -1548,7 +1548,7 @@ class SubnetService:
 
     async def reject_invitation(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         invitee_id: str,
@@ -1559,11 +1559,11 @@ class SubnetService:
         ``INVITATION_REJECTED`` fires; no membership change.
         """
         # See ``reject_join_request`` for the single-fetch reasoning.
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_subnet_id=subnet_id,
+            expected_subnet_id=slug,
         )
         if not row.is_pending:
             raise InvitationAlreadyDecidedError(request_id, row.status)
@@ -1578,7 +1578,7 @@ class SubnetService:
         )
         logger.info(
             "subnet_invitation_rejected",
-            subnet_id=subnet_id,
+            slug=slug,
             invitation_id=request_id,
             invitee_id=invitee_id,
         )
@@ -1586,7 +1586,7 @@ class SubnetService:
 
     async def cancel_invitation(
         self,
-        subnet_id: str,
+        slug: str,
         request_id: str,
         *,
         owner_id: str,
@@ -1599,11 +1599,11 @@ class SubnetService:
         catalogue".
         """
         # See ``reject_join_request`` for the single-fetch reasoning.
-        subnet = await self.get_subnet(subnet_id)
+        subnet = await self.get_subnet(slug)
         row = await self.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_subnet_id=subnet_id,
+            expected_subnet_id=slug,
         )
         if not row.is_pending:
             raise InvitationAlreadyDecidedError(request_id, row.status)
@@ -1618,7 +1618,7 @@ class SubnetService:
         )
         logger.info(
             "subnet_invitation_canceled",
-            subnet_id=subnet_id,
+            slug=slug,
             invitation_id=request_id,
             owner_id=owner_id,
         )
@@ -1628,7 +1628,7 @@ class SubnetService:
 
     async def list_join_requests(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         kind: Literal["join_request", "allowlist_auto"] = "join_request",
         status: Literal["pending", "approved", "rejected", "withdrawn"] | None = None,
@@ -1643,25 +1643,25 @@ class SubnetService:
         rejects ``kind=invitation`` at the request-parse boundary
         with ``400 INVALID_KIND_FILTER``.
         """
-        await self.get_subnet(subnet_id)
+        await self.get_subnet(slug)
         repo = self._require_join_repo()
         return await repo.list_by_subnet(
-            subnet_id, kind=kind, status=status, limit=limit, offset=offset
+            slug, kind=kind, status=status, limit=limit, offset=offset
         )
 
     async def list_invitations(
         self,
-        subnet_id: str,
+        slug: str,
         *,
         status: Literal["pending", "approved", "rejected", "withdrawn"] | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[SubnetJoinRequest]:
         """List invitation rows for a subnet (owner-only at route layer)."""
-        await self.get_subnet(subnet_id)
+        await self.get_subnet(slug)
         repo = self._require_join_repo()
         return await repo.list_by_subnet(
-            subnet_id,
+            slug,
             kind="invitation",
             status=status,
             limit=limit,

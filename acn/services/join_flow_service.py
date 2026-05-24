@@ -146,11 +146,11 @@ class JoinFlowService:
             await self._subnet_service.add_member(subnet_id, agent_id)
             logger.info(
                 "join_flow_branch_open",
-                subnet_id=subnet_id,
+                slug=subnet_id,
                 agent_id=agent_id,
                 branch=1,
             )
-            return JoinFlowJoinedOpenResult(subnet_id=subnet_id, agent_id=agent_id)
+            return JoinFlowJoinedOpenResult(slug=subnet_id, agent_id=agent_id)
 
         # From here on ``join_policy == 'approval'``.
 
@@ -161,11 +161,11 @@ class JoinFlowService:
             await self._subnet_service.add_member(subnet_id, agent_id)
             logger.info(
                 "join_flow_branch_owner_self_join",
-                subnet_id=subnet_id,
+                slug=subnet_id,
                 agent_id=agent_id,
                 branch=2,
             )
-            return JoinFlowJoinedAsOwnerResult(subnet_id=subnet_id, agent_id=agent_id)
+            return JoinFlowJoinedAsOwnerResult(slug=subnet_id, agent_id=agent_id)
 
         # The three remaining branches all hinge on the pending row
         # / allowlist presence. Compute both up front so the
@@ -190,14 +190,14 @@ class JoinFlowService:
             )
             logger.info(
                 "join_flow_branch_invitation_auto_accept",
-                subnet_id=subnet_id,
+                slug=subnet_id,
                 agent_id=agent_id,
                 invitation_id=accepted.request_id,
                 via=via,
                 branch=4 if is_allowlisted else 3,
             )
             return JoinFlowAutoAcceptedInvitationResult(
-                subnet_id=subnet_id,
+                slug=subnet_id,
                 agent_id=agent_id,
                 invitation=accepted,
                 via=via,
@@ -219,7 +219,7 @@ class JoinFlowService:
         if is_allowlisted:
             request = SubnetJoinRequest(
                 request_id=str(uuid.uuid4()),
-                subnet_id=subnet_id,
+                slug=subnet_id,
                 agent_id=agent_id,
                 kind="allowlist_auto",
                 status="approved",
@@ -244,13 +244,13 @@ class JoinFlowService:
             )
             logger.info(
                 "join_flow_branch_allowlist_auto_approved",
-                subnet_id=subnet_id,
+                slug=subnet_id,
                 agent_id=agent_id,
                 request_id=request.request_id,
                 branch=5,
             )
             return JoinFlowAllowlistAutoApprovedResult(
-                subnet_id=subnet_id,
+                slug=subnet_id,
                 agent_id=agent_id,
                 request=request,
             )
@@ -260,7 +260,7 @@ class JoinFlowService:
         # member; the owner owes a decision.
         request = SubnetJoinRequest(
             request_id=str(uuid.uuid4()),
-            subnet_id=subnet_id,
+            slug=subnet_id,
             agent_id=agent_id,
             kind="join_request",
             status="pending",
@@ -274,13 +274,13 @@ class JoinFlowService:
         )
         logger.info(
             "join_flow_branch_pending_join_request",
-            subnet_id=subnet_id,
+            slug=subnet_id,
             agent_id=agent_id,
             request_id=request.request_id,
             branch=6,
         )
         return JoinFlowPendingResult(
-            subnet_id=subnet_id,
+            slug=subnet_id,
             agent_id=agent_id,
             request=request,
         )

@@ -5,9 +5,9 @@ What this pins
 ADR-0004 §"Cascade deletion: Postgres" promises:
 
 > ``delete_subnet`` runs a single ``session.begin()`` transaction
-> containing ``DELETE FROM subnet_join_requests WHERE subnet_id=...``,
-> ``DELETE FROM subnet_allowlist WHERE subnet_id=...``, and
-> ``DELETE FROM subnets WHERE subnet_id=...`` in that order. Any
+> containing ``DELETE FROM subnet_join_requests WHERE slug=...``,
+> ``DELETE FROM subnet_allowlist WHERE slug=...``, and
+> ``DELETE FROM subnets WHERE slug=...`` in that order. Any
 > failure rolls back the whole batch.
 
 Slice 2.1 shipped the three cascade methods but had them each open
@@ -46,12 +46,12 @@ from acn.services.subnet_service import SubnetService
 # ---------------------------------------------------------------------------
 
 
-def _subnet(subnet_id: str, parent_subnet_id: str | None = None) -> Subnet:
+def _subnet(slug: str, parent_slug: str | None = None) -> Subnet:
     return Subnet(
-        subnet_id=subnet_id,
-        name=subnet_id,
+        slug=slug,
+        name=slug,
         owner="alice",
-        parent_subnet_id=parent_subnet_id,
+        parent_slug=parent_slug,
     )
 
 
@@ -211,8 +211,8 @@ class TestAtomicCascadeWithChildren:
         as N+1 independent transactions."""
         parent = _subnet("parent")
         children = [
-            _subnet("child-1", parent_subnet_id="parent"),
-            _subnet("child-2", parent_subnet_id="parent"),
+            _subnet("child-1", parent_slug="parent"),
+            _subnet("child-2", parent_slug="parent"),
         ]
         mock_subnet_repo.find_by_id.return_value = parent
         mock_subnet_repo.find_by_parent.return_value = children

@@ -43,12 +43,12 @@ router = APIRouter(
 )
 
 
-@router.post("/{agent_id}/subnets/{subnet_id}")
+@router.post("/{agent_id}/subnets/{slug}")
 @limiter.limit("30/minute")
 async def join_subnet(
     request: Request,
     agent_id: AgentIdPath,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
@@ -67,7 +67,7 @@ async def join_subnet(
     """
     return await do_join_subnet(
         agent_id=agent_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_info=agent_info,
         subnet_service=subnet_service,
         agent_service=agent_service,
@@ -76,12 +76,12 @@ async def join_subnet(
     )
 
 
-@router.delete("/{agent_id}/subnets/{subnet_id}")
+@router.delete("/{agent_id}/subnets/{slug}")
 @limiter.limit("30/minute")
 async def leave_subnet(
     request: Request,
     agent_id: AgentIdPath,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
@@ -95,7 +95,7 @@ async def leave_subnet(
     """
     return await do_leave_subnet(
         agent_id=agent_id,
-        subnet_id=subnet_id,
+        slug=slug,
         agent_info=agent_info,
         subnet_service=subnet_service,
         agent_service=agent_service,

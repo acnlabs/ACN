@@ -7,7 +7,7 @@ ACN stores subnet membership as a bidirectional pair:
 Both must be written for the membership to be visible to every consumer.
 ``SubnetService.create_subnet`` only writes the subnet side via
 ``subnet.add_member(owner)``; the route handler ``POST /api/v1/subnets``
-must mirror this with an ``agent_service.join_subnet(owner, subnet_id)``
+must mirror this with an ``agent_service.join_subnet(owner, slug)``
 call so the agent side is also written.
 
 Without this, freshly created subnets show ``member_count=0`` in any
@@ -51,9 +51,9 @@ def stub_agent_service():
     return svc
 
 
-def _make_subnet_mock(subnet_id: str = "subnet-new-abc123", owner: str = "agent-target"):
+def _make_subnet_mock(slug: str = "subnet-new-abc123", owner: str = "agent-target"):
     sn = MagicMock()
-    sn.subnet_id = subnet_id
+    sn.slug = slug
     sn.owner = owner
     sn.is_private = False
     sn.harness_url = None
@@ -76,7 +76,7 @@ def stub_subnet_service():
         # Reflect that on the returned mock so tests asserting on the
         # subnet side see what production sees.
         return _make_subnet_mock(
-            subnet_id=kwargs["subnet_id"],
+            slug=kwargs["slug"],
             owner=kwargs["owner"],
         )
 
@@ -85,7 +85,7 @@ def stub_subnet_service():
     return svc
 
 
-# Pin an explicit subnet_id in test request bodies so we can assert on it
+# Pin an explicit slug in test request bodies so we can assert on it
 # without depending on the route's _generate_subnet_id() randomness.
 _EXPLICIT_SUBNET_ID = "subnet-explicit-test-001"
 
@@ -121,7 +121,7 @@ class TestCreateSubnetMembership:
             r = client.post(
                 "/api/v1/subnets",
                 headers={"Authorization": "Bearer owner-key"},
-                json={"name": "Demo Subnet", "subnet_id": _EXPLICIT_SUBNET_ID},
+                json={"name": "Demo Subnet", "slug": _EXPLICIT_SUBNET_ID},
             )
 
         assert r.status_code == 200, r.text
@@ -142,13 +142,13 @@ class TestCreateSubnetMembership:
             r = client.post(
                 "/api/v1/subnets",
                 headers={"Authorization": "Bearer owner-key"},
-                json={"name": "Demo Subnet", "subnet_id": _EXPLICIT_SUBNET_ID},
+                json={"name": "Demo Subnet", "slug": _EXPLICIT_SUBNET_ID},
             )
 
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "created"
-        assert body["subnet_id"] == _EXPLICIT_SUBNET_ID
+        assert body["slug"] == _EXPLICIT_SUBNET_ID
         assert body["is_public"] is True
 
     def test_create_subnet_rolls_back_when_agent_join_fails(
@@ -170,7 +170,7 @@ class TestCreateSubnetMembership:
             r = client.post(
                 "/api/v1/subnets",
                 headers={"Authorization": "Bearer owner-key"},
-                json={"name": "Demo Subnet", "subnet_id": _EXPLICIT_SUBNET_ID},
+                json={"name": "Demo Subnet", "slug": _EXPLICIT_SUBNET_ID},
             )
 
         assert r.status_code == 500

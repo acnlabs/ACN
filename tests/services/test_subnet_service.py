@@ -32,7 +32,7 @@ class TestSubnetServiceCreate:
 
         service = SubnetService(mock_subnet_repository)
         subnet = await service.create_subnet(
-            subnet_id="subnet-test",
+            slug="subnet-test",
             name="Test Subnet",
             owner="agent-owner-123",
         )
@@ -57,7 +57,7 @@ class TestSubnetServiceCreate:
 
         service = SubnetService(mock_subnet_repository)
         subnet = await service.create_subnet(
-            subnet_id="subnet-test",
+            slug="subnet-test",
             name="Test Subnet",
             owner="agent-owner-123",
         )
@@ -72,7 +72,7 @@ class TestSubnetServiceCreate:
         service = SubnetService(mock_subnet_repository)
         with pytest.raises(ValueError, match="already exists"):
             await service.create_subnet(
-                subnet_id="subnet-test",
+                slug="subnet-test",
                 name="Test Subnet",
                 owner="agent-owner-123",
             )
@@ -93,7 +93,7 @@ class TestSubnetServiceADR0002:
         service = SubnetService(mock_subnet_repository)
         with pytest.raises(ValueError, match="ADR-0002"):
             await service.create_subnet(
-                subnet_id="ws-mirror-001",
+                slug="ws-mirror-001",
                 name="Workspace Mirror",
                 owner="backend@internal",
             )
@@ -107,7 +107,7 @@ class TestSubnetServiceADR0002:
 
         service = SubnetService(mock_subnet_repository)
         subnet = await service.create_subnet(
-            subnet_id="ws-mirror-002",
+            slug="ws-mirror-002",
             name="Workspace Mirror",
             owner="svc-backend-prod-agent-uuid",
         )
@@ -144,7 +144,7 @@ class TestSubnetServiceADR0004JoinPolicy:
         service = SubnetService(mock_subnet_repository)
 
         subnet = await service.create_subnet(
-            subnet_id="subnet-pub-default",
+            slug="subnet-pub-default",
             name="Public Default",
             owner="agent-1",
             is_private=False,
@@ -166,7 +166,7 @@ class TestSubnetServiceADR0004JoinPolicy:
         service = SubnetService(mock_subnet_repository)
 
         subnet = await service.create_subnet(
-            subnet_id="subnet-priv-default",
+            slug="subnet-priv-default",
             name="Private Default",
             owner="agent-1",
             is_private=True,
@@ -184,7 +184,7 @@ class TestSubnetServiceADR0004JoinPolicy:
         service = SubnetService(mock_subnet_repository)
 
         subnet = await service.create_subnet(
-            subnet_id="subnet-pub-approval",
+            slug="subnet-pub-approval",
             name="Public Approval",
             owner="agent-1",
             is_private=False,
@@ -206,7 +206,7 @@ class TestSubnetServiceADR0004JoinPolicy:
 
         with pytest.raises(SubnetInvariantError) as exc_info:
             await service.create_subnet(
-                subnet_id="subnet-priv-open",
+                slug="subnet-priv-open",
                 name="Private Open",
                 owner="agent-1",
                 is_private=True,
@@ -224,7 +224,7 @@ class TestSubnetServiceADR0004JoinPolicy:
         service = SubnetService(mock_subnet_repository)
 
         subnet = await service.create_subnet(
-            subnet_id="subnet-priv-approval",
+            slug="subnet-priv-approval",
             name="Private Approval",
             owner="agent-1",
             is_private=True,
@@ -245,7 +245,7 @@ class TestSubnetServiceADR0004JoinPolicy:
         service = SubnetService(mock_subnet_repository)
 
         subnet = await service.create_subnet(
-            subnet_id="subnet-pub-open-explicit",
+            slug="subnet-pub-open-explicit",
             name="Public Open Explicit",
             owner="agent-1",
             is_private=False,

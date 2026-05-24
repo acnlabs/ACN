@@ -101,7 +101,7 @@ UNION_SCHEMA_CODES: dict[str, str] = {
     ),
     "OWNERSHIP_MISMATCH": (
         "registry uses {requested_owner, token_owner} for owner-token "
-        "mismatch; subnets/tasks use {agent_id?, subnet_id?, task_id?, "
+        "mismatch; subnets/tasks use {agent_id?, slug?, task_id?, "
         "reason?} for PermissionError re-raises (free-form str(e))"
     ),
     "INVALID_REQUEST": (
@@ -110,7 +110,7 @@ UNION_SCHEMA_CODES: dict[str, str] = {
         "uses {field, value, allowed?, task_id?, agent_id?, reason?}"
     ),
     "NOT_SUBNET_MEMBER": (
-        "subnets variant uses {subnet_id}; tasks get-task gate adds "
+        "subnets variant uses {slug}; tasks get-task gate adds "
         "{task_id, reason} where reason ∈ {anonymous_caller, not_member}"
     ),
     "AUTHENTICATION_REQUIRED": (

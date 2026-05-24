@@ -7,7 +7,7 @@ the *service* layer (Phase 2) so they live in
 
 Coverage strategy
 -----------------
-- Existing pre-nesting invariants (subnet_id / name / owner non-empty,
+- Existing pre-nesting invariants (slug / name / owner non-empty,
   reserved-ID owner rule) are not repeated here — they're already
   covered by integration tests through the service / route layer.
   This file pins the *new* contracts introduced by ADR-0003.
@@ -29,25 +29,25 @@ class TestSubnetNestingDefaults:
     don't touch the new fields."""
 
     def test_defaults_to_top_level_persistent(self):
-        subnet = Subnet(subnet_id="subnet-a", name="A", owner="agent-1")
+        subnet = Subnet(slug="subnet-a", name="A", owner="agent-1")
 
-        assert subnet.parent_subnet_id is None
+        assert subnet.parent_slug is None
         assert subnet.lifecycle == "persistent"
         assert subnet.linked_task_id is None
 
     def test_to_dict_round_trips_new_fields(self):
         subnet = Subnet(
-            subnet_id="subnet-child",
+            slug="subnet-child",
             name="Child",
             owner="agent-1",
-            parent_subnet_id="subnet-parent",
+            parent_slug="subnet-parent",
             lifecycle="task_scoped",
             linked_task_id="task-xyz",
         )
 
         d = subnet.to_dict()
 
-        assert d["parent_subnet_id"] == "subnet-parent"
+        assert d["parent_slug"] == "subnet-parent"
         assert d["lifecycle"] == "task_scoped"
         assert d["linked_task_id"] == "task-xyz"
 
@@ -56,30 +56,30 @@ class TestSubnetNestingDefaults:
         lacks the three nesting keys entirely. ``from_dict`` must
         fall through to entity defaults rather than KeyError."""
         legacy_data = {
-            "subnet_id": "subnet-legacy",
+            "slug": "subnet-legacy",
             "name": "Legacy",
             "owner": "agent-1",
         }
 
         subnet = Subnet.from_dict(legacy_data)
 
-        assert subnet.parent_subnet_id is None
+        assert subnet.parent_slug is None
         assert subnet.lifecycle == "persistent"
         assert subnet.linked_task_id is None
 
     def test_from_dict_round_trips_new_fields(self):
         original = Subnet(
-            subnet_id="subnet-child",
+            slug="subnet-child",
             name="Child",
             owner="agent-1",
-            parent_subnet_id="subnet-parent",
+            parent_slug="subnet-parent",
             lifecycle="task_scoped",
             linked_task_id="task-xyz",
         )
 
         rebuilt = Subnet.from_dict(original.to_dict())
 
-        assert rebuilt.parent_subnet_id == "subnet-parent"
+        assert rebuilt.parent_slug == "subnet-parent"
         assert rebuilt.lifecycle == "task_scoped"
         assert rebuilt.linked_task_id == "task-xyz"
 
@@ -91,7 +91,7 @@ class TestLifecycleValueValidation:
 
     def test_persistent_is_accepted(self):
         Subnet(
-            subnet_id="subnet-a",
+            slug="subnet-a",
             name="A",
             owner="agent-1",
             lifecycle="persistent",
@@ -99,7 +99,7 @@ class TestLifecycleValueValidation:
 
     def test_task_scoped_is_accepted_with_linked_task(self):
         Subnet(
-            subnet_id="subnet-a",
+            slug="subnet-a",
             name="A",
             owner="agent-1",
             lifecycle="task_scoped",
@@ -109,7 +109,7 @@ class TestLifecycleValueValidation:
     def test_unknown_lifecycle_value_rejected(self):
         with pytest.raises(ValueError, match="lifecycle must be one of"):
             Subnet(
-                subnet_id="subnet-a",
+                slug="subnet-a",
                 name="A",
                 owner="agent-1",
                 lifecycle="permanent",  # typo of "persistent"
@@ -120,7 +120,7 @@ class TestLifecycleValueValidation:
         # default — callers that want the default omit the kwarg.
         with pytest.raises(ValueError, match="lifecycle must be one of"):
             Subnet(
-                subnet_id="subnet-a",
+                slug="subnet-a",
                 name="A",
                 owner="agent-1",
                 lifecycle="",
@@ -138,7 +138,7 @@ class TestTaskScopedLinkedTaskPairing:
             ValueError, match="task_scoped.*requires linked_task_id"
         ):
             Subnet(
-                subnet_id="subnet-a",
+                slug="subnet-a",
                 name="A",
                 owner="agent-1",
                 lifecycle="task_scoped",
@@ -156,7 +156,7 @@ class TestTaskScopedLinkedTaskPairing:
             ValueError, match="persistent.*must not carry a linked_task_id"
         ):
             Subnet(
-                subnet_id="subnet-a",
+                slug="subnet-a",
                 name="A",
                 owner="agent-1",
                 lifecycle="persistent",
@@ -169,26 +169,26 @@ class TestReservedSubnetNestingGuard:
     children — they're platform-owned with implicit "all agents"
     semantics that make the membership-subset invariant meaningless.
     The existing reserved-ID guard is extended to forbid
-    ``parent_subnet_id`` on reserved IDs."""
+    ``parent_slug`` on reserved IDs."""
 
     def test_reserved_subnet_cannot_have_parent(self):
         # ``public`` must be owned by ``system`` (existing rule);
         # adding a parent on top should still be rejected.
         with pytest.raises(
-            ValueError, match="Reserved subnet 'public' cannot have a parent_subnet_id"
+            ValueError, match="Reserved subnet 'public' cannot have a parent_slug"
         ):
             Subnet(
-                subnet_id="public",
+                slug="public",
                 name="Public",
                 owner="system",
-                parent_subnet_id="some-parent",
+                parent_slug="some-parent",
             )
 
     def test_reserved_subnet_can_still_be_constructed_with_defaults(self):
         # Sanity: the new guard doesn't break the legacy "system
         # constructs reserved subnets at bootstrap" path.
-        subnet = Subnet(subnet_id="public", name="Public", owner="system")
-        assert subnet.parent_subnet_id is None
+        subnet = Subnet(slug="public", name="Public", owner="system")
+        assert subnet.parent_slug is None
         assert subnet.lifecycle == "persistent"
 
     def test_reserved_subnet_cannot_be_task_scoped(self):
@@ -201,7 +201,7 @@ class TestReservedSubnetNestingGuard:
             ValueError, match="Reserved subnet 'public' cannot be task_scoped"
         ):
             Subnet(
-                subnet_id="public",
+                slug="public",
                 name="Public",
                 owner="system",
                 lifecycle="task_scoped",
@@ -211,7 +211,7 @@ class TestReservedSubnetNestingGuard:
             ValueError, match="Reserved subnet 'system' cannot be task_scoped"
         ):
             Subnet(
-                subnet_id="system",
+                slug="system",
                 name="System",
                 owner="system",
                 lifecycle="task_scoped",
@@ -222,7 +222,7 @@ class TestReservedSubnetNestingGuard:
 class TestSingleLayerCapNotEnforcedAtEntity:
     """ADR-0003 §A invariant 1 — single-layer cap — is intentionally
     a *service-layer* concern (it requires looking up the parent
-    to check its own ``parent_subnet_id``). The entity must accept
+    to check its own ``parent_slug``). The entity must accept
     a child pointing to any string ID without doing that lookup;
     Phase 2 tests in ``test_subnet_service_nesting.py`` pin the
     actual cap enforcement."""
@@ -231,9 +231,75 @@ class TestSingleLayerCapNotEnforcedAtEntity:
         # No parent existence check, no nesting depth check at the
         # entity layer. The entity is a passive data carrier here.
         subnet = Subnet(
-            subnet_id="subnet-grandchild",
+            slug="subnet-grandchild",
             name="GC",
             owner="agent-1",
-            parent_subnet_id="subnet-some-parent",
+            parent_slug="subnet-some-parent",
         )
-        assert subnet.parent_subnet_id == "subnet-some-parent"
+        assert subnet.parent_slug == "subnet-some-parent"
+
+
+class TestFromDictLegacyKeyTranslation:
+    """``Subnet.from_dict`` must accept dicts persisted before the
+    ``subnet_id`` → ``slug`` rename so Redis-cached rows survive a
+    rolling deploy without a backfill. Pinned here because mock-based
+    repository tests don't exercise the real entity translation
+    path — a regression here only surfaces on a real Redis deploy.
+    """
+
+    def test_translates_legacy_subnet_id_key_to_slug(self):
+        subnet = Subnet.from_dict(
+            {
+                "subnet_id": "legacy-net",
+                "name": "Legacy",
+                "owner": "alice",
+            }
+        )
+
+        assert subnet.slug == "legacy-net"
+
+    def test_translates_legacy_parent_subnet_id_to_parent_slug(self):
+        subnet = Subnet.from_dict(
+            {
+                "slug": "child-net",
+                "name": "Child",
+                "owner": "alice",
+                "parent_subnet_id": "parent-net",
+            }
+        )
+
+        assert subnet.parent_slug == "parent-net"
+
+    def test_translates_both_legacy_keys_in_one_dict(self):
+        # Realistic shape: a Redis HASH dumped before the rename
+        # carries both legacy keys; from_dict must hydrate cleanly.
+        subnet = Subnet.from_dict(
+            {
+                "subnet_id": "child-net",
+                "name": "Child",
+                "owner": "alice",
+                "parent_subnet_id": "parent-net",
+            }
+        )
+
+        assert subnet.slug == "child-net"
+        assert subnet.parent_slug == "parent-net"
+
+    def test_explicit_new_keys_take_precedence_over_legacy(self):
+        # Defensive: if both keys appear (mid-rollout migration glitch),
+        # the new ``slug`` / ``parent_slug`` win and the legacy values
+        # are discarded rather than triggering a "duplicate keyword
+        # argument" TypeError.
+        subnet = Subnet.from_dict(
+            {
+                "slug": "new-slug",
+                "subnet_id": "old-slug",
+                "parent_slug": "new-parent",
+                "parent_subnet_id": "old-parent",
+                "name": "Mixed",
+                "owner": "alice",
+            }
+        )
+
+        assert subnet.slug == "new-slug"
+        assert subnet.parent_slug == "new-parent"
