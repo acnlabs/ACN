@@ -1066,6 +1066,18 @@ export interface AllowlistListResponse {
   total: number;
 }
 
+// ── Inbox message lifecycle ─────────────────────────────────────────────────
+// ADR-0005: server-defined enum values must be typed as string + KNOWN_* array.
+// If the server adds a new status (e.g. "archived"), this array grows without
+// requiring a breaking SDK change — callers should accept any `string`.
+
+export const KNOWN_INBOX_MESSAGE_STATUSES = [
+  'unread',
+  'read',
+  'processed',
+] as const;
+export type InboxMessageStatus = string; // wide for forward-compat
+
 
 
 

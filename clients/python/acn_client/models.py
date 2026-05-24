@@ -101,6 +101,11 @@ class PaymentNetwork(StrEnum):
 # pinning an Enum here would force an SDK release every time the server
 # adds a state.  Callers should treat ``PaymentTask.status`` as ``str``
 # and compare against these constants when needed.
+# ADR-0005: server-defined enum values typed as str + KNOWN_* companion.
+# If the server adds a new inbox status, this tuple grows without a breaking
+# SDK change — callers should accept any str, not compare to this exhaustively.
+KNOWN_INBOX_MESSAGE_STATUSES: tuple[str, ...] = ("unread", "read", "processed")
+
 KNOWN_PAYMENT_TASK_STATUSES: tuple[str, ...] = (
     "created",
     "payment_requested",

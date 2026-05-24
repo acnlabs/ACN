@@ -11,6 +11,7 @@ Example:
 
 from .client import ACNClient, ACNError
 from .models import (
+    KNOWN_INBOX_MESSAGE_STATUSES,
     KNOWN_PAYMENT_TASK_STATUSES,
     AgentInfo,
     AgentJoinRequest,
@@ -90,6 +91,8 @@ __all__ = [
     "SessionInviteRequest",
     # Subnet models
     "SubnetInfo",
+    # Communication constants
+    "KNOWN_INBOX_MESSAGE_STATUSES",
     # Payment models
     "KNOWN_PAYMENT_TASK_STATUSES",
     "PaymentCapability",

@@ -777,7 +777,7 @@ export class ACNClient {
   async updateInboxMessageStatus(
     agentId: string,
     routeId: string,
-    status: 'unread' | 'read' | 'processed',
+    status: string, // wide for forward-compat; see KNOWN_INBOX_MESSAGE_STATUSES in types.ts
   ): Promise<{ agent_id: string; route_id: string; status: string }> {
     return this.patch(`/api/v1/communication/history/${agentId}/${routeId}`, { status });
   }

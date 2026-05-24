@@ -132,7 +132,7 @@ export type {
 } from './types';
 
 // Value exports (constants)
-export { KNOWN_PAYMENT_TASK_STATUSES } from './types';
+export { KNOWN_PAYMENT_TASK_STATUSES, KNOWN_INBOX_MESSAGE_STATUSES } from './types';
 
 // Task pool types
 export type {
