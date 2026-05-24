@@ -70,7 +70,7 @@ afterEach(() => {
 describe('subnet create --join-policy (ADR-0004)', () => {
   const createResponse = {
     status: 'created',
-    subnet_id: 'subnet-x',
+    slug: 'subnet-x',
     is_public: true,
     gateway_a2a_url: 'https://gw/a2a/subnet-x',
     gateway_ws_url: 'https://gw/ws/subnet-x',
@@ -179,7 +179,7 @@ describe('subnet join (ADR-0004 6 branches)', () => {
   it('hits the canonical /agents/{aid}/subnets/{sid} URL', async () => {
     vi.mocked(acnPost).mockResolvedValue({
       status: 'joined',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'agent-1',
     } as never);
     await runSubnet(['join', 's1']);
@@ -189,7 +189,7 @@ describe('subnet join (ADR-0004 6 branches)', () => {
   it('branch 1/2 (joined): plain "joined subnet" line', async () => {
     vi.mocked(acnPost).mockResolvedValue({
       status: 'joined',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'agent-1',
     } as never);
     await runSubnet(['join', 's1']);
@@ -201,7 +201,7 @@ describe('subnet join (ADR-0004 6 branches)', () => {
     vi.mocked(acnPost).mockResolvedValue({
       auto_resolved: true,
       resolved_kind: 'invitation',
-      subnet_id: 's2',
+      slug: 's2',
       agent_id: 'agent-1',
       invitation_id: 'inv-3',
       via: 'self_join',
@@ -217,7 +217,7 @@ describe('subnet join (ADR-0004 6 branches)', () => {
     vi.mocked(acnPost).mockResolvedValue({
       auto_resolved: true,
       resolved_kind: 'invitation',
-      subnet_id: 's3',
+      slug: 's3',
       agent_id: 'agent-1',
       invitation_id: 'inv-4',
       via: 'allowlist',
@@ -231,7 +231,7 @@ describe('subnet join (ADR-0004 6 branches)', () => {
 
   it('branch 5 (allowlist, no invitation): mentions allowlist match', async () => {
     vi.mocked(acnPost).mockResolvedValue({
-      subnet_id: 's4',
+      slug: 's4',
       agent_id: 'agent-1',
       request_id: 'req-5',
       via: 'allowlist',
@@ -243,7 +243,7 @@ describe('subnet join (ADR-0004 6 branches)', () => {
 
   it('branch 6 (pending): mentions pending owner approval', async () => {
     vi.mocked(acnPost).mockResolvedValue({
-      subnet_id: 's5',
+      slug: 's5',
       agent_id: 'agent-1',
       request_id: 'req-6',
       status: 'pending',
@@ -263,10 +263,10 @@ describe('subnet join (ADR-0004 6 branches)', () => {
 describe('subnet allowlist (ADR-0004)', () => {
   it('list hits GET /subnets/{sid}/allowlist', async () => {
     vi.mocked(acnGet).mockResolvedValue({
-      subnet_id: 's1',
+      slug: 's1',
       entries: [
         {
-          subnet_id: 's1',
+          slug: 's1',
           agent_id: 'a-1',
           added_by: 'owner-1',
           added_at: '2026-05-19T00:00:00Z',
@@ -284,7 +284,7 @@ describe('subnet allowlist (ADR-0004)', () => {
 
   it('list with empty result prints empty message', async () => {
     vi.mocked(acnGet).mockResolvedValue({
-      subnet_id: 's1',
+      slug: 's1',
       entries: [],
     } as never);
     await runSubnet(['allowlist', 'list', 's1']);
@@ -294,7 +294,7 @@ describe('subnet allowlist (ADR-0004)', () => {
 
   it('add posts {agent_id}', async () => {
     vi.mocked(acnPost).mockResolvedValue({
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'a-2',
       added_by: 'agent-1',
       added_at: '2026-05-19T00:00:00Z',
@@ -321,11 +321,11 @@ describe('subnet allowlist (ADR-0004)', () => {
 describe('subnet requests (ADR-0004)', () => {
   it('list hits GET /subnets/{sid}/join-requests with default kind', async () => {
     vi.mocked(acnGet).mockResolvedValue({
-      subnet_id: 's1',
+      slug: 's1',
       items: [
         {
           request_id: 'r-1',
-          subnet_id: 's1',
+          slug: 's1',
           agent_id: 'a-1',
           kind: 'join_request',
           status: 'pending',
@@ -345,7 +345,7 @@ describe('subnet requests (ADR-0004)', () => {
 
   it('list propagates --status + --kind filters', async () => {
     vi.mocked(acnGet).mockResolvedValue({
-      subnet_id: 's1',
+      slug: 's1',
       items: [],
     } as never);
     await runSubnet([
@@ -365,7 +365,7 @@ describe('subnet requests (ADR-0004)', () => {
   it('approve posts to /approve endpoint with optional note', async () => {
     vi.mocked(acnPost).mockResolvedValue({
       request_id: 'r-1',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'a-1',
       kind: 'join_request',
       status: 'approved',
@@ -393,7 +393,7 @@ describe('subnet requests (ADR-0004)', () => {
   it('reject posts to /reject endpoint, omits body when no --note', async () => {
     vi.mocked(acnPost).mockResolvedValue({
       request_id: 'r-2',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'a-1',
       kind: 'join_request',
       status: 'rejected',
@@ -413,7 +413,7 @@ describe('subnet requests (ADR-0004)', () => {
   it('withdraw deletes /subnets/{sid}/join-requests/{rid}', async () => {
     vi.mocked(acnDelete).mockResolvedValue({
       request_id: 'r-3',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'agent-1',
       kind: 'join_request',
       status: 'withdrawn',
@@ -439,11 +439,11 @@ describe('subnet requests (ADR-0004)', () => {
       }
       if (path.startsWith('/subnets/s1/')) {
         return Promise.resolve({
-          subnet_id: 's1',
+          slug: 's1',
           items: [
             {
               request_id: 'r-a',
-              subnet_id: 's1',
+              slug: 's1',
               agent_id: 'a-x',
               kind: 'join_request',
               status: 'pending',
@@ -490,7 +490,7 @@ describe('subnet requests (ADR-0004)', () => {
 describe('subnet invitations (ADR-0004)', () => {
   it('send posts {agent_id, note?}', async () => {
     vi.mocked(acnPost).mockResolvedValue({
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'a-2',
       invitation_id: 'inv-1',
       status: 'pending',
@@ -518,7 +518,7 @@ describe('subnet invitations (ADR-0004)', () => {
     vi.mocked(acnPost).mockResolvedValue({
       auto_resolved: true,
       resolved_kind: 'join_request',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'a-3',
       request_id: 'r-merge',
     } as never);
@@ -531,7 +531,7 @@ describe('subnet invitations (ADR-0004)', () => {
 
   it('list hits GET /subnets/{sid}/invitations', async () => {
     vi.mocked(acnGet).mockResolvedValue({
-      subnet_id: 's1',
+      slug: 's1',
       items: [],
     } as never);
     await runSubnet(['invitations', 'list', 's1']);
@@ -546,7 +546,7 @@ describe('subnet invitations (ADR-0004)', () => {
       items: [
         {
           request_id: 'inv-9',
-          subnet_id: 's1',
+          slug: 's1',
           agent_id: 'agent-1',
           kind: 'invitation',
           status: 'pending',
@@ -568,7 +568,7 @@ describe('subnet invitations (ADR-0004)', () => {
   it('accept posts to /invitations/{iid}/accept', async () => {
     vi.mocked(acnPost).mockResolvedValue({
       request_id: 'inv-1',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'agent-1',
       kind: 'invitation',
       status: 'approved',
@@ -596,7 +596,7 @@ describe('subnet invitations (ADR-0004)', () => {
   it('reject posts to /invitations/{iid}/reject with optional note', async () => {
     vi.mocked(acnPost).mockResolvedValue({
       request_id: 'inv-2',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'agent-1',
       kind: 'invitation',
       status: 'rejected',
@@ -624,7 +624,7 @@ describe('subnet invitations (ADR-0004)', () => {
   it('cancel deletes /invitations/{iid}', async () => {
     vi.mocked(acnDelete).mockResolvedValue({
       request_id: 'inv-3',
-      subnet_id: 's1',
+      slug: 's1',
       agent_id: 'a-target',
       kind: 'invitation',
       status: 'withdrawn',

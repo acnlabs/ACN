@@ -45,7 +45,7 @@ async function runSubnet(args: string[]): Promise<void> {
 describe('subnet create (ADR-0003)', () => {
   const createResponse = {
     status: 'created',
-    subnet_id: 'subnet-test-1',
+    slug: 'subnet-test-1',
     is_public: true,
     gateway_a2a_url: 'https://gw/a2a/subnet-test-1',
     gateway_ws_url: 'https://gw/ws/subnet-test-1',
@@ -64,7 +64,7 @@ describe('subnet create (ADR-0003)', () => {
     vi.clearAllMocks();
   });
 
-  it('passes parent_subnet_id when --parent is set', async () => {
+  it('passes parent_slug when --parent is set', async () => {
     await runSubnet(['create', '--name', 'Squad', '--parent', 'net-parent']);
 
     expect(acnPost).toHaveBeenCalledTimes(1);
@@ -72,7 +72,7 @@ describe('subnet create (ADR-0003)', () => {
       '/subnets',
       expect.objectContaining({
         name: 'Squad',
-        parent_subnet_id: 'net-parent',
+        parent_slug: 'net-parent',
         is_private: false,
         lifecycle: 'persistent',
       })
@@ -171,7 +171,7 @@ describe('subnet promote', () => {
       base_url: 'https://api.test',
     });
     vi.mocked(acnPost).mockResolvedValue({
-      subnet_id: 'squad-1',
+      slug: 'squad-1',
       name: 'Squad',
       lifecycle: 'persistent',
       linked_task_id: null,

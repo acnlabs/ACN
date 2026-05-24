@@ -11,7 +11,7 @@ Fourteen handlers covering the three resources the ADR introduces:
   pending-invitation view.
 
 The join-entry verb (``POST /api/v1/agents/{agent_id}/subnets/
-{subnet_id}``) still lives in ``routes/agent_subnets.py`` (and the
+{slug}``) still lives in ``routes/agent_subnets.py`` (and the
 legacy mirror in ``routes/subnets.py``); both delegate to
 ``_subnet_membership.do_join_subnet`` which now dispatches the
 six-branch decision tree via ``JoinFlowService``.
@@ -109,7 +109,7 @@ _MAX_NOTE_LEN: int = 500
 
 
 class AllowlistAddBody(BaseModel):
-    """POST /api/v1/subnets/{subnet_id}/allowlist body."""
+    """POST /api/v1/subnets/{slug}/allowlist body."""
 
     agent_id: str = Field(..., min_length=1, max_length=128)
 
@@ -162,17 +162,17 @@ class CancelInvitationBody(_OptionalNoteBody):
 # leaks relationship metadata if exposed publicly).
 
 
-@router.post("/subnets/{subnet_id}/allowlist", status_code=201)
+@router.post("/subnets/{slug}/allowlist", status_code=201)
 @limiter.limit("30/minute")
 async def add_to_allowlist(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     body: AllowlistAddBody,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     agent_service: AgentServiceDep = None,
 ):
-    """Pre-authorise ``body.agent_id`` for ``subnet_id``'s allowlist.
+    """Pre-authorise ``body.agent_id`` for ``slug``'s allowlist.
 
     Owner-only. Idempotent failure (existing entry) returns 409
     ``ALREADY_ON_ALLOWLIST`` per ADR §"Allowlist endpoints" — the
@@ -185,7 +185,7 @@ async def add_to_allowlist(
     because the route is the only caller — pushing the existence
     check up here keeps the service-layer shape minimal.)
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
 
     try:
@@ -199,14 +199,14 @@ async def add_to_allowlist(
 
     try:
         entry = await subnet_service.add_allowlist(
-            subnet_id, body.agent_id, added_by=agent_info["agent_id"]
+            slug, body.agent_id, added_by=agent_info["agent_id"]
         )
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e
 
     logger.info(
         "subnet_allowlist_added_via_http",
-        slug=subnet_id,
+        slug=slug,
         agent_id=body.agent_id,
         added_by=agent_info["agent_id"],
     )
@@ -214,19 +214,19 @@ async def add_to_allowlist(
 
 
 @router.delete(
-    "/subnets/{subnet_id}/allowlist/{agent_id}",
+    "/subnets/{slug}/allowlist/{agent_id}",
     status_code=204,
     responses={**ACN_DEFAULT_RESPONSES, 204: {"description": "Entry removed"}},
 )
 @limiter.limit("30/minute")
 async def remove_from_allowlist(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_id: AgentIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
 ):
-    """Remove ``agent_id`` from ``subnet_id``'s allowlist (owner-only).
+    """Remove ``agent_id`` from ``slug``'s allowlist (owner-only).
 
     Idempotent per ADR §"Allowlist endpoints" — removing an entry
     that doesn't exist is a 204 (not a 404). This matches the
@@ -238,7 +238,7 @@ async def remove_from_allowlist(
     member if they had already joined. The route layer does not
     revoke membership.
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
 
     # Service-layer ``remove_allowlist`` is already idempotent (returns
@@ -246,31 +246,31 @@ async def remove_from_allowlist(
     # same either way per ADR §"Allowlist endpoints".
     try:
         await subnet_service.remove_allowlist(
-            subnet_id, agent_id, remover=agent_info["agent_id"]
+            slug, agent_id, remover=agent_info["agent_id"]
         )
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e
 
     logger.info(
         "subnet_allowlist_removed_via_http",
-        slug=subnet_id,
+        slug=slug,
         agent_id=agent_id,
         removed_by=agent_info["agent_id"],
     )
     return Response(status_code=204)
 
 
-@router.get("/subnets/{subnet_id}/allowlist")
+@router.get("/subnets/{slug}/allowlist")
 @limiter.limit("60/minute")
 async def list_allowlist(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    """List allowlist entries for ``subnet_id`` (owner-only).
+    """List allowlist entries for ``slug`` (owner-only).
 
     Owner-only by design per ADR §"GET /subnets/{s}/allowlist is
     owner-only deliberately" — the allowlist is a privacy-sensitive
@@ -281,19 +281,19 @@ async def list_allowlist(
     default page, 500 max page. Allowlists are bounded (no
     universal cap, but practical sizes are well under 500).
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
 
     entries = await subnet_service.list_allowlist(
-        subnet_id, limit=limit, offset=offset
+        slug, limit=limit, offset=offset
     )
     return {
         # ``slug`` is the canonical key after the Step 1 rename.
-        # The previous ``subnet_id`` field is intentionally not emitted
+        # The previous ``slug`` field is intentionally not emitted
         # alongside — its absence is what the route's tests pin via
-        # equality assertion. SDK clients that still read ``subnet_id``
+        # equality assertion. SDK clients that still read ``slug``
         # from this response shape must roll forward to ``slug``.
-        "slug": subnet_id,
+        "slug": slug,
         "entries": [serialize_allowlist_entry(e) for e in entries],
     }
 
@@ -314,11 +314,11 @@ async def list_allowlist(
 # leaking the existence of a row in the other namespace.
 
 
-@router.post("/subnets/{subnet_id}/join-requests/{request_id}/approve")
+@router.post("/subnets/{slug}/join-requests/{request_id}/approve")
 @limiter.limit("30/minute")
 async def approve_join_request(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
     body: ApproveBody | None = None,
@@ -336,13 +336,13 @@ async def approve_join_request(
     - ``subnet.join_approved`` webhook fires (logged-only stub
       pending Slice 2.4).
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
     note = body.note if body is not None else None
 
     try:
         row = await subnet_service.approve_join_request(
-            subnet_id,
+            slug,
             request_id,
             owner_id=agent_info["agent_id"],
             note=note,
@@ -353,11 +353,11 @@ async def approve_join_request(
     return serialize_join_request(row)
 
 
-@router.post("/subnets/{subnet_id}/join-requests/{request_id}/reject")
+@router.post("/subnets/{slug}/join-requests/{request_id}/reject")
 @limiter.limit("30/minute")
 async def reject_join_request(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
     body: RejectBody | None = None,
@@ -370,13 +370,13 @@ async def reject_join_request(
     endpoints" lets the owner record a human-readable reason in the
     audit trail.
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
     note = body.note if body is not None else None
 
     try:
         row = await subnet_service.reject_join_request(
-            subnet_id,
+            slug,
             request_id,
             owner_id=agent_info["agent_id"],
             note=note,
@@ -387,11 +387,11 @@ async def reject_join_request(
     return serialize_join_request(row)
 
 
-@router.delete("/subnets/{subnet_id}/join-requests/{request_id}")
+@router.delete("/subnets/{slug}/join-requests/{request_id}")
 @limiter.limit("30/minute")
 async def withdraw_join_request(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
     note: str | None = Query(default=None, description="Optional reason for withdrawal."),
@@ -408,7 +408,7 @@ async def withdraw_join_request(
 
     No membership change. ``subnet.join_withdrawn`` webhook fires.
     """
-    await load_subnet_or_404(subnet_service, subnet_id)
+    await load_subnet_or_404(subnet_service, slug)
 
     # Load + namespace-check the row up front so we can authz
     # against initiated_by. Wrong namespace → 404 surfaces here.
@@ -416,7 +416,7 @@ async def withdraw_join_request(
         row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="join_request",
-            expected_slug=subnet_id,
+            expected_slug=slug,
         )
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e
@@ -440,7 +440,7 @@ async def withdraw_join_request(
     # note comes from query param (P3-8: removed optional body on DELETE)
     try:
         withdrawn = await subnet_service.withdraw_join_request(
-            subnet_id,
+            slug,
             request_id,
             applicant_id=agent_info["agent_id"],
             note=note,
@@ -451,11 +451,11 @@ async def withdraw_join_request(
     return serialize_join_request(withdrawn)
 
 
-@router.get("/subnets/{subnet_id}/join-requests")
+@router.get("/subnets/{slug}/join-requests")
 @limiter.limit("60/minute")
 async def list_join_requests(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     status: Literal["pending", "approved", "rejected", "withdrawn"] | None = Query(
@@ -473,14 +473,14 @@ async def list_join_requests(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    """Owner lists join_request / allowlist_auto rows for ``subnet_id``.
+    """Owner lists join_request / allowlist_auto rows for ``slug``.
 
     ADR §"Application-side endpoints" forbids ``kind=invitation`` on
     this path; rejecting at the request boundary with 400
     ``INVALID_KIND_FILTER`` prevents SDK clients from accidentally
     surfacing invitation rows through the join-request channel.
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
 
     if kind == "invitation":
@@ -491,7 +491,7 @@ async def list_join_requests(
         )
 
     rows = await subnet_service.list_join_requests(
-        subnet_id,
+        slug,
         kind=kind,
         status=status,
         limit=limit,
@@ -499,7 +499,7 @@ async def list_join_requests(
     )
     return {
         # ``slug`` only — see allowlist endpoint for the rationale.
-        "slug": subnet_id,
+        "slug": slug,
         "items": [serialize_join_request(r) for r in rows],
     }
 
@@ -514,11 +514,11 @@ async def list_join_requests(
 # discriminates 202 (normal send) vs 200 (merge).
 
 
-@router.post("/subnets/{subnet_id}/invitations")
+@router.post("/subnets/{slug}/invitations")
 @limiter.limit("30/minute")
 async def send_invitation(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     body: InviteBody,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
@@ -540,7 +540,7 @@ async def send_invitation(
     - Target already has a pending invitation → 409
       ``INVITATION_PENDING`` with the existing id echoed.
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
 
     try:
@@ -554,7 +554,7 @@ async def send_invitation(
 
     try:
         result = await subnet_service.invite_agent(
-            subnet_id,
+            slug,
             body.agent_id,
             owner_id=agent_info["agent_id"],
             note=body.note,
@@ -568,11 +568,11 @@ async def send_invitation(
     return JSONResponse(status_code=status_code, content=payload)
 
 
-@router.post("/subnets/{subnet_id}/invitations/{request_id}/accept")
+@router.post("/subnets/{slug}/invitations/{request_id}/accept")
 @limiter.limit("30/minute")
 async def accept_invitation(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
     body: AcceptInvitationBody | None = None,
@@ -593,14 +593,14 @@ async def accept_invitation(
       path).
     - ``subnet.invitation_accepted`` webhook fires.
     """
-    await load_subnet_or_404(subnet_service, subnet_id)
+    await load_subnet_or_404(subnet_service, slug)
 
     # Load + namespace-check up front so authz uses the loaded row.
     try:
         row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_slug=subnet_id,
+            expected_slug=slug,
         )
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e
@@ -609,7 +609,7 @@ async def accept_invitation(
 
     try:
         accepted = await subnet_service.accept_invitation(
-            subnet_id,
+            slug,
             request_id,
             invitee_id=agent_info["agent_id"],
         )
@@ -621,12 +621,12 @@ async def accept_invitation(
     # the member; failure to write the back-ref leaves a
     # half-joined state we best-effort recover.
     try:
-        await agent_service.join_subnet(agent_info["agent_id"], subnet_id)
+        await agent_service.join_subnet(agent_info["agent_id"], slug)
     except AgentNotFoundException as e:
         logger.warning(
             "accept_invitation_back_ref_failed_agent_not_found",
             agent_id=agent_info["agent_id"],
-            slug=subnet_id,
+            slug=slug,
         )
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
@@ -637,7 +637,7 @@ async def accept_invitation(
         logger.error(
             "accept_invitation_back_ref_failed",
             agent_id=agent_info["agent_id"],
-            slug=subnet_id,
+            slug=slug,
             error=str(e),
             exc_info=True,
         )
@@ -648,17 +648,17 @@ async def accept_invitation(
         # already-decided check will surface 409 INVITATION_ALREADY_DECIDED
         # which is preferable to a permanent inconsistency.
         try:
-            await subnet_service.remove_member(subnet_id, agent_info["agent_id"])
+            await subnet_service.remove_member(slug, agent_info["agent_id"])
             logger.info(
                 "accept_invitation_rollback_ok",
                 agent_id=agent_info["agent_id"],
-                slug=subnet_id,
+                slug=slug,
             )
         except Exception as rollback_err:  # noqa: BLE001
             logger.error(
                 "accept_invitation_rollback_failed",
                 agent_id=agent_info["agent_id"],
-                slug=subnet_id,
+                slug=slug,
                 rollback_error=str(rollback_err),
             )
         raise HTTPException(
@@ -669,11 +669,11 @@ async def accept_invitation(
     return serialize_join_request(accepted)
 
 
-@router.post("/subnets/{subnet_id}/invitations/{request_id}/reject")
+@router.post("/subnets/{slug}/invitations/{request_id}/reject")
 @limiter.limit("30/minute")
 async def reject_invitation(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
     body: RejectInvitationBody | None = None,
@@ -684,13 +684,13 @@ async def reject_invitation(
     No membership change. ``subnet.invitation_rejected`` webhook
     fires. Optional ``note`` lets the invitee record a reason.
     """
-    await load_subnet_or_404(subnet_service, subnet_id)
+    await load_subnet_or_404(subnet_service, slug)
 
     try:
         row = await subnet_service.load_join_request_or_404(
             request_id,
             expected_kind="invitation",
-            expected_slug=subnet_id,
+            expected_slug=slug,
         )
     except JoinFlowError as e:
         raise _map_join_flow_error(e) from e
@@ -700,7 +700,7 @@ async def reject_invitation(
 
     try:
         rejected = await subnet_service.reject_invitation(
-            subnet_id,
+            slug,
             request_id,
             invitee_id=agent_info["agent_id"],
             note=note,
@@ -711,11 +711,11 @@ async def reject_invitation(
     return serialize_join_request(rejected)
 
 
-@router.delete("/subnets/{subnet_id}/invitations/{request_id}")
+@router.delete("/subnets/{slug}/invitations/{request_id}")
 @limiter.limit("30/minute")
 async def cancel_invitation(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     request_id: RequestIdPath,
     agent_info: AgentApiKeyDep,
     body: CancelInvitationBody | None = None,
@@ -731,13 +731,13 @@ async def cancel_invitation(
 
     ``subnet.invitation_canceled`` webhook fires.
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
     note = body.note if body is not None else None
 
     try:
         canceled = await subnet_service.cancel_invitation(
-            subnet_id,
+            slug,
             request_id,
             owner_id=agent_info["agent_id"],
             note=note,
@@ -748,11 +748,11 @@ async def cancel_invitation(
     return serialize_join_request(canceled)
 
 
-@router.get("/subnets/{subnet_id}/invitations")
+@router.get("/subnets/{slug}/invitations")
 @limiter.limit("60/minute")
 async def list_invitations(
     request: Request,
-    subnet_id: SubnetIdPath,
+    slug: SubnetIdPath,
     agent_info: AgentApiKeyDep,
     subnet_service: SubnetServiceDep = None,
     status: Literal["pending", "approved", "rejected", "withdrawn"] | None = Query(
@@ -761,23 +761,23 @@ async def list_invitations(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    """Owner lists invitation rows for ``subnet_id``.
+    """Owner lists invitation rows for ``slug``.
 
     Owner-only — invitees use the per-agent endpoint
     ``GET /agents/{a}/subnet-invitations`` for their own view.
     """
-    subnet = await load_subnet_or_404(subnet_service, subnet_id)
+    subnet = await load_subnet_or_404(subnet_service, slug)
     _require_owner(agent_info, subnet)
 
     rows = await subnet_service.list_invitations(
-        subnet_id,
+        slug,
         status=status,
         limit=limit,
         offset=offset,
     )
     return {
         # ``slug`` only — see allowlist endpoint for the rationale.
-        "slug": subnet_id,
+        "slug": slug,
         "items": [serialize_join_request(r) for r in rows],
     }
 

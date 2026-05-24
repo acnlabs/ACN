@@ -387,18 +387,11 @@ class TaskResponse(BaseModel):
     # frontend DeliverablesPanel can display the submitted content.
     submission: str | None = None
     submission_artifacts: list[dict] = Field(default_factory=list)
-    # Canonical field name after the Step 2 rename.
-    # ``subnet_id`` kept as a backward-compat serialization alias so
-    # existing frontend / SDK clients reading the old key don't break
-    # mid-rollout. Remove alias in Step 3 (frontend update).
     subnet_slug: str | None = Field(
         default=None,
-        serialization_alias="subnet_id",
         description="Subnet slug restricting task visibility (NULL=public).",
     )
     max_resubmit_attempts: int | None = None
-
-    model_config = ConfigDict(populate_by_name=True)
 
 class ParticipationResponse(BaseModel):
     """Participation response model"""
@@ -460,8 +453,7 @@ class TaskHistoryItem(BaseModel):
     participation_id: str | None = None
     subnet_slug: str | None = Field(
         default=None,
-        serialization_alias="subnet_id",
-        description="Subnet slug (legacy alias 'subnet_id' on output; removed in Step 3).",
+        description="Subnet slug (NULL=public).",
     )
 
     model_config = ConfigDict(populate_by_name=True)

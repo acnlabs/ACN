@@ -245,7 +245,7 @@ class AgentSearchOptions(BaseModel):
 
     skills: str | None = None
     status: AgentStatus | None = None
-    subnet_id: str | None = None
+    slug: str | None = None
 
 
 # ============================================
@@ -258,7 +258,7 @@ class SubnetInfo(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    id: str = Field(alias="subnet_id")
+    id: str = Field(validation_alias=AliasChoices("slug", "subnet_id"))
     name: str
     # Owner agent_id of the subnet. Defaults to ``""`` so older clients
     # talking to a server that does not yet expose ``owner`` still parse
@@ -284,7 +284,10 @@ class SubnetInfo(BaseModel):
     # in ``SubnetInfo`` responses — use ``parent_id`` (UUID) instead.
     # ``parent_subnet_id`` is kept here for backward-compat parsing of
     # responses from older server versions.
-    parent_subnet_id: str | None = None
+    parent_slug: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("parent_slug", "parent_subnet_id"),
+    )
     parent_id: str | None = None
     lifecycle: str = "persistent"
     linked_task_id: str | None = None
@@ -293,7 +296,7 @@ class SubnetInfo(BaseModel):
 class SubnetCreateRequest(BaseModel):
     """Subnet creation request.
 
-    ADR-0003 nesting params (``parent_subnet_id`` / ``lifecycle`` /
+    ADR-0003 nesting params (``parent_slug`` / ``lifecycle`` /
     ``linked_task_id``) are optional; defaults preserve the legacy
     "flat top-level persistent subnet" shape.
 
@@ -307,7 +310,7 @@ class SubnetCreateRequest(BaseModel):
     name: str
     description: str | None = None
     metadata: dict[str, Any] | None = None
-    parent_subnet_id: str | None = None
+    parent_slug: str | None = None
     lifecycle: str = "persistent"
     linked_task_id: str | None = None
     join_policy: str | None = None

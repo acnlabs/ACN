@@ -390,7 +390,7 @@ def invite_agent_result_to_response(
 # ---------------------------------------------------------------------------
 
 
-async def load_subnet_or_404(subnet_service: Any, subnet_id: str) -> Subnet:
+async def load_subnet_or_404(subnet_service: Any, slug: str) -> Subnet:
     """``SubnetService.get_subnet`` wrapped in the canonical 404 conversion.
 
     Every admission endpoint starts with a subnet lookup; the
@@ -399,10 +399,10 @@ async def load_subnet_or_404(subnet_service: Any, subnet_id: str) -> Subnet:
     ``_require_owner`` without re-fetching.
     """
     try:
-        return await subnet_service.get_subnet(subnet_id)
+        return await subnet_service.get_subnet(slug)
     except SubnetNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             404,
-            details={"slug": subnet_id},
+            details={"slug": slug},
         ) from e

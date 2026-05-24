@@ -124,7 +124,7 @@ export interface AgentSearchOptions {
   skills?: string;
   /** online (default) | offline | all. Public list does not include verification_code. */
   status?: AgentSearchStatus;
-  subnet_id?: string;
+  slug?: string;
 }
 
 // ============================================
@@ -134,12 +134,12 @@ export interface AgentSearchOptions {
 /** Subnet information */
 export interface SubnetInfo {
   /**
-   * Subnet identifier. The server wire field is `subnet_id`; some
-   * older responses may also surface `id`. Prefer `subnet_id` when
-   * present, falling back to `id`.
+   * Opaque UUID identifier from the persistence layer.
    */
   id: string;
-  /** Wire-side identifier (ADR-0003+ servers always emit this). */
+  /** URL-safe slug identifier (server wire field). */
+  slug?: string;
+  /** @deprecated Use `slug` instead. */
   subnet_id?: string;
   name: string;
   description?: string;
@@ -154,6 +154,8 @@ export interface SubnetInfo {
    * Use `parent_id` (UUID) instead.  Kept for backward-compat parsing
    * of responses from older server versions.
    */
+  parent_slug?: string | null;
+  /** @deprecated Use `parent_slug` instead. */
   parent_subnet_id?: string | null;
   /** ACL V6 B6 — parent subnet's opaque UUID. */
   parent_id?: string | null;
@@ -185,10 +187,10 @@ export interface SubnetCreateRequest {
   metadata?: Record<string, unknown>;
   /**
    * ADR-0003 nested-subnet parent. When set, the new subnet becomes a
-   * child of `parent_subnet_id`. Single-layer cap: the parent itself
+   * child of `parent_slug`. Single-layer cap: the parent itself
    * must be top-level. Immutable after creation.
    */
-  parent_subnet_id?: string;
+  parent_slug?: string;
   /**
    * ADR-0003 lifecycle. Defaults to `'persistent'` when omitted.
    * `'task_scoped'` requires `linked_task_id` and the subnet
@@ -214,7 +216,7 @@ export interface SubnetCreateRequest {
 /** Subnet creation response */
 export interface SubnetCreateResponse {
   success: boolean;
-  subnet_id: string;
+  slug: string;
   message: string;
 }
 
@@ -243,7 +245,7 @@ export interface SubnetAllowlistEntry {
 
 /** Response envelope for `subnetAllowlistList` (owner only). */
 export interface SubnetAllowlistListResponse {
-  subnet_id: string;
+  slug: string;
   entries: SubnetAllowlistEntry[];
   [key: string]: unknown;
 }
@@ -258,7 +260,7 @@ export interface SubnetAllowlistListResponse {
  */
 export interface SubnetJoinRequestRow {
   request_id: string;
-  subnet_id: string;
+  slug: string;
   kind: 'join_request' | 'allowlist_auto' | 'invitation';
   status: 'pending' | 'approved' | 'rejected' | 'withdrawn';
   initiated_by: string;
@@ -272,14 +274,14 @@ export interface SubnetJoinRequestRow {
 
 /** Response envelope for `subnetJoinRequestList` (owner only). */
 export interface SubnetJoinRequestListResponse {
-  subnet_id: string;
+  slug: string;
   items: SubnetJoinRequestRow[];
   [key: string]: unknown;
 }
 
 /** Response envelope for `subnetInvitationList` (owner only). */
 export interface SubnetInvitationListResponse {
-  subnet_id: string;
+  slug: string;
   items: SubnetJoinRequestRow[];
   [key: string]: unknown;
 }
@@ -666,7 +668,7 @@ export interface Task {
   required_tags?: string[];
   /** Reward in numeric form — convenience alias, equals `parseFloat(reward)`. */
   reward_amount?: number;
-  subnet_id: string | null;
+  subnet_slug: string | null;
   created_at: string;
   deadline?: string | null;
   use_escrow?: boolean;
@@ -705,7 +707,7 @@ export interface TaskCreateRequest {
   reward: string;
   /** Deadline in hours (1–2 160). Required. */
   deadline_hours: number;
-  subnet_id?: string | null;
+  subnet_slug?: string | null;
   /** Default: "credits" */
   reward_currency?: string;
   /** Default: 1 */
