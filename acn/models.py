@@ -476,6 +476,15 @@ class SubnetStub(BaseModel):
     ``acn-project-dev``) from the response. Authorised callers receive
     a full ``SubnetInfo`` which carries both identifiers.
 
+    Non-identifying aggregate fields
+    --------------------------------
+    ``member_count`` is a simple headcount — it reveals nothing about
+    *who* belongs to the subnet, only *how many* do. This mirrors the
+    practice of Discord/GitHub showing member/fork counts on private
+    resources. ``created_year_month`` is the creation date truncated to
+    year-month (e.g. ``"2026-05"``), which gives temporal context while
+    preventing fingerprinting from exact timestamps.
+
     Hierarchy
     ---------
     ``parent_id`` is the parent subnet's opaque UUID — same privacy
@@ -491,6 +500,26 @@ class SubnetStub(BaseModel):
         description="Parent subnet's opaque UUID. None for top-level subnets.",
     )
     lifecycle: Literal["persistent", "task_scoped"] = "persistent"
+    member_count: int | None = Field(
+        None,
+        description="Total number of members. Aggregate headcount; does not reveal identities.",
+    )
+    created_year_month: str | None = Field(
+        None,
+        description="Creation date truncated to YYYY-MM. Temporal context without exact-timestamp fingerprinting.",
+    )
+    harness_registered: bool = Field(
+        False,
+        description="Whether an Org Harness is registered. Boolean flag only — harness_url stays hidden.",
+    )
+    linked_task_id: str | None = Field(
+        None,
+        description=(
+            "Linked task UUID when lifecycle='task_scoped'. The task itself is "
+            "ACL-protected, so exposing the UUID enables graph hierarchy edges "
+            "without granting any new task-level access."
+        ),
+    )
 
 
 class SubnetCreateRequest(BaseModel):
