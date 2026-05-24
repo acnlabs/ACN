@@ -62,9 +62,9 @@ settings = get_settings()
 # on every Pydantic field. Path/query parameters were left unbounded because
 # Starlette's URL parser caps headers at ~64 KB anyway — but that ceiling
 # only stops the request *before* it hits the ASGI body middleware. A 60 KB
-# ``subnet_id`` still flows downstream into:
+# ``slug`` still flows downstream into:
 #
-#   - Redis key composition (``acn:subnet:{subnet_id}`` etc.) —— cardinality
+#   - Redis key composition (``acn:subnets:{slug}`` etc.) —— cardinality
 #     pressure on the keyspace, harder OPS-side cleanup.
 #   - SQL ``WHERE`` clauses — PostgreSQL accepts arbitrary VARCHAR but
 #     planner cost climbs with parameter size.
@@ -137,7 +137,7 @@ def _record_auth_failure(
     reason: str,
     request: Request | None = None,
     actor_id: str | None = None,
-    subnet_id: str = "",
+    slug: str = "",
     extra: dict | None = None,
 ) -> None:
     """Proxy-aware wrapper around ``monitoring.record_auth_failure``.
@@ -169,7 +169,7 @@ def _record_auth_failure(
         actor_id=actor_id,
         path=path,
         method=method,
-        slug=subnet_id,
+        slug=slug,
         extra=extra,
     )
 

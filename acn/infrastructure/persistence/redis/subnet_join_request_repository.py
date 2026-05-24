@@ -2,15 +2,15 @@
 
 Key layout (verbatim from ADR-0004 §"Redis layout and atomicity"):
 
-- ``acn:subnets:{subnet_id}:requests:{request_id}`` — HASH carrying
+- ``acn:subnets:{slug}:requests:{request_id}`` — HASH carrying
   the serialised ``SubnetJoinRequest`` fields.
-- ``acn:subnets:{subnet_id}:pending_by_agent:{agent_id}`` — STRING
+- ``acn:subnets:{slug}:pending_by_agent:{agent_id}`` — STRING
   whose value is the current pending ``request_id`` for that
   ``(subnet, agent)`` pair. The reverse pending index that
   enforces the "at most one pending per (subnet, agent) across
   all kinds" invariant Redis-side, equivalent to Postgres's
   ``UNIQUE … WHERE status='pending'`` partial index.
-- ``acn:subnets:{subnet_id}:requests`` — SET of all
+- ``acn:subnets:{slug}:requests`` — SET of all
   ``request_id``s for that subnet, used by ``GET /subnets/{s}/
   join-requests`` and ``/invitations``.
 - ``acn:agents:{agent_id}:subnet_invitations`` — SET of
@@ -74,7 +74,7 @@ logger = logging.getLogger(__name__)
 #
 # ARGV[1] = request_id (the value to SET into KEYS[1] and SADD into KEYS[3])
 # ARGV[2] = kind discriminator ('invitation' or other)
-# ARGV[3] = subnet_id:request_id composite key (the value SADD'd into
+# ARGV[3] = slug:request_id composite key (the value SADD'd into
 #           KEYS[4] when ARGV[2]='invitation'; ignored otherwise). The
 #           composite key lets ``list_pending_invitations_for_agent``
 #           dereference each entry to its subnet HASH directly without
@@ -108,7 +108,7 @@ return {'created', ARGV[1]}
 #
 # ARGV[1] = request_id  (no longer used; kept for ABI symmetry with create)
 # ARGV[2] = kind discriminator ('invitation' or other)
-# ARGV[3] = subnet_id:request_id composite key (to SREM from KEYS[3] —
+# ARGV[3] = slug:request_id composite key (to SREM from KEYS[3] —
 #           must match the SADD value the create path used or the
 #           invitations SET leaks the obsolete entry)
 # ARGV[4..N] = HSET field/value pairs (even count)
@@ -130,7 +130,7 @@ def _invitation_set_member(slug: str, request_id: str) -> str:
     """The composite key used as a member of
     ``acn:agents:{a}:subnet_invitations``.
 
-    Storing ``subnet_id:request_id`` (rather than the bare
+    Storing ``slug:request_id`` (rather than the bare
     request_id) lets ``list_pending_invitations_for_agent``
     dereference each entry to its subnet HASH directly — fixing the
     O(N·S·k) full-keyspace scan that the bare-request_id storage
@@ -257,7 +257,7 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
     async def find_by_id(self, request_id: str) -> SubnetJoinRequest | None:
         """Look up by request_id.
 
-        Redis layout indexes by ``(subnet_id, request_id)``; a
+        Redis layout indexes by ``(slug, request_id)``; a
         request_id-only lookup requires scanning the listing SETs.
         Heavy operation — only used by admin / debugging paths;
         the route layer prefers ``find_pending_for(subnet, agent)``
@@ -370,8 +370,8 @@ class RedisSubnetJoinRequestRepository(ISubnetJoinRequestRepository):
         rows: list[SubnetJoinRequest] = []
         for raw_member in raw_members:
             member = _decode(raw_member)
-            # Composite member format: ``subnet_id:request_id``. Split
-            # on the FIRST ``:`` only — subnet_id is colon-free in
+            # Composite member format: ``slug:request_id``. Split
+            # on the FIRST ``:`` only — slug is colon-free in
             # this codebase but defence in depth.
             if ":" not in member:
                 # Legacy bare-rid member (pre-B1 fix). Skip — there is

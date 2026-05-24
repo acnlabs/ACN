@@ -97,7 +97,7 @@ interface AgentInvitationsResponse {
 // see ADR-0004 §"join branches" and
 // ``_subnet_admission.py::join_flow_result_to_response``. We discriminate
 // on body shape (not HTTP status, which the fetch wrapper doesn't expose).
-// All variants carry ``subnet_id`` + ``agent_id``.
+// All variants carry ``slug`` + ``agent_id``.
 type JoinResponseBody =
   | { status: 'joined'; slug: string; agent_id: string } // branches 1+2
   | {
