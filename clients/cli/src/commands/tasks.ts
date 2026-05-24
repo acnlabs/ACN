@@ -16,6 +16,7 @@ interface TaskInfo {
   created_at?: string;
   deadline?: string;
   max_resubmit_attempts?: number | null;
+  subnet_slug?: string | null;
 }
 
 interface TaskHistoryItem {
@@ -62,6 +63,7 @@ function formatTask(t: TaskInfo): string {
   if (t.reward && t.reward !== '0') {
     lines.push(`  Reward   : ${t.reward} ${t.reward_currency ?? ''}`);
   }
+  if (t.subnet_slug) lines.push(`  Subnet   : ${t.subnet_slug}`);
   if (t.description) lines.push(`  Desc     : ${t.description.slice(0, 120)}`);
   if (t.created_at) lines.push(`  Created  : ${t.created_at}`);
   if (t.deadline) lines.push(`  Deadline : ${t.deadline}`);
@@ -186,6 +188,7 @@ export function tasksCommand(): Command {
     .option('--type <type>', 'Task type (e.g. coding, general)', 'general')
     .option('--max-participants <n>', 'Max participants (default: 1)', '1')
     .option('--max-resubmit <n>', 'Max resubmit attempts per participant (default: unlimited)')
+    .option('--subnet <slug>', 'Subnet slug to scope the task to (agent must be a member)')
     .action(
       async (opts: {
         title: string;
@@ -197,6 +200,7 @@ export function tasksCommand(): Command {
         type?: string;
         maxParticipants?: string;
         maxResubmit?: string;
+        subnet?: string;
       }) => {
         const config = loadConfig();
         if (!config.api_key) {
@@ -217,6 +221,9 @@ export function tasksCommand(): Command {
         };
         if (opts.maxResubmit !== undefined) {
           body.max_resubmit_attempts = parseInt(opts.maxResubmit, 10);
+        }
+        if (opts.subnet) {
+          body.subnet_slug = opts.subnet;
         }
         try {
           const task = await acnPost<TaskInfo>('/tasks/agent/create', body);

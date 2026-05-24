@@ -219,6 +219,31 @@ class MessageService:
 
         return await self.router.get_inbox(agent_id, limit, consume)
 
+    async def update_inbox_message_status(
+        self,
+        agent_id: str,
+        route_id: str,
+        status: str,
+    ) -> bool:
+        """Update the lifecycle status of a specific inbox message.
+
+        Args:
+            agent_id: Agent whose inbox to update.
+            route_id: ``route_id`` of the target message.
+            status: New status (``"unread"``, ``"read"``, ``"processed"``).
+
+        Returns:
+            True if the message was found and updated.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+        """
+        agent = await self.agent_repository.find_by_id(agent_id)
+        if not agent:
+            raise AgentNotFoundException(f"Agent {agent_id} not found")
+
+        return await self.router.update_inbox_message_status(agent_id, route_id, status)
+
     async def register_handler(
         self,
         agent_id: str,

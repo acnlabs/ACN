@@ -1139,6 +1139,24 @@ async def get_message_history(
         raise HTTPException(status_code=500, detail="Failed to retrieve inbox") from e
 
 
+_VALID_INBOX_STATUSES = frozenset({"unread", "read", "processed"})
+
+
+class UpdateMessageStatusRequest(BaseModel):
+    status: str = Field(
+        ...,
+        max_length=16,
+        description="New lifecycle status. Accepted values: unread, read, processed.",
+    )
+
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, v: str) -> str:
+        if v not in _VALID_INBOX_STATUSES:
+            raise ValueError(f"status must be one of: {sorted(_VALID_INBOX_STATUSES)}")
+        return v
+
+
 class AckInboxRequest(BaseModel):
     # Cap the batch — H6 body cap already limits total bytes, but list
     # length is the more meaningful semantic guard for ack endpoints.
@@ -1192,6 +1210,67 @@ async def ack_message_history(
     except Exception as e:
         logger.error("inbox_ack_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to acknowledge message") from e
+
+
+@router.patch("/history/{agent_id}/{route_id}")
+@limiter.limit("120/minute")
+async def update_inbox_message_status(
+    request: Request,
+    agent_id: str,
+    route_id: str,
+    body: UpdateMessageStatusRequest,
+    agent_info: AgentApiKeyDep,
+    message_service: MessageServiceDep = None,
+):
+    """Update the lifecycle status of a specific inbox message.
+
+    Allowed status values: ``unread``, ``read``, ``processed``.
+
+    An agent may only update its own inbox (API key must match agent_id).
+    Returns 404 if the ``route_id`` is not present in the inbox.
+    """
+    if agent_info["agent_id"] != agent_id:
+        raise ACNHTTPError(
+            ErrorCode.API_KEY_AGENT_MISMATCH,
+            403,
+            details={
+                "path_agent": agent_id,
+                "key_agent": agent_info["agent_id"],
+            },
+        )
+    try:
+        updated = await message_service.update_inbox_message_status(
+            agent_id=agent_id,
+            route_id=route_id,
+            status=body.status,
+        )
+        if not updated:
+            raise ACNHTTPError(
+                ErrorCode.AGENT_NOT_FOUND,
+                404,
+                details={"route_id": route_id},
+            )
+        logger.info(
+            "inbox_message_status_updated",
+            agent_id=agent_id,
+            route_id=route_id,
+            status=body.status,
+        )
+        return {"agent_id": agent_id, "route_id": route_id, "status": body.status}
+
+    except ACNHTTPError:
+        raise
+
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    except Exception as e:
+        logger.error("inbox_status_update_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update message status") from e
 
 
 @router.post("/retry-dlq")

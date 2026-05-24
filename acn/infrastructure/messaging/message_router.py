@@ -822,6 +822,45 @@ class MessageRouter:
         await self.redis.zrem(key, *to_remove)
         return len(to_remove)
 
+    async def update_inbox_message_status(
+        self,
+        agent_id: str,
+        route_id: str,
+        status: str,
+    ) -> bool:
+        """Update the lifecycle status of a specific inbox message.
+
+        The inbox ZSET stores opaque JSON blobs as members — in-place field
+        updates require a ZRANGE scan to locate the member, ZREM to remove it,
+        then ZADD to re-insert with the updated status field.  The score
+        (timestamp) is preserved so ordering is unchanged.
+
+        Args:
+            agent_id: Agent whose inbox to update.
+            route_id: ``route_id`` of the message to update.
+            status: New status value (``"unread"``, ``"read"``, ``"processed"``).
+
+        Returns:
+            True if the message was found and updated, False if not found.
+        """
+        key = f"acn:inbox:{agent_id}"
+        raw_members = await self.redis.zrange(key, 0, -1, withscores=True)
+        for raw, score in raw_members:
+            member = raw.decode() if isinstance(raw, bytes) else raw
+            try:
+                entry = json.loads(member)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if entry.get("route_id") == route_id:
+                entry["status"] = status
+                updated_member = json.dumps(entry)
+                pipe = self.redis.pipeline(transaction=True)
+                pipe.zrem(key, member)
+                pipe.zadd(key, {updated_member: score})
+                await pipe.execute()
+                return True
+        return False
+
     async def get_inbox(
         self,
         agent_id: str,
@@ -995,6 +1034,7 @@ class MessageRouter:
         """
         key = f"acn:inbox:{to_agent}"
         score = datetime.now(UTC).timestamp()
+        log_entry.setdefault("status", "unread")
         async with self.redis.pipeline(transaction=False) as pipe:
             pipe.zadd(key, {json.dumps(log_entry): score})
             pipe.zremrangebyrank(key, 0, -(_INBOX_CAP + 1))
