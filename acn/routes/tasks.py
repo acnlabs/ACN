@@ -882,7 +882,7 @@ async def get_task(
                 message="Authentication required to view this task.",
                 details={
                     "task_id": task_id,
-                    "subnet_id": task.subnet_slug,
+                    "slug": task.subnet_slug,
                     "reason": "anonymous_caller",
                 },
             )
@@ -893,7 +893,7 @@ async def get_task(
                 403,
                 details={
                     "task_id": task_id,
-                    "subnet_id": task.subnet_slug,
+                    "slug": task.subnet_slug,
                     "agent_id": caller_id,
                     "reason": "not_member",
                 },
@@ -962,7 +962,7 @@ async def create_task(
                     403,
                     message="You must be a member of the subnet to create a task within it.",
                     details={
-                        "subnet_id": body.subnet_slug,
+                        "slug": body.subnet_slug,
                         "reason": "creator_not_subnet_member",
                     },
                 )
@@ -1057,7 +1057,7 @@ async def accept_task(
                 403,
                 details={
                     "task_id": task_id,
-                    "subnet_id": task.subnet_slug,
+                    "slug": task.subnet_slug,
                     "reason": "not_subnet_member",
                 },
             )
@@ -1318,7 +1318,7 @@ async def list_participations(
                     403,
                     details={
                         "task_id": task_id,
-                        "subnet_id": task.subnet_slug,
+                        "slug": task.subnet_slug,
                         "reason": "not_member",
                     },
                 )
@@ -1555,7 +1555,7 @@ async def agent_create_task(
                 403,
                 message="Agent must be a member of the subnet to create a task within it.",
                 details={
-                    "subnet_id": body.subnet_slug,
+                    "slug": body.subnet_slug,
                     "reason": "creator_not_subnet_member",
                 },
             )
@@ -1616,7 +1616,7 @@ async def agent_accept_task(
                 403,
                 details={
                     "task_id": task_id,
-                    "subnet_id": task_entity.subnet_slug,
+                    "slug": task_entity.subnet_slug,
                     "reason": "not_subnet_member",
                 },
             )
