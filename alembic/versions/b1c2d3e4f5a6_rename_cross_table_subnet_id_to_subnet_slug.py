@@ -6,7 +6,7 @@ Create Date: 2026-05-24
 
 Step 2 of the slug-rename migration (ADR slug rename).
 
-Step 1 (``a1b2c3d4e5f6``) renamed the Postgres PK column of the
+Step 1 (``a1b2c3d4e5f7``) renamed the Postgres PK column of the
 ``subnets`` table from ``subnet_id`` → ``slug`` and the self-reference
 ``parent_subnet_id`` → ``parent_slug``.
 
@@ -35,7 +35,7 @@ from __future__ import annotations
 from alembic import op
 
 revision: str = "b1c2d3e4f5a6"
-down_revision: str | None = "a1b2c3d4e5f6"
+down_revision: str | None = "a1b2c3d4e5f7"
 branch_labels = None
 depends_on = None
 
