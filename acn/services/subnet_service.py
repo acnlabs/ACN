@@ -1679,3 +1679,121 @@ class SubnetService:
         """
         repo = self._require_join_repo()
         return await repo.list_pending_invitations_for_agent(agent_id)
+
+    # ------------------------------------------------------------------
+    # Ownership transfer (ADR-0005: Subnet ownership transfer)
+    # ------------------------------------------------------------------
+
+    async def transfer_owner(
+        self,
+        slug: str,
+        current_owner: str,
+        new_owner: str,
+    ) -> Subnet:
+        """Transfer subnet ownership from ``current_owner`` to ``new_owner``.
+
+        Implements ADR-0005. Prevents the "orphan subnet" failure mode
+        described in ADR-0004 §"Out of scope": when an owner agent goes
+        dark or its key is revoked, ownership can be handed off before
+        that happens so the approval / invitation / allowlist workflows
+        remain reachable.
+
+        Business rules:
+
+        - Only the current owner may invoke this (``PermissionError`` on
+          mismatch — route maps it to ``OWNERSHIP_MISMATCH 403``).
+        - Reserved subnets (``public``/``system``) cannot be transferred
+          (``PermissionError`` — same 403 surface).
+        - ``new_owner`` must differ from ``current_owner`` (``ValueError``
+          — route maps to ``INVALID_REQUEST 400``).
+        - ``new_owner`` must not be the reserved platform identities
+          ``"backend@internal"`` (ADR-0002) or ``"system"``
+          (``ValueError`` — same 400). These guards run unconditionally,
+          regardless of whether ``agent_repository`` is wired.
+        - ``new_owner`` must be a registered agent when
+          ``agent_repository`` is wired (``ValueError`` — same 400).
+        - After the owner field is updated, ``new_owner`` is added to the
+          subnet's member set (idempotent — ``set.add`` is a no-op if
+          already a member, matching the ADR-0001 invariant that the owner
+          is always a member).
+
+        Child-subnet note (ADR-0003)
+        ----------------------------
+        When transferring a child subnet, the ``new_owner`` is added to
+        the child's member set by direct set mutation, deliberately
+        bypassing :meth:`add_member`'s parent-membership check — the same
+        deliberate bypass documented in :meth:`create_subnet`. The owner
+        is allowed to be outside the parent subnet (delegated-admin
+        pattern). See ``create_subnet`` for the full rationale.
+
+        Args:
+            slug: Subnet to transfer.
+            current_owner: Authenticated agent making the request.
+            new_owner: Agent that will become the new owner.
+
+        Returns:
+            Updated subnet entity with ``owner == new_owner``.
+
+        Raises:
+            SubnetNotFoundException: Subnet does not exist.
+            PermissionError: ``current_owner`` does not own the subnet,
+                or the subnet is a reserved system subnet.
+            ValueError: Any of — ``new_owner == current_owner``;
+                ``new_owner`` is ``"backend@internal"`` or ``"system"``;
+                ``new_owner`` is not a registered agent (when repo wired).
+        """
+        subnet = await self.get_subnet(slug)
+
+        if subnet.owner != current_owner:
+            raise PermissionError(
+                f"Owner mismatch: {current_owner} != {subnet.owner}"
+            )
+
+        if slug in {"public", "system"}:
+            raise PermissionError(f"Cannot transfer system subnet: {slug}")
+
+        if new_owner == current_owner:
+            raise ValueError("new_owner must differ from current_owner")
+
+        # ADR-0002 defence-in-depth — unconditional, same guard as create_subnet.
+        if new_owner == "backend@internal":
+            raise ValueError(
+                "ADR-0002: 'backend@internal' is not a valid subnet owner; "
+                "use a registered service-account agent as transfer target."
+            )
+
+        # Prevent elevating to the reserved platform identity.
+        if new_owner == "system":
+            raise ValueError(
+                "'system' is a reserved platform identity and cannot be "
+                "used as a subnet owner."
+            )
+
+        if self.agent_repository is not None:
+            agent = await self.agent_repository.find_by_id(new_owner)
+            if agent is None:
+                raise ValueError(
+                    f"Agent '{new_owner}' is not registered; "
+                    "transfer target must be a registered agent"
+                )
+
+        # Explicit set copy: dataclasses.replace shallow-copies fields;
+        # without this, new_members would share identity with subnet.member_agent_ids.
+        # Direct set.add (not add_member): intentionally bypasses parent-membership
+        # check for child subnets — same deliberate decision as create_subnet.
+        new_members = set(subnet.member_agent_ids)
+        new_members.add(new_owner)
+        transferred = dataclasses.replace(
+            subnet,
+            owner=new_owner,
+            member_agent_ids=new_members,
+        )
+        await self.repository.save(transferred)
+
+        logger.info(
+            "subnet_owner_transferred",
+            slug=slug,
+            previous_owner=current_owner,
+            new_owner=new_owner,
+        )
+        return transferred

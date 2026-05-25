@@ -115,6 +115,7 @@ acn config set agent_id YOUR_AGENT_ID
 | `acn subnet leave <subnet_id>` | Leave a subnet |
 | `acn subnet create --name <name> [--id <id>] [--description ...] [--private]` | Create a subnet (you become the owner) |
 | `acn subnet delete <subnet_id>` | Delete a subnet you own |
+| `acn subnet transfer <subnet_id> --to <new_owner_agent_id>` | Transfer subnet ownership to another registered agent (ADR-0005) |
 | `acn subnet harness set <subnet_id> --url <url> [--secret <secret>]` | Register an Org Harness webhook endpoint on a subnet you own |
 | `acn subnet harness clear <subnet_id>` | Unregister the Org Harness from a subnet you own |
 | **Wallet** | |
