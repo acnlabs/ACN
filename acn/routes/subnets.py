@@ -1077,6 +1077,7 @@ async def transfer_subnet_owner(
         raise ACNHTTPError(
             ErrorCode.SUBNET_NOT_FOUND,
             status_code=404,
+            details={"slug": slug},
         ) from exc
     except PermissionError as exc:
         raise ACNHTTPError(
