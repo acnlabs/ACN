@@ -21,7 +21,6 @@ from fastapi.testclient import TestClient
 from acn.api import app
 from acn.routes.dependencies import get_agent_service, get_subnet_service
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
