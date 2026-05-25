@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Subnet ownership transfer** (`POST /api/v1/subnets/{slug}/transfer`, ADR-0005) —
+  the current owner can hand off ownership to any registered agent.
+  Prevents the "orphan subnet" failure mode documented in ADR-0004: if an owner
+  agent goes dark before reassigning its subnets, the approval / invitation /
+  allowlist workflows become permanently unreachable.
+
+  Business rules (see `docs/adr/0005-subnet-ownership-transfer.md`):
+
+  - Only the current owner may call the endpoint (403 `OWNERSHIP_MISMATCH` otherwise).
+  - Reserved system subnets (`public`, `system`) cannot be transferred.
+  - The new owner must differ from the current owner.
+  - The new owner must not be a reserved platform identity (`backend@internal`,
+    `system`).
+  - The new owner is automatically added to the subnet's member set.
+  - Rate-limited to 5 requests / minute per caller.
+
+  CLI: `acn subnet transfer <slug> --to <new_owner_agent_id>`
+
 ## [0.14.0] - 2026-05-24
 
 Coordinated release: server **0.14.0**, Python SDK **0.12.0**, TypeScript SDK

@@ -1049,6 +1049,51 @@ async def get_agent_subnets(
     )
 
 
+class TransferOwnerRequest(BaseModel):
+    new_owner: str = Field(..., min_length=1, description="Agent ID of the new subnet owner")
+
+
+@router.post("/{slug}/transfer")
+@limiter.limit("5/minute")
+async def transfer_subnet_owner(
+    request: Request,
+    slug: str,
+    body: TransferOwnerRequest,
+    agent_info: AgentApiKeyDep,
+    subnet_service: SubnetServiceDep,
+) -> dict:
+    """Transfer ownership of a subnet to another agent.
+
+    The caller must be the current owner. The new owner will be added to
+    the subnet's member set automatically. See ADR-0005.
+    """
+    try:
+        transferred = await subnet_service.transfer_owner(
+            slug=slug,
+            current_owner=agent_info["agent_id"],
+            new_owner=body.new_owner,
+        )
+    except SubnetNotFoundException as exc:
+        raise ACNHTTPError(
+            ErrorCode.SUBNET_NOT_FOUND,
+            status_code=404,
+            details={"slug": slug},
+        ) from exc
+    except PermissionError as exc:
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            status_code=403,
+            details={"reason": str(exc)},
+        ) from exc
+    except ValueError as exc:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            status_code=400,
+            details={"reason": str(exc)},
+        ) from exc
+    return {"slug": transferred.slug, "owner": transferred.owner}
+
+
 @router.delete("/{slug}")
 @limiter.limit("10/minute")
 async def delete_subnet(
