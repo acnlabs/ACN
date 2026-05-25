@@ -270,6 +270,18 @@ class AgentJoinResponse(BaseModel):
     heartbeat_endpoint: str = Field(..., description="Heartbeat endpoint")
     agent_card_url: str = Field(..., description="URL to retrieve the stored Agent Card")
 
+    # Reachability probe result (soft check — False means the server didn't respond
+    # to a HEAD probe at registration time, but registration still succeeded).
+    endpoint_reachable: bool = Field(
+        default=True,
+        description=(
+            "Whether the registered endpoint responded to a health probe at "
+            "registration time. False means DNS resolved but the server did not "
+            "answer within the probe timeout — messages will fall back to inbox "
+            "until the endpoint becomes reachable."
+        ),
+    )
+
 
 def _extract_jsonrpc_endpoint_from_agent_card(agent_card: dict) -> str | None:
     """Return the direct JSON-RPC URL from v1 interfaces or legacy v0.3 url."""
@@ -303,22 +315,91 @@ def _validate_resolved_a2a_endpoint(endpoint: str) -> None:
         ) from e
 
 
+async def _probe_endpoint_http(endpoint: str, *, timeout: float = 3.0) -> bool:
+    """Send a HEAD request to *endpoint*; return True if any HTTP response arrives.
+
+    A JSON-RPC-only server that rejects HEAD with 405 Method Not Allowed is
+    still considered reachable — any HTTP response proves the host is live.
+    Returns False on connection errors, timeouts, or SSL handshake failures.
+    The caller decides whether to hard-block or surface a soft warning.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            await client.head(endpoint)
+        return True
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError):
+        return False
+    except Exception:  # noqa: BLE001 — any other transport failure = unreachable
+        return False
+
+
+async def _check_endpoint_reachability(endpoint: str) -> bool:
+    """Run the two-layer reachability check for a direct A2A endpoint.
+
+    Layer 1 — DNS resolution (hard fail):
+        Calls ``safe_resolve_target`` so that a hostname that can't be
+        resolved (NXDOMAIN) or resolves to a private/blocked range is
+        rejected immediately with a 400. This catches typos and
+        not-yet-provisioned DNS records before they enter the registry.
+
+    Layer 2 — HTTP HEAD probe (soft warning):
+        Calls ``_probe_endpoint_http``; failures are logged but do NOT
+        block registration. The caller receives the result as
+        ``endpoint_reachable`` in the join/register response so that
+        agents can detect misconfigured servers without being hard-rejected
+        (the server may not be deployed yet at join time).
+
+    Raises:
+        HTTPException(400): if DNS resolution or SSRF guard fails.
+
+    Returns:
+        True if the HTTP probe succeeds, False if the probe times out or
+        the connection is refused (i.e. DNS resolved but server is down).
+    """
+    try:
+        await safe_resolve_target(endpoint, allow_loopback=settings.dev_mode)
+    except SSRFViolation as e:
+        logger.warning("endpoint_dns_check_failed", endpoint=endpoint, reason=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail="Endpoint host cannot be resolved or is not in an allowed address range.",
+        ) from e
+
+    reachable = await _probe_endpoint_http(endpoint)
+    if not reachable:
+        logger.warning("endpoint_http_probe_failed", endpoint=endpoint)
+    return reachable
+
+
 async def _resolve_registration_endpoint(
     *,
     direct_endpoint: str | None,
     agent_card_url: str | None,
     agent_card: dict | None,
-) -> tuple[str, dict | None]:
-    """Resolve the direct A2A endpoint while preserving the discovery card."""
+) -> tuple[str, dict | None, bool]:
+    """Resolve the direct A2A endpoint while preserving the discovery card.
+
+    Returns ``(endpoint, agent_card, endpoint_reachable)``.
+
+    ``endpoint_reachable`` reflects the HTTP HEAD probe result:
+    - True  → server responded (any HTTP status counts as reachable)
+    - False → DNS resolved but no HTTP response within the probe timeout
+
+    DNS failures are hard errors (raise HTTPException); HTTP probe
+    failures are soft — callers propagate the flag to the client so
+    the agent operator knows the server isn't answering yet.
+    """
     if direct_endpoint:
         _validate_resolved_a2a_endpoint(direct_endpoint)
-        return direct_endpoint, agent_card
+        reachable = await _check_endpoint_reachability(direct_endpoint)
+        return direct_endpoint, agent_card, reachable
 
     if agent_card:
         direct_endpoint = _extract_jsonrpc_endpoint_from_agent_card(agent_card)
         if direct_endpoint:
             _validate_resolved_a2a_endpoint(direct_endpoint)
-            return direct_endpoint, agent_card
+            reachable = await _check_endpoint_reachability(direct_endpoint)
+            return direct_endpoint, agent_card, reachable
 
     if not agent_card_url:
         raise HTTPException(
@@ -346,8 +427,11 @@ async def _resolve_registration_endpoint(
             detail="A2A Agent Card does not include a JSON-RPC delivery URL",
         )
     _validate_resolved_a2a_endpoint(direct_endpoint)
+    # The card URL was already fetched successfully, so at minimum the card host
+    # is alive. Still probe the extracted endpoint — it may differ from the card URL.
+    reachable = await _check_endpoint_reachability(direct_endpoint)
 
-    return direct_endpoint, fetched_card
+    return direct_endpoint, fetched_card, reachable
 
 
 class AgentClaimRequest(BaseModel):
@@ -466,7 +550,7 @@ async def dev_register_agent(
             )
 
     try:
-        endpoint, agent_card = await _resolve_registration_endpoint(
+        endpoint, agent_card, _ = await _resolve_registration_endpoint(
             direct_endpoint=request.get_direct_a2a_endpoint(),
             agent_card_url=request.agent_card_url,
             agent_card=request.agent_card,
@@ -673,7 +757,7 @@ async def register_agent(
             )
 
     try:
-        endpoint, agent_card = await _resolve_registration_endpoint(
+        endpoint, agent_card, _ = await _resolve_registration_endpoint(
             direct_endpoint=request.get_direct_a2a_endpoint(),
             agent_card_url=request.agent_card_url,
             agent_card=request.agent_card,
@@ -1139,7 +1223,7 @@ async def _join_agent_impl(
         if body.wallet_address and "ethereum" not in wallet_addresses:
             wallet_addresses["ethereum"] = body.wallet_address
 
-        endpoint, agent_card = await _resolve_registration_endpoint(
+        endpoint, agent_card, endpoint_reachable = await _resolve_registration_endpoint(
             direct_endpoint=body.get_direct_a2a_endpoint(),
             agent_card_url=body.agent_card_url,
             agent_card=body.agent_card,
@@ -1197,6 +1281,7 @@ async def _join_agent_impl(
             tasks_endpoint=f"{base_url}/api/v1/tasks",
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
             agent_card_url=f"{base_url}/api/v1/agents/{agent.agent_id}/.well-known/agent-card.json",
+            endpoint_reachable=endpoint_reachable,
         )
     except ACNHTTPError:
         raise

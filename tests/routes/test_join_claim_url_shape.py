@@ -26,11 +26,16 @@ We test ``_join_agent_impl`` directly rather than going through the
 FastAPI route because the route adds rate-limit / SlowAPI / SSRF /
 background-task plumbing that has nothing to do with this string
 contract — adding all of it would dilute the test's signal.
+
+``_resolve_registration_endpoint`` is mocked here because it performs
+real DNS lookups and HTTP probes; those behaviours are tested separately
+in ``test_endpoint_reachability.py``. This file cares only about the
+``claim_url`` shape after a successful endpoint resolution.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import BackgroundTasks
@@ -77,12 +82,16 @@ async def test_claim_url_uses_query_token_form(stub_join_service, fake_agent):
     the old ``…/claim/<agent_id>/<token>`` path-segment form is what
     silently 404'd in production. Any future change that reintroduces
     the path form must fail this test."""
-    resp = await _join_agent_impl(
-        _make_body(),
-        BackgroundTasks(),
-        ref=None,
-        agent_service=stub_join_service,
-    )
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True)),
+    ):
+        resp = await _join_agent_impl(
+            _make_body(),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+        )
 
     aid = fake_agent.agent_id
     token = fake_agent.verification_code
@@ -109,12 +118,16 @@ async def test_claim_url_url_encodes_reserved_characters(stub_join_service, fake
     survives as its percent-encoded form."""
     fake_agent.verification_code = "with/slash&amp=eq?qmark#hash"
 
-    resp = await _join_agent_impl(
-        _make_body(),
-        BackgroundTasks(),
-        ref=None,
-        agent_service=stub_join_service,
-    )
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True)),
+    ):
+        resp = await _join_agent_impl(
+            _make_body(),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+        )
 
     # Every reserved char must come out percent-encoded so the
     # query string parses to a single ``token`` param value.
