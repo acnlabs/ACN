@@ -1370,6 +1370,10 @@ async def search_agents(
     ),
     owner: str | None = None,
     name: str | None = None,
+    subnet: str | None = Query(
+        default=None,
+        description="Filter by subnet slug — only agents that are members of this subnet are returned.",
+    ),
     limit: int = Query(
         default=200,
         ge=1,
@@ -1424,6 +1428,30 @@ async def search_agents(
     if not is_admin and visibility != "real":
         visibility = "real"
 
+    # ACL: if ?subnet= is given, verify the subnet exists and that the caller
+    # is allowed to enumerate its members. Private subnets are only queryable
+    # by members (via agent API key) or admins.
+    if subnet:
+        subnet_entity = await subnet_service.get_subnet(subnet)
+        if subnet_entity is None:
+            raise ACNHTTPError(ErrorCode.SUBNET_NOT_FOUND, 404, details={"slug": subnet})
+        if subnet_entity.is_private and not is_admin:
+            caller_agent_id: str | None = None
+            if credentials:
+                try:
+                    caller_agent = await agent_service.get_agent_by_api_key(
+                        credentials.credentials
+                    )
+                    caller_agent_id = caller_agent.agent_id if caller_agent else None
+                except Exception:  # noqa: BLE001
+                    caller_agent_id = None
+            if caller_agent_id is None or not subnet_entity.has_member(caller_agent_id):
+                raise ACNHTTPError(
+                    ErrorCode.NOT_SUBNET_MEMBER,
+                    403,
+                    details={"slug": subnet},
+                )
+
     tag_param = tag or skill  # accept both; `tag` takes precedence
     tag_list = tag_param.split(",") if tag_param else None
 
@@ -1431,6 +1459,7 @@ async def search_agents(
     agents = await agent_service.search_agents(
         tags=tag_list,
         status=status,
+        slug=subnet,
     )
 
     # Apply visibility hygiene filter.
