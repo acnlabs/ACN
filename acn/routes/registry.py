@@ -11,6 +11,7 @@ Supports two registration modes:
 import re
 import secrets
 from typing import Any, Literal
+from urllib.parse import quote, urlparse
 
 import httpx
 import structlog  # type: ignore[import-untyped]
@@ -173,11 +174,10 @@ class AgentJoinRequest(BaseModel):
         # the HTTP probe (ACN responds 405) while delivering nothing to the
         # real agent. Compare normalized hosts to handle trailing slashes and
         # port variations. Check both GATEWAY_BASE_URL and FRONTEND_BASE_URL.
-        from urllib.parse import urlparse as _urlparse
-        _v_host = _urlparse(v).netloc.lower()
+        _v_host = urlparse(v).netloc.lower()
         for _gateway in (settings.gateway_base_url, settings.frontend_base_url):
             if _gateway:
-                _gw_host = _urlparse(_gateway.rstrip("/")).netloc.lower()
+                _gw_host = urlparse(_gateway.rstrip("/")).netloc.lower()
                 if _v_host and _gw_host and _v_host == _gw_host:
                     raise ValueError(
                         "Endpoint must point to the agent's own server, "
@@ -1301,7 +1301,6 @@ async def _join_agent_impl(
         # ``searchParams.get("token")``). The earlier path-segment shape
         # ``/claim/{id}/{token}`` only ever rendered the Next.js 404 page
         # because the dynamic route has a single ``[id]`` segment.
-        from urllib.parse import quote
         claim_url = f"{frontend_url}/claim/{agent.agent_id}?token={quote(claim_token, safe='')}"
         return AgentJoinResponse(
             agent_id=agent.agent_id,
