@@ -446,6 +446,19 @@ class AuditLogger:
     # Query Methods
     # =========================================================================
 
+    @staticmethod
+    def is_public_broadcast_eligible(event: AuditEvent) -> bool:
+        """Return True iff an audit event is eligible for public fan-out.
+
+        Eligibility is an explicit opt-in carried in ``event.details``:
+        ``{"public_broadcast_eligible": true}``.
+
+        We intentionally require a strict boolean ``True`` (not just truthy)
+        so malformed payloads like ``"true"`` or ``1`` do not leak into
+        public streams.
+        """
+        return event.details.get("public_broadcast_eligible") is True
+
     async def query_events(
         self,
         event_type: AuditEventType | None = None,
@@ -526,6 +539,42 @@ class AuditLogger:
                 continue
 
         return events
+
+    async def query_public_broadcast_events(
+        self,
+        *,
+        event_types: list[AuditEventType] | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AuditEvent]:
+        """Return audit events that are safe to forward to public feeds.
+
+        This is a read-side helper for downstream broadcasters so every
+        consumer applies the same strict eligibility rule.
+        """
+        # Read more than ``limit`` so post-filter pagination remains stable.
+        candidates = await self.query_events(
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit + offset + 1000,
+            offset=0,
+        )
+        out: list[AuditEvent] = []
+        skipped = 0
+        for event in candidates:
+            if event_types and event.event_type not in event_types:
+                continue
+            if not self.is_public_broadcast_eligible(event):
+                continue
+            if skipped < offset:
+                skipped += 1
+                continue
+            out.append(event)
+            if len(out) >= limit:
+                break
+        return out
 
     async def get_event(self, event_id: str) -> AuditEvent | None:
         """Get a specific event by ID"""
