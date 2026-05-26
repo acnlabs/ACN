@@ -446,6 +446,10 @@ class AuditLogger:
     # Query Methods
     # =========================================================================
 
+    _PUBLIC_BROADCAST_EVENT_TYPES = frozenset(
+        {AuditEventType.AGENT_REGISTERED, AuditEventType.SUBNET_CREATED}
+    )
+
     @staticmethod
     def is_public_broadcast_eligible(event: AuditEvent) -> bool:
         """Return True iff an audit event is eligible for public fan-out.
@@ -458,6 +462,53 @@ class AuditLogger:
         public streams.
         """
         return event.details.get("public_broadcast_eligible") is True
+
+    @classmethod
+    def to_public_broadcast_payload(cls, event: AuditEvent) -> dict[str, Any] | None:
+        """Build a fixed-schema payload for public broadcast channels.
+
+        Returns ``None`` when the event is not eligible (or unsupported).
+        This ensures downstream broadcasters can call one function and avoid
+        duplicating filter + redaction logic.
+        """
+        if not cls.is_public_broadcast_eligible(event):
+            return None
+        if event.event_type not in cls._PUBLIC_BROADCAST_EVENT_TYPES:
+            return None
+
+        base = {
+            "schema_version": 1,
+            "event_id": event.id,
+            "timestamp": event.timestamp.isoformat(),
+            "event_type": event.event_type.value,
+        }
+
+        if event.event_type == AuditEventType.AGENT_REGISTERED:
+            if not event.target_id:
+                return None
+            out = {
+                **base,
+                "agent_id": event.target_id,
+            }
+            source = event.details.get("source")
+            if isinstance(source, str) and source:
+                out["source"] = source
+            return out
+
+        if event.event_type == AuditEventType.SUBNET_CREATED:
+            if not event.target_id:
+                return None
+            out = {
+                **base,
+                "subnet_id": event.target_id,
+            }
+            join_policy = event.details.get("join_policy")
+            if isinstance(join_policy, str) and join_policy:
+                out["join_policy"] = join_policy
+            return out
+
+        # Future-proof fallback for mypy/control-flow completeness.
+        return None
 
     async def query_events(
         self,

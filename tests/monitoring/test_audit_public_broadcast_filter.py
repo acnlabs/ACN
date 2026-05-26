@@ -65,3 +65,48 @@ async def test_query_public_broadcast_events_honors_event_type_filter_and_pagina
     )
 
     assert [e.id for e in events] == ["e3"]
+
+
+def test_to_public_broadcast_payload_for_agent_registered_is_whitelisted() -> None:
+    event = _event("e1", AuditEventType.AGENT_REGISTERED, eligible=True)
+    event.actor_id = "secret-actor"
+    event.actor_type = "agent"
+    event.source_ip = "203.0.113.7"
+    event.user_agent = "sensitive-agent"
+    event.details.update(
+        {
+            "source": "join",
+            "visibility": "real",
+            "public_broadcast_eligible": True,
+            "internal_note": "must-not-leak",
+        }
+    )
+
+    payload = AuditLogger.to_public_broadcast_payload(event)
+
+    assert payload == {
+        "schema_version": 1,
+        "event_id": "e1",
+        "timestamp": event.timestamp.isoformat(),
+        "event_type": "agent_registered",
+        "agent_id": "target-e1",
+        "source": "join",
+    }
+
+
+def test_to_public_broadcast_payload_for_subnet_and_non_eligible_cases() -> None:
+    subnet_event = _event("e2", AuditEventType.SUBNET_CREATED, eligible=True)
+    subnet_event.target_id = "subnet-public-1"
+    subnet_event.details["join_policy"] = "open"
+    payload = AuditLogger.to_public_broadcast_payload(subnet_event)
+    assert payload == {
+        "schema_version": 1,
+        "event_id": "e2",
+        "timestamp": subnet_event.timestamp.isoformat(),
+        "event_type": "subnet_created",
+        "subnet_id": "subnet-public-1",
+        "join_policy": "open",
+    }
+
+    hidden_event = _event("e3", AuditEventType.SUBNET_CREATED, eligible=False)
+    assert AuditLogger.to_public_broadcast_payload(hidden_event) is None
