@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -110,3 +111,47 @@ def test_to_public_broadcast_payload_for_subnet_and_non_eligible_cases() -> None
 
     hidden_event = _event("e3", AuditEventType.SUBNET_CREATED, eligible=False)
     assert AuditLogger.to_public_broadcast_payload(hidden_event) is None
+
+
+@pytest.mark.asyncio
+async def test_log_event_publishes_fixed_schema_to_public_ws_channel() -> None:
+    redis = AsyncMock()
+    logger = AuditLogger(redis=redis)
+    event_id = await logger.log_event(
+        event_type=AuditEventType.AGENT_REGISTERED,
+        target_id="agent-realtime-1",
+        target_type="agent",
+        details={
+            "source": "join",
+            "public_broadcast_eligible": True,
+            "internal_only": "drop-me",
+        },
+    )
+
+    redis.publish.assert_awaited_once()
+    channel, raw_message = redis.publish.await_args.args
+    assert channel == "acn:ws:broadcast:system-events"
+    message = json.loads(raw_message)
+    assert message["type"] == "public_system_event"
+    assert message["event"] == {
+        "schema_version": 1,
+        "event_id": event_id,
+        "timestamp": message["event"]["timestamp"],
+        "event_type": "agent_registered",
+        "agent_id": "agent-realtime-1",
+        "source": "join",
+    }
+
+
+@pytest.mark.asyncio
+async def test_log_event_skips_public_ws_publish_for_non_eligible_event() -> None:
+    redis = AsyncMock()
+    logger = AuditLogger(redis=redis)
+    await logger.log_event(
+        event_type=AuditEventType.SUBNET_CREATED,
+        target_id="subnet-private",
+        target_type="subnet",
+        details={"public_broadcast_eligible": False, "join_policy": "approval"},
+    )
+
+    redis.publish.assert_not_awaited()

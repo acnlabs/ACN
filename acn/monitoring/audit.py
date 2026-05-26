@@ -290,6 +290,8 @@ class AuditLogger:
         await self.redis.ltrim(type_key, 0, self.max_entries - 1)
         await self.redis.expire(type_key, self.retention_days * 24 * 3600)
 
+        await self.publish_public_system_event(event)
+
         return event_id
 
     # =========================================================================
@@ -449,6 +451,8 @@ class AuditLogger:
     _PUBLIC_BROADCAST_EVENT_TYPES = frozenset(
         {AuditEventType.AGENT_REGISTERED, AuditEventType.SUBNET_CREATED}
     )
+    _PUBLIC_SYSTEM_EVENTS_CHANNEL = "broadcast:system-events"
+    _PUBLIC_SYSTEM_EVENT_MESSAGE_TYPE = "public_system_event"
 
     @staticmethod
     def is_public_broadcast_eligible(event: AuditEvent) -> bool:
@@ -509,6 +513,35 @@ class AuditLogger:
 
         # Future-proof fallback for mypy/control-flow completeness.
         return None
+
+    async def publish_public_system_event(self, event: AuditEvent) -> None:
+        """Fan out public-eligible events to the WS public channel.
+
+        The feed is best-effort: audit persistence should succeed even when
+        realtime fan-out is temporarily degraded.
+        """
+        payload = self.to_public_broadcast_payload(event)
+        if payload is None:
+            return
+        try:
+            await self.redis.publish(
+                f"acn:ws:{self._PUBLIC_SYSTEM_EVENTS_CHANNEL}",
+                json.dumps(
+                    {
+                        "type": self._PUBLIC_SYSTEM_EVENT_MESSAGE_TYPE,
+                        "event": payload,
+                    }
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug(
+                "audit_public_system_event_publish_failed",
+                extra={
+                    "event_type": event.event_type.value,
+                    "event_id": event.id,
+                    "error": str(exc),
+                },
+            )
 
     async def query_events(
         self,
