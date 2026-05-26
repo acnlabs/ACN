@@ -20,7 +20,12 @@ from fastapi import APIRouter, Query
 from fastapi.responses import PlainTextResponse
 
 from ..monitoring import AuditEventType, AuditLogger
-from .dependencies import AnalyticsDep, AuditDep, InternalTokenDep, MetricsDep  # type: ignore[import-untyped]
+from .dependencies import (  # type: ignore[import-untyped]
+    AnalyticsDep,
+    AuditDep,
+    InternalTokenDep,
+    MetricsDep,
+)
 
 router = APIRouter(tags=["monitoring"])
 
