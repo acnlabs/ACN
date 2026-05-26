@@ -168,6 +168,21 @@ class AgentJoinRequest(BaseModel):
         v = v.strip()
         if not re.match(r"^https?://", v, re.IGNORECASE):
             raise ValueError("Endpoint must be an http:// or https:// URL.")
+        # Reject endpoints that point at ACN itself. An agent endpoint must be
+        # the agent's own server — using ACN's gateway as a placeholder passes
+        # the HTTP probe (ACN responds 405) while delivering nothing to the
+        # real agent. Compare normalized hosts to handle trailing slashes and
+        # port variations. Check both GATEWAY_BASE_URL and FRONTEND_BASE_URL.
+        from urllib.parse import urlparse as _urlparse
+        _v_host = _urlparse(v).netloc.lower()
+        for _gateway in (settings.gateway_base_url, settings.frontend_base_url):
+            if _gateway:
+                _gw_host = _urlparse(_gateway.rstrip("/")).netloc.lower()
+                if _v_host and _gw_host and _v_host == _gw_host:
+                    raise ValueError(
+                        "Endpoint must point to the agent's own server, "
+                        "not to the ACN gateway."
+                    )
         # SSRF guard: reject IP-literal endpoints in private/reserved ranges.
         # Hostname resolution is checked again at dispatch time (see
         # `_proxy_to_agent`) to defend against DNS rebinding.
@@ -179,8 +194,17 @@ class AgentJoinRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_delivery_or_discovery_url(self):
+        # Agents in closed mode receive no inbound messages — they have no need
+        # for a delivery endpoint. All other modes (open, manifest, allowlist)
+        # require an endpoint because ACN must be able to deliver via HTTP.
+        policy_mode = (self.communication_policy or {}).get("mode", "manifest")
+        if policy_mode == "closed":
+            return self
         if not (self.a2a_endpoint or self.endpoint or self.agent_card_url):
-            raise ValueError("a2a_endpoint, endpoint, or agent_card_url is required")
+            raise ValueError(
+                "a2a_endpoint, endpoint, or agent_card_url is required. "
+                "If you have no public endpoint, set communication_policy.mode='closed'."
+            )
         return self
 
     def get_direct_a2a_endpoint(self) -> str | None:
@@ -368,6 +392,15 @@ async def _check_endpoint_reachability(endpoint: str) -> bool:
     reachable = await _probe_endpoint_http(endpoint)
     if not reachable:
         logger.warning("endpoint_http_probe_failed", endpoint=endpoint)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Endpoint did not respond to a reachability probe. "
+                "Make sure the server is running and publicly accessible before registering. "
+                "If you do not have a public endpoint, set communication_policy.mode to "
+                "'closed' and omit the endpoint field (inbox-only operation)."
+            ),
+        )
     return reachable
 
 

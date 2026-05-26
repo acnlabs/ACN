@@ -7,13 +7,13 @@ ACN performs a two-layer check when an agent registers a direct ``a2a_endpoint``
    - This catches typos and unprovisioned DNS records before they enter
      the registry.
 
-2. **HTTP HEAD probe** (soft warning): ``_probe_endpoint_http`` fires a HEAD
+2. **HTTP HEAD probe** (hard fail): ``_probe_endpoint_http`` fires a HEAD
    request with a short timeout.
    - Any HTTP response (including 405 Method Not Allowed from a JSON-RPC-only
      server) counts as "reachable".
-   - Connection failures and timeouts set ``endpoint_reachable=False`` in the
-     join response without blocking registration — the server may not be
-     deployed yet at join time.
+   - Connection failures and timeouts raise HTTPException(400) — registration
+     is blocked. Agents must have a running, publicly reachable server before
+     registering (or use communication_policy.mode='closed').
 
 These tests are unit-level: they mock ``safe_resolve_target`` and
 ``_probe_endpoint_http`` so they never hit the network. The full
@@ -157,9 +157,9 @@ async def test_dns_ok_http_probe_success_returns_true():
 
 
 @pytest.mark.asyncio
-async def test_dns_ok_http_probe_failure_returns_false():
-    """DNS resolves but HTTP probe fails → reachable=False (soft warning,
-    registration is NOT blocked)."""
+async def test_dns_ok_http_probe_failure_raises_400():
+    """DNS resolves but HTTP probe fails → HTTPException(400).
+    Registration is now hard-blocked when the endpoint is unreachable."""
     with (
         patch(
             "acn.routes.registry.safe_resolve_target",
@@ -170,9 +170,10 @@ async def test_dns_ok_http_probe_failure_returns_false():
             new=AsyncMock(return_value=False),
         ),
     ):
-        result = await _check_endpoint_reachability("https://agent.example.com/a2a")
+        with pytest.raises(HTTPException) as exc_info:
+            await _check_endpoint_reachability("https://agent.example.com/a2a")
 
-    assert result is False
+    assert exc_info.value.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -200,21 +201,21 @@ async def test_resolve_direct_endpoint_propagates_reachable_true():
 
 
 @pytest.mark.asyncio
-async def test_resolve_direct_endpoint_propagates_reachable_false():
-    """When the HTTP probe fails the tuple carries reachable=False but does
-    NOT raise — registration continues with a soft warning."""
+async def test_resolve_direct_endpoint_raises_on_probe_failure():
+    """When the HTTP probe fails, _resolve_registration_endpoint raises
+    HTTPException(400) — registration is hard-blocked."""
     with patch(
         "acn.routes.registry._check_endpoint_reachability",
-        new=AsyncMock(return_value=False),
+        new=AsyncMock(side_effect=HTTPException(status_code=400, detail="Endpoint did not respond")),
     ):
-        endpoint, card, reachable = await _resolve_registration_endpoint(
-            direct_endpoint="https://agent.example.com/a2a",
-            agent_card_url=None,
-            agent_card=None,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_registration_endpoint(
+                direct_endpoint="https://agent.example.com/a2a",
+                agent_card_url=None,
+                agent_card=None,
+            )
 
-    assert endpoint == "https://agent.example.com/a2a"
-    assert reachable is False
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -282,28 +283,32 @@ async def test_join_response_endpoint_reachable_true_when_probe_succeeds():
 
 
 @pytest.mark.asyncio
-async def test_join_response_endpoint_reachable_false_when_probe_fails():
-    """When the HTTP probe fails (server not yet up), ``endpoint_reachable``
-    must be False in the response — but registration MUST succeed (no raise)."""
+async def test_join_blocked_when_probe_fails():
+    """When the HTTP probe fails, _join_agent_impl must re-raise the
+    HTTPException(400) — the agent must NOT be saved."""
     fake_agent = _make_fake_agent()
     svc = AsyncMock()
     svc.join_agent = AsyncMock(return_value=(fake_agent, "acn_test_key"))
 
     with patch(
         "acn.routes.registry._resolve_registration_endpoint",
-        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, False)),
+        new=AsyncMock(
+            side_effect=HTTPException(
+                status_code=400,
+                detail="Endpoint did not respond to a reachability probe.",
+            )
+        ),
     ):
-        resp = await _join_agent_impl(
-            _make_join_body(),
-            BackgroundTasks(),
-            ref=None,
-            agent_service=svc,
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            await _join_agent_impl(
+                _make_join_body(),
+                BackgroundTasks(),
+                ref=None,
+                agent_service=svc,
+            )
 
-    # Registration succeeded (no exception raised)
-    assert resp.agent_id == fake_agent.agent_id
-    # Soft warning surfaced in response
-    assert resp.endpoint_reachable is False
+    assert exc_info.value.status_code == 400
+    svc.join_agent.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -334,3 +339,87 @@ async def test_join_blocked_on_dns_failure():
     assert exc_info.value.status_code == 400
     # join_agent must NOT have been called — agent was never persisted
     svc.join_agent.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# #141 — ACN own gateway domain rejected at validation time
+# ---------------------------------------------------------------------------
+
+
+def test_join_request_rejects_acn_gateway_as_endpoint():
+    """An endpoint that points at ACN's own gateway (GATEWAY_BASE_URL host)
+    must be rejected at Pydantic validation time with a clear error message."""
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentJoinRequest(
+            name="bad-agent",
+            description="Agent using ACN proxy as placeholder endpoint",
+            a2a_endpoint="https://api.acnlabs.dev/api/v1/agents/some-uuid",
+        )
+
+    errors = exc_info.value.errors()
+    assert any("ACN gateway" in str(e.get("msg", "")) for e in errors), (
+        f"Expected 'ACN gateway' in error message, got: {errors}"
+    )
+
+
+def test_join_request_rejects_acn_gateway_subpath():
+    """Any path under the ACN gateway host must be rejected — not just the
+    exact gateway URL."""
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentJoinRequest(
+            name="bad-agent",
+            description="Agent using ACN proxy as placeholder endpoint",
+            endpoint="https://api.acnlabs.dev/anything",
+        )
+
+    errors = exc_info.value.errors()
+    assert any("ACN gateway" in str(e.get("msg", "")) for e in errors)
+
+
+def test_join_request_allows_non_acn_endpoint():
+    """A well-formed endpoint on a non-ACN domain must pass validation."""
+    req = AgentJoinRequest(
+        name="good-agent",
+        description="Agent with its own real endpoint",
+        a2a_endpoint="https://agent.example.com/a2a",
+    )
+    assert req.a2a_endpoint == "https://agent.example.com/a2a"
+
+
+# ---------------------------------------------------------------------------
+# closed-mode: endpoint is optional
+# ---------------------------------------------------------------------------
+
+
+def test_join_request_closed_mode_allows_no_endpoint():
+    """Agents in closed mode receive no inbound messages — endpoint is optional."""
+    req = AgentJoinRequest(
+        name="closed-agent",
+        description="Agent that operates in closed mode without public endpoint",
+        communication_policy={"mode": "closed"},
+    )
+    assert req.a2a_endpoint is None
+    assert req.endpoint is None
+    assert req.agent_card_url is None
+
+
+def test_join_request_open_mode_still_requires_endpoint():
+    """Open-mode agents still require an endpoint — the exemption is closed-only."""
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentJoinRequest(
+            name="open-agent",
+            description="Open mode agent without any endpoint",
+            communication_policy={"mode": "open"},
+        )
+
+    errors = exc_info.value.errors()
+    assert any("endpoint" in str(e.get("msg", "")).lower() for e in errors)
