@@ -20,8 +20,7 @@ Tracking: ``docs/adr/0001-subnet-creator-must-be-member.md``.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
