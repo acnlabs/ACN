@@ -355,19 +355,19 @@ async def create_subnet(
         gateway_ws_url = f"{base_url}/gateway/ws/{subnet.slug}"
 
         logger.info("subnet_created", slug=subnet.slug, owner=owner)
-        if not subnet.is_private:
-            fire_and_forget_event(
-                get_audit_singleton(),
-                event_type=AuditEventType.SUBNET_CREATED,
-                actor_id=owner,
-                actor_type="agent",
-                target_id=subnet.slug,
-                target_type="subnet",
-                details={
-                    "is_private": subnet.is_private,
-                    "join_policy": subnet.join_policy,
-                },
-            )
+        fire_and_forget_event(
+            get_audit_singleton(),
+            event_type=AuditEventType.SUBNET_CREATED,
+            actor_id=owner,
+            actor_type="agent",
+            target_id=subnet.slug,
+            target_type="subnet",
+            details={
+                "is_private": subnet.is_private,
+                "join_policy": subnet.join_policy,
+                "public_broadcast_eligible": not subnet.is_private,
+            },
+        )
 
         return SubnetCreateResponse(
             status="created",

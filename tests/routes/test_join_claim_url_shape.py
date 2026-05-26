@@ -164,14 +164,15 @@ async def test_join_emits_agent_registered_audit_for_real_visibility(stub_join_s
     assert kwargs["event_type"] == AuditEventType.AGENT_REGISTERED
     assert kwargs["details"]["source"] == "join"
     assert kwargs["details"]["visibility"] == "real"
+    assert kwargs["details"]["public_broadcast_eligible"] is True
 
 
 @pytest.mark.asyncio
-async def test_join_skips_agent_registered_audit_for_non_real_visibility(
+async def test_join_emits_internal_audit_for_non_real_visibility(
     stub_join_service,
     fake_agent,
 ):
-    """Internal/test joins should not enter the public registration event stream."""
+    """Internal/test joins stay auditable but are marked non-public."""
     fake_agent.metadata = {"visibility": "test"}
     with (
         patch(
@@ -189,4 +190,8 @@ async def test_join_skips_agent_registered_audit_for_non_real_visibility(
             default_metadata={"visibility": "test"},
         )
 
-    fire.assert_not_called()
+    fire.assert_called_once()
+    kwargs = fire.call_args.kwargs
+    assert kwargs["event_type"] == AuditEventType.AGENT_REGISTERED
+    assert kwargs["details"]["visibility"] == "test"
+    assert kwargs["details"]["public_broadcast_eligible"] is False

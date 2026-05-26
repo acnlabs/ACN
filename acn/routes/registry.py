@@ -1251,28 +1251,25 @@ async def _join_agent_impl(
         frontend_url = (settings.frontend_base_url or base_url).rstrip("/")
 
         logger.info("agent_joined", agent_id=agent.agent_id, name=agent.name, referrer_id=referrer_id)
-        # System-level join event: emit only for production-visible agents.
-        # Internal probe joins stamp ``metadata.visibility="test"`` and must
-        # stay out of the default public event stream.
+        # System-level join event: always emit into the internal audit stream.
+        # Public feeds must filter by ``public_broadcast_eligible`` so probe /
+        # test registrations remain internal-only while still being auditable.
         _raw_metadata = getattr(agent, "metadata", None)
         _metadata = _raw_metadata if isinstance(_raw_metadata, dict) else {}
         _visibility = str(_metadata.get("visibility", "real")).lower()
-        if _visibility == "real":
-            fire_and_forget_event(
-                get_audit_singleton(),
-                event_type=AuditEventType.AGENT_REGISTERED,
-                actor_id=agent.agent_id,
-                actor_type="agent",
-                target_id=agent.agent_id,
-                target_type="agent",
-                details={"source": "join", "visibility": _visibility},
-            )
-        else:
-            logger.debug(
-                "agent_join_audit_skipped",
-                agent_id=agent.agent_id,
-                visibility=_visibility,
-            )
+        fire_and_forget_event(
+            get_audit_singleton(),
+            event_type=AuditEventType.AGENT_REGISTERED,
+            actor_id=agent.agent_id,
+            actor_type="agent",
+            target_id=agent.agent_id,
+            target_type="agent",
+            details={
+                "source": "join",
+                "visibility": _visibility,
+                "public_broadcast_eligible": _visibility == "real",
+            },
+        )
 
         background_tasks.add_task(_grant_register_reward, agent_id=agent.agent_id)
 

@@ -215,8 +215,9 @@ class TestCreateSubnetMembership:
         assert kwargs["event_type"] == AuditEventType.SUBNET_CREATED
         assert kwargs["target_id"] == _EXPLICIT_SUBNET_ID
         assert kwargs["details"]["is_private"] is False
+        assert kwargs["details"]["public_broadcast_eligible"] is True
 
-    def test_create_private_subnet_skips_subnet_created_audit(
+    def test_create_private_subnet_emits_internal_audit_but_marks_non_public(
         self, stub_agent_service, stub_subnet_service
     ):
         async def _private_create(**kwargs):
@@ -243,4 +244,8 @@ class TestCreateSubnetMembership:
             )
 
         assert r.status_code == 200, r.text
-        fire.assert_not_called()
+        fire.assert_called_once()
+        kwargs = fire.call_args.kwargs
+        assert kwargs["event_type"] == AuditEventType.SUBNET_CREATED
+        assert kwargs["details"]["is_private"] is True
+        assert kwargs["details"]["public_broadcast_eligible"] is False
