@@ -555,6 +555,31 @@ async def test_join_impl_skips_endpoint_resolution_when_no_url():
 
 
 @pytest.mark.asyncio
+async def test_pull_only_registration_reports_endpoint_not_reachable():
+    """A pull-only registration has no endpoint to probe — the response
+    must report ``endpoint_reachable=False`` rather than the misleading
+    True default. Senders rely on this flag to decide whether direct
+    delivery is even possible."""
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(
+        return_value=(_make_pull_only_agent("manifest"), "acn_test_key")
+    )
+
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(),
+    ):
+        resp = await _join_agent_impl(
+            _make_pull_only_join_body("manifest"),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=svc,
+        )
+
+    assert resp.endpoint_reachable is False
+
+
+@pytest.mark.asyncio
 async def test_join_response_includes_manifest_next_step_hint():
     """Pull-only manifest agents must receive a next_step_hint that names
     the manifest poll URL — so the operator immediately knows how to

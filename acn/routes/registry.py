@@ -306,10 +306,12 @@ class AgentJoinResponse(BaseModel):
     endpoint_reachable: bool = Field(
         default=True,
         description=(
-            "Whether the registered endpoint responded to a health probe at "
-            "registration time. False means DNS resolved but the server did not "
-            "answer within the probe timeout — messages will fall back to inbox "
-            "until the endpoint becomes reachable."
+            "Whether a delivery endpoint is registered AND responded to a "
+            "health probe at registration time. False when (a) no endpoint "
+            "was registered (pull-only manifest/closed agents), or (b) the "
+            "endpoint was registered but did not answer the probe. Callers "
+            "should treat False as 'do not attempt direct delivery' and "
+            "consult communication_mode to pick the right send path."
         ),
     )
 
@@ -1345,7 +1347,10 @@ async def _join_agent_impl(
                 agent_card=body.agent_card,
             )
         else:
-            endpoint, agent_card, endpoint_reachable = None, None, True
+            # No endpoint registered → ``endpoint_reachable=False`` is the
+            # honest answer. Senders should look at ``communication_mode``
+            # to pick manifest-notify instead of direct delivery.
+            endpoint, agent_card, endpoint_reachable = None, None, False
 
         agent, api_key = await agent_service.join_agent(
             name=body.name,
