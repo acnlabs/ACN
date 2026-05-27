@@ -54,6 +54,10 @@ def fake_agent():
     agent.claim_status = MagicMock(value="unclaimed")
     # Default to a realistic token_urlsafe output (URL-safe alphabet)
     agent.verification_code = "QjCbj7z_O4EgAwUcHNMbwSSUbjgrnX9ZENehhlYukds"
+    # Set a concrete policy so the join response can echo a real mode
+    # string. MagicMock's default attribute would otherwise be another
+    # MagicMock and Pydantic would reject it.
+    agent.communication_policy = {"mode": "open"}
     return agent
 
 

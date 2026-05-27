@@ -194,16 +194,23 @@ class AgentJoinRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_delivery_or_discovery_url(self):
-        # Agents in closed mode receive no inbound messages — they have no need
-        # for a delivery endpoint. All other modes (open, manifest, allowlist)
-        # require an endpoint because ACN must be able to deliver via HTTP.
+        # Endpoint requirement depends on the inbound delivery model:
+        # - ``open`` / ``allowlist`` push to the agent over HTTP, so they
+        #   need a delivery endpoint.
+        # - ``manifest`` (the default) and ``closed`` never push — manifest
+        #   agents pull from ``GET /communication/manifest/{id}``; closed
+        #   agents reject all inbound. Both can register without any URL.
+        # This keeps the default registration path open to pull-only AI
+        # assistants and local-dev agents that have no public HTTP server.
         policy_mode = (self.communication_policy or {}).get("mode", "manifest")
-        if policy_mode == "closed":
+        if policy_mode in {"manifest", "closed"}:
             return self
         if not (self.a2a_endpoint or self.endpoint or self.agent_card_url):
             raise ValueError(
-                "a2a_endpoint, endpoint, or agent_card_url is required. "
-                "If you have no public endpoint, set communication_policy.mode='closed'."
+                f"communication_policy.mode={policy_mode!r} requires a delivery URL. "
+                "Pass a2a_endpoint, endpoint, or agent_card_url, OR omit "
+                "communication_policy to use the default 'manifest' (pull-based) "
+                "mode which does not need a public endpoint."
             )
         return self
 
@@ -306,6 +313,30 @@ class AgentJoinResponse(BaseModel):
         ),
     )
 
+    # Resolved inbound delivery mode, echoed back so the caller does not
+    # have to read it from the agent record. One of
+    # ``open | manifest | allowlist | closed``.
+    communication_mode: str = Field(
+        default="manifest",
+        description=(
+            "Resolved inbound delivery mode: open | manifest | allowlist | "
+            "closed. Echoed from the agent's communication_policy."
+        ),
+    )
+
+    # Actionable next-step guidance for the operator. Populated when the
+    # registration outcome is not the simple ``open + reachable endpoint``
+    # happy path so the caller knows what to do next (poll the manifest
+    # queue, deploy an endpoint, etc.). ``None`` means no follow-up is
+    # required.
+    next_step_hint: str | None = Field(
+        default=None,
+        description=(
+            "Human-readable hint describing what the operator should do "
+            "next — present for pull-only and unreachable-endpoint outcomes."
+        ),
+    )
+
 
 def _extract_jsonrpc_endpoint_from_agent_card(agent_card: dict) -> str | None:
     """Return the direct JSON-RPC URL from v1 interfaces or legacy v0.3 url."""
@@ -402,6 +433,47 @@ async def _check_endpoint_reachability(endpoint: str) -> bool:
             ),
         )
     return reachable
+
+
+def _build_next_step_hint(
+    *,
+    mode: str,
+    has_endpoint: bool,
+    endpoint_reachable: bool,
+    agent_id: str,
+    base_url: str,
+) -> str | None:
+    """Return an actionable follow-up message for non-happy-path registrations.
+
+    Returns ``None`` for the simple ``open + reachable endpoint`` case
+    where the caller has nothing to do. For every other shape, the hint
+    spells out the concrete next API call the operator should make.
+    """
+    if not has_endpoint:
+        if mode == "manifest":
+            return (
+                "Registered in pull-based 'manifest' mode (no public endpoint). "
+                f"Poll GET {base_url}/api/v1/communication/manifest/{agent_id} "
+                "to receive notifications. To enable direct delivery later, "
+                f"PATCH {base_url}/api/v1/agents/{agent_id}/endpoint with your "
+                f"HTTPS URL and PATCH {base_url}/api/v1/agents/{agent_id}/policy "
+                "with {\"mode\": \"open\"}."
+            )
+        if mode == "closed":
+            return (
+                "Registered in 'closed' mode — all inbound messages are "
+                "rejected. To start receiving messages, PATCH "
+                f"{base_url}/api/v1/agents/{agent_id}/policy with "
+                "{\"mode\": \"manifest\"} (pull) or {\"mode\": \"open\"} (push)."
+            )
+        return None
+    if not endpoint_reachable:
+        return (
+            "Endpoint registered but did not answer the reachability probe. "
+            "Messages will fall back to the inbox queue until your server "
+            "responds. Once the server is up, no further action is required."
+        )
+    return None
 
 
 async def _resolve_registration_endpoint(
@@ -1256,11 +1328,24 @@ async def _join_agent_impl(
         if body.wallet_address and "ethereum" not in wallet_addresses:
             wallet_addresses["ethereum"] = body.wallet_address
 
-        endpoint, agent_card, endpoint_reachable = await _resolve_registration_endpoint(
-            direct_endpoint=body.get_direct_a2a_endpoint(),
-            agent_card_url=body.agent_card_url,
-            agent_card=body.agent_card,
+        # Pull-only registration: when the caller provides no delivery URL
+        # at all AND chose a non-pushing mode (manifest/closed — already
+        # checked by the AgentJoinRequest validator), skip endpoint
+        # resolution entirely. ``endpoint`` is intentionally None on the
+        # stored agent; senders look up ``mode`` via
+        # ``GET /agents/{id}/communication_profile`` to know whether to
+        # push or notify-only.
+        _has_any_url = bool(
+            body.get_direct_a2a_endpoint() or body.agent_card_url or body.agent_card
         )
+        if _has_any_url:
+            endpoint, agent_card, endpoint_reachable = await _resolve_registration_endpoint(
+                direct_endpoint=body.get_direct_a2a_endpoint(),
+                agent_card_url=body.agent_card_url,
+                agent_card=body.agent_card,
+            )
+        else:
+            endpoint, agent_card, endpoint_reachable = None, None, True
 
         agent, api_key = await agent_service.join_agent(
             name=body.name,
@@ -1302,6 +1387,14 @@ async def _join_agent_impl(
         # ``/claim/{id}/{token}`` only ever rendered the Next.js 404 page
         # because the dynamic route has a single ``[id]`` segment.
         claim_url = f"{frontend_url}/claim/{agent.agent_id}?token={quote(claim_token, safe='')}"
+        _mode = (agent.communication_policy or {}).get("mode", "manifest")
+        _hint = _build_next_step_hint(
+            mode=_mode,
+            has_endpoint=endpoint is not None,
+            endpoint_reachable=endpoint_reachable,
+            agent_id=agent.agent_id,
+            base_url=base_url,
+        )
         return AgentJoinResponse(
             agent_id=agent.agent_id,
             api_key=api_key,
@@ -1314,6 +1407,8 @@ async def _join_agent_impl(
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
             agent_card_url=f"{base_url}/api/v1/agents/{agent.agent_id}/.well-known/agent-card.json",
             endpoint_reachable=endpoint_reachable,
+            communication_mode=_mode,
+            next_step_hint=_hint,
         )
     except ACNHTTPError:
         raise

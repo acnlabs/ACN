@@ -257,6 +257,9 @@ def _make_fake_agent(verification_code: str = "test_code_abc") -> MagicMock:
     agent.status = MagicMock(value="active")
     agent.claim_status = MagicMock(value="unclaimed")
     agent.verification_code = verification_code
+    # Explicit default so AgentJoinResponse can read a concrete mode
+    # string from the stored agent. Individual tests may override.
+    agent.communication_policy = {"mode": "open"}
     return agent
 
 
@@ -410,7 +413,8 @@ def test_join_request_closed_mode_allows_no_endpoint():
 
 
 def test_join_request_open_mode_still_requires_endpoint():
-    """Open-mode agents still require an endpoint — the exemption is closed-only."""
+    """Open-mode agents still require an endpoint — the exemption is for
+    non-pushing modes (manifest, closed)."""
     import pytest
     from pydantic import ValidationError
 
@@ -423,3 +427,247 @@ def test_join_request_open_mode_still_requires_endpoint():
 
     errors = exc_info.value.errors()
     assert any("endpoint" in str(e.get("msg", "")).lower() for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# manifest-mode (default): endpoint is optional
+# ---------------------------------------------------------------------------
+
+
+def test_join_request_manifest_mode_allows_no_endpoint():
+    """Manifest-mode agents pull from the manifest queue — they do not need
+    a delivery endpoint. This is the path for pull-only AI assistants and
+    local-dev agents without a public HTTP server."""
+    req = AgentJoinRequest(
+        name="pull-only-assistant",
+        description="A conversational AI assistant with no HTTP server.",
+        communication_policy={"mode": "manifest"},
+    )
+    assert req.a2a_endpoint is None
+    assert req.endpoint is None
+    assert req.agent_card_url is None
+
+
+def test_join_request_default_mode_allows_no_endpoint():
+    """When ``communication_policy`` is omitted, the default is ``manifest``
+    — so registration must succeed without any URL field."""
+    req = AgentJoinRequest(
+        name="default-pull-agent",
+        description="No policy, no endpoint — should default to manifest mode.",
+    )
+    assert req.a2a_endpoint is None
+    assert (req.communication_policy or {}).get("mode") == "manifest"
+
+
+def test_join_request_allowlist_mode_still_requires_endpoint():
+    """Allowlist-mode agents may receive direct delivery from allowlisted
+    senders — they still require a delivery endpoint."""
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentJoinRequest(
+            name="allowlist-agent",
+            description="Allowlist mode agent without any endpoint",
+            communication_policy={"mode": "allowlist"},
+        )
+
+    errors = exc_info.value.errors()
+    msg = " ".join(str(e.get("msg", "")) for e in errors).lower()
+    assert "endpoint" in msg
+    # The error must steer the operator to the pull-based default, not
+    # to 'closed' (which silently turns them into a black hole).
+    assert "manifest" in msg
+
+
+def test_join_request_open_mode_error_points_at_manifest_default():
+    """The error message for ``open`` mode without endpoint must guide the
+    operator toward the pull-based ``manifest`` default rather than the
+    inbound-rejection ``closed`` escape hatch."""
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentJoinRequest(
+            name="open-agent",
+            description="Open mode agent without any endpoint",
+            communication_policy={"mode": "open"},
+        )
+
+    msg = " ".join(str(e.get("msg", "")) for e in exc_info.value.errors()).lower()
+    assert "manifest" in msg
+
+
+# ---------------------------------------------------------------------------
+# _join_agent_impl — pull-only registration skips endpoint resolution
+# ---------------------------------------------------------------------------
+
+
+def _make_pull_only_join_body(mode: str = "manifest") -> AgentJoinRequest:
+    return AgentJoinRequest(
+        name="PullOnlyAgent",
+        description="Agent registered without any HTTP delivery endpoint.",
+        tags=["test"],
+        communication_policy={"mode": mode},
+    )
+
+
+def _make_pull_only_agent(mode: str = "manifest") -> MagicMock:
+    agent = MagicMock()
+    agent.agent_id = "agent-pull-only-001"
+    agent.name = "PullOnlyAgent"
+    agent.status = MagicMock(value="active")
+    agent.claim_status = MagicMock(value="unclaimed")
+    agent.verification_code = "test_code_pull"
+    agent.communication_policy = {"mode": mode}
+    return agent
+
+
+@pytest.mark.asyncio
+async def test_join_impl_skips_endpoint_resolution_when_no_url():
+    """A pull-only registration must not touch ``_resolve_registration_endpoint``
+    at all — otherwise the DNS/probe hard-fail would block agents that have
+    no endpoint by design."""
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(
+        return_value=(_make_pull_only_agent("manifest"), "acn_test_key")
+    )
+
+    resolve_mock = AsyncMock()
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=resolve_mock,
+    ):
+        resp = await _join_agent_impl(
+            _make_pull_only_join_body("manifest"),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=svc,
+        )
+
+    resolve_mock.assert_not_called()
+    # join_agent must receive endpoint=None — not a coerced empty string,
+    # which would still pass downstream "is this set?" checks.
+    kwargs = svc.join_agent.await_args.kwargs
+    assert kwargs["endpoint"] is None
+    assert kwargs["a2a_endpoint"] is None
+    assert resp.communication_mode == "manifest"
+
+
+@pytest.mark.asyncio
+async def test_join_response_includes_manifest_next_step_hint():
+    """Pull-only manifest agents must receive a next_step_hint that names
+    the manifest poll URL — so the operator immediately knows how to
+    receive messages."""
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(
+        return_value=(_make_pull_only_agent("manifest"), "acn_test_key")
+    )
+
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(),
+    ):
+        resp = await _join_agent_impl(
+            _make_pull_only_join_body("manifest"),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=svc,
+        )
+
+    assert resp.next_step_hint is not None
+    assert "manifest" in resp.next_step_hint.lower()
+    assert "/communication/manifest/" in resp.next_step_hint
+
+
+@pytest.mark.asyncio
+async def test_join_response_includes_closed_next_step_hint():
+    """Closed-mode pull-only registrations must receive a hint explaining
+    that the agent will reject all inbound messages until the operator
+    switches the mode."""
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(
+        return_value=(_make_pull_only_agent("closed"), "acn_test_key")
+    )
+
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(),
+    ):
+        resp = await _join_agent_impl(
+            _make_pull_only_join_body("closed"),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=svc,
+        )
+
+    assert resp.next_step_hint is not None
+    assert "closed" in resp.next_step_hint.lower()
+    assert "/policy" in resp.next_step_hint
+
+
+@pytest.mark.asyncio
+async def test_join_response_no_hint_on_open_happy_path():
+    """An ``open``-mode registration with a reachable endpoint is the happy
+    path — no follow-up action is required, so ``next_step_hint`` must
+    be ``None``."""
+    fake_agent = _make_fake_agent()
+    fake_agent.communication_policy = {"mode": "open"}
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(return_value=(fake_agent, "acn_test_key"))
+
+    body = AgentJoinRequest(
+        name="ReachabilityTestAgent",
+        description="Tests that no hint is emitted on the happy path.",
+        tags=["test"],
+        a2a_endpoint="https://agent.example.com/a2a",
+        communication_policy={"mode": "open"},
+    )
+
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, True)),
+    ):
+        resp = await _join_agent_impl(
+            body,
+            BackgroundTasks(),
+            ref=None,
+            agent_service=svc,
+        )
+
+    assert resp.communication_mode == "open"
+    assert resp.next_step_hint is None
+
+
+@pytest.mark.asyncio
+async def test_join_response_hint_when_endpoint_unreachable():
+    """When an endpoint is registered but the probe returns False (soft
+    case — DNS resolved but server isn't up yet), the hint must tell
+    the operator that messages will queue until the server answers."""
+    fake_agent = _make_fake_agent()
+    fake_agent.communication_policy = {"mode": "open"}
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(return_value=(fake_agent, "acn_test_key"))
+
+    body = AgentJoinRequest(
+        name="ReachabilityTestAgent",
+        description="Tests the unreachable-endpoint hint.",
+        tags=["test"],
+        a2a_endpoint="https://agent.example.com/a2a",
+        communication_policy={"mode": "open"},
+    )
+
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, False)),
+    ):
+        resp = await _join_agent_impl(
+            body,
+            BackgroundTasks(),
+            ref=None,
+            agent_service=svc,
+        )
+
+    assert resp.endpoint_reachable is False
+    assert resp.next_step_hint is not None
+    assert "reachability" in resp.next_step_hint.lower()
