@@ -471,25 +471,29 @@ def _build_next_step_hint(
     where the caller has nothing to do. For every other shape, the hint
     spells out the concrete next API call the operator should make.
     """
-    if not has_endpoint:
-        if mode == "manifest":
-            return (
-                "Registered in pull-based 'manifest' mode (no public endpoint). "
-                f"Poll GET {base_url}/api/v1/communication/manifest/{agent_id} "
-                "to receive notifications. To enable direct delivery later, "
-                f"PATCH {base_url}/api/v1/agents/{agent_id}/endpoint with your "
-                f"HTTPS URL and PATCH {base_url}/api/v1/agents/{agent_id}/policy "
-                "with {\"mode\": \"open\"}."
-            )
-        if mode == "closed":
-            return (
-                "Registered in 'closed' mode — all inbound messages are "
-                "rejected. To start receiving messages, PATCH "
-                f"{base_url}/api/v1/agents/{agent_id}/policy with "
-                "{\"mode\": \"manifest\"} (pull) or {\"mode\": \"open\"} (push)."
-            )
-        return None
-    if not endpoint_reachable:
+    # Non-pushing modes never push over HTTP, so their hint is about how to
+    # actually receive traffic — independent of whether an (unprobed)
+    # endpoint was supplied. These modes are not reachability-probed, so
+    # the "didn't answer the probe" branch below must not apply to them.
+    if mode == "manifest":
+        return (
+            "Registered in pull-based 'manifest' mode. "
+            f"Poll GET {base_url}/api/v1/communication/manifest/{agent_id} "
+            "to receive notifications. To enable direct delivery later, "
+            f"PATCH {base_url}/api/v1/agents/{agent_id}/endpoint with your "
+            f"HTTPS URL and PATCH {base_url}/api/v1/agents/{agent_id}/policy "
+            "with {\"mode\": \"open\"}."
+        )
+    if mode == "closed":
+        return (
+            "Registered in 'closed' mode — all inbound messages are "
+            "rejected. To start receiving messages, PATCH "
+            f"{base_url}/api/v1/agents/{agent_id}/policy with "
+            "{\"mode\": \"manifest\"} (pull) or {\"mode\": \"open\"} (push)."
+        )
+    # Push modes (open / allowlist): the endpoint is load-bearing and was
+    # probed. Surface a hint only when it didn't answer.
+    if has_endpoint and not endpoint_reachable:
         return (
             "Endpoint registered but did not answer the reachability probe. "
             "Messages will fall back to the inbox queue until your server "
@@ -1350,27 +1354,32 @@ async def _join_agent_impl(
         if body.wallet_address and "ethereum" not in wallet_addresses:
             wallet_addresses["ethereum"] = body.wallet_address
 
-        # Pull-only registration: when the caller provides no delivery URL
-        # at all AND chose a non-pushing mode (manifest/closed — already
-        # checked by the AgentJoinRequest validator), skip endpoint
-        # resolution entirely. ``endpoint`` is intentionally None on the
-        # stored agent; senders look up ``mode`` via
-        # ``GET /agents/{id}/communication_profile`` to know whether to
-        # push or notify-only.
-        _has_any_url = bool(
-            body.get_direct_a2a_endpoint() or body.agent_card_url or body.agent_card
-        )
-        if _has_any_url:
+        # Endpoint handling keys off the delivery MODE, not merely whether a
+        # URL was supplied:
+        #   * Push modes (open / allowlist) deliver over HTTP, so the
+        #     endpoint is load-bearing — resolve it and hard-fail on an
+        #     unreachable URL (DNS / HTTP probe), same as before.
+        #   * Non-pushing modes (manifest / closed) never push to the agent,
+        #     so a delivery endpoint is NOT load-bearing. We store whatever
+        #     direct URL was provided (already SSRF/scheme/gateway-host
+        #     validated by the request validator) WITHOUT a reachability
+        #     probe — probing a non-load-bearing URL would block
+        #     registration for no benefit (the original closed-mode
+        #     complaint). Reachability is (re)verified later via
+        #     PATCH /{id}/endpoint if the agent switches to a push mode.
+        _policy_mode = (body.communication_policy or {}).get("mode", "manifest")
+        if _policy_mode in _PUSH_MODES:
             endpoint, agent_card, endpoint_reachable = await _resolve_registration_endpoint(
                 direct_endpoint=body.get_direct_a2a_endpoint(),
                 agent_card_url=body.agent_card_url,
                 agent_card=body.agent_card,
             )
         else:
-            # No endpoint registered → ``endpoint_reachable=False`` is the
-            # honest answer. Senders should look at ``communication_mode``
-            # to pick manifest-notify instead of direct delivery.
-            endpoint, agent_card, endpoint_reachable = None, None, False
+            endpoint = body.get_direct_a2a_endpoint()
+            agent_card = body.agent_card
+            # Not probed (mode doesn't push); senders consult
+            # ``communication_mode`` to choose manifest-notify over direct.
+            endpoint_reachable = False
 
         agent, api_key = await agent_service.join_agent(
             name=body.name,

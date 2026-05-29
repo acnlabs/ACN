@@ -242,11 +242,15 @@ async def test_resolve_raises_on_dns_failure():
 
 
 def _make_join_body() -> AgentJoinRequest:
+    # Explicit open mode: reachability probing (and its hard-fail) only
+    # applies to push modes. Without this the body would default to
+    # ``manifest`` (pull), which intentionally skips the probe.
     return AgentJoinRequest(
         name="ReachabilityTestAgent",
         description="Tests that endpoint_reachable is wired into the join response.",
         tags=["test"],
         a2a_endpoint="https://agent.example.com/a2a",
+        communication_policy={"mode": "open"},
     )
 
 
@@ -696,3 +700,73 @@ async def test_join_response_hint_when_endpoint_unreachable():
     assert resp.endpoint_reachable is False
     assert resp.next_step_hint is not None
     assert "reachability" in resp.next_step_hint.lower()
+
+
+# ---------------------------------------------------------------------------
+# C2 — non-pushing modes skip the reachability probe even WITH an endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_manifest_with_endpoint_skips_reachability_probe():
+    """A manifest-mode agent that *does* supply an endpoint must NOT be
+    reachability-probed: the endpoint is not load-bearing in a pull mode,
+    so probing it (and hard-failing on unreachable) would block
+    registration for no benefit. The supplied URL is still stored."""
+    agent = _make_pull_only_agent("manifest")
+    agent.communication_policy = {"mode": "manifest"}
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(return_value=(agent, "acn_test_key"))
+
+    body = AgentJoinRequest(
+        name="ManifestWithEndpoint",
+        description="Pull-mode agent that happens to advertise a URL.",
+        tags=["test"],
+        a2a_endpoint="https://agent.example.com/a2a",
+        communication_policy={"mode": "manifest"},
+    )
+
+    resolve_mock = AsyncMock()
+    with patch("acn.routes.registry._resolve_registration_endpoint", new=resolve_mock):
+        resp = await _join_agent_impl(
+            body, BackgroundTasks(), ref=None, agent_service=svc
+        )
+
+    # The probe path must never run for a non-pushing mode.
+    resolve_mock.assert_not_called()
+    # The supplied endpoint is still persisted (usable once they switch to push).
+    kwargs = svc.join_agent.await_args.kwargs
+    assert kwargs["endpoint"] == "https://agent.example.com/a2a"
+    assert resp.endpoint_reachable is False
+    # Hint must be the manifest pull hint, NOT the "didn't answer probe" one.
+    assert resp.next_step_hint is not None
+    assert "manifest" in resp.next_step_hint.lower()
+    assert "did not answer" not in resp.next_step_hint.lower()
+
+
+@pytest.mark.asyncio
+async def test_closed_with_unreachable_endpoint_still_registers():
+    """closed-mode + a provided endpoint must not be hard-blocked by the
+    reachability probe — the residual edge of the original closed-mode
+    complaint. Registration succeeds without ever probing."""
+    agent = _make_pull_only_agent("closed")
+    agent.communication_policy = {"mode": "closed"}
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(return_value=(agent, "acn_test_key"))
+
+    body = AgentJoinRequest(
+        name="ClosedWithEndpoint",
+        description="Closed-mode agent that still lists a (maybe-down) URL.",
+        tags=["test"],
+        a2a_endpoint="https://down.example.com/a2a",
+        communication_policy={"mode": "closed"},
+    )
+
+    resolve_mock = AsyncMock()
+    with patch("acn.routes.registry._resolve_registration_endpoint", new=resolve_mock):
+        resp = await _join_agent_impl(
+            body, BackgroundTasks(), ref=None, agent_service=svc
+        )
+
+    resolve_mock.assert_not_called()
+    assert resp.communication_mode == "closed"
