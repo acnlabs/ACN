@@ -152,6 +152,30 @@ def _validate_agent_endpoint_url(v: str | None) -> str | None:
 # ========== Request/Response Models ==========
 
 
+def _validate_agent_name(v: str) -> str:
+    """Validate an agent display name (shared by join + profile PATCH).
+
+    Returns the stripped name. Raises ``ValueError`` on a blank name, an
+    auto-generated-looking name (long trailing numeric suffix), or a name
+    with no letters. Centralizing this keeps the registration validator
+    and the ``PATCH /{id}/profile`` route enforcing the same rule — a
+    divergence would let a name banned at join time slip in via edit.
+    """
+    v = v.strip()
+    if not v:
+        raise ValueError("Name cannot be blank")
+    # Reject auto-generated names: ends with 8+ digit numeric suffix (e.g. agent-1772498556)
+    if re.search(r"[-_]\d{8,}$", v):
+        raise ValueError(
+            "Name looks auto-generated (ends with a long numeric suffix). "
+            "Please use a descriptive human-readable name."
+        )
+    # Must contain at least one letter (Latin or CJK)
+    if not re.search(r"[a-zA-Z\u4e00-\u9fff]", v):
+        raise ValueError("Name must contain at least one letter.")
+    return v
+
+
 class AgentJoinRequest(BaseModel):
     """Request for autonomous agent to join ACN"""
 
@@ -189,19 +213,7 @@ class AgentJoinRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Name cannot be blank")
-        # Reject auto-generated names: ends with 8+ digit numeric suffix (e.g. agent-1772498556)
-        if re.search(r"[-_]\d{8,}$", v):
-            raise ValueError(
-                "Name looks auto-generated (ends with a long numeric suffix). "
-                "Please use a descriptive human-readable name."
-            )
-        # Must contain at least one letter (Latin or CJK)
-        if not re.search(r"[a-zA-Z\u4e00-\u9fff]", v):
-            raise ValueError("Name must contain at least one letter.")
-        return v
+        return _validate_agent_name(v)
 
     @field_validator("endpoint", "a2a_endpoint", "agent_card_url")
     @classmethod
@@ -2494,6 +2506,123 @@ async def update_agent_social_card_url(
     return {
         "agent_id": agent_id,
         "social_card_url": agent.social_card_url,
+    }
+
+
+class ProfilePatchRequest(BaseModel):
+    """PATCH body for ``/agents/{id}/profile``.
+
+    Partial update of editable metadata: ``name`` / ``description`` /
+    ``tags``. Every field is optional — only those present are changed.
+    This is a PATCH (partial), not a PUT (replace): omitting a field
+    leaves it untouched; it is never blanked out. ``tags`` *is* replaced
+    wholesale when present (the list is the unit of update); pass the
+    full desired list, or ``[]`` to clear all tags.
+
+    The same validators that run at registration apply here so a value
+    rejected on join can't slip in via edit.
+    """
+
+    name: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=100,
+        description="New display name, or omit to leave unchanged.",
+    )
+    description: str | None = Field(
+        default=None,
+        min_length=10,
+        max_length=500,
+        description="New description, or omit to leave unchanged.",
+    )
+    tags: list[str] | None = Field(
+        default=None,
+        max_length=20,
+        description=(
+            "New full capability-tag list (replaces the existing list), "
+            "or omit to leave unchanged. Pass [] to clear all tags."
+        ),
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return _validate_agent_name(v)
+
+    @model_validator(mode="after")
+    def _require_at_least_one_field(self):
+        if self.name is None and self.description is None and self.tags is None:
+            raise ValueError(
+                "At least one of name, description, or tags must be provided."
+            )
+        return self
+
+
+@router.patch("/{agent_id}/profile")
+# Same per-agent ceiling as the policy / social-card / endpoint PATCH
+# endpoints: writes DB + invalidates cache. A leaked owner key spamming
+# it could churn the cache and audit stream. 30/min is ~one edit per 2s,
+# far above any legitimate operator pattern.
+@limiter.limit("30/minute")
+async def update_agent_profile(
+    request: Request,
+    agent_id: AgentIdPath,
+    body: ProfilePatchRequest,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Partial update of an agent's editable metadata (name/description/tags).
+
+    Closes the "agents can't edit their own basic info after registration"
+    gap: previously ``name`` / ``description`` / ``tags`` were fixed at
+    join time, and ``PATCH /{id}`` is the A2A proxy, not a metadata route.
+
+    Auth: ``OwnerOrInternalDep`` — the agent itself (Bearer API key) or
+    X-Internal-Token, identical to ``PATCH /{id}/policy`` and
+    ``/social-card-url``. Only fields present in the body are changed.
+    """
+    try:
+        updated = await agent_service.update_profile(
+            agent_id=agent_id,
+            name=body.name,
+            description=body.description,
+            tags=body.tags,
+        )
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    # M3: the auth cache rows carry the agent name, so a name change must
+    # evict the stale entry or downstream callers would see the old name
+    # for up to the cache TTL.
+    evict_agent_from_cache(agent_id)
+
+    logger.info(
+        "agent_profile_updated",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+        caller_agent_id=caller.get("agent_id"),
+        fields=[
+            f
+            for f, v in (
+                ("name", body.name),
+                ("description", body.description),
+                ("tags", body.tags),
+            )
+            if v is not None
+        ],
+    )
+
+    return {
+        "agent_id": agent_id,
+        "name": updated.name,
+        "description": updated.description,
+        "tags": updated.tags,
     }
 
 
