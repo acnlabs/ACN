@@ -290,6 +290,8 @@ class AuditLogger:
         await self.redis.ltrim(type_key, 0, self.max_entries - 1)
         await self.redis.expire(type_key, self.retention_days * 24 * 3600)
 
+        await self.publish_public_system_event(event)
+
         return event_id
 
     # =========================================================================
@@ -446,6 +448,101 @@ class AuditLogger:
     # Query Methods
     # =========================================================================
 
+    _PUBLIC_BROADCAST_EVENT_TYPES = frozenset(
+        {AuditEventType.AGENT_REGISTERED, AuditEventType.SUBNET_CREATED}
+    )
+    _PUBLIC_SYSTEM_EVENTS_CHANNEL = "broadcast:system-events"
+    _PUBLIC_SYSTEM_EVENT_MESSAGE_TYPE = "public_system_event"
+
+    @staticmethod
+    def is_public_broadcast_eligible(event: AuditEvent) -> bool:
+        """Return True iff an audit event is eligible for public fan-out.
+
+        Eligibility is an explicit opt-in carried in ``event.details``:
+        ``{"public_broadcast_eligible": true}``.
+
+        We intentionally require a strict boolean ``True`` (not just truthy)
+        so malformed payloads like ``"true"`` or ``1`` do not leak into
+        public streams.
+        """
+        return event.details.get("public_broadcast_eligible") is True
+
+    @classmethod
+    def to_public_broadcast_payload(cls, event: AuditEvent) -> dict[str, Any] | None:
+        """Build a fixed-schema payload for public broadcast channels.
+
+        Returns ``None`` when the event is not eligible (or unsupported).
+        This ensures downstream broadcasters can call one function and avoid
+        duplicating filter + redaction logic.
+        """
+        if not cls.is_public_broadcast_eligible(event):
+            return None
+        if event.event_type not in cls._PUBLIC_BROADCAST_EVENT_TYPES:
+            return None
+
+        base = {
+            "schema_version": 1,
+            "event_id": event.id,
+            "timestamp": event.timestamp.isoformat(),
+            "event_type": event.event_type.value,
+        }
+
+        if event.event_type == AuditEventType.AGENT_REGISTERED:
+            if not event.target_id:
+                return None
+            out = {
+                **base,
+                "agent_id": event.target_id,
+            }
+            source = event.details.get("source")
+            if isinstance(source, str) and source:
+                out["source"] = source
+            return out
+
+        if event.event_type == AuditEventType.SUBNET_CREATED:
+            if not event.target_id:
+                return None
+            out = {
+                **base,
+                "subnet_id": event.target_id,
+            }
+            join_policy = event.details.get("join_policy")
+            if isinstance(join_policy, str) and join_policy:
+                out["join_policy"] = join_policy
+            return out
+
+        # Future-proof fallback for mypy/control-flow completeness.
+        return None
+
+    async def publish_public_system_event(self, event: AuditEvent) -> None:
+        """Fan out public-eligible events to the WS public channel.
+
+        The feed is best-effort: audit persistence should succeed even when
+        realtime fan-out is temporarily degraded.
+        """
+        payload = self.to_public_broadcast_payload(event)
+        if payload is None:
+            return
+        try:
+            await self.redis.publish(
+                f"acn:ws:{self._PUBLIC_SYSTEM_EVENTS_CHANNEL}",
+                json.dumps(
+                    {
+                        "type": self._PUBLIC_SYSTEM_EVENT_MESSAGE_TYPE,
+                        "event": payload,
+                    }
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug(
+                "audit_public_system_event_publish_failed",
+                extra={
+                    "event_type": event.event_type.value,
+                    "event_id": event.id,
+                    "error": str(exc),
+                },
+            )
+
     async def query_events(
         self,
         event_type: AuditEventType | None = None,
@@ -526,6 +623,42 @@ class AuditLogger:
                 continue
 
         return events
+
+    async def query_public_broadcast_events(
+        self,
+        *,
+        event_types: list[AuditEventType] | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AuditEvent]:
+        """Return audit events that are safe to forward to public feeds.
+
+        This is a read-side helper for downstream broadcasters so every
+        consumer applies the same strict eligibility rule.
+        """
+        # Read more than ``limit`` so post-filter pagination remains stable.
+        candidates = await self.query_events(
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit + offset + 1000,
+            offset=0,
+        )
+        out: list[AuditEvent] = []
+        skipped = 0
+        for event in candidates:
+            if event_types and event.event_type not in event_types:
+                continue
+            if not self.is_public_broadcast_eligible(event):
+                continue
+            if skipped < offset:
+                skipped += 1
+                continue
+            out.append(event)
+            if len(out) >= limit:
+                break
+        return out
 
     async def get_event(self, event_id: str) -> AuditEvent | None:
         """Get a specific event by ID"""

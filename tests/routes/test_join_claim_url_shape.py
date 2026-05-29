@@ -40,6 +40,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import BackgroundTasks
 
+from acn.monitoring.audit import AuditEventType
 from acn.routes.registry import AgentJoinRequest, _join_agent_impl
 
 
@@ -138,3 +139,59 @@ async def test_claim_url_url_encodes_reserved_characters(stub_join_service, fake
     # And the raw form must NOT appear — that would mean we forgot to
     # call quote() somewhere on the path.
     assert "with/slash&amp=eq?qmark#hash" not in resp.claim_url
+
+
+@pytest.mark.asyncio
+async def test_join_emits_agent_registered_audit_for_real_visibility(stub_join_service):
+    """Public joins should emit a system-level registration audit event."""
+    with (
+        patch(
+            "acn.routes.registry._resolve_registration_endpoint",
+            new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True)),
+        ),
+        patch("acn.routes.registry.get_audit_singleton", return_value=object()),
+        patch("acn.routes.registry.fire_and_forget_event") as fire,
+    ):
+        await _join_agent_impl(
+            _make_body(),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+        )
+
+    fire.assert_called_once()
+    kwargs = fire.call_args.kwargs
+    assert kwargs["event_type"] == AuditEventType.AGENT_REGISTERED
+    assert kwargs["details"]["source"] == "join"
+    assert kwargs["details"]["visibility"] == "real"
+    assert kwargs["details"]["public_broadcast_eligible"] is True
+
+
+@pytest.mark.asyncio
+async def test_join_emits_internal_audit_for_non_real_visibility(
+    stub_join_service,
+    fake_agent,
+):
+    """Internal/test joins stay auditable but are marked non-public."""
+    fake_agent.metadata = {"visibility": "test"}
+    with (
+        patch(
+            "acn.routes.registry._resolve_registration_endpoint",
+            new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True)),
+        ),
+        patch("acn.routes.registry.get_audit_singleton", return_value=object()),
+        patch("acn.routes.registry.fire_and_forget_event") as fire,
+    ):
+        await _join_agent_impl(
+            _make_body(),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+            default_metadata={"visibility": "test"},
+        )
+
+    fire.assert_called_once()
+    kwargs = fire.call_args.kwargs
+    assert kwargs["event_type"] == AuditEventType.AGENT_REGISTERED
+    assert kwargs["details"]["visibility"] == "test"
+    assert kwargs["details"]["public_broadcast_eligible"] is False

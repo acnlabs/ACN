@@ -15,13 +15,21 @@ covered by `tests/monitoring/`. The point here is to guard against another
 "route calls a method that doesn't exist" regression.
 """
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from acn.api import app
-from acn.routes.dependencies import get_analytics, get_metrics, limiter, verify_internal_token
+from acn.monitoring.audit import AuditEvent, AuditEventType, AuditLevel
+from acn.routes.dependencies import (
+    get_analytics,
+    get_audit,
+    get_metrics,
+    limiter,
+    verify_internal_token,
+)
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -116,7 +124,53 @@ def stub_analytics() -> AsyncMock:
 
 
 @pytest.fixture
-def client(stub_metrics: AsyncMock, stub_analytics: AsyncMock):
+def stub_audit() -> AsyncMock:
+    """A stub AuditLogger exposing only the public-feed query used by routes."""
+    a = AsyncMock()
+    a.query_public_broadcast_events = AsyncMock(
+        return_value=[
+            AuditEvent(
+                id="e-agent",
+                timestamp=datetime.now(UTC),
+                event_type=AuditEventType.AGENT_REGISTERED,
+                level=AuditLevel.INFO,
+                target_id="agent-1",
+                target_type="agent",
+                details={
+                    "public_broadcast_eligible": True,
+                    "source": "join",
+                    "internal_note": "must-not-leak",
+                },
+            ),
+            AuditEvent(
+                id="e-subnet",
+                timestamp=datetime.now(UTC),
+                event_type=AuditEventType.SUBNET_CREATED,
+                level=AuditLevel.INFO,
+                target_id="subnet-1",
+                target_type="subnet",
+                details={
+                    "public_broadcast_eligible": True,
+                    "join_policy": "open",
+                    "is_private": False,
+                },
+            ),
+            AuditEvent(
+                id="e-hidden",
+                timestamp=datetime.now(UTC),
+                event_type=AuditEventType.POLICY_CHANGED,
+                level=AuditLevel.INFO,
+                target_id="agent-2",
+                target_type="agent",
+                details={"public_broadcast_eligible": True},
+            ),
+        ]
+    )
+    return a
+
+
+@pytest.fixture
+def client(stub_metrics: AsyncMock, stub_analytics: AsyncMock, stub_audit: AsyncMock):
     """TestClient with dependencies overridden and rate limiter disabled.
 
     We override the *dependency functions* (not the underlying singletons)
@@ -131,6 +185,7 @@ def client(stub_metrics: AsyncMock, stub_analytics: AsyncMock):
 
     app.dependency_overrides[get_metrics] = lambda: stub_metrics
     app.dependency_overrides[get_analytics] = lambda: stub_analytics
+    app.dependency_overrides[get_audit] = lambda: stub_audit
     # Internal token is checked via verify_internal_token — override to no-op.
     app.dependency_overrides[verify_internal_token] = lambda: None
 
@@ -203,6 +258,60 @@ class TestMonitoringRoutes:
         stub_analytics.get_dashboard_data.assert_awaited_once()
         # metrics is not involved in dashboard anymore
         stub_metrics.get_all_metrics.assert_not_called()
+
+    def test_public_system_events_returns_fixed_redacted_schema(
+        self, client: TestClient, stub_audit: AsyncMock
+    ):
+        r = client.get("/api/v1/public/system-events")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["count"] == 2
+        assert body["limit"] == 100
+        assert body["offset"] == 0
+        assert [item["event_type"] for item in body["items"]] == ["agent_registered", "subnet_created"]
+        assert body["items"][0]["agent_id"] == "agent-1"
+        assert "internal_note" not in body["items"][0]
+        assert "actor_id" not in body["items"][0]
+        assert "source_ip" not in body["items"][0]
+        assert body["items"][1]["subnet_id"] == "subnet-1"
+        assert "is_private" not in body["items"][1]
+        stub_audit.query_public_broadcast_events.assert_awaited_once_with(
+            event_types=None,
+            limit=100,
+            offset=0,
+        )
+
+    def test_public_system_events_maps_event_type_filter(
+        self, client: TestClient, stub_audit: AsyncMock
+    ):
+        stub_audit.query_public_broadcast_events.reset_mock()
+        stub_audit.query_public_broadcast_events.return_value = [
+            AuditEvent(
+                id="e-agent-only",
+                timestamp=datetime.now(UTC),
+                event_type=AuditEventType.AGENT_REGISTERED,
+                level=AuditLevel.INFO,
+                target_id="agent-9",
+                target_type="agent",
+                details={"public_broadcast_eligible": True, "source": "join"},
+            )
+        ]
+
+        r = client.get(
+            "/api/v1/public/system-events",
+            params=[("event_type", "agent_registered"), ("limit", "10"), ("offset", "2")],
+        )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["count"] == 1
+        assert body["items"][0]["event_type"] == "agent_registered"
+        stub_audit.query_public_broadcast_events.assert_awaited_once_with(
+            event_types=[AuditEventType.AGENT_REGISTERED],
+            limit=10,
+            offset=2,
+        )
 
 
 # -----------------------------------------------------------------------------

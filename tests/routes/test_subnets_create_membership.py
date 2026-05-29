@@ -20,12 +20,13 @@ Tracking: ``docs/adr/0001-subnet-creator-must-be-member.md``.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from acn.api import app
+from acn.monitoring.audit import AuditEventType
 from acn.routes.dependencies import (
     get_agent_service,
     get_subnet_service,
@@ -192,3 +193,59 @@ class TestCreateSubnetMembership:
         assert 400 <= r.status_code < 500
         stub_subnet_service.create_subnet.assert_not_awaited()
         stub_agent_service.join_subnet.assert_not_awaited()
+
+    def test_create_public_subnet_emits_subnet_created_audit(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        _wire(stub_agent_service, stub_subnet_service)
+        with (
+            patch("acn.routes.subnets.get_audit_singleton", return_value=object()),
+            patch("acn.routes.subnets.fire_and_forget_event") as fire,
+            TestClient(app) as client,
+        ):
+            r = client.post(
+                "/api/v1/subnets",
+                headers={"Authorization": "Bearer owner-key"},
+                json={"name": "Demo Subnet", "slug": _EXPLICIT_SUBNET_ID},
+            )
+
+        assert r.status_code == 200, r.text
+        fire.assert_called_once()
+        kwargs = fire.call_args.kwargs
+        assert kwargs["event_type"] == AuditEventType.SUBNET_CREATED
+        assert kwargs["target_id"] == _EXPLICIT_SUBNET_ID
+        assert kwargs["details"]["is_private"] is False
+        assert kwargs["details"]["public_broadcast_eligible"] is True
+
+    def test_create_private_subnet_emits_internal_audit_but_marks_non_public(
+        self, stub_agent_service, stub_subnet_service
+    ):
+        async def _private_create(**kwargs):
+            sn = _make_subnet_mock(slug=kwargs["slug"], owner=kwargs["owner"])
+            sn.is_private = True
+            sn.join_policy = "approval"
+            return sn
+
+        stub_subnet_service.create_subnet = AsyncMock(side_effect=_private_create)
+        _wire(stub_agent_service, stub_subnet_service)
+        with (
+            patch("acn.routes.subnets.get_audit_singleton", return_value=object()),
+            patch("acn.routes.subnets.fire_and_forget_event") as fire,
+            TestClient(app) as client,
+        ):
+            r = client.post(
+                "/api/v1/subnets",
+                headers={"Authorization": "Bearer owner-key"},
+                json={
+                    "name": "Private Subnet",
+                    "slug": _EXPLICIT_SUBNET_ID,
+                    "is_private": True,
+                },
+            )
+
+        assert r.status_code == 200, r.text
+        fire.assert_called_once()
+        kwargs = fire.call_args.kwargs
+        assert kwargs["event_type"] == AuditEventType.SUBNET_CREATED
+        assert kwargs["details"]["is_private"] is True
+        assert kwargs["details"]["public_broadcast_eligible"] is False

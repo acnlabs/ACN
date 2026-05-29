@@ -14,12 +14,26 @@ The previous version of this file invoked:
 so every endpoint here except `GET /metrics` previously returned 500.
 """
 
-from fastapi import APIRouter
+from typing import Literal
+
+from fastapi import APIRouter, Query
 from fastapi.responses import PlainTextResponse
 
-from .dependencies import AnalyticsDep, InternalTokenDep, MetricsDep  # type: ignore[import-untyped]
+from ..monitoring import AuditEventType, AuditLogger
+from .dependencies import (  # type: ignore[import-untyped]
+    AnalyticsDep,
+    AuditDep,
+    InternalTokenDep,
+    MetricsDep,
+)
 
 router = APIRouter(tags=["monitoring"])
+
+PublicSystemEventType = Literal["agent_registered", "subnet_created"]
+_PUBLIC_EVENT_TYPE_MAP: dict[PublicSystemEventType, AuditEventType] = {
+    "agent_registered": AuditEventType.AGENT_REGISTERED,
+    "subnet_created": AuditEventType.SUBNET_CREATED,
+}
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
@@ -55,3 +69,35 @@ async def get_dashboard_data(_: InternalTokenDep, analytics: AnalyticsDep = None
     trip to metrics here.
     """
     return await analytics.get_dashboard_data()
+
+
+@router.get("/api/v1/public/system-events")
+async def get_public_system_events(
+    event_type: list[PublicSystemEventType] | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    audit: AuditDep = None,
+):
+    """Public system-event feed with fixed, redacted output schema.
+
+    This endpoint is intentionally open (no auth dependency) so frontend and
+    third-party consumers can poll a stable read model without touching
+    internal audit fields.
+    """
+    event_types = [_PUBLIC_EVENT_TYPE_MAP[value] for value in event_type] if event_type else None
+    events = await audit.query_public_broadcast_events(
+        event_types=event_types,
+        limit=limit,
+        offset=offset,
+    )
+    items = [
+        payload
+        for event in events
+        if (payload := AuditLogger.to_public_broadcast_payload(event)) is not None
+    ]
+    return {
+        "items": items,
+        "limit": limit,
+        "offset": offset,
+        "count": len(items),
+    }
