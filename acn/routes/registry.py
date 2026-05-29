@@ -106,6 +106,48 @@ _optional_bearer = HTTPBearer(auto_error=False)
 _MODES_REQUIRING_SDK_NOTIFY: frozenset[str] = frozenset({"manifest", "allowlist"})
 _SDK_MIN_VERSION_HEADER = "X-ACN-SDK-Min-Version"
 
+# Modes that push messages to the agent over HTTP and therefore require a
+# delivery endpoint. ``manifest`` / ``closed`` never push (pull / reject)
+# so they may register and operate without one.
+_PUSH_MODES: frozenset[str] = frozenset({"open", "allowlist"})
+
+
+def _validate_agent_endpoint_url(v: str | None) -> str | None:
+    """Validate an agent-supplied delivery URL (shared by join + PATCH).
+
+    Returns the stripped URL, or ``None`` for a ``None`` / blank input.
+    Raises ``ValueError`` on any of:
+      * non-http(s) scheme,
+      * a host that points at ACN's own gateway (which would pass the
+        reachability probe via ACN's 405 yet deliver nothing to the agent),
+      * an SSRF-blocked target (private / reserved IP literal).
+
+    Centralizing this keeps the registration field validator and the
+    ``PATCH /{id}/endpoint`` route in lockstep — a divergence here would
+    let an endpoint banned at join time slip in via the update path.
+    """
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        return None
+    if not re.match(r"^https?://", v, re.IGNORECASE):
+        raise ValueError("Endpoint must be an http:// or https:// URL.")
+    _v_host = urlparse(v).netloc.lower()
+    for _gateway in (settings.gateway_base_url, settings.frontend_base_url):
+        if _gateway:
+            _gw_host = urlparse(_gateway.rstrip("/")).netloc.lower()
+            if _v_host and _gw_host and _v_host == _gw_host:
+                raise ValueError(
+                    "Endpoint must point to the agent's own server, "
+                    "not to the ACN gateway."
+                )
+    try:
+        validate_endpoint_url(v, allow_loopback=settings.dev_mode)
+    except SSRFViolation as e:
+        raise ValueError(str(e)) from e
+    return v
+
 
 # ========== Request/Response Models ==========
 
@@ -164,33 +206,11 @@ class AgentJoinRequest(BaseModel):
     @field_validator("endpoint", "a2a_endpoint", "agent_card_url")
     @classmethod
     def validate_endpoint(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        v = v.strip()
-        if not re.match(r"^https?://", v, re.IGNORECASE):
-            raise ValueError("Endpoint must be an http:// or https:// URL.")
-        # Reject endpoints that point at ACN itself. An agent endpoint must be
-        # the agent's own server — using ACN's gateway as a placeholder passes
-        # the HTTP probe (ACN responds 405) while delivering nothing to the
-        # real agent. Compare normalized hosts to handle trailing slashes and
-        # port variations. Check both GATEWAY_BASE_URL and FRONTEND_BASE_URL.
-        _v_host = urlparse(v).netloc.lower()
-        for _gateway in (settings.gateway_base_url, settings.frontend_base_url):
-            if _gateway:
-                _gw_host = urlparse(_gateway.rstrip("/")).netloc.lower()
-                if _v_host and _gw_host and _v_host == _gw_host:
-                    raise ValueError(
-                        "Endpoint must point to the agent's own server, "
-                        "not to the ACN gateway."
-                    )
-        # SSRF guard: reject IP-literal endpoints in private/reserved ranges.
-        # Hostname resolution is checked again at dispatch time (see
-        # `_proxy_to_agent`) to defend against DNS rebinding.
-        try:
-            validate_endpoint_url(v, allow_loopback=settings.dev_mode)
-        except SSRFViolation as e:
-            raise ValueError(str(e)) from e
-        return v
+        # SSRF / scheme / ACN-gateway-host checks are shared with the
+        # PATCH /{id}/endpoint route via ``_validate_agent_endpoint_url``.
+        # Hostname resolution is re-checked at dispatch time (see
+        # ``_proxy_to_agent``) to defend against DNS rebinding.
+        return _validate_agent_endpoint_url(v)
 
     @model_validator(mode="after")
     def require_delivery_or_discovery_url(self):
@@ -1924,6 +1944,120 @@ async def get_agent_endpoint(
             404,
             details={"agent_id": agent_id},
         ) from e
+
+
+class EndpointPatchRequest(BaseModel):
+    """PATCH body for ``/agents/{id}/endpoint``.
+
+    Wraps the URL in a top-level ``endpoint`` key, mirroring the field
+    name everywhere else. This is the pull→push upgrade path: a
+    manifest-mode agent that later stands up an HTTPS server registers
+    it here instead of re-joining (which would mint a new ``agent_id``).
+    Pass ``null`` to clear the endpoint and revert to pull-only.
+    """
+
+    endpoint: str | None = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "New direct A2A delivery URL, or null to clear (revert to "
+            "pull-only). Must be an http(s) URL on the agent's own host "
+            "(not the ACN gateway) and pass SSRF checks."
+        ),
+    )
+
+    @field_validator("endpoint")
+    @classmethod
+    def _validate(cls, v: str | None) -> str | None:
+        return _validate_agent_endpoint_url(v)
+
+
+@router.patch("/{agent_id}/endpoint")
+# Same per-agent ceiling as the policy / social-card PATCH endpoints:
+# writes DB + invalidates cache + (on set) fires an outbound reachability
+# probe, so a leaked owner key spamming it could push both the audit
+# stream and external probe traffic. 30/min is ~one update per 2s, far
+# above any legitimate operator pattern.
+@limiter.limit("30/minute")
+async def update_agent_endpoint(
+    request: Request,
+    agent_id: AgentIdPath,
+    body: EndpointPatchRequest,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Set or clear an agent's delivery endpoint after registration.
+
+    The pull→push upgrade path. A manifest-mode agent that deploys an
+    HTTPS server calls this to start receiving direct delivery, without
+    re-registering (which would issue a new ``agent_id`` and orphan its
+    identity, reputation, and subnet memberships).
+
+    Auth: ``OwnerOrInternalDep`` — same as ``GET /{id}/endpoint`` and
+    ``PATCH /{id}/policy``. The agent (Bearer API key) manages its own
+    endpoint; X-Internal-Token covers ops.
+
+    Setting an endpoint runs the same two-layer reachability check as
+    registration (DNS hard-fail + HTTP probe hard-fail → 400) so a dead
+    URL can't silently black-hole inbound delivery. Clearing
+    (``endpoint=null``) is rejected when the agent is in a push mode
+    (``open`` / ``allowlist``) because that would leave it advertising a
+    delivery mode with nowhere to deliver — switch to ``manifest`` /
+    ``closed`` via ``PATCH /{id}/policy`` first.
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    current_mode = (agent.communication_policy or {}).get("mode", "open")
+
+    endpoint_reachable = False
+    if body.endpoint is not None:
+        # Two-layer check identical to registration: DNS + HTTP probe,
+        # both hard-fail with 400. Scheme / gateway-host / SSRF were
+        # already enforced by the request validator.
+        endpoint_reachable = await _check_endpoint_reachability(body.endpoint)
+    else:
+        # Clearing while in a push mode would leave the agent in the
+        # exact inconsistent state the registration validator forbids.
+        if current_mode in _PUSH_MODES:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                400,
+                message=(
+                    f"Cannot clear the endpoint while communication_policy.mode="
+                    f"{current_mode!r}: that mode pushes messages over HTTP. "
+                    "Switch to 'manifest' or 'closed' via PATCH /agents/{id}/policy "
+                    "first, then clear the endpoint."
+                ),
+                details={"reason": "endpoint_required_for_mode", "mode": current_mode},
+            )
+
+    updated = await agent_service.update_endpoint(
+        agent_id=agent_id,
+        endpoint=body.endpoint,
+    )
+
+    logger.info(
+        "agent_endpoint_updated",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+        caller_agent_id=caller.get("agent_id"),
+        endpoint_set=updated.endpoint is not None,
+        endpoint_reachable=endpoint_reachable,
+    )
+
+    return {
+        "agent_id": agent_id,
+        "endpoint": updated.endpoint,
+        "endpoint_reachable": endpoint_reachable,
+        "communication_mode": current_mode,
+    }
 
 
 # ---------------------------------------------------------------------------

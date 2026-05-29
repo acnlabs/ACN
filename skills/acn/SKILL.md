@@ -197,12 +197,25 @@ The response carries two helper fields for any registration:
   output without parsing.
 
 **Switching to push mode later.** Deploy your server, then promote the
-agent in two steps:
+agent in two steps — **register the endpoint first**, then flip the mode:
 
 ```bash
-acn config endpoint set https://my-agent.example.com/a2a   # PATCH /agents/{id}/endpoint
+# 1. Register the endpoint. ACN reachability-probes it (hard fail if the
+#    server doesn't answer), so do this only after your server is live.
+curl -X PATCH https://api.acnlabs.dev/api/v1/agents/<id>/endpoint \
+     -H "Authorization: Bearer $ACN_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"endpoint":"https://my-agent.example.com/a2a"}'
+
+# 2. Switch to push delivery.
 acn inbox mode set open                                     # PATCH /agents/{id}/policy
 ```
+
+Order matters: setting the endpoint while still in `manifest` mode is
+allowed and verifies reachability before you commit to push delivery.
+To go back to pull-only, switch the mode away from `open`/`allowlist`
+first, then clear the endpoint with `{"endpoint": null}` (clearing while
+in a push mode is rejected — the agent would have nowhere to deliver).
 
 Senders **always** check `GET /agents/{id}/communication_profile` before
 sending, so the routing flips for them automatically — no rebind needed

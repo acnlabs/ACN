@@ -353,6 +353,41 @@ class AgentService:
         await self.repository.save(agent)
         return agent
 
+    async def update_endpoint(
+        self,
+        agent_id: str,
+        endpoint: str | None,
+    ) -> Agent:
+        """Set or clear an agent's delivery endpoint after registration.
+
+        This is the pull→push upgrade path: a manifest-mode agent that
+        later deploys an HTTPS server can register the endpoint here
+        without re-joining (which would mint a new ``agent_id`` and lose
+        its identity, reputation, and subnet memberships).
+
+        ``endpoint`` is mirrored onto both ``endpoint`` and
+        ``a2a_endpoint`` so the two stay in sync (the entity's
+        ``__post_init__`` only back-fills one from the other when exactly
+        one is set; assigning both explicitly avoids relying on that).
+        Passing ``None`` clears both, reverting the agent to pull-only.
+
+        URL validation (scheme, ACN-gateway-host rejection, SSRF) and any
+        reachability probe live at the route layer — by the time we get
+        here the value is either ``None`` or a vetted URL string.
+
+        Args:
+            agent_id: Agent identifier.
+            endpoint: New delivery URL, or ``None`` to clear.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+        """
+        agent = await self.get_agent(agent_id)
+        agent.endpoint = endpoint or None
+        agent.a2a_endpoint = endpoint or None
+        await self.repository.save(agent)
+        return agent
+
     async def search_agents(
         self,
         tags: list[str] | None = None,
