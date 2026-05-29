@@ -5,6 +5,7 @@ Business logic for agent registration, discovery, and management.
 
 import hashlib
 import secrets
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import structlog  # type: ignore[import-untyped]
@@ -25,6 +26,11 @@ from .auth0_client import Auth0CredentialClient
 # Heartbeat TTL policy (seconds)
 ALIVE_GRACE_TTL = 1800  # 30 min — grace period after join, no heartbeat yet
 ALIVE_RENEW_TTL = 3600  # 60 min — renewed on each heartbeat call
+
+# How long an agent-initiated deletion request stays open for the human
+# owner to confirm before it expires. 72h covers a long weekend so a
+# request raised Friday isn't silently dead by Monday.
+DELETION_REQUEST_TTL_SECONDS = 72 * 3600
 
 logger = structlog.get_logger()
 
@@ -576,6 +582,105 @@ class AgentService:
                         error=str(e),
                     )
         return deleted
+
+    async def request_deletion(self, agent_id: str) -> tuple[Agent, str]:
+        """Open a pending deletion request on a **claimed** agent.
+
+        This is the agent-initiated path for an agent that has a human
+        owner: the agent (via its API key) asks to be deleted, but the
+        actual deletion requires the owner to confirm — mirroring the
+        claim flow in reverse.
+
+        The pending request lives in ``metadata["deletion_request"]`` as
+        ``{token_hash, requested_at, expires_at}``. Only the SHA-256 hash
+        of the one-time token is stored; the plaintext token is returned
+        once (for the confirmation URL) and never persisted. The public
+        serializer (``_agent_entity_to_info``) strips ``token_hash`` and
+        surfaces a ``pending_deletion`` marker instead.
+
+        Returns ``(agent, plaintext_token)``.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+            ValueError: If the agent is unclaimed (those delete directly,
+                with no human to confirm).
+        """
+        agent = await self.get_agent(agent_id)
+        if agent.owner is None:
+            raise ValueError(
+                "Agent is unclaimed; delete it directly instead of requesting "
+                "owner confirmation."
+            )
+        token = generate_verification_code()
+        now = datetime.now(UTC)
+        metadata = dict(agent.metadata or {})
+        metadata["deletion_request"] = {
+            "token_hash": hash_api_key(token),
+            "requested_at": now.isoformat(),
+            "expires_at": (now + timedelta(seconds=DELETION_REQUEST_TTL_SECONDS)).isoformat(),
+        }
+        agent.metadata = metadata
+        await self.repository.save(agent)
+        logger.info("agent_deletion_requested", agent_id=agent_id)
+        return agent, token
+
+    async def confirm_deletion(self, agent_id: str, owner: str, token: str) -> bool:
+        """Confirm and execute a pending deletion as the agent's owner.
+
+        Validates that (a) a pending request exists, (b) the caller is the
+        agent's owner, (c) the request hasn't expired, and (d) the token
+        matches — then delegates to ``unregister_agent`` so the same
+        follow-graph / payment-discovery cleanup runs as any other delete.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+            PermissionError: If ``owner`` is not the agent's owner.
+            ValueError: If there is no pending request, it has expired, or
+                the token is invalid.
+        """
+        agent = await self.get_agent(agent_id)
+        req = (agent.metadata or {}).get("deletion_request")
+        if not req:
+            raise ValueError("No pending deletion request for this agent.")
+        if agent.owner != owner:
+            raise PermissionError(f"Owner mismatch: {owner} != {agent.owner}")
+
+        expires_at_raw = req.get("expires_at", "")
+        try:
+            expired = datetime.fromisoformat(expires_at_raw) < datetime.now(UTC)
+        except ValueError:
+            expired = True
+        if expired:
+            # Clear the stale request so the agent returns to a clean state.
+            await self._clear_deletion_request(agent)
+            raise ValueError("Deletion request has expired; request deletion again.")
+
+        if not secrets.compare_digest(hash_api_key(token), req.get("token_hash", "")):
+            raise ValueError("Invalid deletion token.")
+
+        # Owner matches → reuse the canonical delete path (cleanups included).
+        return await self.unregister_agent(agent_id, owner)
+
+    async def cancel_deletion(self, agent_id: str) -> Agent:
+        """Cancel a pending deletion request, returning the agent to normal.
+
+        Idempotent: clearing a non-existent request is a no-op.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+        """
+        agent = await self.get_agent(agent_id)
+        await self._clear_deletion_request(agent)
+        return agent
+
+    async def _clear_deletion_request(self, agent: Agent) -> None:
+        """Drop the ``deletion_request`` marker from an agent and persist."""
+        if (agent.metadata or {}).get("deletion_request") is None:
+            return
+        metadata = dict(agent.metadata or {})
+        metadata.pop("deletion_request", None)
+        agent.metadata = metadata
+        await self.repository.save(agent)
 
     async def update_heartbeat(self, agent_id: str) -> Agent:
         """

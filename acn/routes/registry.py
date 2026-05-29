@@ -771,6 +771,18 @@ def _agent_entity_to_info(
     if not strip_sensitive:
         metadata["verification_code"] = agent.verification_code
 
+    # Pending-deletion marker. The raw ``deletion_request`` carries the
+    # one-time token's SHA-256 hash, which must never appear in any read
+    # response — replace it with a non-secret, outward-visible marker so
+    # consumers can tell an agent is winding down (and stop routing fresh
+    # work to it) without exposing the confirmation token.
+    _deletion_request = metadata.pop("deletion_request", None)
+    if isinstance(_deletion_request, dict):
+        metadata["pending_deletion"] = {
+            "requested_at": _deletion_request.get("requested_at"),
+            "expires_at": _deletion_request.get("expires_at"),
+        }
+
     # Public-facing endpoint: ACN canonical address (hides the real backend URL).
     # Owner-only access (strip_sensitive=False) keeps the raw endpoint for debugging.
     if strip_sensitive:
@@ -2891,6 +2903,203 @@ async def unregister_agent(
             403,
             details={"agent_id": agent_id, "reason": "owner_mismatch"},
         ) from e
+
+
+async def _assert_no_owned_subnets(agent_id: str, subnet_service) -> None:
+    """ADR-0006 guard: refuse to delete an agent that still owns subnets.
+
+    Shared by every deletion path (owner DELETE, agent-initiated request,
+    owner confirm) so the registry never ends up holding subnets with no
+    reachable owner regardless of which entry point triggers the delete.
+    """
+    if subnet_service is None:
+        return
+    owned = await subnet_service.list_subnets(owner=agent_id)
+    if owned:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_HAS_OWNED_SUBNETS,
+            409,
+            details={
+                "agent_id": agent_id,
+                "owned_subnet_ids": [s.slug for s in owned],
+                "hint": "Delete or transfer ownership of these subnets before removing the agent.",
+            },
+        )
+
+
+def _emit_agent_unregistered_audit(agent_id: str, *, actor_id: str, actor_type: str) -> None:
+    fire_and_forget_event(
+        get_audit_singleton(),
+        event_type=AuditEventType.AGENT_UNREGISTERED,
+        actor_id=actor_id,
+        actor_type=actor_type,
+        target_id=agent_id,
+        target_type="agent",
+        details={"confirmed": True},
+    )
+
+
+class DeletionConfirmRequest(BaseModel):
+    """POST body for ``/agents/{id}/deletion-request/confirm``."""
+
+    token: str = Field(
+        ...,
+        max_length=128,
+        description="The one-time deletion token from the deletion-request response.",
+    )
+
+
+@router.post("/{agent_id}/deletion-request")
+@limiter.limit("10/hour")
+async def request_agent_deletion(
+    request: Request,
+    agent_id: AgentIdPath,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+    subnet_service: SubnetServiceDep = None,
+):
+    """Agent-initiated deletion (self-service).
+
+    Auth: ``OwnerOrInternalDep`` — the agent's own API key, or
+    X-Internal-Token (ops).
+
+    Branches on claim status:
+      * **Unclaimed** (no human owner) or **internal** caller → deletes
+        immediately. An unclaimed agent has no owner to confirm, and
+        leaving it un-deletable was the original gap.
+      * **Claimed** agent via its API key → opens a pending request that
+        the human owner must confirm via
+        ``POST /agents/{id}/deletion-request/confirm`` (mirrors the claim
+        flow in reverse). The agent is NOT deleted yet; a
+        ``pending_deletion`` marker becomes visible on the agent.
+
+    ADR-0006: rejected (409) when the agent still owns subnets.
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND, 404, details={"agent_id": agent_id}
+        ) from e
+
+    await _assert_no_owned_subnets(agent_id, subnet_service)
+
+    caller_kind = caller.get("caller_kind")
+    is_immediate = caller_kind == "internal" or agent.owner is None
+
+    if is_immediate:
+        # Reuse the canonical delete path. owner==agent.owner passes the
+        # service-layer ownership check for both unclaimed (None==None)
+        # and internal-on-claimed (owner==owner) cases.
+        await agent_service.unregister_agent(agent_id, agent.owner)
+        evict_agent_from_cache(agent_id)
+        logger.info(
+            "agent_self_deleted",
+            agent_id=agent_id,
+            caller_kind=caller_kind,
+            claim_status=agent.claim_status.value if agent.claim_status else None,
+        )
+        _emit_agent_unregistered_audit(
+            agent_id,
+            actor_id=caller.get("agent_id") or "internal",
+            actor_type="agent" if caller_kind == "agent" else "system",
+        )
+        return {"status": "deleted", "agent_id": agent_id}
+
+    # Claimed agent via its own API key → two-phase: open a pending request.
+    _agent, token = await agent_service.request_deletion(agent_id)
+    frontend_url = (settings.frontend_base_url or settings.gateway_base_url or "").rstrip("/")
+    confirm_url = (
+        f"{frontend_url}/agents/{agent_id}/confirm-delete?token={quote(token, safe='')}"
+        if frontend_url
+        else None
+    )
+    pending = (_agent.metadata or {}).get("deletion_request", {})
+    logger.info("agent_deletion_requested", agent_id=agent_id, caller_kind=caller_kind)
+    return {
+        "status": "pending_confirmation",
+        "agent_id": agent_id,
+        "confirm_url": confirm_url,
+        "expires_at": pending.get("expires_at"),
+        "hint": (
+            "This agent is claimed. Its human owner must confirm deletion via "
+            "POST /api/v1/agents/{id}/deletion-request/confirm with the token, "
+            "or open the confirm_url. The request expires at expires_at."
+        ),
+    }
+
+
+@router.post("/{agent_id}/deletion-request/confirm")
+@limiter.limit("10/hour")
+async def confirm_agent_deletion(
+    request: Request,
+    agent_id: AgentIdPath,
+    body: DeletionConfirmRequest,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+    subnet_service: SubnetServiceDep = None,
+):
+    """Human owner confirms an agent-initiated deletion request.
+
+    Auth: Auth0 owner JWT with ``acn:write`` — same gate as the direct
+    ``DELETE /{id}``. The caller must be the agent's owner and present the
+    one-time token from the deletion-request response.
+
+    ADR-0006: rejected (409) when the agent still owns subnets.
+    """
+    token_owner: str = payload.get("sub", "")
+    await _assert_no_owned_subnets(agent_id, subnet_service)
+    try:
+        await agent_service.confirm_deletion(agent_id, token_owner, body.token)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND, 404, details={"agent_id": agent_id}
+        ) from e
+    except PermissionError as e:
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"agent_id": agent_id, "reason": "owner_mismatch"},
+        ) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"agent_id": agent_id, "reason": "deletion_confirm_failed"},
+            message=str(e),
+        ) from e
+
+    evict_agent_from_cache(agent_id)
+    logger.info("agent_deletion_confirmed", agent_id=agent_id, actor=token_owner)
+    _emit_agent_unregistered_audit(agent_id, actor_id=token_owner, actor_type=payload.get("type", "user"))
+    return {"status": "deleted", "agent_id": agent_id}
+
+
+@router.delete("/{agent_id}/deletion-request")
+@limiter.limit("30/minute")
+async def cancel_agent_deletion(
+    request: Request,
+    agent_id: AgentIdPath,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Cancel a pending deletion request (agent or internal).
+
+    Idempotent — succeeds even if there is no pending request. Clears the
+    ``pending_deletion`` marker and leaves the agent fully operational.
+    """
+    try:
+        await agent_service.cancel_deletion(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND, 404, details={"agent_id": agent_id}
+        ) from e
+    logger.info(
+        "agent_deletion_cancelled",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+    )
+    return {"status": "cancelled", "agent_id": agent_id}
 
 
 # ============================================================================
