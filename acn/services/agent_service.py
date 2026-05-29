@@ -304,6 +304,47 @@ class AgentService:
         await self.repository.save(agent)
         return agent
 
+    async def update_profile(
+        self,
+        agent_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+    ) -> Agent:
+        """Partial update of an agent's editable metadata.
+
+        Only the fields passed as non-``None`` are changed; the rest keep
+        their stored values. This is a PATCH (partial) update, not a PUT
+        (replace) — omitting a field must never blank it out.
+
+        Schema validation (name format, length caps, tag count) lives at
+        the route layer (``ProfilePatchRequest``), so by the time we get
+        here the values are already vetted.
+
+        ``tags`` is replaced wholesale when provided (a list is the unit
+        of update — there is no per-tag add/remove here); pass the full
+        desired list. An empty list clears all tags.
+
+        Args:
+            agent_id: Agent identifier.
+            name: New display name, or ``None`` to leave unchanged.
+            description: New description, or ``None`` to leave unchanged.
+            tags: New full tag list, or ``None`` to leave unchanged.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+        """
+        agent = await self.get_agent(agent_id)
+        if name is not None:
+            agent.name = name
+        if description is not None:
+            agent.description = description
+        if tags is not None:
+            agent.tags = list(tags)
+        await self.repository.save(agent)
+        return agent
+
     async def update_communication_policy(
         self,
         agent_id: str,
