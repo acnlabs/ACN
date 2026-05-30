@@ -1,9 +1,18 @@
 # ADR-0007: Unified Agent Identity & Credential Issuance
 
-**Status:** Proposed
+**Status:** Accepted — implemented (Phases 0–3 shipped 2026-05-30)
 **Date:** 2026-05-30
 **Deciders:** ACN core team + AgentPlanet backend
 **Related:** ADR-0006 (V6 ACL contract), Store marketplace integration (`backend/docs/STORE_MARKETPLACE_INTEGRATION.md`)
+
+> **Implemented.** ACN is now the sole agent identity authority: it mints
+> short-lived RS256 JWTs at `POST /oauth/token` (publishing JWKS + OIDC
+> discovery), and the AgentPlanet backend verifies them offline, reading
+> `agent_id` straight from `sub` with no mapping-table lookup. The legacy
+> Auth0 M2M agent path has been fully decommissioned (Phase 3). The *Context*
+> section below describes the pre-implementation state and is retained as a
+> historical record. See **Rollout status** at the end for what shipped and
+> the deferred-cleanup trackers.
 
 ---
 
@@ -136,3 +145,38 @@ The Decision above fixes the *direction* (B). These sub-decisions must be ratifi
 | D11 | **Phase ownership + Phase 0 go/no-go** | ACN team owns Phase 1; backend team owns Phase 2–3; Phase 0 (configure + provision AgentMother) approved to start now | Operational sequencing |
 
 **D1 is the one to settle first** — it directly determines how cheap the eventual AgentMother (and every future seller) migration is, and it should shape how Phase 0's skill documents the "get a token" step.
+
+---
+
+## Rollout status (2026-05-30)
+
+All phases shipped on 2026-05-30. Ratified sub-decisions: D1 standard OAuth2
+`client_credentials`; D2 **RS256**, private key (`AGENT_JWT_PRIVATE_KEY`) in
+Railway secrets, JWKS public half derived at runtime; D3 default scope
+`acn:read acn:write store:sell` (wallet-for-others kept out); D4 `sub = agent_id`;
+D5 1h TTL, no refresh token.
+
+| Phase | What shipped | PRs |
+|---|---|---|
+| 1 — ACN becomes issuer | `/oauth/token` (client_credentials), `/.well-known/jwks.json`, `/.well-known/openid-configuration`; `AgentTokenIssuer` | ACN #150 (+ ADR #149) |
+| 2 — backend dual-accept | Offline ACN-JWT verification; `agent_id` read from `sub`, no table lookup | backend #8 |
+| 3 — decommission legacy | Removed Auth0 M2M agent path: backend dropped `_resolve_agent_client_id` + `auth0_agent_service.py`, retired `POST/GET/DELETE /api/agent-auth/credentials`, dropped `AUTH0_MGMT_*`; ACN stopped provisioning at registration and deleted `auth0_client.py`. Human-owner + platform-M2M Auth0 retained. | ACN #151, backend #9 |
+
+Production E2E (register → ACN mint → `POST /api/store/quotes` → `GET /checkout`)
+confirms `seller_id == agent_id`; the retired `/api/agent-auth/credentials`
+endpoint now returns 404.
+
+### Deferred cleanup (tracked, low-priority — dormant/harmless)
+
+- **backend** — drop the orphaned `agent_auth0_credentials` table; remove the
+  now-unused `AUTH0_MGMT_*` Railway env vars. → acnlabs/Agentplanet-backend#10
+- **ACN** — remove the dormant Agent-entity `auth0_*` fields (entity +
+  redis/pg repos + pg model + Alembic migration). → acnlabs/ACN#152
+
+### Not done (intentionally out of scope)
+
+The "Affected Components" items above for **ACN accepting its own JWTs**
+(`acn/auth/middleware.py`) and the **A2A `from_agent` middleware** were *not*
+required by Phase 3 (which targeted the backend's agent auth). The `acn_*` key
+still authenticates agent→ACN calls directly. Converting ACN's own request path
+to mint-only (D6 end-state) remains future work.
