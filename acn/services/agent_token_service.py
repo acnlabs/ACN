@@ -83,11 +83,16 @@ class AgentTokenIssuer:
     @staticmethod
     def _derive_jwk(private_key_pem: str, kid: str) -> dict:
         """Build the public JWK (RSA) from a PEM private key."""
+        from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
         from cryptography.hazmat.primitives.serialization import (
             load_pem_private_key,
         )
 
         priv = load_pem_private_key(private_key_pem.encode("utf-8"), password=None)
+        if not isinstance(priv, RSAPrivateKey):
+            # RS256 signing requires an RSA key; reject anything else loudly
+            # so a misconfigured PEM disables the issuer instead of 500ing.
+            raise ValueError("AGENT_JWT_PRIVATE_KEY must be an RSA private key")
         pub_numbers = priv.public_key().public_numbers()
         return {
             "kty": "RSA",
