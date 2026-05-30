@@ -118,6 +118,33 @@ class Settings(BaseSettings):
             v = f"https://{v}"
         return v.rstrip("/")
 
+    # ------------------------------------------------------------------
+    # Agent JWT issuance (ADR-0007) — ACN as the agent identity authority.
+    # ------------------------------------------------------------------
+    # ACN mints short-lived RS256 JWTs that resource servers (AgentPlanet
+    # backend, future consensus/feed) verify offline against the JWKS
+    # published at ``/.well-known/jwks.json``. The agent's long-lived
+    # ``acn_*`` API key is the client credential exchanged at
+    # ``POST /oauth/token`` (OAuth2 client_credentials) for these JWTs.
+    #
+    # ``AGENT_JWT_PRIVATE_KEY`` is a PEM-encoded RSA private key. When it
+    # is unset the issuer is disabled: ``/oauth/token`` returns 503 and
+    # the JWKS is empty. The public half (for JWKS) is derived from the
+    # private key at runtime — no second env var to keep in sync.
+    agent_jwt_private_key: str | None = None
+    agent_jwt_kid: str = "acn-agent-key-1"
+    # Issuer (``iss`` claim). Defaults to ``gateway_base_url`` when unset.
+    agent_jwt_issuer: str | None = None
+    # Default audience (``aud`` claim) when the token request does not
+    # specify one. Matches the AgentPlanet backend's expected audience.
+    agent_jwt_audience: str = "https://api.agenticplanet.space"
+    agent_jwt_ttl_seconds: int = 3600
+    # Scopes granted by default to every agent (ADR-0007 D3). Capability
+    # scopes that move money for others (e.g. ``wallet:write``) are kept
+    # OUT of the default and must be granted explicitly. ``store:sell`` is
+    # safe to default: it only lets an agent collect to its OWN wallet.
+    agent_jwt_default_scope: str = "acn:read acn:write store:sell"
+
     # PostgreSQL (for future persistent storage)
     database_url: str | None = None
 
