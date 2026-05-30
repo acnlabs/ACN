@@ -21,7 +21,6 @@ from ..protocols.ap2.core import (
     SupportedPaymentMethod,
     TokenPricing,
 )
-from .auth0_client import Auth0CredentialClient
 
 # Heartbeat TTL policy (seconds)
 ALIVE_GRACE_TTL = 1800  # 30 min — grace period after join, no heartbeat yet
@@ -67,7 +66,6 @@ class AgentService:
     def __init__(
         self,
         agent_repository: IAgentRepository,
-        auth0_client: Auth0CredentialClient | None = None,
         payment_discovery: PaymentDiscoveryService | None = None,
     ):
         """
@@ -75,11 +73,9 @@ class AgentService:
 
         Args:
             agent_repository: Agent repository implementation
-            auth0_client: Auth0 credential client for creating Agent M2M credentials
             payment_discovery: Payment discovery service for auto-indexing payment capabilities
         """
         self.repository = agent_repository
-        self.auth0_client = auth0_client
         self.payment_discovery = payment_discovery
         # Optional FollowService — wired post-construction in lifespan
         # because the follow subsystem depends on this service (would
@@ -213,35 +209,9 @@ class AgentService:
         await self.repository.set_alive(agent_id, ALIVE_GRACE_TTL)
         await self._sync_payment_discovery(agent)
 
-        # 创建 Auth0 M2M 凭证（异步，不阻塞注册）
-        if self.auth0_client:
-            try:
-                cred_result = await self.auth0_client.create_credentials(
-                    agent_id=agent_id,
-                    agent_name=name,
-                )
-                if cred_result.success:
-                    agent.auth0_client_id = cred_result.client_id
-                    agent.auth0_client_secret = cred_result.client_secret
-                    agent.auth0_token_endpoint = cred_result.token_endpoint
-                    await self.repository.save(agent)
-                    logger.info(
-                        "agent_auth0_credentials_assigned",
-                        agent_id=agent_id,
-                        client_id=cred_result.client_id,
-                    )
-                else:
-                    logger.warning(
-                        "agent_auth0_credentials_failed",
-                        agent_id=agent_id,
-                        error=cred_result.error,
-                    )
-            except Exception as e:
-                logger.warning(
-                    "agent_auth0_credentials_error",
-                    agent_id=agent_id,
-                    error=str(e),
-                )
+        # ADR-0007 Phase 3: agents no longer get an Auth0 M2M credential at
+        # registration. Identity is the acn_* API key (minted into short-lived
+        # JWTs at /oauth/token), so there is no backend provisioning call here.
 
         return agent
 
