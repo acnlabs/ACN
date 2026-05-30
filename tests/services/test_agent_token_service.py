@@ -24,14 +24,14 @@ def _gen_key_pem() -> str:
 
 
 def _issuer(**overrides) -> AgentTokenIssuer:
-    params = dict(
-        private_key_pem=_gen_key_pem(),
-        kid="acn-agent-key-1",
-        issuer="https://acn.test",
-        default_audience="https://api.test",
-        ttl_seconds=3600,
-        default_scope="acn:read acn:write store:sell",
-    )
+    params = {
+        "private_key_pem": _gen_key_pem(),
+        "kid": "acn-agent-key-1",
+        "issuer": "https://acn.test",
+        "default_audience": "https://api.test",
+        "ttl_seconds": 3600,
+        "default_scope": "acn:read acn:write store:sell",
+    }
     params.update(overrides)
     return AgentTokenIssuer(**params)
 
