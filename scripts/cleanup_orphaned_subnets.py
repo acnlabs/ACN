@@ -31,7 +31,7 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 async def build_subnet_service():
     """Wire SubnetService the same way api.py does (PG or Redis fallback)."""
     import redis.asyncio as aioredis
+
     from acn.config import get_settings
     from acn.services.subnet_service import SubnetService
 
@@ -58,8 +59,8 @@ async def build_subnet_service():
 
         try:
             from acn.infrastructure.persistence.postgres import (
-                PostgresSubnetJoinRequestRepository,
                 PostgresSubnetAllowlistRepository,
+                PostgresSubnetJoinRequestRepository,
                 PostgresTaskRepository,
             )
         except ImportError:
@@ -73,7 +74,7 @@ async def build_subnet_service():
         agent_repo = PostgresAgentRepository(sf, redis_client)
         uow = PostgresUnitOfWork(sf)
 
-        kwargs: dict = dict(agent_repository=agent_repo, unit_of_work=uow)
+        kwargs: dict = {"agent_repository": agent_repo, "unit_of_work": uow}
         if PostgresTaskRepository:
             kwargs["task_repository"] = PostgresTaskRepository(sf, redis_client)
         if PostgresSubnetJoinRequestRepository:
@@ -150,7 +151,7 @@ async def find_orphaned_redis(redis_client, cutoff: datetime) -> list[tuple[str,
 
 async def run(execute: bool, min_age_days: int) -> None:
     service, redis_client, backend, session_factory = await build_subnet_service()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
+    cutoff = datetime.now(UTC) - timedelta(days=min_age_days)
 
     print(f"Backend:  {backend}")
     print(f"Mode:     {'EXECUTE (will delete!)' if execute else 'DRY RUN (preview only)'}")
