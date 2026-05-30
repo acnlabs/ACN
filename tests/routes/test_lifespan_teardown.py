@@ -87,8 +87,7 @@ def _enter_common_patches(stack: ExitStack, ws_stub, webhook_stub):
     stack.enter_context(
         patch.object(api_module, "create_webhook_config_from_settings", return_value=None)
     )
-    # Neutralize auth / escrow side-channels (they hit HTTP on __init__).
-    stack.enter_context(patch.object(api_module, "Auth0CredentialClient", return_value=AsyncMock()))
+    # Neutralize escrow side-channel (hits HTTP on __init__).
     stack.enter_context(
         patch.object(api_module, "AgentPlanetEscrowProvider", return_value=AsyncMock())
     )

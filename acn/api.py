@@ -130,7 +130,6 @@ from .services import (
     TaskService,
 )
 from .services.activity_service import ActivityService
-from .services.auth0_client import Auth0CredentialClient
 from .services.erc8004_client import ERC8004Client
 from .services.escrow_client import AgentPlanetEscrowProvider
 from .services.join_flow_service import JoinFlowService
@@ -279,12 +278,6 @@ async def lifespan(app: FastAPI):
     # migration record (commits 1ee1015..4771a1b).
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
 
-    # Initialize Auth0 Credential Client (for Agent M2M credentials)
-    auth0_credential_client = Auth0CredentialClient(
-        backend_url=settings.backend_url,
-        internal_token=settings.internal_api_token,
-    )
-
     # Initialize Clean Architecture services
     # Switch between PostgreSQL (durable) and Redis (fallback) based on DATABASE_URL
     _pg_engine = None
@@ -317,10 +310,7 @@ async def lifespan(app: FastAPI):
         subnet_repository = RedisSubnetRepository(redis_client)
         task_repository = RedisTaskRepository(redis_client)
 
-    agent_service_instance = AgentService(
-        agent_repository,
-        auth0_client=auth0_credential_client,
-    )
+    agent_service_instance = AgentService(agent_repository)
     # ADR-0003: SubnetService now takes an optional task_repository
     # used by ``create_subnet`` to validate ``linked_task_id`` on
     # ``task_scoped`` child subnets (``linked_task_not_found``
