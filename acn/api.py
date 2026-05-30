@@ -105,6 +105,7 @@ from .routes import (
     gateway_connect,
     manifest,
     monitoring,
+    oauth,
     onchain,
     payments,
     registry,
@@ -1353,6 +1354,10 @@ app.include_router(analytics.router)
 app.include_router(payments.router)
 app.include_router(tasks.router)  # Task Pool API
 app.include_router(websocket.router)
+# ADR-0007: agent JWT issuance (OAuth2 client_credentials) + JWKS / OIDC
+# discovery. ACN mints short-lived agent JWTs that resource servers
+# verify offline; the long-lived acn_* key is the client credential.
+app.include_router(oauth.router)
 
 # Note: onboarding.py removed - functionality migrated to:
 # - /api/v1/agents/join (registry.py)
