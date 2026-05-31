@@ -157,10 +157,12 @@ network. **A** keeps each guarantee where it is strongest.
   `paid`/`fulfilling` for the calling seller agent, with the same fields the
   `store.order_paid` event carries — incl. private `metadata`). Seller polls +
   idempotent `fulfill`. Push stays as a latency optimization.
-- **P1 — ACN/AP2 event layer:** replace `_notify_seller_paid`'s fire-and-forget
-  internal-send with ACN `WebhookService` (signed + retried + history); mirror
-  agent↔agent store orders as AP2 `PaymentTask`s for discovery. Backend ledger
-  unchanged.
+- **P1 — ACN/AP2 event layer (chosen: P1-A, route through AP2):** on store
+  settlement, drive an AP2 `PaymentTask` (`payment_method=platform_credits`,
+  `currency=credits`) so ACN fires `payment_task.payment_confirmed` to the
+  **seller's registered webhook** (signed + retried), replacing the
+  fire-and-forget internal-send. Backend ledger unchanged (the task is an
+  event-mirror, not a second ledger).
 - **P2 — agentic rails:** integrate Alipay AI Pay (MCP) + ACT 2.0 A2A/A2M for
   autonomous agent buyers; keep PayPal/Stripe/credits for humans. Rail charge →
   ledger settlement (truth stays in backend).
@@ -168,13 +170,50 @@ network. **A** keeps each guarantee where it is strongest.
 > Blast radius: P0 backend-only (additive). P1 backend + ACN. P2 backend + ACN +
 > Alipay open-platform config.
 
+### P1-A — chosen path and findings (2026-05-31 code audit)
+
+Routing store events through ACN's AP2 layer (vs a bespoke backend webhook) was
+chosen for architectural coherence: AP2 already models `buyer_agent`/
+`seller_agent`, already has per-agent webhook registration, and gives discovery
+for free. Audit findings that scope the work:
+
+1. **`platform_credits` already exists.** AP2 ships
+   `SupportedPaymentMethod.PLATFORM_CREDITS`, a `credits` currency, and
+   `CREDITS_PER_USD = 100` (the backend's exact convention). Store settlement
+   maps onto AP2 with **no new payment method** — clean fit.
+2. **Per-seller webhook delivery is NOT wired (the real gap).** Sellers can
+   register `webhook_url` on their payment capability
+   (`POST /payments/{agent_id}/payment-capability`), but **nothing consumes it**:
+   `PaymentTaskManager._send_webhook` calls `WebhookService.send_event`, which
+   delivers only to the **platform-wide `default_config` URL** — never to the
+   seller's registered `webhook_url` via `send_to`. P1-A's core ACN change is to
+   deliver seller-facing task events to the seller's own `webhook_url`.
+3. **No per-agent webhook secret today.** The capability stores `webhook_url`
+   but no HMAC secret; one must be added (generated at registration, shown once)
+   so `send_to` can sign per seller.
+4. **Retries are in-process, not a durable outbox.** `WebhookService` retries
+   3× (~15s, exponential) in-process and persists delivery records to Redis as
+   *history*, not as a work queue. A process crash mid-retry loses the push.
+   Therefore **P0 reconciliation remains the correctness guarantee**; P1-A
+   webhook is a latency optimization. True at-least-once needs a durable outbox
+   worker — tracked as a separate ACN hardening item (does not block P1-A).
+
+**Human buyers:** AgentMother's real orders are mostly human→agent (a human pays
+the checkout link). AP2 needs a `buyer_agent`, so human-buyer settlements mirror
+with a **system pseudo buyer-agent** (e.g. `system:agentplanet-backend`), the
+real human `buyer_id` carried in metadata. This means P1-A fires the seller
+webhook for **all** paid orders, not only agent↔agent — refining C1 below.
+
 ---
 
 ## Open Sub-Decisions
 
 | # | Decision | Default / status |
 |---|---|---|
-| C1 | Does AP2 `PaymentTask` mirror *all* store orders or only agent↔agent ones | Default: only agent↔agent (human buyers need no agent-side discovery) |
+| C1 | Does AP2 `PaymentTask` mirror *all* store orders or only agent↔agent ones | **Revised: mirror all paid orders** — human buyers use a system pseudo buyer-agent, so the seller webhook fires for human→agent orders too (AgentMother's main case) |
 | C2 | Polling cadence / queue pagination for P0 | Default: seller polls on its own cadence; queue returns oldest-first, capped (e.g. 50) |
 | C3 | Keep the fire-and-forget push after P1 webhook lands | Keep as best-effort low-latency hint; webhook + reconcile are the guarantees |
+| C5 | P1-A delivery shape: full AP2 `PaymentTask` (created+confirmed) vs lightweight "notify seller webhook" call | **Open** — full task gives discovery/history + buyer/seller model but more surface; lightweight only fires `send_to`. Lean: full task (the P1-A intent) |
+| C6 | Per-agent webhook secret model | **Open** — generate at capability registration, return once, store hashed; used by `send_to` for `X-ACN-Signature` |
+| C7 | Durable webhook outbox in ACN `WebhookService` | **Deferred follow-up** — in-process retries today; P0 poll is the guarantee until an outbox worker lands |
 | C4 | Alipay AI Pay authorization tier for agent buyers | Deferred to P2 design (supervised vs scoped vs autonomous) |
