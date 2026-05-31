@@ -136,8 +136,10 @@ class Settings(BaseSettings):
     # Issuer (``iss`` claim). Defaults to ``gateway_base_url`` when unset.
     agent_jwt_issuer: str | None = None
     # Default audience (``aud`` claim) when the token request does not
-    # specify one. Matches the AgentPlanet backend's expected audience.
-    agent_jwt_audience: str = "https://api.agenticplanet.space"
+    # specify one. Canonical AgentPlanet backend audience (ADR-0008). The
+    # backend dual-accepts the legacy https://api.agenticplanet.space during
+    # the migration window, so clients still requesting it keep working.
+    agent_jwt_audience: str = "https://api.agentplanet.org"
     agent_jwt_ttl_seconds: int = 3600
     # Scopes granted by default to every agent (ADR-0007 D3). Capability
     # scopes that move money for others (e.g. ``wallet:write``) are kept
