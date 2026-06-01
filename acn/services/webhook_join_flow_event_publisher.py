@@ -161,6 +161,7 @@ class WebhookJoinFlowEventPublisher(IJoinFlowEventPublisher):
                 # directly so this is a transport-only field.
                 task_id=subnet.slug,
                 data=data,
+                outbox=False,  # join-flow lifecycle: fire-and-forget, reconcile via GET /allowlist
             )
         except Exception as exc:  # noqa: BLE001 — see class docstring.
             logger.error(

@@ -271,6 +271,7 @@ async def do_join_subnet(
                     "agent_id": agent_id,
                     "parent_slug": parent_slug,
                 },
+                outbox=False,  # membership lifecycle: fire-and-forget, reconcile via GET /allowlist
             )
         except Exception as e:  # noqa: BLE001 - never break join on webhook failure
             logger.warning(
@@ -324,6 +325,7 @@ async def do_leave_subnet(
                         # harnesses get hierarchy on both edges.
                         "parent_slug": _subnet_parent_id(subnet),
                     },
+                    outbox=False,  # membership lifecycle: fire-and-forget, reconcile via GET /allowlist
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning(

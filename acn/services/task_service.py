@@ -2039,6 +2039,7 @@ class TaskService:
                     event=event,
                     task_id=task.task_id,
                     data=payload,
+                    outbox=False,  # Org-Harness lifecycle: fire-and-forget, reconcile out-of-band
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning(
@@ -2096,6 +2097,7 @@ class TaskService:
                     event=event,
                     task_id=task.task_id,
                     data=payload,
+                    outbox=False,  # Org-Harness lifecycle: fire-and-forget, reconcile out-of-band
                 )
             except Exception as e:
                 logger.warning(
