@@ -257,6 +257,36 @@ async def test_zrem_claim_is_atomic(redis_client):
 
 
 @pytest.mark.asyncio
+async def test_send_to_outbox_false_does_not_park(redis_client):
+    """Opt-out callers (join-flow / Org-Harness) keep the old fail-fast behavior."""
+    svc = _make_service(redis_client)
+    svc._http_client = _fake_http(ok=False)
+
+    ok = await svc.send_to(
+        URL, SECRET, EVENT, "task1", {"x": 1},
+        retry_count=1, retry_delay=0, outbox=False,
+    )
+
+    assert ok is False
+    assert await redis_client.zcard(_OUTBOX_DUE_ZSET) == 0  # nothing parked
+
+
+@pytest.mark.asyncio
+async def test_send_to_default_parks_on_failure(redis_client):
+    """Payment/default callers (outbox defaults True) DO park on failure."""
+    svc = _make_service(redis_client)
+    svc._http_client = _fake_http(ok=False)
+
+    ok = await svc.send_to(
+        URL, SECRET, EVENT, "task1", {"x": 1},
+        retry_count=1, retry_delay=0,
+    )
+
+    assert ok is False
+    assert await redis_client.zcard(_OUTBOX_DUE_ZSET) == 1  # parked for re-driving
+
+
+@pytest.mark.asyncio
 async def test_secret_never_written_to_history_record(redis_client):
     svc = _make_service(redis_client)
     delivery, payload_json = _payload()

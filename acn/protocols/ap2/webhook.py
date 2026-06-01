@@ -255,11 +255,15 @@ class WebhookService:
         amount: str | None = None,
         currency: str | None = None,
         payment_method: str | None = None,
+        outbox: bool = True,
     ) -> bool:
         """
         Send a webhook event to configured endpoints.
 
         Returns True if delivered successfully (or no webhook configured).
+
+        ``outbox`` (default True) controls durable at-least-once re-driving; see
+        :meth:`_deliver_webhook`.
         """
         if not self.default_config or not self.default_config.enabled:
             logger.debug(f"Webhook not configured, skipping event: {event}")
@@ -281,7 +285,7 @@ class WebhookService:
             payment_method=payment_method,
         )
 
-        return await self._deliver_webhook(payload, self.default_config)
+        return await self._deliver_webhook(payload, self.default_config, use_outbox=outbox)
 
     async def send_to(
         self,
@@ -299,6 +303,7 @@ class WebhookService:
         timeout: int = 30,
         retry_count: int = 3,
         retry_delay: int = 5,
+        outbox: bool = True,
     ) -> bool:
         """Deliver a webhook payload to an arbitrary URL.
 
@@ -319,6 +324,9 @@ class WebhookService:
             timeout: HTTP timeout in seconds
             retry_count: Number of delivery attempts
             retry_delay: Base delay between retries (exponential backoff)
+            outbox: Durable at-least-once re-driving (default True). Pass False
+                for fire-and-forget callers (e.g. join-flow / Org-Harness
+                lifecycle events) that reconcile out-of-band.
 
         Returns:
             True if delivered successfully, False after exhausting retries.
@@ -346,14 +354,24 @@ class WebhookService:
             enabled=True,
         )
 
-        return await self._deliver_webhook(payload, config)
+        return await self._deliver_webhook(payload, config, use_outbox=outbox)
 
     async def _deliver_webhook(
         self,
         payload: WebhookPayload,
         config: WebhookConfig,
+        *,
+        use_outbox: bool = True,
     ) -> bool:
-        """Deliver webhook with retries"""
+        """Deliver webhook with retries.
+
+        ``use_outbox`` gates the durable outbox (ACN #162). It defaults to True
+        (payment/platform webhooks want at-least-once), but callers whose
+        delivery semantics are "fire-and-forget, reconcile out-of-band" — e.g.
+        subnet / Org-Harness join-flow lifecycle events (ADR-0004) — pass
+        ``False`` to keep the historical "fail fast after in-process retries"
+        behavior and avoid late/out-of-order re-delivery.
+        """
         if not self._http_client:
             self._http_client = httpx.AsyncClient(timeout=config.timeout, trust_env=False)
 
@@ -420,8 +438,9 @@ class WebhookService:
 
         # In-process retries exhausted. Park it in the durable outbox so a
         # background worker keeps re-driving across restarts (at-least-once);
-        # fall back to the old terminal "failed" only when the outbox is off.
-        if self._outbox_enabled:
+        # fall back to the old terminal "failed" when the outbox is off OR the
+        # caller opted out (use_outbox=False).
+        if self._outbox_enabled and use_outbox:
             delivery.status = "queued"
             await self._save_delivery(delivery)
             await self._enqueue_outbox(delivery, config, payload_json)
