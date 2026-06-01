@@ -249,7 +249,11 @@ async def set_payment_capability(
     # again (excluded from GET responses).
     new_secret: str | None = None
     webhook_secret: str | None = None
-    if body.webhook_url:
+    # Only mint a secret when the capability will actually be indexed and
+    # deliver: index_payment_capability is a no-op when accepts_payment is
+    # False, so minting one there would hand back a secret that is never
+    # stored and never used.
+    if body.webhook_url and body.accepts_payment:
         existing = None
         try:
             existing = await payment_discovery.get_agent_payment_capability(agent_id)
