@@ -313,6 +313,24 @@ class PaymentCapability(BaseModel):
         description="Token-based pricing (per million tokens, OpenAI-style)",
     )
 
+    # Webhook delivery (P1-A): the seller's endpoint that ACN POSTs payment
+    # events to (signed + retried). Until P1-A this was accepted by the API
+    # but never stored (the field did not exist on the model, so it was
+    # silently dropped by Pydantic's extra='ignore').
+    webhook_url: str | None = Field(
+        default=None,
+        description="Seller endpoint ACN delivers payment events to (signed + retried).",
+    )
+    # HMAC-SHA256 signing secret for outgoing deliveries to webhook_url. This is
+    # a SHARED symmetric secret: ACN signs each outgoing request with it and the
+    # seller verifies. ACN must therefore store it *recoverably* (NOT hashed) —
+    # the same way agents.api_key is kept (plaintext behind infra at-rest
+    # encryption), not via a new app-level crypto layer.
+    webhook_secret: str | None = Field(
+        default=None,
+        description="Recoverable HMAC secret used to sign outgoing webhook deliveries.",
+    )
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def supported_methods(self) -> list[SupportedPaymentMethod]:
@@ -804,6 +822,99 @@ class PaymentTaskManager:
 
         return task
 
+    # ------------------------------------------------------------------ #
+    # Store settlement bridge (ADR-0009 P1-A)
+    # ------------------------------------------------------------------ #
+    # The AgentPlanet backend store settles credits in its own ledger (the
+    # source of truth). These helpers let the backend *mirror* a settled store
+    # order as a platform_credits PaymentTask so ACN fires the seller's webhook
+    # and the order joins the agent-commerce event/discovery layer. The task is
+    # an event mirror — never a second ledger. Idempotent on the store order id.
+
+    def _store_order_index_key(self, order_id: str) -> str:
+        return f"{self._prefix}store_order:{order_id}"
+
+    async def record_store_settlement(
+        self,
+        *,
+        order_id: str,
+        seller_agent: str,
+        buyer_agent: str,
+        amount_credits: int,
+        description: str | None = None,
+        metadata: dict | None = None,
+    ) -> PaymentTask:
+        """Mirror a settled store order as a confirmed platform_credits task.
+
+        Idempotent on ``order_id``: a repeat call returns the existing task
+        without re-creating or re-firing. Creating + confirming fires the
+        seller's ``payment_task.payment_confirmed`` webhook (see _send_webhook).
+        """
+        index_key = self._store_order_index_key(order_id)
+        existing_id = await self.redis.get(index_key)
+        if existing_id:
+            if isinstance(existing_id, bytes):
+                existing_id = existing_id.decode()
+            existing_task = await self.get_task(existing_id)
+            if existing_task:
+                return existing_task
+
+        task_metadata = {
+            **(metadata or {}),
+            "order_id": order_id,
+            "source": "store",
+            # Make the single-ledger constraint explicit for any consumer:
+            # money truth lives in the backend wallet, not in this task.
+            "settlement_authority": "backend",
+        }
+        task = await self.create_payment_task(
+            buyer_agent=buyer_agent,
+            seller_agent=seller_agent,
+            task_description=description or f"Store order {order_id}",
+            amount=str(amount_credits),
+            currency=CREDITS,
+            payment_method=SupportedPaymentMethod.PLATFORM_CREDITS,
+            task_type="store_settlement",
+            metadata=task_metadata,
+        )
+        # Settlement already happened in the backend; jump straight to confirmed
+        # (no buyer tx_hash dance). tx_hash carries the store order id.
+        await self.update_task_status(
+            task_id=task.task_id,
+            status=PaymentTaskStatus.PAYMENT_CONFIRMED,
+            tx_hash=order_id,
+        )
+        # Index for idempotency; TTL matches terminal-task retention.
+        await self.redis.set(
+            index_key,
+            task.task_id,
+            ex=_PAYMENT_TASK_TERMINAL_TTL_SECONDS,
+        )
+        return await self.get_task(task.task_id) or task
+
+    async def complete_store_settlement(self, order_id: str) -> PaymentTask | None:
+        """Advance a store-mirror task to ``task_completed`` on seller fulfill (C8).
+
+        Idempotent; returns ``None`` if no mirror task exists for ``order_id``
+        (e.g. the settlement mirror was never recorded — the caller falls back
+        to its reconciliation path).
+        """
+        index_key = self._store_order_index_key(order_id)
+        existing_id = await self.redis.get(index_key)
+        if not existing_id:
+            return None
+        if isinstance(existing_id, bytes):
+            existing_id = existing_id.decode()
+        task = await self.get_task(existing_id)
+        if not task:
+            return None
+        if task.status == PaymentTaskStatus.TASK_COMPLETED:
+            return task
+        return await self.update_task_status(
+            task_id=existing_id,
+            status=PaymentTaskStatus.TASK_COMPLETED,
+        )
+
     async def sweep_stale_tasks(self, stale_after_days: int = 7) -> int:
         """Force-fail in-flight payment tasks that have been stuck too long.
 
@@ -1084,7 +1195,19 @@ class PaymentTaskManager:
         await self.redis.expire(log_key, _PAYMENT_TASK_TERMINAL_TTL_SECONDS)
 
     async def _send_webhook(self, event_type: str, task: PaymentTask):
-        """Send webhook notification to backend"""
+        """Send webhook notification.
+
+        Two delivery targets, both best-effort (correctness is guaranteed by
+        the buyer/seller reconciling against the source-of-truth, e.g. the
+        backend store's fulfillment-queue — ADR-0009 P0, not by this push):
+
+        1. The platform-wide ``default_config`` webhook (the billing backend),
+           preserved from the original behavior.
+        2. **P1-A**: the *seller's* own registered ``webhook_url`` (signed with
+           the seller's per-agent ``webhook_secret``), so seller agents like
+           AgentMother receive payment events directly. Previously the seller
+           webhook was registered but never consumed.
+        """
         if not self.webhook:
             return
 
@@ -1097,16 +1220,55 @@ class PaymentTaskManager:
             # Unknown event type, skip
             return
 
+        payload_data = task.model_dump()
+        payment_method = task.payment_method.value if task.payment_method else None
+
+        # 1) Platform-wide default backend (existing behavior).
         await self.webhook.send_event(
             event=webhook_event,
             task_id=task.task_id,
-            data=task.model_dump(),
+            data=payload_data,
             buyer_agent=task.buyer_agent,
             seller_agent=task.seller_agent,
             amount=task.amount,
             currency=task.currency,
-            payment_method=task.payment_method.value if task.payment_method else None,
+            payment_method=payment_method,
         )
+
+        # 2) Seller's own registered webhook (P1-A). Best-effort: a lookup or
+        # delivery failure must never break the status transition that
+        # triggered it — the seller's reconciliation poll is the guarantee.
+        try:
+            capability = await self.discovery.get_agent_payment_capability(task.seller_agent)
+        except Exception:
+            logger.warning(
+                "seller_webhook_capability_lookup_failed task=%s seller=%s",
+                task.task_id,
+                task.seller_agent,
+            )
+            capability = None
+
+        if capability and capability.webhook_url:
+            try:
+                await self.webhook.send_to(
+                    url=capability.webhook_url,
+                    secret=capability.webhook_secret,
+                    event=webhook_event,
+                    task_id=task.task_id,
+                    data=payload_data,
+                    buyer_agent=task.buyer_agent,
+                    seller_agent=task.seller_agent,
+                    amount=task.amount,
+                    currency=task.currency,
+                    payment_method=payment_method,
+                )
+            except Exception:
+                logger.warning(
+                    "seller_webhook_delivery_failed task=%s seller=%s url=%s",
+                    task.task_id,
+                    task.seller_agent,
+                    capability.webhook_url,
+                )
 
 
 # =============================================================================
