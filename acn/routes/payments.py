@@ -366,7 +366,7 @@ async def store_settlement(
         task = await payment_tasks.complete_store_settlement(body.order_id)
         if task is None:
             raise ACNHTTPError(
-                ErrorCode.PAYMENT_TASK_NOT_FOUND,
+                ErrorCode.STORE_SETTLEMENT_NOT_FOUND,
                 status_code=404,
                 details={"order_id": body.order_id},
             )
@@ -385,7 +385,7 @@ async def store_settlement(
         # Seller hasn't registered a platform_credits capability — the backend
         # treats this as non-fatal and falls back to its reconciliation path.
         raise ACNHTTPError(
-            ErrorCode.PAYMENT_CAPABILITY_NOT_FOUND,
+            ErrorCode.STORE_SETTLEMENT_SELLER_NOT_PAYABLE,
             status_code=409,
             details={"order_id": body.order_id, "reason": str(exc)},
         ) from exc

@@ -311,6 +311,12 @@ class ErrorCode(StrEnum):
     PAYMENT_TASK_NOT_FOUND = "payment_task_not_found"
     TOKEN_PRICING_NOT_CONFIGURED = "token_pricing_not_configured"
     BILLING_TRANSACTION_NOT_FOUND = "billing_transaction_not_found"
+    # Store-settlement bridge (ADR-0009 P1-A). Dedicated codes (not the
+    # generic capability/task-not-found above) because they carry a store
+    # ``order_id`` rather than an ``agent_id``/``task_id``, and a distinct
+    # ``details`` shape per the cross-module schema contract.
+    STORE_SETTLEMENT_SELLER_NOT_PAYABLE = "store_settlement_seller_not_payable"
+    STORE_SETTLEMENT_NOT_FOUND = "store_settlement_not_found"
 
     # ===== Cross-module auth/permission/validation (sprint row #2b) =====
     # Shared by ``registry``, ``subnets``, and ``tasks`` routes.
@@ -461,6 +467,13 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.BILLING_TRANSACTION_NOT_FOUND: (
         "The requested billing transaction could not be found."
+    ),
+    ErrorCode.STORE_SETTLEMENT_SELLER_NOT_PAYABLE: (
+        "The seller agent does not accept platform-credit payments, so the "
+        "store order cannot be mirrored as a payment task."
+    ),
+    ErrorCode.STORE_SETTLEMENT_NOT_FOUND: (
+        "No payment task is recorded for the given store order id."
     ),
     ErrorCode.ALLOWLIST_CAPACITY_EXCEEDED: (
         "The owner's allowlist is at capacity. Remove some entries first."
