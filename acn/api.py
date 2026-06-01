@@ -517,7 +517,14 @@ async def lifespan(app: FastAPI):
 
     # Initialize payment services
     webhook_config = create_webhook_config_from_settings(settings)
-    webhook_service_instance = WebhookService(redis_client, webhook_config)
+    webhook_service_instance = WebhookService(
+        redis_client,
+        webhook_config,
+        outbox_enabled=settings.webhook_outbox_enabled,
+        outbox_poll_interval=settings.webhook_outbox_poll_interval,
+        outbox_max_age_seconds=settings.webhook_outbox_max_age_seconds,
+        outbox_max_backoff=settings.webhook_outbox_max_backoff,
+    )
 
     # ADR-0004 Slice 2.4 — swap the no-op join-flow publisher used by
     # ``SubnetService`` + ``JoinFlowService`` for a real

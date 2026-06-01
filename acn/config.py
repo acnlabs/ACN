@@ -98,6 +98,16 @@ class Settings(BaseSettings):
     webhook_retry_count: int = 3
     webhook_retry_delay: int = 5  # seconds
 
+    # Durable webhook outbox (ADR-0009 C7 / ACN #162): after in-process retries
+    # are exhausted, the delivery is parked in Redis and re-driven by a background
+    # worker until delivered or aged out — giving at-least-once delivery across
+    # process restarts. P0 reconciliation (seller fulfillment-queue poll) remains
+    # the correctness backstop; this only shortens the window the seller relies on it.
+    webhook_outbox_enabled: bool = True
+    webhook_outbox_poll_interval: int = 5  # seconds between worker sweeps
+    webhook_outbox_max_age_seconds: int = 86400  # give up (dead-letter) after 24h
+    webhook_outbox_max_backoff: int = 600  # cap per-attempt backoff at 10 min
+
     # Billing webhook
     billing_webhook_url: str | None = None  # e.g., "https://your-backend.com/api/billing/webhook"
 
