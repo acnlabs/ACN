@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import time
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -28,6 +29,11 @@ from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
+
+# Durable outbox (ACN #162) Redis keys.
+_OUTBOX_DUE_ZSET = "acn:webhooks:outbox:due"  # score = next-attempt epoch, member = delivery_id
+_OUTBOX_ITEM_PREFIX = "acn:webhooks:outbox:item:"  # per-delivery re-drive payload
+_OUTBOX_METRIC_PREFIX = "acn:webhooks:metrics:"  # {outcome}:{event} counters
 
 
 class WebhookEventType(StrEnum):
@@ -143,6 +149,29 @@ class WebhookDelivery(BaseModel):
     last_error: str | None = None
 
 
+class OutboxItem(BaseModel):
+    """A durable, re-drivable webhook delivery parked in Redis (ACN #162).
+
+    Holds everything needed to re-POST the *exact* original body (so the HMAC
+    signature still matches and the receiver can dedupe on ``delivery_id``),
+    including the target ``secret``. This lives only in the internal Redis store
+    — the same trust boundary that already holds the signed payloads and seller
+    capabilities — and is never copied into the secret-free delivery history.
+    """
+
+    delivery_id: str
+    url: str
+    secret: str | None = None
+    payload: str  # the exact JSON body that was signed/sent
+    event: str  # WebhookEventType value, for the X-ACN-Event header
+    timestamp: str  # original payload timestamp, for the X-ACN-Timestamp header
+    task_id: str
+    attempts: int = 0
+    first_enqueued_at: float
+    next_attempt_at: float
+    last_error: str | None = None
+
+
 class WebhookConfig(BaseModel):
     """Webhook configuration"""
 
@@ -168,18 +197,42 @@ class WebhookService:
     - Multiple webhook endpoints support
     """
 
-    def __init__(self, redis: Redis, default_config: WebhookConfig | None = None):
+    def __init__(
+        self,
+        redis: Redis,
+        default_config: WebhookConfig | None = None,
+        *,
+        outbox_enabled: bool = True,
+        outbox_poll_interval: int = 5,
+        outbox_max_age_seconds: int = 86400,
+        outbox_max_backoff: int = 600,
+    ):
         self.redis = redis
         self.default_config = default_config
         self._http_client: httpx.AsyncClient | None = None
+        # Durable outbox (ACN #162)
+        self._outbox_enabled = outbox_enabled
+        self._outbox_poll_interval = max(1, outbox_poll_interval)
+        self._outbox_max_age_seconds = outbox_max_age_seconds
+        self._outbox_max_backoff = max(1, outbox_max_backoff)
+        self._outbox_task: asyncio.Task[None] | None = None
 
     async def start(self):
-        """Start the webhook service"""
+        """Start the webhook service (and the durable-outbox worker)."""
         self._http_client = httpx.AsyncClient(timeout=30, trust_env=False)
-        logger.info("WebhookService started")
+        if self._outbox_enabled and self._outbox_task is None:
+            self._outbox_task = asyncio.create_task(self._outbox_worker())
+        logger.info("WebhookService started (outbox=%s)", self._outbox_enabled)
 
     async def stop(self):
-        """Stop the webhook service"""
+        """Stop the webhook service and gracefully cancel the outbox worker."""
+        if self._outbox_task is not None:
+            self._outbox_task.cancel()
+            try:
+                await self._outbox_task
+            except asyncio.CancelledError:
+                pass
+            self._outbox_task = None
         if self._http_client:
             await self._http_client.aclose()
         logger.info("WebhookService stopped")
@@ -365,11 +418,188 @@ class WebhookService:
                 delay = config.retry_delay * (2**attempt)
                 await asyncio.sleep(delay)
 
-        # All retries failed
-        delivery.status = "failed"
-        await self._save_delivery(delivery)
-        logger.error(f"Webhook failed after {config.retry_count} attempts: {delivery_id}")
+        # In-process retries exhausted. Park it in the durable outbox so a
+        # background worker keeps re-driving across restarts (at-least-once);
+        # fall back to the old terminal "failed" only when the outbox is off.
+        if self._outbox_enabled:
+            delivery.status = "queued"
+            await self._save_delivery(delivery)
+            await self._enqueue_outbox(delivery, config, payload_json)
+            logger.warning(
+                "Webhook queued to durable outbox after %d attempts: %s -> %s",
+                config.retry_count,
+                delivery_id,
+                config.url,
+            )
+        else:
+            delivery.status = "failed"
+            await self._save_delivery(delivery)
+            logger.error(f"Webhook failed after {config.retry_count} attempts: {delivery_id}")
         return False
+
+    # ------------------------------------------------------------------ #
+    # Durable outbox (ACN #162)                                          #
+    # ------------------------------------------------------------------ #
+
+    async def _enqueue_outbox(
+        self,
+        delivery: WebhookDelivery,
+        config: WebhookConfig,
+        payload_json: str,
+    ) -> None:
+        """Park a failed delivery in Redis for durable, background re-driving."""
+        now = time.time()
+        base = max(1, config.retry_delay)
+        next_at = now + min(self._outbox_max_backoff, base * 2)
+        item = OutboxItem(
+            delivery_id=delivery.id,
+            url=config.url,
+            secret=config.secret,
+            payload=payload_json,
+            event=delivery.payload.event.value,
+            timestamp=delivery.payload.timestamp,
+            task_id=delivery.payload.task_id,
+            attempts=delivery.attempts,
+            first_enqueued_at=now,
+            next_attempt_at=next_at,
+            last_error=delivery.last_error,
+        )
+        await self._save_outbox_item(item)
+        await self.redis.zadd(_OUTBOX_DUE_ZSET, {item.delivery_id: next_at})
+
+    async def _save_outbox_item(self, item: OutboxItem) -> None:
+        # Live a bit longer than the max age so a final dead-letter pass can read it.
+        ttl = self._outbox_max_age_seconds + 3600
+        await self.redis.set(
+            f"{_OUTBOX_ITEM_PREFIX}{item.delivery_id}",
+            item.model_dump_json(),
+            ex=ttl,
+        )
+
+    async def _load_outbox_item(self, delivery_id: str) -> OutboxItem | None:
+        data = await self.redis.get(f"{_OUTBOX_ITEM_PREFIX}{delivery_id}")
+        if not data:
+            return None
+        return OutboxItem.model_validate_json(data)
+
+    async def _remove_outbox_item(self, delivery_id: str) -> None:
+        await self.redis.zrem(_OUTBOX_DUE_ZSET, delivery_id)
+        await self.redis.delete(f"{_OUTBOX_ITEM_PREFIX}{delivery_id}")
+
+    async def _incr_metric(self, outcome: str, event: str) -> None:
+        try:
+            await self.redis.incr(f"{_OUTBOX_METRIC_PREFIX}{outcome}:{event}")
+        except Exception:  # metrics are best-effort, never block delivery
+            pass
+
+    async def _post_once(self, item: OutboxItem) -> bool:
+        """One signed POST of the parked body. Returns True on 2xx."""
+        if not self._http_client:
+            self._http_client = httpx.AsyncClient(timeout=30, trust_env=False)
+        headers = {
+            "Content-Type": "application/json",
+            "X-ACN-Webhook-ID": item.delivery_id,
+            "X-ACN-Event": item.event,
+            "X-ACN-Timestamp": item.timestamp,
+        }
+        if item.secret:
+            headers["X-ACN-Signature"] = f"sha256={self._sign_payload(item.payload, item.secret)}"
+        try:
+            resp = await self._http_client.post(
+                item.url, content=item.payload, headers=headers, timeout=30
+            )
+            if resp.is_success:
+                return True
+            item.last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            return False
+        except httpx.TimeoutException:
+            item.last_error = "Request timeout"
+            return False
+        except httpx.RequestError as e:
+            item.last_error = str(e)
+            return False
+
+    async def _mark_delivery_status(
+        self, delivery_id: str, status: str, attempts: int, last_error: str | None
+    ) -> None:
+        """Update the (secret-free) history record's terminal status in place."""
+        key = f"acn:webhooks:deliveries:{delivery_id}"
+        data = await self.redis.get(key)
+        if not data:
+            return
+        delivery = WebhookDelivery.model_validate_json(data)
+        delivery.status = status
+        delivery.attempts = attempts
+        if last_error:
+            delivery.last_error = last_error
+        if status == "delivered":
+            delivery.delivered_at = datetime.now(UTC).isoformat()
+        await self.redis.set(key, delivery.model_dump_json(), ex=86400 * 7)
+
+    async def _process_outbox_item(self, item: OutboxItem) -> None:
+        """Attempt one re-drive of a claimed outbox item, then settle its fate."""
+        item.attempts += 1
+        if await self._post_once(item):
+            await self._remove_outbox_item(item.delivery_id)
+            await self._mark_delivery_status(
+                item.delivery_id, "delivered", item.attempts, None
+            )
+            await self._incr_metric("delivered", item.event)
+            logger.info("Webhook outbox delivered: %s -> %s", item.delivery_id, item.url)
+            return
+
+        now = time.time()
+        if now - item.first_enqueued_at >= self._outbox_max_age_seconds:
+            await self._remove_outbox_item(item.delivery_id)
+            await self._mark_delivery_status(
+                item.delivery_id, "dead", item.attempts, item.last_error
+            )
+            await self._incr_metric("dead", item.event)
+            logger.error(
+                "Webhook outbox dead-lettered after %d attempts (P0 queue remains the "
+                "backstop): %s -> %s (%s)",
+                item.attempts,
+                item.delivery_id,
+                item.url,
+                item.last_error,
+            )
+            return
+
+        backoff = min(self._outbox_max_backoff, self._outbox_poll_interval * (2**item.attempts))
+        item.next_attempt_at = now + backoff
+        await self._save_outbox_item(item)
+        await self.redis.zadd(_OUTBOX_DUE_ZSET, {item.delivery_id: item.next_attempt_at})
+        await self._incr_metric("failed", item.event)
+
+    async def _drain_outbox_once(self) -> int:
+        """Claim and process all currently-due outbox items. Returns count processed."""
+        now = time.time()
+        due_ids = await self.redis.zrangebyscore(_OUTBOX_DUE_ZSET, 0, now, start=0, num=100)
+        processed = 0
+        for raw in due_ids:
+            delivery_id = raw.decode() if isinstance(raw, bytes) else raw
+            # Atomic claim across replicas: only the worker whose ZREM removes
+            # the member owns this attempt. Re-add happens on retry/reschedule.
+            if not await self.redis.zrem(_OUTBOX_DUE_ZSET, delivery_id):
+                continue
+            item = await self._load_outbox_item(delivery_id)
+            if item is None:
+                continue  # item expired/cleaned; nothing to re-drive
+            await self._process_outbox_item(item)
+            processed += 1
+        return processed
+
+    async def _outbox_worker(self) -> None:
+        """Background loop that re-drives parked webhook deliveries."""
+        logger.info("Webhook outbox worker started (interval=%ss)", self._outbox_poll_interval)
+        while True:
+            try:
+                await self._drain_outbox_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # never let the worker die on a transient error
+                logger.error("Webhook outbox sweep failed: %s", e)
+            await asyncio.sleep(self._outbox_poll_interval)
 
     async def _save_delivery(self, delivery: WebhookDelivery):
         """Save delivery record to Redis"""
