@@ -1,5 +1,8 @@
 """Payment System API Routes"""
 
+import secrets
+from typing import Literal
+
 import structlog  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
@@ -51,6 +54,13 @@ class PaymentCapabilityRequest(BaseModel):
     )
     api_endpoint: str | None = Field(default=None, max_length=500)
     webhook_url: str | None = Field(default=None, max_length=500)
+    rotate_webhook_secret: bool = Field(
+        default=False,
+        description=(
+            "Force a new webhook signing secret even if webhook_url is unchanged. "
+            "The new secret is returned once in the response and never again."
+        ),
+    )
 
     @field_validator("token_pricing")
     @classmethod
@@ -78,6 +88,37 @@ class CreatePaymentTaskRequest(BaseModel):
     currency: str = Field(..., max_length=32)
     payment_method: SupportedPaymentMethod
     network: SupportedNetwork
+    description: str | None = Field(default=None, max_length=2_000)
+    metadata: dict | None = None
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        return check_dict_size_64k("metadata", v)
+
+
+class StoreSettlementRequest(BaseModel):
+    """Internal: mirror a settled AgentPlanet store order as an AP2 task.
+
+    Called by the backend store (X-Internal-Token) so a store payment fires
+    the seller's AP2 webhook and joins the agent-commerce event layer. The
+    backend wallet remains the single ledger; this task is an event mirror.
+    """
+
+    order_id: str = Field(..., max_length=128, description="Store order id (idempotency key)")
+    seller_agent: str = Field(..., max_length=128)
+    buyer_agent: str = Field(
+        ...,
+        max_length=128,
+        description="Buyer agent id; a system pseudo-agent for human buyers",
+    )
+    amount_credits: int = Field(..., ge=0, description="Settled amount in platform credits")
+    event: Literal["paid", "fulfilled"] = Field(
+        default="paid",
+        description="'paid' mirrors+confirms the order; 'fulfilled' completes the task (C8)",
+    )
     description: str | None = Field(default=None, max_length=2_000)
     metadata: dict | None = None
 
@@ -198,6 +239,30 @@ async def set_payment_capability(
         except Exception:
             pass
 
+    # Resolve the webhook signing secret (P1-A). Re-registration is a full
+    # replace, so we look at the *existing* indexed capability to decide:
+    #   - webhook_url unchanged + existing secret + no rotate  -> preserve
+    #     (so a pricing-only update doesn't silently break the seller's verifier)
+    #   - new/changed webhook_url, explicit rotate, or no prior secret -> mint
+    #   - webhook_url cleared -> drop the secret
+    # A freshly minted secret is returned exactly once; it is never readable
+    # again (excluded from GET responses).
+    new_secret: str | None = None
+    webhook_secret: str | None = None
+    if body.webhook_url:
+        existing = None
+        try:
+            existing = await payment_discovery.get_agent_payment_capability(agent_id)
+        except Exception:
+            logger.warning("payment_capability_lookup_failed", agent_id=agent_id, exc_info=True)
+        same_url = bool(existing and existing.webhook_url == body.webhook_url)
+        prior_secret = existing.webhook_secret if existing else None
+        if same_url and prior_secret and not body.rotate_webhook_secret:
+            webhook_secret = prior_secret
+        else:
+            new_secret = secrets.token_urlsafe(32)
+            webhook_secret = new_secret
+
     capability = PaymentCapability(
         agent_id=agent_id,
         accepts_payment=body.accepts_payment,
@@ -208,13 +273,18 @@ async def set_payment_capability(
         token_pricing=token_pricing_obj,
         api_endpoint=body.api_endpoint,
         webhook_url=body.webhook_url,
+        webhook_secret=webhook_secret,
     )
     try:
         await payment_discovery.index_payment_capability(agent_id, capability)
     except Exception:
         logger.warning("payment_discovery_index_failed", agent_id=agent_id, exc_info=True)
 
-    return {"status": "registered", "agent_id": agent_id}
+    response: dict = {"status": "registered", "agent_id": agent_id}
+    if new_secret:
+        # Shown once — the seller must store this to verify webhook signatures.
+        response["webhook_secret"] = new_secret
+    return response
 
 
 @router.get("/{agent_id}/payment-capability")
@@ -243,7 +313,8 @@ async def get_payment_capability(
             status_code=404,
             details={"agent_id": agent_id},
         )
-    return capability
+    # webhook_secret is show-once at registration; never expose it on reads.
+    return capability.model_dump(exclude={"webhook_secret"})
 
 
 @router.get("/discover")
@@ -265,6 +336,61 @@ async def discover_payment_agents(
         network=network,
     )
     return {"agents": agents, "count": len(agents)}
+
+
+@router.post("/internal/store-settlement")
+async def store_settlement(
+    body: StoreSettlementRequest,
+    _: InternalTokenDep,
+    payment_tasks: PaymentTasksDep = None,
+):
+    """Internal: mirror a settled store order into an AP2 payment task.
+
+    Auth: ``X-Internal-Token`` (trusted backend only). Idempotent on
+    ``order_id``.
+
+    - ``event="paid"``: create (if new) + confirm the mirror task, firing the
+      seller's ``payment_task.payment_confirmed`` webhook. Returns the task id.
+    - ``event="fulfilled"``: advance the existing mirror task to
+      ``task_completed`` (C8). Returns ``404`` if no mirror exists for the
+      order (the backend then relies on its own reconciliation).
+
+    Delivery to the seller is best-effort; the backend store's
+    fulfillment-queue (ADR-0009 P0) remains the correctness guarantee.
+    """
+    if body.event == "fulfilled":
+        task = await payment_tasks.complete_store_settlement(body.order_id)
+        if task is None:
+            raise ACNHTTPError(
+                ErrorCode.PAYMENT_TASK_NOT_FOUND,
+                status_code=404,
+                details={"order_id": body.order_id},
+            )
+        return {"status": "completed", "order_id": body.order_id, "task_id": task.task_id}
+
+    try:
+        task = await payment_tasks.record_store_settlement(
+            order_id=body.order_id,
+            seller_agent=body.seller_agent,
+            buyer_agent=body.buyer_agent,
+            amount_credits=body.amount_credits,
+            description=body.description,
+            metadata=body.metadata,
+        )
+    except ValueError as exc:
+        # Seller hasn't registered a platform_credits capability — the backend
+        # treats this as non-fatal and falls back to its reconciliation path.
+        raise ACNHTTPError(
+            ErrorCode.PAYMENT_CAPABILITY_NOT_FOUND,
+            status_code=409,
+            details={"order_id": body.order_id, "reason": str(exc)},
+        ) from exc
+
+    return {
+        "status": "confirmed",
+        "order_id": body.order_id,
+        "task_id": task.task_id,
+    }
 
 
 @router.post("/tasks")
