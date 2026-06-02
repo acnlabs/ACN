@@ -738,9 +738,33 @@ async def lifespan(app: FastAPI):
         # active from the first request. See
         # protocols/a2a/auth_middleware.py docstring for the
         # threat model and design rationale.
-        async def _a2a_agent_lookup(api_key: str) -> str | None:
-            agent = await agent_service_instance.get_agent_by_api_key(api_key)
-            return agent.agent_id if agent is not None else None
+        async def _a2a_agent_lookup(credential: str) -> str | None:
+            # Fast path: opaque acn_* API key (legacy + mint-only end-state).
+            if credential.startswith("acn_"):
+                agent = await agent_service_instance.get_agent_by_api_key(credential)
+                return agent.agent_id if agent is not None else None
+            # JWT path: ACN-issued RS256 agent JWT (ADR-0007 D6, issue #156).
+            # Peek at the unverified iss claim; if it matches ACN's issuer,
+            # verify offline and return the agent_id from sub.
+            try:
+                from .auth.middleware import (
+                    _get_acn_effective_issuer,
+                    _verify_acn_agent_jwt,
+                )
+                from .config import get_settings as _get_settings
+                from jose import jwt as _jwt
+
+                _settings = _get_settings()
+                _acn_iss = (_get_acn_effective_issuer(_settings) or "").rstrip("/")
+                if _acn_iss:
+                    _claims = _jwt.get_unverified_claims(credential)
+                    _token_iss = (_claims.get("iss") or "").rstrip("/")
+                    if _token_iss == _acn_iss:
+                        payload = await _verify_acn_agent_jwt(credential, _settings)
+                        return payload.get("sub")
+            except Exception:  # noqa: BLE001
+                pass
+            return None
 
         guarded_a2a_app = A2AFromAgentValidationMiddleware(
             a2a_app,

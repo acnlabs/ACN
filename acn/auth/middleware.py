@@ -1,14 +1,25 @@
 """
-ACN Auth0 Middleware
+ACN Auth0 + ACN-agent-JWT Middleware
 
-Standalone Auth0 JWT verification using python-jose.
+Standalone JWT verification using python-jose.
 Does NOT rely on Backend's auth module or sys.path manipulation.
 
-In production (dev_mode=False), Auth0 configuration is required.
+In production (dev_mode=False), Auth0 configuration is required for human
+callers. ACN-issued agent JWTs are verified offline against ACN's own
+signing key — no Auth0 dependency for agent-to-ACN traffic.
+
 In development (dev_mode=True), a stub is used for convenience.
 
 JWKS are cached in-memory with a configurable TTL (default 600s) to avoid
 hitting Auth0's endpoint on every request.
+
+Protocol dispatch (verify_token)
+---------------------------------
+1. ``acn_*`` prefix → opaque API-key path (Redis/PG lookup), legacy + mint.
+2. Unverified ``iss`` == ACN issuer → ACN-issued RS256 agent JWT path (offline).
+3. Everything else → Auth0 human JWT path (network JWKS).
+
+See ADR-0007 D6 (issue #156) for the rationale.
 """
 
 from __future__ import annotations
@@ -205,6 +216,156 @@ async def _refresh_jwks_from_network(domain: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ACN self-issued agent JWT verification (ADR-0007 D6, issue #156)
+# ---------------------------------------------------------------------------
+# ACN publishes its own JWKS at ``/.well-known/jwks.json``. For self-
+# verification we derive the public key directly from the private key
+# already held in settings — no network call needed. The derived key list
+# is cached module-level (process lifetime) and rebuilt only on cold start.
+# ---------------------------------------------------------------------------
+
+_acn_agent_jwks: list[dict] = []
+_acn_agent_jwks_lock = asyncio.Lock()
+_acn_agent_jwks_loaded = False
+
+
+async def _get_acn_agent_jwks(settings) -> list[dict]:
+    """Return ACN's own public JWK list (derived offline from the signing key)."""
+    global _acn_agent_jwks, _acn_agent_jwks_loaded
+    if _acn_agent_jwks_loaded:
+        return _acn_agent_jwks
+    async with _acn_agent_jwks_lock:
+        if _acn_agent_jwks_loaded:
+            return _acn_agent_jwks
+        if not settings.agent_jwt_private_key:
+            _acn_agent_jwks_loaded = True
+            return _acn_agent_jwks
+        try:
+            from ..services.agent_token_service import AgentTokenIssuer
+
+            key = AgentTokenIssuer._derive_jwk(
+                settings.agent_jwt_private_key.strip(),
+                settings.agent_jwt_kid,
+            )
+            _acn_agent_jwks = [key]
+            logger.info("acn_agent_jwks_derived", kid=settings.agent_jwt_kid)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("acn_agent_jwks_derive_failed", error=str(exc))
+        _acn_agent_jwks_loaded = True
+        return _acn_agent_jwks
+
+
+def _get_acn_effective_issuer(settings) -> str | None:
+    """Return the effective ACN agent-JWT issuer (the ``iss`` claim value).
+
+    Mirrors ``AgentTokenIssuer.__init__`` which falls back to
+    ``gateway_base_url`` when ``agent_jwt_issuer`` is unset.
+    """
+    iss = settings.agent_jwt_issuer
+    if iss:
+        return iss.rstrip("/")
+    gw = getattr(settings, "gateway_base_url", None)
+    return gw.rstrip("/") if gw else None
+
+
+async def _verify_acn_agent_jwt(
+    token: str,
+    settings,
+    request: Request | None = None,
+) -> dict:
+    """Verify an ACN-issued RS256 agent JWT and return a normalised payload.
+
+    On success returns ``{"sub": agent_id, "type": "agent", "permissions": [...],
+    "acn_principal": "agent"}`` so downstream ACLs can branch on the same
+    schema as every other auth path.
+
+    Raises ``ACNHTTPError(401)`` on any verification failure. The caller is
+    responsible for routing only tokens whose unverified ``iss`` matches the
+    ACN issuer; this function does not re-check routing, it only verifies.
+    """
+    src_ip = _peer_ip(request)
+    path, method = _request_path(request)
+
+    issuer = _get_acn_effective_issuer(settings)
+    if not issuer:
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="ACN agent JWT issuer not configured.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    jwks = await _get_acn_agent_jwks(settings)
+    if not jwks:
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="ACN agent JWT signing key not configured.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        unverified_header = jwt.get_unverified_header(token)
+        kid = unverified_header.get("kid")
+        # Prefer the key whose kid matches; fall back to the first key so a
+        # single-key deployment with a mismatched kid still works.
+        rsa_key = next((k for k in jwks if k.get("kid") == kid), jwks[0])
+        payload = jwt.decode(
+            token,
+            rsa_key,
+            algorithms=["RS256"],
+            audience=settings.agent_jwt_audience,
+            issuer=issuer,
+        )
+    except ExpiredSignatureError:
+        record_auth_failure(
+            reason="acn_agent_jwt_expired",
+            source_ip=src_ip,
+            path=path,
+            method=method,
+        )
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Token has expired.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+    except JWTError as exc:
+        logger.warning("acn_agent_jwt_verification_failed", error=str(exc))
+        record_auth_failure(
+            reason="acn_agent_jwt_invalid",
+            source_ip=src_ip,
+            path=path,
+            method=method,
+            extra={"jwt_error": type(exc).__name__},
+        )
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Invalid token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    agent_id = payload.get("sub")
+    if not agent_id:
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="ACN agent JWT missing sub claim.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    logger.debug("acn_agent_jwt_verified", agent_id=agent_id)
+    return {
+        "sub": agent_id,
+        "type": "agent",
+        # Agent JWTs don't carry acn:admin — same restriction as API keys.
+        "permissions": ["acn:read", "acn:write"],
+        "acn_principal": "agent",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Core JWT verification
 # ---------------------------------------------------------------------------
 
@@ -392,10 +553,14 @@ async def verify_token(
 
     token = credentials.credentials
 
-    # Production dual-protocol dispatch: ``acn_*`` prefix → API-key path,
-    # everything else → JWT path. Prefix dispatch (rather than try-JWT-
-    # then-fallback) keeps API-key traffic out of the JWT failure audit
-    # log and surfaces precise error reasons per protocol.
+    # Production triple-protocol dispatch:
+    #   1. ``acn_*`` prefix       → opaque API-key (Redis/PG lookup)
+    #   2. iss == ACN issuer      → ACN-issued RS256 agent JWT (offline verify)
+    #   3. everything else        → Auth0 human JWT
+    #
+    # Prefix / iss routing (rather than try-and-fallback) keeps each
+    # protocol's traffic in its own failure-audit bucket, making on-call
+    # alert queries precise. See ADR-0007 D6, issue #156.
     if token.startswith("acn_"):
         resolved = await _resolve_agent_id_from_api_key(token)
         if resolved is not None:
@@ -421,6 +586,22 @@ async def verify_token(
             message="Invalid API key.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # ACN-issued agent JWT: peek at the unverified ``iss`` claim (fast,
+    # no crypto yet). If it matches ACN's own issuer, verify offline
+    # against ACN's signing key — no Auth0 dependency for agent callers.
+    try:
+        _unverified_claims = jwt.get_unverified_claims(token)
+        _token_iss = (_unverified_claims.get("iss") or "").rstrip("/")
+        _acn_iss = _get_acn_effective_issuer(settings) or ""
+        if _token_iss and _acn_iss and _token_iss == _acn_iss:
+            return await _verify_acn_agent_jwt(token, settings, request=request)
+    except (ACNHTTPError, HTTPException):
+        raise
+    except Exception:  # noqa: BLE001
+        # Unverified decode failed (malformed base64, etc.) — fall through
+        # to the Auth0 path which will surface a clean "Invalid token" error.
+        pass
 
     payload = await _verify_jwt(token, request=request)
     # Standardise payload schema: every successful auth returns ``type``
@@ -559,4 +740,8 @@ __all__ = [
     "require_permission",
     "require_internal_or_permission",
     "get_subject",
+    # Exported for use by the A2A agent_lookup binding (api.py).
+    "_get_acn_effective_issuer",
+    "_get_acn_agent_jwks",
+    "_verify_acn_agent_jwt",
 ]
