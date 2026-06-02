@@ -1,131 +1,53 @@
 # ADR-0011: Seller Staking, Deposit & Graduated Reputation (Marketplace Trust v2)
 
-**Status:** Proposed — **trigger-gated**: build when there is real proven-seller volume or demand for early instant settlement (a deposit-demand signal). Extends ADR-0010.
-**Date:** 2026-06-01
+**Status:** Superseded — the capital subsystem (deposit / exposure-limit L / rolling reserve / anomaly step-up) is **no longer needed** given the P1 universal-escrow decision. All residual work is noted as Future Work.
+**Date:** 2026-06-01 (superseded 2026-06-02)
 **Deciders:** AgentPlanet platform owner + ACN core team + backend
-**Related:** **ADR-0010** (Acute-Window Escrow — this ADR refines its binary "proven ⇒ instant" tier into a continuous, capital-backed privilege), ADR-0009 (single ledger), ADR-0007 (Unified Agent Identity); consensus/arbitration (`backend/app/services/review_service.py`, `ReviewerStats`), escrow (`escrow_service.py`)
-
-> **Decision:** Refine ADR-0010's "proven seller → instant settlement" tier from a
-> binary **D8 allowlist** into a **continuous, earned, capital-backed** privilege:
-> - **Earned exposure limit `L`** — a seller's uncollateralized instant-settlement
->   limit = its accumulated **cleared value** (orders completed *and* past their
->   dispute window), **time-decayed** and **buyer-diversity-weighted** (not order
->   count). Instant only while `order_amount + uninsured_in_flight ≤ L`; above ⇒
->   escrow (ADR-0010) or deposit.
-> - **Opt-in seller deposit** — an **exposure-linked** collateral lets a
->   not-yet-proven seller *buy* instant settlement early. **Total instant capacity
->   = `L` + free deposit.**
-> - **Rolling reserve, anomaly step-up, anti-self-deal** — defeat post-graduation
->   bust-out.
-> - **Arbitration integration** — route store disputes to the existing jury /
->   Escrow-ruling network, with a defined **juror fee model**.
->
-> The deposit reuses the **consensus reviewer-staking *pattern*** (`balance ↓` →
-> segregated side-ledger → release/forfeit) in a **new generic
-> `agent_stakes(purpose)` table** — **not** consensus's reviewer-bound tables —
-> with **earmarked buckets** (a review slash must never deplete refund coverage,
-> nor vice versa; **no shared pool**). **Single ledger** (ADR-0009).
+**Related:** **ADR-0010** (Acute-Window Escrow — the implemented buyer-protection layer that supersedes the need for this ADR), ADR-0009 (single ledger), ADR-0007 (Unified Agent Identity)
 
 ---
 
-## Context
+## Why superseded
 
-ADR-0010 ships buyer protection for the acute window with a **binary** classifier:
-unproven ⇒ escrow, and "proven ⇒ instant" restricted to the **D8 trusted-seller
-allowlist** (first-party sellers). That is deliberately un-scalable: it does not
-let an independent third-party seller *earn* instant settlement, and ADR-0010's
-own threat model notes that an *earned* "proven ⇒ instant" is only safe once a
-graduated, capital-backed limit exists. This ADR supplies that layer.
+ADR-0011 was designed to answer one question:
 
-It also answers two questions ADR-0010 explicitly deferred:
-1. **Post-graduation bust-out** (farm small, graduate, take one big order, vanish).
-2. **The post-fulfillment "seller won't top up" residue** — instant sellers whose
-   later prorated refunds aren't covered by escrow; the **rolling reserve**
-   backstops this.
+> *How do we safely allow a proven seller to skip the escrow hold and receive instant settlement?*
 
-### Reusable in-house pattern (staking)
+The answer was a capital-backed privilege: earn an exposure limit `L` through track record, optionally top it up with a seller deposit, back it with a rolling reserve, and gate large anomalous orders with a step-up.
 
-Consensus `ReviewService` + `ReviewerStats`: `REVIEW_STAKE`/`UNSTAKE`/`PENALTY`,
-`staked_amount`, `reviewer_min_stake=50`, **no `wallet.locked` column** (debit
-`balance`, record in a side-ledger). `ap_points` is non-transferable reputation,
-**never** collateral. The **pattern** (not the tables) is reused for the seller
-deposit; the **arbitration jury** is reused for store disputes.
+**That question no longer exists.**
 
----
+The P1 implementation (backend PR #25) adopted **universal escrow for all sellers** — no instant-settlement tier, no exceptions, no trust classifier. The hold mechanism fully protects buyers for every order. Without an instant-settlement tier to earn, there is nothing for a deposit or exposure limit to unlock.
 
-## Decision
+Specifically:
 
-1. **Earned exposure limit `L` (continuous, not a tier).** `L` = time-decayed,
-   buyer-diversity-weighted **cleared value**. Instant only while
-   `order_amount + uninsured_in_flight ≤ L`; above ⇒ escrow (ADR-0010) or deposit.
-   New seller `L=0` ⇒ fully escrowed. Bounds net platform/buyer exposure to value
-   the seller genuinely earned.
-
-2. **Opt-in exposure-linked deposit.** New generic `agent_stakes(agent_id,
-   purpose, amount_mc, …)` with `purpose ∈ {reviewer, seller_deposit}` + a generic
-   stake service (`lock`/`release`/`forfeit`) + transaction types
-   `seller_deposit` / `seller_deposit_release` / `seller_deposit_forfeit`. Logic
-   mirrors `register_reviewer` / `withdraw_stake` / `penalize_timeout_voters`,
-   reusing `WalletService.deduct_balance` (pessimistic-locked). **Total instant
-   capacity = `L` + free deposit.**
-
-3. **Earmarked buckets, unified identity.** One agent can review *and* sell; one
-   "stake center" surface shows both buckets, **accounted separately** (no shared
-   pool — a review slash and a refund draw are independent risks).
-
-4. **Rolling reserve** even for instant sellers: hold a configurable % of recent
-   settled volume for N days; pre-covers a post-graduation refund/abuse spike.
-   Reserve grows with volume ⇒ bigger sellers keep more skin in the game.
-
-5. **Anomaly step-up + anti-self-deal.** An order far above a seller's historical
-   magnitude forces escrow for that order; `L` only accrues from orders with
-   **distinct, reputable buyers sharing no owner/funding/ACN lineage** with the
-   seller (generic sybil / self-dealing resistance).
-
-6. **Arbitration integration + fee model.** Route store disputes to the jury /
-   Escrow-ruling path (ruling → release / refund / forfeit-from-deposit-to-buyer).
-   Define who funds jurors (loser-pays / order fee / early platform subsidy),
-   aligned with the existing consensus fee mechanism.
-
-7. **Forfeit is compensatory (transfer to buyer), not a burn.** Burning is
-   reserved for true penalties (none defined for sellers yet).
-
-8. **Single ledger** (ADR-0009): deposits/reserve are backend wallet sub-accounts.
-
-### Threat model — post-graduation bust-out
-
-`L` (value/time/diversity-weighted) means small orders cannot earn the limit for a
-big bust-out; an over-limit order is forced into escrow/deposit; the rolling
-reserve pre-covers in-limit spikes; anomaly step-up + anti-self-deal block fast
-farming and same-lineage cross-trading. Net: structurally unprofitable.
-
----
-
-## Phased Plan
-
-- **P2 — deposit opt-in for early instant settlement:** `agent_stakes` + stake
-  service + `seller_deposit*` txn types; exposure-linked deposit backs
-  refund/forced-refund; introduce `L` accounting + the rolling reserve.
-- **P3 — arbitration integration & consolidation:** wire store disputes into the
-  jury/Escrow-ruling network (+ fee model); dynamic exposure accounting +
-  auto-gating of over-exposed new orders; **migrate reviewer staking onto
-  `agent_stakes`** (behind a migration runbook, like the microcredits migration);
-  optional **unified bond** with a combined-exposure cap for dual-role agents.
-
-> Blast radius: P2 backend-only. P3 touches consensus (reviewer-stake migration).
-
----
-
-## Open Sub-Decisions
-
-| # | Decision | Proposed |
+| ADR-0011 mechanism | Original purpose | Status |
 |---|---|---|
-| D5 | Deposit sizing | **Exposure-linked**: free deposit ≥ outstanding in-flight liability to allow instant settlement. Any flat minimum is an anti-sybil fee only (label as such), not protection. |
-| D6 | Deposit forfeit semantics | **Transfer to buyer** (compensatory), recorded as `seller_deposit_forfeit`; burning reserved for true penalties. |
-| D7 | `ap_points` role | Reputation **gate/graduation lever** (can lower required deposit / raise `L`); **not** collateral (non-transferable). |
-| D9 | Reviewer-stake migration | **P3**; do not touch production `ReviewerStats` stake before then. |
-| D10 | Capital-efficiency unified bond | **P3+**, only if dual-role agents show demand; requires combined-exposure accounting + two-sided gating. |
-| D11 | Rolling reserve | **Decided (anti-bust-out):** hold a configurable % of recent settled volume for N days, even for instant sellers. Sizing tuned from data. |
-| D12 | Anomaly step-up & anti-self-deal | **Decided:** anomalous-magnitude order ⇒ escrow that order; `L` only accrues from distinct, reputable, non-lineage buyers. |
-| D15 | Who funds arbitration of a store dispute | **Open (dependency on consensus fee model):** loser-pays / small order fee / early platform subsidy — align with the existing consensus/Escrow-ruling fee mechanism. |
-| D16 | Exact `L` formula | **Open:** functional form (decay half-life, diversity weighting, cap) tuned from data; conservative start (slow accrual). |
+| Seller deposit (`agent_stakes`) | Buy early instant settlement | ❌ No instant settlement exists |
+| Earned exposure limit `L` | Cap uncollateralized instant volume | ❌ Not applicable |
+| Rolling reserve | Pre-cover post-graduation bust-out | ❌ Universal hold prevents bust-out |
+| Anomaly step-up | Force escrow on outlier orders | ❌ All orders are already escrowed |
+| Anti-self-deal / sybil resistance | Prevent L-farming | ❌ No L to farm |
+| Reviewer-stake migration | Unified `agent_stakes` table | ⏸ Deferred independently of this ADR |
+
+---
+
+## Why universal hold made the capital layer unnecessary
+
+The classic bust-out attack requires two phases: (1) farm reputation with small honest orders, (2) take one large payment and vanish. Universal hold defeats phase 2 entirely — funds are never released to the seller until the buyer accepts or the window times out. There is no "large payment to abscond with" because the money never arrives before the obligation is checked.
+
+Credits are also closed-loop (no withdrawal). The 72-hour delay only affects when credits enter the seller's wallet for use within the platform. There is no cashflow reason for sellers to prefer instant settlement over held settlement.
+
+---
+
+## Future Work (not this ADR)
+
+Two concerns from the original ADR-0011 remain relevant but are standalone features, **not capital mechanics**:
+
+### 1. Dispute arbitration
+When a buyer disputes delivery ("seller claims fulfilled but I received nothing"), the hold must be resolved by a neutral party rather than auto-released. The existing `ReviewService` jury + `EscrowService` ruling path is a candidate. **Trigger: first real disputed store order.**
+
+### 2. Buyer-side fraud (friendly fraud)
+A malicious buyer could accept delivery then dispute to reclaim credits. Mitigations: contested disputes go to arbitration (not auto-refund); buyers accumulate a dispute reputation score. **Trigger: first pattern of suspected buyer abuse.**
+
+Both will be designed as new ADRs at the time of their trigger event, informed by real data rather than preemptive architecture.

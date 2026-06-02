@@ -1,9 +1,9 @@
 # ADR-0010: Marketplace Buyer Protection — Acute-Window Escrow
 
-**Status:** Accepted (direction) — P0 done; **P1 is foundational infrastructure and a hard prerequisite for enabling third-party (non-first-party) seller onboarding** — it is built *before* the marketplace opens to untrusted sellers, **not** deferred until one appears (that would leave the first such seller's buyers unprotected). Until P1 ships, third-party seller registration stays closed and only D8 first-party sellers (e.g. AgentMother) sell, on the trusted-instant path. Release *mechanism* decided (D3); window length (D13) set during P1 build. The graduated staking/deposit/reputation layer is split into **ADR-0011**.
+**Status:** Accepted — **P0 and P1 fully implemented** (backend PRs #24, #25, #26). Universal escrow hold: all orders, all sellers, no instant-settlement tier. The graduated staking/deposit/reputation layer (originally split into ADR-0011) is **superseded** — it was only needed to safely allow sellers to skip escrow, a tier that no longer exists.
 **Date:** 2026-06-01
 **Deciders:** AgentPlanet platform owner + ACN core team + backend
-**Related:** ADR-0009 (Commerce Layered Architecture — single ledger, reconciliation, AP2 events; this ADR *refines* its instant-settlement assumption), **ADR-0011** (Seller Staking / Deposit / Graduated Reputation — the capital-backed refinement of this ADR's "proven seller" tier), ADR-0007 (Unified Agent Identity); backend store (`backend/app/services/store_service.py`), refund API (`POST /api/store/orders/{order_id}/refund`), escrow (`backend/app/services/escrow_service.py`)
+**Related:** ADR-0009 (Commerce Layered Architecture — single ledger, reconciliation, AP2 events), ~~ADR-0011~~ (Superseded — seller capital layer no longer needed given universal hold), ADR-0007 (Unified Agent Identity); backend PRs #24 #25 #26 (`store_service.py`, `main.py`, `SKILL.md v1.5.0`)
 
 > **Decision:** Buyer protection is provided **per order**, only for the **acute
 > "paid → fulfilled-and-accepted" window**. This ADR uses **two tiers**:
@@ -216,16 +216,11 @@ the cheapest sufficient mechanism on each tier.
   window timeout; abandonment/refund refunds the buyer from the hold. Proven /
   D8-trusted sellers keep instant settlement. **Routing is binary** — the
   continuous limit `L` is ADR-0011.
-- **P2 / P3 → ADR-0011:** seller deposit (`agent_stakes`), earned exposure limit
-  `L`, rolling reserve, anomaly step-up, arbitration integration + fee model,
-  reviewer-stake migration, optional unified bond.
-
-> Sequencing: P1 is **build-ahead infrastructure** — it gates the *opening* of
-> third-party seller onboarding (you flip third-party registration on only once
-> the hold path exists), so buyers are never exposed by a seller arriving before
-> protection does. By contrast the ADR-0011 capital subsystem is genuinely
-> demand-gated: it waits for real proven-seller volume / a deposit-demand signal,
-> because escrow already fully protects unproven sellers' buyers in the interim.
+- **P2 / P3 → Superseded.** The seller capital layer (deposit, L, reserve) is no longer
+  needed — universal hold already provides full buyer protection with no instant-settlement
+  tier to protect against. Dispute arbitration and buyer-reputation are noted as Future Work
+  in the now-superseded ADR-0011; they will be designed when the first real disputed order
+  occurs.
 
 > Blast radius: P0/P1 backend-only.
 
