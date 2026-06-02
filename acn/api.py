@@ -747,12 +747,13 @@ async def lifespan(app: FastAPI):
             # Peek at the unverified iss claim; if it matches ACN's issuer,
             # verify offline and return the agent_id from sub.
             try:
+                from jose import jwt as _jwt
+
                 from .auth.middleware import (
                     _get_acn_effective_issuer,
                     _verify_acn_agent_jwt,
                 )
                 from .config import get_settings as _get_settings
-                from jose import jwt as _jwt
 
                 _settings = _get_settings()
                 _acn_iss = (_get_acn_effective_issuer(_settings) or "").rstrip("/")
