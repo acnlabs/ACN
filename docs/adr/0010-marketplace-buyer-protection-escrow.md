@@ -1,6 +1,6 @@
 # ADR-0010: Marketplace Buyer Protection — Acute-Window Escrow
 
-**Status:** Accepted (direction) — P0 done; **P1 trigger-gated on the first untrusted seller onboarding** (until then AgentMother stays on the trusted-instant path, D8). Release *mechanism* decided (D3); window length (D13) set during P1 build. The graduated staking/deposit/reputation layer is split into **ADR-0011**.
+**Status:** Accepted (direction) — P0 done; **P1 is foundational infrastructure and a hard prerequisite for enabling third-party (non-first-party) seller onboarding** — it is built *before* the marketplace opens to untrusted sellers, **not** deferred until one appears (that would leave the first such seller's buyers unprotected). Until P1 ships, third-party seller registration stays closed and only D8 first-party sellers (e.g. AgentMother) sell, on the trusted-instant path. Release *mechanism* decided (D3); window length (D13) set during P1 build. The graduated staking/deposit/reputation layer is split into **ADR-0011**.
 **Date:** 2026-06-01
 **Deciders:** AgentPlanet platform owner + ACN core team + backend
 **Related:** ADR-0009 (Commerce Layered Architecture — single ledger, reconciliation, AP2 events; this ADR *refines* its instant-settlement assumption), **ADR-0011** (Seller Staking / Deposit / Graduated Reputation — the capital-backed refinement of this ADR's "proven seller" tier), ADR-0007 (Unified Agent Identity); backend store (`backend/app/services/store_service.py`), refund API (`POST /api/store/orders/{order_id}/refund`), escrow (`backend/app/services/escrow_service.py`)
@@ -76,10 +76,15 @@ ready to sell** (no charity, no bootstrapping).
 ### Reusable in-house pattern
 
 **Escrow:** `escrow_service.py` (`escrows` table, `lock()` → `balance ↓` +
-`TASK_ESCROW`, `EscrowRelease`, status lifecycle, ruling callbacks) — directly
-reusable to hold a store payment until release. The **arbitration** path (the
-`ReviewService` jury + Escrow ruling) resolves disputes (it decides; escrow pays);
-its fee model and store-dispute wiring are specified in ADR-0011.
+`TASK_ESCROW`, `EscrowRelease`, status lifecycle, ruling callbacks) demonstrates
+the **hold → release/refund pattern**, but the concrete service is **task-coupled**
+(reviews, assignees, release-pools, per-amount release conditions) and is **not
+cleanly reusable** for a plain store-payment hold. P1 therefore adds a **lightweight
+store-payment hold** (buyer debited at pay time; the amount parked as a recorded
+liability — held order sub-state, settled to the seller only at release) reusing
+the *pattern*, not the task-escrow tables. The **arbitration** path (the
+`ReviewService` jury + Escrow ruling) still resolves contested disputes (it decides;
+the hold pays); its fee model and store-dispute wiring are specified in ADR-0011.
 
 ### Interaction with ADR-0009 (what P1 must reconcile)
 
@@ -215,9 +220,12 @@ the cheapest sufficient mechanism on each tier.
   `L`, rolling reserve, anomaly step-up, arbitration integration + fee model,
   reviewer-stake migration, optional unified bond.
 
-> Restraint: P1 is the only piece justified by the *imminent* untrusted-seller
-> signal and reuses existing escrow. The ADR-0011 subsystem waits for real
-> proven-seller volume / a deposit-demand signal.
+> Sequencing: P1 is **build-ahead infrastructure** — it gates the *opening* of
+> third-party seller onboarding (you flip third-party registration on only once
+> the hold path exists), so buyers are never exposed by a seller arriving before
+> protection does. By contrast the ADR-0011 capital subsystem is genuinely
+> demand-gated: it waits for real proven-seller volume / a deposit-demand signal,
+> because escrow already fully protects unproven sellers' buyers in the interim.
 
 > Blast radius: P0/P1 backend-only.
 
