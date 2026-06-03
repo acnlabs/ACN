@@ -69,6 +69,16 @@ class MessageType(StrEnum):
     SUBSCRIBE = "subscribe"
     UNSUBSCRIBE = "unsubscribe"
 
+    # ADR-0012 Mode B — webhook delivery over the agent's outbound WS
+    # control channel (for agents with no public HTTP endpoint).
+    #   a2a_request:  ACN -> agent. Carries a relayed inbound HTTP request
+    #                 ({id, method, path, headers, body, body_encoding,
+    #                 deadline_ms}). ``id`` correlates the reply.
+    #   a2a_response: agent -> ACN. Reply to an a2a_request, correlated by
+    #                 ``id`` ({id, status, headers, body, body_encoding}).
+    A2A_REQUEST = "a2a_request"
+    A2A_RESPONSE = "a2a_response"
+
 
 @dataclass
 class Connection:
@@ -81,6 +91,11 @@ class Connection:
     connected_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Serialize writes to this socket: a Mode-B relay sends ``a2a_request``
+    # frames from arbitrary proxy request tasks, concurrently with the WS
+    # receive loop's pong/welcome sends. Starlette's ``send`` is not safe
+    # under concurrent callers, so every ``_send`` takes this lock.
+    send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class WebSocketManager:
@@ -144,6 +159,14 @@ class WebSocketManager:
 
         # Message handlers
         self._handlers: dict[str, Callable] = {}
+
+        # ADR-0012 Mode B relay correlation: correlation_id -> Future that
+        # the proxy path awaits and the WS receive loop resolves when the
+        # matching ``a2a_response`` frame arrives. In-process by design —
+        # the awaiting HTTP request and the agent's WS connection must live
+        # on the same worker (ACN deploys single-instance; multi-replica
+        # would need sticky routing or a pub/sub relay, tracked separately).
+        self._relay_futures: dict[str, asyncio.Future] = {}
 
         # Pub/Sub subscriber
         self._pubsub: redis.client.PubSub | None = None
@@ -531,7 +554,8 @@ class WebSocketManager:
     ):
         """Send message to connection"""
         try:
-            await connection.websocket.send_json(message)
+            async with connection.send_lock:
+                await connection.websocket.send_json(message)
         except Exception as e:
             logger.error(f"Failed to send to {connection.connection_id}: {e}")
 
@@ -668,3 +692,104 @@ class WebSocketManager:
             user_id: Principal identifier set during ``connect()``.
         """
         return any(conn.user_id == user_id for conn in self._connections.values())
+
+    # --- ADR-0012 Mode B: real-time webhook relay over the WS channel ---
+
+    def _first_connection_for(self, user_id: str) -> "Connection | None":
+        """Return one live connection for the principal, or None if offline."""
+        for conn in self._connections.values():
+            if conn.user_id == user_id:
+                return conn
+        return None
+
+    async def relay_request_to_agent(
+        self,
+        agent_id: str,
+        *,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: bytes | str,
+        timeout: float = 30.0,
+    ) -> dict[str, Any] | None:
+        """Relay an inbound HTTP request to a connected agent and await its reply.
+
+        This is the real-time delivery path for agents that registered
+        without a public HTTP endpoint: instead of ACN dialing the agent
+        (Mode A), the agent holds an outbound WebSocket and ACN pushes the
+        request down it, then blocks for the correlated ``a2a_response``.
+
+        Args:
+            agent_id: Recipient agent (matched against connection ``user_id``).
+            method: Original HTTP method.
+            path: Sub-path beyond the proxy root ("/" for root A2A POST).
+            headers: Forward headers (hop-by-hop already stripped by caller).
+            body: Raw request body.
+            timeout: Seconds to wait for the agent's response.
+
+        Returns:
+            ``{"status", "headers", "body", "body_encoding"}`` when the agent
+            replied; ``None`` when the agent holds no live WS connection (the
+            caller falls back to inbox / 503).
+
+        Raises:
+            TimeoutError: agent is connected but did not reply within ``timeout``.
+        """
+        # Deliver to exactly ONE connection. ``send_to_user`` broadcasts to
+        # every connection the agent holds, which would make a non-idempotent
+        # request execute once per connection (double charge, duplicate
+        # reply). For request/response relay we pick a single connection and
+        # correlate its reply.
+        connection = self._first_connection_for(agent_id)
+        if connection is None:
+            return None
+
+        correlation_id = uuid4().hex
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._relay_futures[correlation_id] = future
+
+        if isinstance(body, bytes):
+            try:
+                body_text = body.decode("utf-8")
+                body_encoding = "utf-8"
+            except UnicodeDecodeError:
+                import base64
+
+                body_text = base64.b64encode(body).decode("ascii")
+                body_encoding = "base64"
+        else:
+            body_text = body or ""
+            body_encoding = "utf-8"
+
+        frame = {
+            "type": MessageType.A2A_REQUEST.value,
+            "id": correlation_id,
+            "method": method,
+            "path": path or "/",
+            "headers": headers,
+            "body": body_text,
+            "body_encoding": body_encoding,
+            "deadline_ms": int(timeout * 1000),
+        }
+
+        try:
+            await self._send(connection, frame)
+            return await asyncio.wait_for(future, timeout=timeout)
+        finally:
+            # Always drop the pending entry — on success, timeout, or
+            # cancellation — so the registry cannot leak Futures.
+            self._relay_futures.pop(correlation_id, None)
+
+    def resolve_relay_response(self, correlation_id: str, payload: dict[str, Any]) -> bool:
+        """Resolve a pending relay request with the agent's ``a2a_response``.
+
+        Called from the WS receive loop. Returns True when a waiting request
+        was matched, False for an unknown / already-settled correlation id
+        (stale reply after a timeout, or a duplicate from a second connection).
+        """
+        future = self._relay_futures.get(correlation_id)
+        if future is None or future.done():
+            return False
+        future.set_result(payload)
+        return True

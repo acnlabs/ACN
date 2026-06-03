@@ -33,6 +33,7 @@ app so we don't need the full ACN lifespan.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -157,12 +158,11 @@ class TestHeaderAuth:
                     "/ws/agent-1",
                     headers={"Authorization": "Bearer good-token"},
                 ) as ws:
-                    # Header path: no auth_ok echo; first server message
-                    # is whatever the echo loop sends. Send & receive once
-                    # to prove the connection is fully usable.
-                    ws.send_text("hello")
-                    reply = ws.receive_text()
-                    assert reply == "Received: hello"
+                    # Header path: no auth_ok echo. Prove the connection is
+                    # fully usable via the application keepalive (ADR-0012
+                    # Mode B control-channel protocol): ping -> pong.
+                    ws.send_text(json.dumps({"type": "ping"}))
+                    assert ws.receive_json() == {"type": "pong"}
             ws_mgr.connect.assert_awaited_once()
         finally:
             _exit(ps)
@@ -240,8 +240,8 @@ class TestQueryTokenGating:
                 with client.websocket_connect(
                     "/ws/agent-1?token=good-token",
                 ) as ws:
-                    ws.send_text("ping")
-                    assert ws.receive_text() == "Received: ping"
+                    ws.send_text(json.dumps({"type": "ping"}))
+                    assert ws.receive_json() == {"type": "pong"}
             ws_mgr.connect.assert_awaited_once()
         finally:
             _exit(ps)
@@ -282,8 +282,8 @@ class TestFirstMessageAuth:
                     # First-message flow gets an auth_ok echo.
                     ack = ws.receive_json()
                     assert ack == {"type": "auth_ok"}
-                    ws.send_text("ping")
-                    assert ws.receive_text() == "Received: ping"
+                    ws.send_text(json.dumps({"type": "ping"}))
+                    assert ws.receive_json() == {"type": "pong"}
             ws_mgr.connect.assert_awaited_once()
         finally:
             _exit(ps)

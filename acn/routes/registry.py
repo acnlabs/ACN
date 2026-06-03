@@ -8,8 +8,11 @@ Supports two registration modes:
 3. Self-service: GET /me - agent gets own info via API key
 """
 
+import base64
+import json
 import re
 import secrets
+from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import quote, urlparse
 
@@ -1275,7 +1278,17 @@ async def _proxy_to_agent(
 
     real_endpoint = agent.endpoint
     if not real_endpoint:
-        raise HTTPException(status_code=503, detail="Agent has no registered endpoint")
+        # ADR-0012 Mode B — the agent registered without a public HTTP
+        # endpoint (e.g. a laptop / NAT'd / serverless agent). The proxy is
+        # still its address: deliver in real time over its WS control
+        # channel if it's connected, else fall back to the offline inbox.
+        return await _relay_or_inbox(
+            request=request,
+            agent_id=agent_id,
+            method=method,
+            rest_path=rest_path,
+            caller=caller,
+        )
 
     target_url = real_endpoint.rstrip("/")
     if rest_path:
@@ -1368,6 +1381,149 @@ async def _proxy_to_agent(
         raise HTTPException(
             status_code=502, detail="Failed to reach agent endpoint"
         ) from None
+
+
+# ADR-0012 Mode B — seconds the proxy waits for a WS-connected agent to
+# answer a relayed request. Kept under the Mode-A httpx timeout (60 s): a
+# round-trip to a live agent should be quick, and a slow agent is better
+# surfaced as a 504 than by pinning the caller's connection open.
+_WS_RELAY_TIMEOUT_SECONDS: float = 30.0
+
+
+async def _relay_or_inbox(
+    *,
+    request: Request,
+    agent_id: str,
+    method: str,
+    rest_path: str,
+    caller: dict,
+) -> Response:
+    """Deliver to an agent that has no public HTTP endpoint (ADR-0012 Mode B).
+
+    Real-time first: if the agent holds a live WebSocket control channel,
+    relay the request over it and return the agent's response synchronously —
+    this is the whole point of the proxy address standing in for a
+    ``real_endpoint``.
+
+    Offline backstop: with no live channel, a root A2A ``POST`` is parked in
+    the agent's inbox (the same store the agent already pulls via
+    ``GET /communication/inbox``) and answered ``202``; any other method
+    returns ``503`` (no real-time peer, and nothing meaningful to queue).
+    """
+    body = await request.body()
+    forward_headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in _PROXY_HOP_BY_HOP_HEADERS
+    }
+    forward_headers["X-ACN-Caller-Agent"] = caller["agent_id"]
+    if caller.get("name"):
+        forward_headers["X-ACN-Caller-Name"] = caller["name"]
+
+    # WebSocketManager is a process singleton; in narrow unit-test contexts
+    # it may be uninitialized — treat that as "no live channel" (fall to
+    # backstop) rather than surfacing a 500.
+    try:
+        from .dependencies import get_ws_manager
+
+        ws_manager = get_ws_manager()
+    except Exception:  # noqa: BLE001 — uninitialized manager == offline
+        ws_manager = None
+
+    if ws_manager is not None:
+        try:
+            relayed = await ws_manager.relay_request_to_agent(
+                agent_id,
+                method=method,
+                path=rest_path or "/",
+                headers=forward_headers,
+                body=body,
+                timeout=_WS_RELAY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("ws_relay_timeout", agent_id=agent_id, method=method)
+            raise HTTPException(
+                status_code=504,
+                detail="Agent is connected but did not respond in time.",
+            ) from None
+
+        if relayed is not None:
+            status_code = int(relayed.get("status", 200))
+            resp_headers = relayed.get("headers") or {}
+            media_type = (
+                resp_headers.get("content-type")
+                or resp_headers.get("Content-Type")
+                or "application/json"
+            )
+            resp_body = relayed.get("body") or ""
+            content: bytes | str
+            if relayed.get("body_encoding") == "base64":
+                content = base64.b64decode(resp_body)
+            else:
+                content = resp_body
+            logger.info(
+                "ws_relay_delivered",
+                agent_id=agent_id,
+                method=method,
+                status=status_code,
+            )
+            return Response(content=content, status_code=status_code, media_type=media_type)
+
+    # --- Offline backstop ---
+    if method.upper() == "POST" and not rest_path:
+        await _park_in_inbox(agent_id=agent_id, from_agent=caller["agent_id"], body=body)
+        logger.info(
+            "ws_relay_offline_inbox", agent_id=agent_id, from_agent=caller["agent_id"]
+        )
+        return Response(
+            content=json.dumps(
+                {
+                    "status": "queued",
+                    "delivery_mode": "inbox",
+                    "detail": "Agent is offline; message stored in inbox for pull.",
+                }
+            ),
+            status_code=202,
+            media_type="application/json",
+        )
+
+    raise HTTPException(
+        status_code=503,
+        detail="Agent has no public endpoint and no active real-time connection.",
+    )
+
+
+async def _park_in_inbox(*, agent_id: str, from_agent: str, body: bytes) -> None:
+    """Store an undeliverable A2A request in the recipient's offline inbox.
+
+    Reuses ``MessageRouter._store_inbox`` so the entry shape, cap, and TTL
+    match the existing ``/communication/send`` inbox path the recipient
+    already pulls from — no second inbox format to maintain.
+    """
+    from .dependencies import get_router
+
+    router = get_router()
+    try:
+        message: Any = json.loads(body) if body else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        message = {
+            "raw": body.decode("utf-8", errors="replace")
+            if isinstance(body, bytes)
+            else str(body)
+        }
+    await router._store_inbox(
+        to_agent=agent_id,
+        log_entry={
+            "route_id": secrets.token_hex(8),
+            "from_agent": from_agent,
+            "to_agent": agent_id,
+            "direction": "inbound",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "delivery_mode": "inbox",
+            "source": "proxy_relay_offline",
+            "message": message,
+        },
+    )
 
 
 async def _join_agent_impl(

@@ -105,6 +105,45 @@ Agent process ──outbound WebSocket──→ ACN Gateway
 Both modes produce the same external behaviour: callers POST to
 `{slug}.acnlabs.org/webhook` without knowledge of the delivery mechanism.
 
+##### Mode B wire protocol (implemented — P2a)
+
+The relay reuses the existing `/ws/{agent_id}` control channel. Frames are
+correlated request/response over JSON text:
+
+ACN → agent (an inbound request landed at the proxy):
+
+```json
+{ "type": "a2a_request", "id": "<correlation-uuid>", "method": "POST",
+  "path": "/", "headers": { "...": "..." },
+  "body": "<request body>", "body_encoding": "utf-8|base64",
+  "deadline_ms": 30000 }
+```
+
+agent → ACN (reply, correlated by `id`):
+
+```json
+{ "type": "a2a_response", "id": "<correlation-uuid>", "status": 200,
+  "headers": { "content-type": "application/json" },
+  "body": "<response body>", "body_encoding": "utf-8|base64" }
+```
+
+Keepalive: `{"type":"ping"}` ⇄ `{"type":"pong"}`.
+
+Proxy routing rule for an endpoint-less agent
+(`_proxy_to_agent` → `_relay_or_inbox`):
+
+1. agent holds a live WS connection → relay the frame, block for the
+   correlated `a2a_response` (30 s), return it as the HTTP response (**real
+   time**); no response in time → `504`.
+2. no live WS connection → root A2A `POST` is parked in the offline inbox
+   (`202`, the same store the agent pulls via `GET /communication/inbox`);
+   any other method → `503`.
+
+Correlation state is in-process: the awaiting HTTP request and the agent's
+WS connection must be served by the same worker. ACN deploys single-instance
+today; a multi-replica deployment needs sticky routing or a pub/sub relay
+(tracked separately).
+
 ### 3. Domain is never hardcoded in agent code
 
 The base domain (`acnlabs.org`) is a deployment-time configuration in the
@@ -158,18 +197,19 @@ correctness.
 ## Agent-side integration (CLI — primary path)
 
 ```bash
-# Registration (once)
-acn register --slug mybot --delivery websocket
-# → ACN assigns mybot.acnlabs.org, stores delivery mode
+# Tunnel relayed requests to a local A2A server (agent already speaks HTTP,
+# just has no public address). CLI holds the outbound WS, keepalives, and
+# auto-reconnects.
+acn listen --forward http://localhost:8080
 
-# Runtime (start with agent process)
-acn listen --event payment_task.payment_confirmed \
-           --exec "python handle_payment.py '{event}'"
-# → CLI maintains WebSocket, verifies signatures, execs handler on event
-
-# Pipe variant (any language)
-acn listen | node handle_events.js
+# Or run a handler subprocess per request: the request body arrives on
+# stdin, the command's stdout becomes the response.
+acn listen --exec "python handle_request.py"
 ```
+
+The listener authenticates the WS handshake with the agent's API key
+(`Authorization: Bearer …`), so `agent_id` + `api_key` must be in
+`~/.acn/config.json` (set by `acn join`).
 
 SDK (`acn-client`) provides an equivalent programmatic interface for agents
 that embed ACN integration into their own server application.
@@ -207,7 +247,9 @@ that embed ACN integration into their own server application.
 |-------|-------|--------|
 | **P0 (current)** | AgentMother uses own `agentmother.acnlabs.org`; ACN #161 delivers webhook + signing secret | ACN #161, backend #21 |
 | **P1** | ACN Gateway: wildcard DNS/TLS, registry `GET /agents/{id}`, Mode A proxy | New ACN issue |
-| **P2** | Mode B: WebSocket relay, `acn listen` CLI subcommand | New ACN issue |
+| **P2a (done)** | Mode B server-side relay: `a2a_request`/`a2a_response` over `/ws/{agent_id}`, proxy integration, offline inbox backstop | this change |
+| **P2b (done)** | `acn listen` CLI: outbound WS, `--forward`/`--exec` handlers, keepalive + reconnect | this change |
+| **P2c** | `{slug}.acnlabs.org` subdomain prettification (wildcard DNS/TLS) | New ACN issue |
 | **P3** | `acn-client` SDK wrapping Mode A/B; SOCIAL.md `links.agent_card` convention | New ACN issue |
 
 ---

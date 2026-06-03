@@ -488,8 +488,34 @@ async def websocket_endpoint(
                 return
             logger.debug("websocket_message_received", agent_id=agent_id, data=data)
 
-            # Echo back for now (can extend with message routing)
-            await websocket.send_text(f"Received: {data}")
+            # ADR-0012 Mode B — the agent's outbound control channel carries:
+            #   * ``a2a_response`` — the agent's reply to a request ACN relayed
+            #     to it (correlated by ``id``). Resolve the pending Future so
+            #     the blocked proxy HTTP request can return synchronously.
+            #   * ``ping`` — application-level keepalive; answer ``pong``.
+            # Unknown / malformed frames are ignored (never break the
+            # connection) so the wire protocol stays forward-compatible.
+            try:
+                frame = json.loads(data)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if not isinstance(frame, dict):
+                continue
+
+            frame_type = frame.get("type")
+            if frame_type == "a2a_response":
+                correlation_id = frame.get("id")
+                if correlation_id:
+                    matched = ws_manager.resolve_relay_response(correlation_id, frame)
+                    if not matched:
+                        logger.warning(
+                            "ws_relay_response_unmatched",
+                            agent_id=agent_id,
+                            correlation_id=correlation_id,
+                            request_id=request_id,
+                        )
+            elif frame_type == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
 
     except WebSocketDisconnect:
         logger.info(
