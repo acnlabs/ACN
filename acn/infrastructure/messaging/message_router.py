@@ -278,8 +278,14 @@ class MessageRouter:
                     pass
             # ``follow_redirects=False``: a 3xx pointing to a private
             # address would otherwise sneak past the SSRF check above.
+            #
+            # Bounded connect timeout (ADR-0012): ``route()`` now ATTEMPTS the
+            # direct push even when the Redis ``alive`` key is absent, so a
+            # genuinely-down host must fail fast on connect instead of blocking
+            # for the full read window. Read/write stay generous so a slow but
+            # reachable agent is not cut off mid-response.
             httpx_client = httpx.AsyncClient(
-                timeout=30.0,
+                timeout=httpx.Timeout(30.0, connect=5.0),
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
                 follow_redirects=False,
             )
@@ -507,37 +513,52 @@ class MessageRouter:
                 message=message,
             )
 
-        # 2. Offline pre-check — skip the HTTP round-trip when the recipient
-        #    is not currently alive (per the Redis ``acn:agents:{id}:alive``
-        #    TTL key, the single source of truth for online-ness since the
-        #    implicit-heartbeat refactor).
+        # 2. Direct delivery (Mode A) — ADR-0012 "reachable == online".
         #
-        #    Done before _log_message so the audit stream reflects the real
-        #    delivery direction ("inbound" inbox write, not a false "outbound").
+        #    We ATTEMPT the HTTP push regardless of the Redis ``alive`` key. A
+        #    reachable agent whose heartbeat loop died (alive key expired) can
+        #    still receive in real time; gating purely on heartbeat freshness
+        #    would strand such an agent on the inbox forever, because a passive
+        #    push-only agent never makes the authenticated calls that would
+        #    implicitly renew the key. This mirrors Mode B, where "the WebSocket
+        #    is connected" — not "a heartbeat is fresh" — defines online-ness.
         #
-        #    Accuracy note: a false-positive (key present but the agent is
-        #    actually down) falls through to the HTTP path and writes to inbox
-        #    on failure — unchanged from the legacy behaviour. A false-negative
-        #    (key expired in the few-second window before the next implicit
-        #    renewal) is rare and self-heals on the next authenticated request;
-        #    we skip the HTTP attempt to avoid a guaranteed timeout.
-        if not await self.agent_service.is_alive(to_agent):
-            logger.info(
-                f"[{route_id}] Agent {to_agent!r} is offline (alive key absent);"
-                " skipping HTTP, delivering directly to inbox"
+        #    The cost of probing a genuinely-down host is bounded by the short
+        #    connect timeout on the httpx client (see ``_get_client``): a dead
+        #    host fails fast instead of blocking for the full read timeout.
+        #
+        #    ``alive_now`` only selects the FAILURE semantics, preserving the
+        #    legacy contracts:
+        #      - believed-online but failed  → unexpected → inbox + DLQ + raise
+        #        (retry-worthy; the caller sees the error)
+        #      - believed-offline and failed → expected   → inbox only, no raise
+        #        (graceful envelope, same surface the old pre-check produced)
+        alive_now = await self.agent_service.is_alive(to_agent)
+
+        # Only the send itself is guarded by the failure handler. Post-delivery
+        # bookkeeping (alive renewal, audit log) is deliberately OUTSIDE this
+        # try: once the agent has the message, a Redis blip while recording it
+        # must NOT be mistaken for a delivery failure (which would duplicate the
+        # message to the inbox, queue a spurious DLQ retry, and raise to the
+        # caller for a message that already arrived).
+        try:
+            client = await self._get_client(endpoint)
+            request = SendMessageRequest(
+                id=route_id,
+                params=MessageSendParams(message=message),
             )
-            log_entry = {
-                "route_id": route_id,
-                "from_agent": from_agent,
-                "to_agent": to_agent,
-                "direction": "inbound",
-                "timestamp": datetime.now(UTC).isoformat(),
-                "message": (
-                    message.model_dump()
-                    if hasattr(message, "model_dump")
-                    else str(message)
-                ),
-            }
+            response = await self._send_message_with_client(client, request)
+
+        except SSRFViolation:
+            # A blocked endpoint is a security signal, not a delivery miss —
+            # never silently divert it to the inbox; surface it to the caller.
+            raise
+
+        except Exception as e:
+            logger.info(
+                f"[{route_id}] Direct delivery to {to_agent!r} failed"
+                f" (alive={alive_now}): {e}; parking in inbox"
+            )
             await self._log_message(
                 route_id=route_id,
                 from_agent=from_agent,
@@ -545,48 +566,6 @@ class MessageRouter:
                 message=message,
                 direction="inbound",
             )
-            await self._store_inbox(to_agent=to_agent, log_entry=log_entry)
-            # ``status="inbox"`` predates Phase 2 — kept verbatim for
-            # SDK compatibility. ``delivery_mode="inbox"`` mirrors the
-            # manifest-mode response shape so clients that switched to
-            # the new schema can use a single key (``delivery_mode``)
-            # instead of branching on ``status`` enum strings.
-            return {
-                "status": "inbox",
-                "delivery_mode": "inbox",
-                "route_id": route_id,
-            }
-
-        # 3. Log outbound message (only reached when agent is online)
-        await self._log_message(
-            route_id=route_id,
-            from_agent=from_agent,
-            to_agent=to_agent,
-            message=message,
-            direction="outbound",
-        )
-
-        try:
-            # 4. Get A2A client and send message
-            client = await self._get_client(endpoint)
-
-            # Create SendMessageRequest
-            request = SendMessageRequest(
-                id=route_id,
-                params=MessageSendParams(message=message),
-            )
-            response = await self._send_message_with_client(client, request)
-
-            # 5. Log response
-            logger.debug(f"[{route_id}] Received response: {type(response)}")
-
-            logger.info(f"[{route_id}] Message delivered successfully")
-            return response
-
-        except Exception as e:
-            logger.error(f"[{route_id}] Delivery failed: {e}")
-
-            # Store in offline inbox so the recipient can pull when back online
             await self._store_inbox(
                 to_agent=to_agent,
                 log_entry={
@@ -599,15 +578,48 @@ class MessageRouter:
                 },
             )
 
-            # Store in dead letter queue for retry
-            await self._store_dlq(
+            if alive_now:
+                # We believed the agent was online, so this is an unexpected
+                # failure: queue for retry and surface the error (legacy path).
+                await self._store_dlq(
+                    route_id=route_id,
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    message=message,
+                    error=str(e),
+                )
+                raise
+
+            # Believed-offline and unreachable: an expected condition. Return
+            # the inbox envelope gracefully — no DLQ, no raise — matching the
+            # surface the legacy offline pre-check produced.
+            return {
+                "status": "inbox",
+                "delivery_mode": "inbox",
+                "route_id": route_id,
+            }
+
+        # --- Reached only on a confirmed successful delivery. ---
+        # A completed delivery is the strongest liveness signal there is, so
+        # renew the alive TTL (touch_alive swallows its own errors). The audit
+        # write is best-effort too: it records the real "outbound" direction
+        # but must never turn a delivered message into a failure.
+        await self.agent_service.touch_alive(to_agent)
+        try:
+            await self._log_message(
                 route_id=route_id,
                 from_agent=from_agent,
                 to_agent=to_agent,
                 message=message,
-                error=str(e),
+                direction="outbound",
             )
-            raise
+        except Exception as log_err:  # noqa: BLE001 — audit is non-critical
+            logger.warning(
+                f"[{route_id}] audit log after successful delivery failed: {log_err}"
+            )
+        logger.debug(f"[{route_id}] Received response: {type(response)}")
+        logger.info(f"[{route_id}] Message delivered successfully")
+        return response
 
     # --- ADR-0012 Mode B: real-time relay over the agent's WebSocket ---
 

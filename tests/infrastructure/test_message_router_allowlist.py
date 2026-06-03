@@ -141,6 +141,9 @@ class TestAllowlistMember:
             manifest_dispatcher=stub_dispatcher,
             allowlist_service=allowlist_service,
         )
+        # route() now probes the endpoint even when offline; simulate an
+        # unreachable host so the offline path falls through to the inbox.
+        router._get_client = AsyncMock(side_effect=RuntimeError("offline"))
 
         result = await router.route(
             from_agent="alice",
@@ -342,6 +345,9 @@ async def test_system_sender_bypasses_allowlist(
         manifest_dispatcher=stub_dispatcher,
         allowlist_service=allowlist_service,
     )
+    # route() now probes the endpoint even when offline; simulate an
+    # unreachable host so the offline path falls through to the inbox.
+    router._get_client = AsyncMock(side_effect=RuntimeError("offline"))
 
     result = await router.route(
         from_agent="system:chat",
