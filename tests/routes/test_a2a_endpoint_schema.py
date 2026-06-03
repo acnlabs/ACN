@@ -39,6 +39,84 @@ def test_register_request_still_requires_delivery_or_discovery_url():
         AgentRegisterRequest(owner="user-1", name="Agent")
 
 
+def test_register_request_relay_delivery_waives_url_in_push_mode():
+    # ADR-0012 Mode B: delivery="relay" lets an open-mode agent register with
+    # no public delivery URL (it is reached over its outbound WebSocket).
+    request = AgentRegisterRequest(
+        owner="user-1",
+        name="Relay Agent",
+        delivery="relay",
+        communication_policy={"mode": "open"},
+    )
+
+    assert request.delivery == "relay"
+    assert request.get_direct_a2a_endpoint() is None
+
+
+def test_register_request_open_mode_without_relay_still_requires_url():
+    with pytest.raises(ValidationError):
+        AgentRegisterRequest(
+            owner="user-1",
+            name="Pushy Agent",
+            communication_policy={"mode": "open"},
+        )
+
+
+def test_register_request_rejects_unknown_delivery_value():
+    with pytest.raises(ValidationError):
+        AgentRegisterRequest(
+            owner="user-1",
+            name="Agent",
+            a2a_endpoint="https://agent.example.com/a2a",
+            delivery="carrier-pigeon",
+        )
+
+
+def test_join_request_relay_delivery_waives_url_in_push_mode():
+    request = AgentJoinRequest(
+        name="Relay Agent",
+        description="Reached over an outbound WebSocket",
+        delivery="relay",
+        communication_policy={"mode": "open"},
+    )
+
+    assert request.delivery == "relay"
+    assert request.get_direct_a2a_endpoint() is None
+
+
+def test_join_request_open_mode_without_relay_still_requires_url():
+    with pytest.raises(ValidationError):
+        AgentJoinRequest(
+            name="Pushy Agent",
+            description="Open mode but no endpoint and no relay opt-in",
+            communication_policy={"mode": "open"},
+        )
+
+
+def test_register_request_relay_with_url_is_rejected():
+    # delivery="relay" + a direct URL is contradictory: route() would dial
+    # over HTTP and ignore the relay intent. Must be rejected at validation.
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        AgentRegisterRequest(
+            owner="user-1",
+            name="Confused Agent",
+            delivery="relay",
+            a2a_endpoint="https://agent.example.com/a2a",
+            communication_policy={"mode": "open"},
+        )
+
+
+def test_join_request_relay_with_url_is_rejected():
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        AgentJoinRequest(
+            name="Confused Agent",
+            description="Relay opt-in but also supplies a direct URL",
+            delivery="relay",
+            a2a_endpoint="https://agent.example.com/a2a",
+            communication_policy={"mode": "open"},
+        )
+
+
 def test_extract_jsonrpc_endpoint_prefers_supported_interfaces():
     card = {
         "name": "Agent",

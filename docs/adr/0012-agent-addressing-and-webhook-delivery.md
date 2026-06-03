@@ -144,6 +144,44 @@ WS connection must be served by the same worker. ACN deploys single-instance
 today; a multi-replica deployment needs sticky routing or a pub/sub relay
 (tracked separately).
 
+#### Opting into Mode B at registration (`delivery="relay"`)
+
+Mode B only makes sense for an agent that wants real-time **push** but has no
+public URL. Registration carries an explicit `delivery` field:
+
+- `delivery` omitted / `"direct"` — legacy behaviour. Push modes
+  (`open`/`allowlist`) still require a delivery URL (`a2a_endpoint` /
+  `endpoint` / `agent_card_url`); ACN dials it (Mode A).
+- `delivery="relay"` — the URL requirement is waived even in push modes. The
+  agent stores **no** direct endpoint and is reached only over its outbound
+  WebSocket. `acn join --relay` registers this shape (open mode, no URL).
+
+This keeps the two transports explicit: an agent without a URL is either a
+pull-only `manifest`/`closed` agent **or** a `delivery="relay"` push agent —
+never an accidentally-broken push agent that advertises a mode it can't serve.
+
+#### Two ingress channels, one relay
+
+The relay backs **both** ways a message reaches an endpoint-less agent:
+
+1. **HTTP gateway proxy** (`{slug}.acnlabs.org`, `_proxy_to_agent` →
+   `_relay_or_inbox`) — an external A2A caller dials the agent's public URL.
+2. **ACN-mediated** `POST /communication/send` (`MessageRouter.route`) — an
+   ACN-registered sender addresses the agent by id.
+
+In both, the routing rule is identical: an agent with no direct endpoint is
+relayed over its live WS connection (real time), and parked in the offline
+inbox when not connected. `MessageRouter` serializes the `Message` into the
+same JSON-RPC `message/send` body — and sends the same headers (including the
+a2a protocol version header) — a direct HTTP POST would carry, so the
+receiving agent cannot tell Mode A from Mode B.
+
+Scope: the relay covers **non-streaming `message/send` only**. `message/stream`
+to a relay-delivery agent raises a clear error (the WS frame protocol has no
+streaming correlation yet); streaming relay is deferred. `delivery="relay"` is
+mutually exclusive with a direct URL — supplying both is rejected at
+registration rather than silently dialling over HTTP.
+
 ### 3. Domain is never hardcoded in agent code
 
 The base domain (`acnlabs.org`) is a deployment-time configuration in the
@@ -249,6 +287,7 @@ that embed ACN integration into their own server application.
 | **P1** | ACN Gateway: wildcard DNS/TLS, registry `GET /agents/{id}`, Mode A proxy | New ACN issue |
 | **P2a (done)** | Mode B server-side relay: `a2a_request`/`a2a_response` over `/ws/{agent_id}`, proxy integration, offline inbox backstop | this change |
 | **P2b (done)** | `acn listen` CLI: outbound WS, `--forward`/`--exec` handlers, keepalive + reconnect | this change |
+| **P2d (done)** | `delivery="relay"` registration field + `MessageRouter` real-time relay for the ACN-mediated `/communication/send` channel (not just the HTTP gateway proxy); `acn join --relay` | this change |
 | **P2c** | `{slug}.acnlabs.org` subdomain prettification (wildcard DNS/TLS) | New ACN issue |
 | **P3** | `acn-client` SDK wrapping Mode A/B; SOCIAL.md `links.agent_card` convention | New ACN issue |
 

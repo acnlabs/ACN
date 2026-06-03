@@ -175,6 +175,15 @@ class AgentRegisterRequest(BaseModel):
             "fetches this card and extracts the JSON-RPC endpoint."
         ),
     )
+    delivery: str | None = Field(
+        None,
+        description=(
+            "Inbound delivery transport (ADR-0012). 'direct' (default): ACN "
+            "dials the agent's public endpoint / agent_card_url. 'relay': the "
+            "agent holds an outbound WebSocket (`acn listen`) and ACN pushes "
+            "messages over it in real time — no public delivery URL required."
+        ),
+    )
     tags: list[str] = Field(default_factory=list, max_length=50, description="Agent capability tags")
     agent_card: dict | None = Field(
         None,
@@ -259,6 +268,16 @@ class AgentRegisterRequest(BaseModel):
             raise ValueError(str(e)) from e
         return v
 
+    @field_validator("delivery")
+    @classmethod
+    def validate_delivery(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip().lower()
+        if v not in {"direct", "relay"}:
+            raise ValueError("delivery must be 'direct' or 'relay'")
+        return v
+
     @model_validator(mode="after")
     def require_delivery_or_discovery_url(self):
         # Agents whose inbound policy is manifest/closed never receive a direct
@@ -267,6 +286,20 @@ class AgentRegisterRequest(BaseModel):
         # (open/allowlist) still require one. Default (None) is treated as
         # ``open`` to preserve the legacy register contract.
         policy_mode = (self.communication_policy or {}).get("mode", "open")
+        # ADR-0012 Mode B: relay-delivery agents reach the recipient over their
+        # outbound WebSocket, so they register without a public delivery URL
+        # even in push (open/allowlist) modes. A direct URL is mutually
+        # exclusive with relay in every mode — accepting both would silently
+        # dial over HTTP (Mode A) and ignore the relay intent.
+        if self.delivery == "relay":
+            if self.a2a_endpoint or self.endpoint or self.agent_card_url:
+                raise ValueError(
+                    "delivery='relay' is mutually exclusive with a delivery URL "
+                    "(a2a_endpoint, endpoint, or agent_card_url): relay agents are "
+                    "reached only over their outbound WebSocket. Omit the URL, or "
+                    "use delivery='direct' to be dialled over HTTP."
+                )
+            return self
         if policy_mode in {"manifest", "closed"}:
             return self
         if not (self.a2a_endpoint or self.endpoint or self.agent_card_url):

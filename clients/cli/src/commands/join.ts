@@ -21,13 +21,31 @@ export function joinCommand(): Command {
     .requiredOption('-t, --tags <tags>', 'Comma-separated capability tags (e.g. coding,review)')
     .option('-e, --endpoint <url>', 'Public A2A endpoint URL of this agent')
     .option('-d, --description <text>', 'Agent description')
-    .action(async (opts: { name: string; tags: string; endpoint?: string; description?: string }) => {
+    .option(
+      '--relay',
+      'Receive messages in real time over an outbound WebSocket (run `acn listen`) ' +
+        'instead of hosting a public endpoint. Registers in open/push mode with no delivery URL.',
+    )
+    .action(
+      async (opts: {
+        name: string;
+        tags: string;
+        endpoint?: string;
+        description?: string;
+        relay?: boolean;
+      }) => {
       const tags = opts.tags.split(',').map((s) => s.trim()).filter(Boolean);
       const body = {
         name: opts.name,
         description: opts.description ?? `${opts.name} — registered via acn-cli`,
         tags,
         ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
+        // ADR-0012 Mode B: relay delivery needs a push mode (open) so the
+        // gateway actually pushes inbound messages down the WebSocket; the
+        // server-side validator then waives the public-URL requirement.
+        ...(opts.relay
+          ? { delivery: 'relay', communication_policy: { mode: 'open' } }
+          : {}),
       };
 
       try {

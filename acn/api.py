@@ -490,6 +490,10 @@ async def lifespan(app: FastAPI):
         policy_service=policy_service_instance,
         manifest_dispatcher=manifest_dispatcher_instance,
         allowlist_service=allowlist_service_instance,
+        # ADR-0012 Mode B: same WS manager that accepts agent ``acn listen``
+        # connections, so MessageRouter can push ACN-mediated A2A messages
+        # over the agent's outbound socket in real time.
+        ws_manager=ws_manager_instance,
     )
     message_service_instance = MessageService(router_instance, agent_repository)
     # Phase 2 Group C #9: BroadcastService now requires agent_repository

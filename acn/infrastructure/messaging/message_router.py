@@ -9,6 +9,7 @@ Routes messages between agents using:
 Based on: https://github.com/a2aproject/A2A
 """
 
+import base64
 import json
 import logging
 from collections.abc import AsyncGenerator, Callable
@@ -19,10 +20,12 @@ from uuid import uuid4
 
 import httpx
 import redis.asyncio as redis
+from jsonrpc.jsonrpc2 import JSONRPC20Request  # type: ignore[import-untyped]
 
 # Official A2A SDK
 from a2a.client import Client, ClientConfig, ClientFactory  # type: ignore[import-untyped]
 from a2a.compat.v0_3.conversions import (  # type: ignore[import-untyped]
+    to_compat_send_message_request,
     to_compat_stream_response,
     to_core_send_message_request,
 )
@@ -39,6 +42,10 @@ from a2a.types.a2a_pb2 import (  # type: ignore[import-untyped]
     AgentCapabilities,
     AgentCard,
     AgentInterface,
+)
+from a2a.utils.constants import (  # type: ignore[import-untyped]
+    PROTOCOL_VERSION_0_3,
+    VERSION_HEADER,
 )
 
 from ...config import get_settings
@@ -97,6 +104,7 @@ if TYPE_CHECKING:
     from ...services.allowlist_service import AllowlistService
     from ...services.policy_service import PolicyCheckService
     from .manifest_dispatcher import ManifestDispatcher
+    from .websocket_manager import WebSocketManager
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +173,7 @@ class MessageRouter:
         policy_service: "PolicyCheckService | None" = None,
         manifest_dispatcher: "ManifestDispatcher | None" = None,
         allowlist_service: "AllowlistService | None" = None,
+        ws_manager: "WebSocketManager | None" = None,
     ):
         """
         Initialize Message Router
@@ -217,6 +226,10 @@ class MessageRouter:
         self.policy_service = policy_service
         self.manifest_dispatcher = manifest_dispatcher
         self.allowlist_service = allowlist_service
+        # ADR-0012 Mode B: optional real-time relay over the agent's outbound
+        # WebSocket. When ``None`` (legacy tests / scripts), relay-delivery
+        # agents fall back to the inbox path — same as before this feature.
+        self.ws_manager = ws_manager
 
         # Cache of A2A clients by endpoint (capped to prevent unbounded growth)
         self._clients: dict[str, Client] = {}
@@ -475,6 +488,25 @@ class MessageRouter:
         endpoint = _agent_delivery_endpoint(agent_info)
         logger.debug(f"[{route_id}] Discovered endpoint: {endpoint}")
 
+        # 1.6. ADR-0012 Mode B relay delivery.
+        #
+        # A push-mode recipient (open / allowlist) with NO direct delivery URL
+        # can only be a relay-delivery agent: registration rejects push mode
+        # without a URL unless ``delivery="relay"`` was set, and manifest /
+        # closed recipients were already diverted / rejected by the policy
+        # gate above. Such agents hold an outbound WebSocket (`acn listen`),
+        # so we push the message over it in real time and block for the
+        # correlated reply — falling back to the inbox when the agent is not
+        # currently connected. This is the ACN-mediated counterpart to the
+        # gateway HTTP proxy relay (registry._relay_or_inbox).
+        if not endpoint:
+            return await self._route_relay_or_inbox(
+                route_id=route_id,
+                from_agent=from_agent,
+                to_agent=to_agent,
+                message=message,
+            )
+
         # 2. Offline pre-check — skip the HTTP round-trip when the recipient
         #    is not currently alive (per the Redis ``acn:agents:{id}:alive``
         #    TTL key, the single source of truth for online-ness since the
@@ -577,6 +609,138 @@ class MessageRouter:
             )
             raise
 
+    # --- ADR-0012 Mode B: real-time relay over the agent's WebSocket ---
+
+    _RELAY_TIMEOUT_SECONDS = 30.0
+
+    def _build_relay_send_body(self, route_id: str, message: Message) -> bytes:
+        """Serialize ``message`` into a JSON-RPC ``message/send`` request body.
+
+        Mirrors ``a2a.compat.v0_3.jsonrpc_transport.CompatJsonRpcTransport``
+        so the bytes pushed over the WebSocket are byte-for-byte what a direct
+        HTTP A2A POST would carry — the receiving agent's A2A server cannot
+        tell the difference between Mode A (HTTP) and Mode B (relay).
+        """
+        compat_request = SendMessageRequest(
+            id=route_id,
+            params=MessageSendParams(message=message),
+        )
+        core_request = to_core_send_message_request(compat_request)
+        req_v03 = to_compat_send_message_request(core_request, request_id=0)
+        rpc_request = JSONRPC20Request(
+            method="message/send",
+            params=req_v03.params.model_dump(
+                by_alias=True, exclude_none=True, mode="json"
+            ),
+            _id=route_id,
+        )
+        return json.dumps(dict(rpc_request.data)).encode("utf-8")
+
+    @staticmethod
+    def _decode_relay_envelope(relayed: dict[str, Any]) -> dict[str, Any]:
+        """Decode the agent's relayed reply body into a JSON-RPC envelope dict."""
+        body_text = relayed.get("body") or ""
+        if relayed.get("body_encoding") == "base64":
+            try:
+                body_text = base64.b64decode(body_text).decode("utf-8", errors="replace")
+            except Exception:
+                body_text = ""
+        if not body_text:
+            return {}
+        try:
+            data = json.loads(body_text)
+        except json.JSONDecodeError:
+            return {"raw": body_text}
+        return data if isinstance(data, dict) else {"result": data}
+
+    async def _route_relay_or_inbox(
+        self,
+        *,
+        route_id: str,
+        from_agent: str,
+        to_agent: str,
+        message: Message,
+    ) -> dict[str, Any]:
+        """Deliver to a relay-delivery agent in real time, else park in inbox.
+
+        Returns a JSON-serialisable envelope:
+        - ``delivery_mode="relay"`` with the agent's ``response`` payload when
+          the agent was connected and replied.
+        - ``delivery_mode="inbox"`` when no live WebSocket exists (or relay is
+          not wired / timed out) — the recipient pulls it later.
+        """
+        if self.ws_manager is not None:
+            try:
+                relayed = await self.ws_manager.relay_request_to_agent(
+                    to_agent,
+                    method="POST",
+                    path="/",
+                    # Mirror the headers a direct HTTP A2A POST would send
+                    # (CompatJsonRpcTransport) so the receiving agent cannot
+                    # tell Mode A (HTTP) from Mode B (relay) — including the
+                    # protocol version header some strict servers require.
+                    headers={
+                        "content-type": "application/json",
+                        VERSION_HEADER.lower(): PROTOCOL_VERSION_0_3,
+                    },
+                    body=self._build_relay_send_body(route_id, message),
+                    timeout=self._RELAY_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    f"[{route_id}] relay to {to_agent!r} timed out; parking in inbox"
+                )
+                relayed = None
+
+            if relayed is not None:
+                await self._log_message(
+                    route_id=route_id,
+                    from_agent=from_agent,
+                    to_agent=to_agent,
+                    message=message,
+                    direction="outbound",
+                )
+                envelope = self._decode_relay_envelope(relayed)
+                logger.info(f"[{route_id}] Delivered to {to_agent!r} via WS relay")
+                return {
+                    "status": "delivered",
+                    "delivery_mode": "relay",
+                    "route_id": route_id,
+                    "message_id": getattr(message, "message_id", None),
+                    "response": envelope.get("result", envelope),
+                }
+
+        # No live WS connection (or relay not wired / timed out): the agent is
+        # a relay-delivery agent that is currently offline. Park the full
+        # message in its inbox so it can pull on reconnect — identical
+        # semantics to the offline path for direct-push agents.
+        logger.info(
+            f"[{route_id}] Relay agent {to_agent!r} offline; delivering to inbox"
+        )
+        log_entry = {
+            "route_id": route_id,
+            "from_agent": from_agent,
+            "to_agent": to_agent,
+            "direction": "inbound",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "message": (
+                message.model_dump() if hasattr(message, "model_dump") else str(message)
+            ),
+        }
+        await self._log_message(
+            route_id=route_id,
+            from_agent=from_agent,
+            to_agent=to_agent,
+            message=message,
+            direction="inbound",
+        )
+        await self._store_inbox(to_agent=to_agent, log_entry=log_entry)
+        return {
+            "status": "inbox",
+            "delivery_mode": "inbox",
+            "route_id": route_id,
+        }
+
     async def route_by_tag(
         self,
         from_agent: str,
@@ -656,6 +820,15 @@ class MessageRouter:
             raise ValueError(f"Agent not found: {to_agent}")
 
         endpoint = _agent_delivery_endpoint(agent_info)
+        # ADR-0012 Mode B relay covers non-streaming message/send only. A
+        # relay-delivery agent has no direct endpoint, so surface a clear
+        # error instead of letting _get_client crash on an empty URL.
+        if not endpoint:
+            raise ValueError(
+                f"Agent {to_agent!r} has no direct endpoint (relay-delivery); "
+                "streaming (message/stream) is not supported over the WebSocket "
+                "relay — use POST /communication/send (message/send) instead."
+            )
         logger.info(f"Starting stream: {from_agent} -> {to_agent}")
 
         # Get A2A client and stream

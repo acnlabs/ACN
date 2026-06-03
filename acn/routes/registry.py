@@ -203,6 +203,15 @@ class AgentJoinRequest(BaseModel):
             "fetches this card and extracts the JSON-RPC endpoint."
         ),
     )
+    delivery: str | None = Field(
+        None,
+        description=(
+            "Inbound delivery transport (ADR-0012). 'direct' (default): ACN "
+            "dials the agent's public endpoint / agent_card_url. 'relay': the "
+            "agent holds an outbound WebSocket (`acn listen`) and ACN pushes "
+            "messages over it in real time — no public delivery URL required."
+        ),
+    )
     referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
     agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
 
@@ -227,6 +236,16 @@ class AgentJoinRequest(BaseModel):
         # ``_proxy_to_agent``) to defend against DNS rebinding.
         return _validate_agent_endpoint_url(v)
 
+    @field_validator("delivery")
+    @classmethod
+    def validate_delivery(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip().lower()
+        if v not in {"direct", "relay"}:
+            raise ValueError("delivery must be 'direct' or 'relay'")
+        return v
+
     @model_validator(mode="after")
     def require_delivery_or_discovery_url(self):
         # Endpoint requirement depends on the inbound delivery model:
@@ -238,6 +257,20 @@ class AgentJoinRequest(BaseModel):
         # This keeps the default registration path open to pull-only AI
         # assistants and local-dev agents that have no public HTTP server.
         policy_mode = (self.communication_policy or {}).get("mode", "manifest")
+        # ADR-0012 Mode B: relay-delivery agents are pushed to over their
+        # outbound WebSocket (`acn listen`), so a push-mode agent may join
+        # without any public delivery URL when it opts into relay. A direct
+        # URL is mutually exclusive with relay in every mode — accepting both
+        # would silently dial over HTTP (Mode A) and ignore the relay intent.
+        if self.delivery == "relay":
+            if self.a2a_endpoint or self.endpoint or self.agent_card_url:
+                raise ValueError(
+                    "delivery='relay' is mutually exclusive with a delivery URL "
+                    "(a2a_endpoint, endpoint, or agent_card_url): relay agents are "
+                    "reached only over their outbound WebSocket. Omit the URL, or "
+                    "use delivery='direct' to be dialled over HTTP."
+                )
+            return self
         if policy_mode in {"manifest", "closed"}:
             return self
         if not (self.a2a_endpoint or self.endpoint or self.agent_card_url):
@@ -700,7 +733,10 @@ async def dev_register_agent(
         # resolution/probing — mirrors the join path (#142). Default (None)
         # is treated as ``open`` to preserve the legacy register contract.
         _policy_mode = (request.communication_policy or {}).get("mode", "open")
-        if _policy_mode in _PUSH_MODES:
+        # ADR-0012 Mode B: relay-delivery agents are reached over their
+        # outbound WebSocket (`acn listen`), never dialled — skip endpoint
+        # resolution and store no direct URL even in push modes.
+        if _policy_mode in _PUSH_MODES and request.delivery != "relay":
             endpoint, agent_card, _ = await _resolve_registration_endpoint(
                 direct_endpoint=request.get_direct_a2a_endpoint(),
                 agent_card_url=request.agent_card_url,
@@ -927,7 +963,10 @@ async def register_agent(
         # resolution/probing — mirrors the join path (#142). Default (None)
         # is treated as ``open`` to preserve the legacy register contract.
         _policy_mode = (request.communication_policy or {}).get("mode", "open")
-        if _policy_mode in _PUSH_MODES:
+        # ADR-0012 Mode B: relay-delivery agents are reached over their
+        # outbound WebSocket (`acn listen`), never dialled — skip endpoint
+        # resolution and store no direct URL even in push modes.
+        if _policy_mode in _PUSH_MODES and request.delivery != "relay":
             endpoint, agent_card, _ = await _resolve_registration_endpoint(
                 direct_endpoint=request.get_direct_a2a_endpoint(),
                 agent_card_url=request.agent_card_url,
@@ -1564,7 +1603,10 @@ async def _join_agent_impl(
         #     complaint). Reachability is (re)verified later via
         #     PATCH /{id}/endpoint if the agent switches to a push mode.
         _policy_mode = (body.communication_policy or {}).get("mode", "manifest")
-        if _policy_mode in _PUSH_MODES:
+        # ADR-0012 Mode B: relay-delivery agents are reached over their
+        # outbound WebSocket (`acn listen`), never dialled — skip endpoint
+        # resolution and store no direct URL even in push modes.
+        if _policy_mode in _PUSH_MODES and body.delivery != "relay":
             endpoint, agent_card, endpoint_reachable = await _resolve_registration_endpoint(
                 direct_endpoint=body.get_direct_a2a_endpoint(),
                 agent_card_url=body.agent_card_url,
