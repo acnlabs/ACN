@@ -64,11 +64,6 @@ class Agent:
     # Authentication (for autonomous agents)
     api_key: str | None = None
 
-    # Auth0 M2M 凭证（Agent 自主身份认证）
-    auth0_client_id: str | None = None
-    auth0_client_secret: str | None = None  # 仅在内存中使用，不持久化到 Redis
-    auth0_token_endpoint: str | None = None
-
     # Claim status (for autonomous agents)
     claim_status: ClaimStatus | None = None
     verification_code: str | None = None  # Short code for human verification
@@ -317,9 +312,6 @@ class Agent:
             "accepts_payment": self.accepts_payment,
             "payment_methods": self.payment_methods,
             "token_pricing": self.token_pricing,
-            # Auth0 M2M 凭证（client_secret 不序列化）
-            "auth0_client_id": self.auth0_client_id,
-            "auth0_token_endpoint": self.auth0_token_endpoint,
             # [REMOVED] Agent Wallet fields - 由 Backend 管理
             # ERC-8004 On-Chain Identity
             "erc8004_agent_id": self.erc8004_agent_id,

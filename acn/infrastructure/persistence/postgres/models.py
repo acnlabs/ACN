@@ -132,8 +132,6 @@ class AgentModel(Base):
     tags: Mapped[list[str] | None] = mapped_column("skills", ARRAY(String), nullable=True)  # DB column: "skills" (backward compat)
     subnet_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     api_key: Mapped[str | None] = mapped_column(String, nullable=True)
-    auth0_client_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    auth0_token_endpoint: Mapped[str | None] = mapped_column(String, nullable=True)
     claim_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     verification_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     referrer_id: Mapped[str | None] = mapped_column(String, nullable=True)

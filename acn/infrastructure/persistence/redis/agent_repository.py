@@ -387,9 +387,6 @@ class RedisAgentRepository(IAgentRepository):
                 if agent_dict.get("communication_policy")
                 else None
             ),
-            # Auth0 M2M 凭证（client_secret 不持久化）
-            "auth0_client_id": agent_dict.get("auth0_client_id"),
-            "auth0_token_endpoint": agent_dict.get("auth0_token_endpoint"),
             # [REMOVED] Agent Wallet fields - 由 Backend 管理
             # ERC-8004 On-Chain Identity
             "erc8004_agent_id": agent_dict.get("erc8004_agent_id"),

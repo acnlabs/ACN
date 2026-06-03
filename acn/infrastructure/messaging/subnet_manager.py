@@ -144,7 +144,7 @@ class SubnetManager:
         self,
         agent_service: "AgentService",
         redis_client: redis.Redis,
-        gateway_base_url: str = "https://gateway.agentplanet.com",
+        gateway_base_url: str = "https://api.acnlabs.dev",
         heartbeat_interval: int = 30,
         heartbeat_timeout: int = 90,
         policy_service: "PolicyCheckService | None" = None,
