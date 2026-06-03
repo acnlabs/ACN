@@ -288,8 +288,22 @@ that embed ACN integration into their own server application.
 | **P2a (done)** | Mode B server-side relay: `a2a_request`/`a2a_response` over `/ws/{agent_id}`, proxy integration, offline inbox backstop | this change |
 | **P2b (done)** | `acn listen` CLI: outbound WS, `--forward`/`--exec` handlers, keepalive + reconnect | this change |
 | **P2d (done)** | `delivery="relay"` registration field + `MessageRouter` real-time relay for the ACN-mediated `/communication/send` channel (not just the HTTP gateway proxy); `acn join --relay` | this change |
-| **P2c** | `{slug}.acnlabs.org` subdomain prettification (wildcard DNS/TLS) | New ACN issue |
+| **P2c (deferred — cosmetic only)** | `{slug}.acnlabs.org` subdomain prettification (wildcard DNS/TLS). **Not required for the closed loop** — see note below. | New ACN issue |
 | **P3** | `acn-client` SDK wrapping Mode A/B; SOCIAL.md `links.agent_card` convention | New ACN issue |
+
+> **The official proxy address already exists and is the load-bearing one.**
+> Registration returns, and `GET /agents/{id}` advertises, a stable path-based
+> gateway URL: `{GATEWAY_BASE_URL}/api/v1/agents/{agent_id}` (e.g.
+> `https://api.acnlabs.dev/api/v1/agents/{id}`), with its Agent Card at
+> `…/{id}/.well-known/agent-card.json`. Both Mode A (direct proxy) and Mode B
+> (WS relay, verified end to end by `scripts/e2e_relay_smoke.py`) operate over
+> this address. `{slug}.acnlabs.org` (P2c) is **pure vanity addressing** — a
+> human-friendly alias that adds wildcard DNS + wildcard TLS + a
+> `subdomain→agent_id` routing/slug-uniqueness layer for **zero functional
+> gain**. Because the registry is the single source of truth for URLs (callers
+> must never hardcode/interpolate addresses), the UUID path is already stable
+> and rename-proof. P2c is therefore deferred and only worth doing for a
+> branding/marketing requirement, not for the protocol.
 
 ---
 
