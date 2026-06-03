@@ -56,6 +56,8 @@ class AgentTokenIssuer:
         default_audience: str,
         ttl_seconds: int,
         default_scope: str,
+        secondary_private_key_pem: str | None = None,
+        secondary_kid: str | None = None,
     ) -> None:
         self._kid = kid
         self._issuer = issuer.rstrip("/")
@@ -65,12 +67,30 @@ class AgentTokenIssuer:
         self._private_key_pem = private_key_pem.strip() if private_key_pem else None
         self._jwks_keys: list[dict] = []
 
+        # Primary key — the only one used to mint (sign) tokens.
         if self._private_key_pem:
             try:
                 self._jwks_keys = [self._derive_jwk(self._private_key_pem, kid)]
             except Exception as exc:  # noqa: BLE001
                 logger.error("agent_jwt_private_key_invalid", error=str(exc))
                 self._private_key_pem = None
+
+        # Secondary key — verification-only, published in JWKS during a
+        # rotation window (#154). Never used to mint. A bad secondary key is
+        # logged and skipped so it can never disable the (valid) primary.
+        secondary = secondary_private_key_pem.strip() if secondary_private_key_pem else None
+        if secondary and secondary_kid and secondary_kid != kid:
+            try:
+                self._jwks_keys.append(self._derive_jwk(secondary, secondary_kid))
+                logger.info("agent_jwt_secondary_key_published", kid=secondary_kid)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("agent_jwt_secondary_key_invalid", error=str(exc))
+        elif secondary and secondary_kid == kid:
+            logger.error(
+                "agent_jwt_secondary_kid_collision",
+                kid=kid,
+                detail="secondary kid must differ from primary; secondary key ignored",
+            )
 
     @property
     def enabled(self) -> bool:

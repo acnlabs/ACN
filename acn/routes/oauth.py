@@ -50,6 +50,8 @@ def get_token_issuer() -> AgentTokenIssuer:
         default_audience=s.agent_jwt_audience,
         ttl_seconds=s.agent_jwt_ttl_seconds,
         default_scope=s.agent_jwt_default_scope,
+        secondary_private_key_pem=s.agent_jwt_private_key_secondary,
+        secondary_kid=s.agent_jwt_kid_secondary,
     )
 
 

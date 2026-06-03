@@ -240,17 +240,30 @@ async def _get_acn_agent_jwks(settings) -> list[dict]:
         if not settings.agent_jwt_private_key:
             _acn_agent_jwks_loaded = True
             return _acn_agent_jwks
-        try:
-            from ..services.agent_token_service import AgentTokenIssuer
+        from ..services.agent_token_service import AgentTokenIssuer
 
-            key = AgentTokenIssuer._derive_jwk(
-                settings.agent_jwt_private_key.strip(),
-                settings.agent_jwt_kid,
+        keys: list[dict] = []
+        # Primary signing key.
+        try:
+            keys.append(
+                AgentTokenIssuer._derive_jwk(
+                    settings.agent_jwt_private_key.strip(),
+                    settings.agent_jwt_kid,
+                )
             )
-            _acn_agent_jwks = [key]
             logger.info("acn_agent_jwks_derived", kid=settings.agent_jwt_kid)
         except Exception as exc:  # noqa: BLE001
             logger.error("acn_agent_jwks_derive_failed", error=str(exc))
+        # Secondary verification-only key (rotation window, #154).
+        secondary = getattr(settings, "agent_jwt_private_key_secondary", None)
+        secondary_kid = getattr(settings, "agent_jwt_kid_secondary", None)
+        if secondary and secondary_kid and secondary_kid != settings.agent_jwt_kid:
+            try:
+                keys.append(AgentTokenIssuer._derive_jwk(secondary.strip(), secondary_kid))
+                logger.info("acn_agent_jwks_secondary_derived", kid=secondary_kid)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("acn_agent_jwks_secondary_derive_failed", error=str(exc))
+        _acn_agent_jwks = keys
         _acn_agent_jwks_loaded = True
         return _acn_agent_jwks
 
@@ -307,9 +320,26 @@ async def _verify_acn_agent_jwt(
     try:
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header.get("kid")
-        # Prefer the key whose kid matches; fall back to the first key so a
-        # single-key deployment with a mismatched kid still works.
-        rsa_key = next((k for k in jwks if k.get("kid") == kid), jwks[0])
+        # Strict kid match. The old behaviour fell back to jwks[0] on a
+        # mismatch, which during a rotation window could verify a token
+        # against the wrong key's slot; with overlapping kids now properly
+        # published (#154) we require an exact match and reject otherwise.
+        rsa_key = next((k for k in jwks if k.get("kid") == kid), None)
+        if rsa_key is None:
+            logger.warning("acn_agent_jwt_unknown_kid", kid=kid)
+            record_auth_failure(
+                reason="acn_agent_jwt_unknown_kid",
+                source_ip=src_ip,
+                path=path,
+                method=method,
+                extra={"kid": str(kid)},
+            )
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
+                401,
+                message="Unknown token signing key.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         payload = jwt.decode(
             token,
             rsa_key,

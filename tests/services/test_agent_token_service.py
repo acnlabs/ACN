@@ -92,3 +92,72 @@ def test_disabled_without_key():
 def test_invalid_private_key_disables_issuer():
     iss = _issuer(private_key_pem="-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----")
     assert iss.enabled is False
+
+
+# --- key rotation: overlapping kids (#154) ------------------------------------
+
+
+def _jwk_by_kid(jwks: dict, kid: str) -> dict:
+    key = next(k for k in jwks["keys"] if k["kid"] == kid)
+    return {"kty": key["kty"], "kid": key["kid"], "use": key["use"], "n": key["n"], "e": key["e"]}
+
+
+def test_secondary_key_published_in_jwks_but_not_used_to_mint():
+    primary = _gen_key_pem()
+    secondary = _gen_key_pem()
+    iss = _issuer(
+        private_key_pem=primary,
+        kid="kid-new",
+        secondary_private_key_pem=secondary,
+        secondary_kid="kid-old",
+    )
+    kids = {k["kid"] for k in iss.jwks()["keys"]}
+    assert kids == {"kid-new", "kid-old"}
+    # mint must use only the primary kid
+    tok = iss.mint("agent-1")
+    assert jwt.get_unverified_header(tok["access_token"])["kid"] == "kid-new"
+
+
+def test_old_token_still_verifies_after_promoting_new_primary():
+    """Simulate step 2 of rotation: old key demoted to secondary, old token still valid."""
+    old = _gen_key_pem()
+    new = _gen_key_pem()
+    # Before rotation: old is primary.
+    before = _issuer(private_key_pem=old, kid="kid-old")
+    old_token = before.mint("agent-1")["access_token"]
+    # After promotion: new is primary, old is secondary (verification-only).
+    after = _issuer(
+        private_key_pem=new,
+        kid="kid-new",
+        secondary_private_key_pem=old,
+        secondary_kid="kid-old",
+    )
+    payload = jwt.decode(
+        old_token,
+        _jwk_by_kid(after.jwks(), "kid-old"),
+        algorithms=["RS256"],
+        audience="https://api.test",
+        issuer="https://acn.test",
+    )
+    assert payload["sub"] == "agent-1"
+
+
+def test_secondary_kid_collision_is_ignored():
+    iss = _issuer(
+        kid="same-kid",
+        secondary_private_key_pem=_gen_key_pem(),
+        secondary_kid="same-kid",
+    )
+    # collision → secondary dropped, only the primary remains
+    assert len(iss.jwks()["keys"]) == 1
+    assert iss.jwks()["keys"][0]["kid"] == "same-kid"
+
+
+def test_invalid_secondary_key_does_not_disable_primary():
+    iss = _issuer(
+        kid="kid-new",
+        secondary_private_key_pem="-----BEGIN PRIVATE KEY-----\nbad\n-----END PRIVATE KEY-----",
+        secondary_kid="kid-old",
+    )
+    assert iss.enabled is True
+    assert [k["kid"] for k in iss.jwks()["keys"]] == ["kid-new"]

@@ -143,6 +143,18 @@ class Settings(BaseSettings):
     # private key at runtime — no second env var to keep in sync.
     agent_jwt_private_key: str | None = None
     agent_jwt_kid: str = "acn-agent-key-1"
+    # Key rotation window (#154 / ADR-0007 D2 "overlapping kids"). A second
+    # PEM key that is published in JWKS for *verification only* — it is never
+    # used to mint. This enables zero-downtime rotation:
+    #   1. Pre-publish the NEW key here (JWKS now serves both kids); wait for
+    #      relying-party JWKS caches to pick it up.
+    #   2. Promote: make the new key the primary above (it now mints), move the
+    #      OLD key into this secondary slot (old tokens still verify); wait one
+    #      max-TTL window for old tokens to drain.
+    #   3. Clear this secondary slot — rotation complete.
+    # The two kids MUST differ. See docs/operations-agent-jwt-key-rotation.md.
+    agent_jwt_private_key_secondary: str | None = None
+    agent_jwt_kid_secondary: str = "acn-agent-key-2"
     # Issuer (``iss`` claim). Defaults to ``gateway_base_url`` when unset.
     agent_jwt_issuer: str | None = None
     # Default audience (``aud`` claim) when the token request does not
