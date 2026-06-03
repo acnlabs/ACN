@@ -693,11 +693,19 @@ async def dev_register_agent(
             )
 
     try:
-        endpoint, agent_card, _ = await _resolve_registration_endpoint(
-            direct_endpoint=request.get_direct_a2a_endpoint(),
-            agent_card_url=request.agent_card_url,
-            agent_card=request.agent_card,
-        )
+        # Manifest/closed agents are inbox-only (no push), so skip endpoint
+        # resolution/probing — mirrors the join path (#142). Default (None)
+        # is treated as ``open`` to preserve the legacy register contract.
+        _policy_mode = (request.communication_policy or {}).get("mode", "open")
+        if _policy_mode in _PUSH_MODES:
+            endpoint, agent_card, _ = await _resolve_registration_endpoint(
+                direct_endpoint=request.get_direct_a2a_endpoint(),
+                agent_card_url=request.agent_card_url,
+                agent_card=request.agent_card,
+            )
+        else:
+            endpoint = request.get_direct_a2a_endpoint()
+            agent_card = request.agent_card
         # Use AgentService (Clean Architecture)
         agent = await agent_service.register_agent(
             owner=request.owner,
@@ -912,11 +920,19 @@ async def register_agent(
             )
 
     try:
-        endpoint, agent_card, _ = await _resolve_registration_endpoint(
-            direct_endpoint=request.get_direct_a2a_endpoint(),
-            agent_card_url=request.agent_card_url,
-            agent_card=request.agent_card,
-        )
+        # Manifest/closed agents are inbox-only (no push), so skip endpoint
+        # resolution/probing — mirrors the join path (#142). Default (None)
+        # is treated as ``open`` to preserve the legacy register contract.
+        _policy_mode = (request.communication_policy or {}).get("mode", "open")
+        if _policy_mode in _PUSH_MODES:
+            endpoint, agent_card, _ = await _resolve_registration_endpoint(
+                direct_endpoint=request.get_direct_a2a_endpoint(),
+                agent_card_url=request.agent_card_url,
+                agent_card=request.agent_card,
+            )
+        else:
+            endpoint = request.get_direct_a2a_endpoint()
+            agent_card = request.agent_card
         # Use AgentService (Clean Architecture)
         agent = await agent_service.register_agent(
             owner=request.owner,

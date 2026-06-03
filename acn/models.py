@@ -261,8 +261,20 @@ class AgentRegisterRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_delivery_or_discovery_url(self):
+        # Agents whose inbound policy is manifest/closed never receive a direct
+        # push — delivery falls back to the ACN inbox / manifest pull — so they
+        # have no need for a public delivery URL (#142). Push modes
+        # (open/allowlist) still require one. Default (None) is treated as
+        # ``open`` to preserve the legacy register contract.
+        policy_mode = (self.communication_policy or {}).get("mode", "open")
+        if policy_mode in {"manifest", "closed"}:
+            return self
         if not (self.a2a_endpoint or self.endpoint or self.agent_card_url):
-            raise ValueError("a2a_endpoint, endpoint, or agent_card_url is required")
+            raise ValueError(
+                f"communication_policy.mode={policy_mode!r} requires a delivery URL "
+                "(a2a_endpoint, endpoint, or agent_card_url). Use mode 'closed' or "
+                "'manifest' for an inbox-only agent with no public endpoint."
+            )
         return self
 
     def get_direct_a2a_endpoint(self) -> str | None:

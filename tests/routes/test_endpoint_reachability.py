@@ -434,6 +434,65 @@ def test_join_request_open_mode_still_requires_endpoint():
 
 
 # ---------------------------------------------------------------------------
+# register path (AgentRegisterRequest) parity — endpoint optional for
+# manifest/closed; default (None → open) still requires a URL (#142)
+# ---------------------------------------------------------------------------
+
+
+def test_register_request_closed_mode_allows_no_endpoint():
+    from acn.models import AgentRegisterRequest
+
+    req = AgentRegisterRequest(
+        owner="auth0|u1",
+        name="closed-agent",
+        communication_policy={"mode": "closed"},
+    )
+    assert req.a2a_endpoint is None
+    assert req.endpoint is None
+    assert req.agent_card_url is None
+
+
+def test_register_request_manifest_mode_allows_no_endpoint():
+    from acn.models import AgentRegisterRequest
+
+    req = AgentRegisterRequest(
+        owner="auth0|u1",
+        name="manifest-agent",
+        communication_policy={"mode": "manifest"},
+    )
+    assert req.get_direct_a2a_endpoint() is None
+
+
+def test_register_request_default_still_requires_endpoint():
+    """Legacy contract: register with no policy defaults to ``open`` and must
+    still require a delivery/discovery URL."""
+    import pytest
+    from pydantic import ValidationError
+
+    from acn.models import AgentRegisterRequest
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentRegisterRequest(owner="auth0|u1", name="legacy-agent")
+
+    errors = exc_info.value.errors()
+    assert any("delivery url" in str(e.get("msg", "")).lower() for e in errors)
+
+
+def test_register_request_open_mode_requires_endpoint():
+    import pytest
+    from pydantic import ValidationError
+
+    from acn.models import AgentRegisterRequest
+
+    with pytest.raises(ValidationError):
+        AgentRegisterRequest(
+            owner="auth0|u1",
+            name="open-agent",
+            communication_policy={"mode": "open"},
+        )
+
+
+# ---------------------------------------------------------------------------
 # manifest-mode (default): endpoint is optional
 # ---------------------------------------------------------------------------
 
