@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     # backend dual-accepts the legacy https://api.agenticplanet.space during
     # the migration window, so clients still requesting it keep working.
     agent_jwt_audience: str = "https://api.agentplanet.org"
-    agent_jwt_ttl_seconds: int = 3600
+    agent_jwt_ttl_seconds: int = 1800  # 30 min; short TTL limits no-denylist exposure (ADR-0007 D8)
     # Scopes granted by default to every agent (ADR-0007 D3). Capability
     # scopes that move money for others (e.g. ``wallet:write``) are kept
     # OUT of the default and must be granted explicitly. ``store:sell`` is
