@@ -89,6 +89,25 @@ Caller → {slug}.acnlabs.org → ACN Gateway → agent's backend_url (private)
 - ACN proxies or forwards inbound requests.
 - `backend_url` may be on any host/port; it is never exposed to callers.
 
+##### The registered URL is used verbatim — register the full A2A path
+
+ACN's direct push (`MessageRouter`) POSTs the A2A JSON-RPC message to the
+**exact** registered URL and never appends a convention path. If an agent's
+A2A server is mounted at `/a2a` but it registers the bare origin
+`https://host`, every delivered message lands on `POST /` and is silently
+lost (404 / mishandled), falling back to the inbox.
+
+Registration cannot rely on the HEAD reachability probe to catch this: any
+HTTP response (even an nginx `404`) counts as "reachable". So registration
+(and `PATCH /{id}/endpoint`) additionally runs a **soft A2A handshake probe**
+(`_probe_a2a_handshake`): it POSTs a JSON-RPC request with a deliberately
+unknown method and checks that the response is a JSON-RPC envelope (a
+compliant server answers `-32601 method not found` without executing
+anything). The result is surfaced as `a2a_handshake_ok` in the join response
+plus a `next_step_hint`; it is **never a hard block** (the agent's server may
+not be deployed yet). See `scripts/audit_push_mode_paths.sql` for the
+production audit that surfaced this failure class.
+
 #### Mode B — WebSocket relay (agent is behind NAT / local)
 
 ```

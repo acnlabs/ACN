@@ -32,10 +32,102 @@ from acn.routes.registry import (
     AgentJoinRequest,
     _check_endpoint_reachability,
     _join_agent_impl,
+    _probe_a2a_handshake,
     _probe_endpoint_http,
     _resolve_registration_endpoint,
 )
 from acn.security import SSRFViolation
+
+# ---------------------------------------------------------------------------
+# _probe_a2a_handshake — unit tests (soft A2A JSON-RPC handshake probe)
+# ---------------------------------------------------------------------------
+
+
+def _mock_post_client(*, status_code=200, content_type="application/json", json_value=None, json_raises=False, side_effect=None):
+    """Build a patched httpx.AsyncClient whose .post returns a canned response."""
+    import httpx
+
+    def _factory():
+        client = AsyncMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        if side_effect is not None:
+            client.post = AsyncMock(side_effect=side_effect)
+            return client
+        resp = MagicMock(spec=httpx.Response)
+        resp.status_code = status_code
+        resp.headers = {"content-type": content_type}
+        if json_raises:
+            resp.json = MagicMock(side_effect=ValueError("not json"))
+        else:
+            resp.json = MagicMock(return_value=json_value)
+        client.post = AsyncMock(return_value=resp)
+        return client
+
+    return _factory
+
+
+@pytest.mark.asyncio
+async def test_handshake_true_on_jsonrpc_error_body():
+    """A compliant JSON-RPC server answers the unknown probe method with a
+    structured error object — that proves it speaks A2A at this URL."""
+    with patch(
+        "httpx.AsyncClient",
+        side_effect=lambda *a, **k: _mock_post_client(
+            json_value={"jsonrpc": "2.0", "id": "acn-handshake-probe", "error": {"code": -32601, "message": "Method not found"}}
+        )(),
+    ):
+        assert await _probe_a2a_handshake("https://agent.example.com/a2a") is True
+
+
+@pytest.mark.asyncio
+async def test_handshake_true_on_error_code_without_jsonrpc_field():
+    """Some servers omit the top-level jsonrpc field but still return an
+    error object with a numeric code — still a JSON-RPC endpoint."""
+    with patch(
+        "httpx.AsyncClient",
+        side_effect=lambda *a, **k: _mock_post_client(
+            json_value={"error": {"code": -32601, "message": "nope"}}
+        )(),
+    ):
+        assert await _probe_a2a_handshake("https://agent.example.com/a2a") is True
+
+
+@pytest.mark.asyncio
+async def test_handshake_false_on_html_404():
+    """A bare origin / wrong path served by nginx returns HTML — the exact
+    Samantha case. Must resolve to False even though the host is up."""
+    with patch(
+        "httpx.AsyncClient",
+        side_effect=lambda *a, **k: _mock_post_client(
+            status_code=404, content_type="text/html", json_raises=True
+        )(),
+    ):
+        assert await _probe_a2a_handshake("https://agent.example.com") is False
+
+
+@pytest.mark.asyncio
+async def test_handshake_false_on_non_dict_json():
+    """A JSON body that isn't a dict (e.g. a bare list) is not JSON-RPC."""
+    with patch(
+        "httpx.AsyncClient",
+        side_effect=lambda *a, **k: _mock_post_client(json_value=[1, 2, 3])(),
+    ):
+        assert await _probe_a2a_handshake("https://agent.example.com/a2a") is False
+
+
+@pytest.mark.asyncio
+async def test_handshake_false_on_connect_error():
+    """Transport failures resolve to False, never raise."""
+    import httpx
+
+    with patch(
+        "httpx.AsyncClient",
+        side_effect=lambda *a, **k: _mock_post_client(
+            side_effect=httpx.ConnectError("refused")
+        )(),
+    ):
+        assert await _probe_a2a_handshake("https://agent.example.com/a2a") is False
 
 # ---------------------------------------------------------------------------
 # _probe_endpoint_http — unit tests
@@ -184,12 +276,19 @@ async def test_dns_ok_http_probe_failure_raises_400():
 @pytest.mark.asyncio
 async def test_resolve_direct_endpoint_propagates_reachable_true():
     """When a direct endpoint is given and the probe succeeds, the third
-    element of the returned tuple must be True."""
-    with patch(
-        "acn.routes.registry._check_endpoint_reachability",
-        new=AsyncMock(return_value=True),
+    element of the returned tuple must be True (and the fourth, the A2A
+    handshake result, must propagate too)."""
+    with (
+        patch(
+            "acn.routes.registry._check_endpoint_reachability",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "acn.routes.registry._probe_a2a_handshake",
+            new=AsyncMock(return_value=True),
+        ),
     ):
-        endpoint, card, reachable = await _resolve_registration_endpoint(
+        endpoint, card, reachable, handshake_ok = await _resolve_registration_endpoint(
             direct_endpoint="https://agent.example.com/a2a",
             agent_card_url=None,
             agent_card=None,
@@ -198,6 +297,31 @@ async def test_resolve_direct_endpoint_propagates_reachable_true():
     assert endpoint == "https://agent.example.com/a2a"
     assert card is None
     assert reachable is True
+    assert handshake_ok is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_direct_endpoint_reachable_but_handshake_fails():
+    """A reachable host whose URL is not an A2A endpoint resolves to
+    reachable=True, a2a_handshake_ok=False — the bare-origin footgun."""
+    with (
+        patch(
+            "acn.routes.registry._check_endpoint_reachability",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "acn.routes.registry._probe_a2a_handshake",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        endpoint, card, reachable, handshake_ok = await _resolve_registration_endpoint(
+            direct_endpoint="https://agent.example.com",
+            agent_card_url=None,
+            agent_card=None,
+        )
+
+    assert reachable is True
+    assert handshake_ok is False
 
 
 @pytest.mark.asyncio
@@ -277,7 +401,7 @@ async def test_join_response_endpoint_reachable_true_when_probe_succeeds():
 
     with patch(
         "acn.routes.registry._resolve_registration_endpoint",
-        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, True)),
+        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, True, True)),
     ):
         resp = await _join_agent_impl(
             _make_join_body(),
@@ -287,6 +411,7 @@ async def test_join_response_endpoint_reachable_true_when_probe_succeeds():
         )
 
     assert resp.endpoint_reachable is True
+    assert resp.a2a_handshake_ok is True
 
 
 @pytest.mark.asyncio
@@ -714,7 +839,7 @@ async def test_join_response_no_hint_on_open_happy_path():
 
     with patch(
         "acn.routes.registry._resolve_registration_endpoint",
-        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, True)),
+        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, True, True)),
     ):
         resp = await _join_agent_impl(
             body,
@@ -747,7 +872,7 @@ async def test_join_response_hint_when_endpoint_unreachable():
 
     with patch(
         "acn.routes.registry._resolve_registration_endpoint",
-        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, False)),
+        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, False, False)),
     ):
         resp = await _join_agent_impl(
             body,
@@ -759,6 +884,42 @@ async def test_join_response_hint_when_endpoint_unreachable():
     assert resp.endpoint_reachable is False
     assert resp.next_step_hint is not None
     assert "reachability" in resp.next_step_hint.lower()
+
+
+@pytest.mark.asyncio
+async def test_join_response_hint_when_reachable_but_not_a2a():
+    """Reachable host but the URL is not an A2A endpoint (bare-origin footgun):
+    response must carry a2a_handshake_ok=False and a hint that points the
+    operator at re-registering the full A2A path."""
+    fake_agent = _make_fake_agent()
+    fake_agent.communication_policy = {"mode": "open"}
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(return_value=(fake_agent, "acn_test_key"))
+
+    body = AgentJoinRequest(
+        name="ReachabilityTestAgent",
+        description="Tests the reachable-but-not-A2A hint.",
+        tags=["test"],
+        a2a_endpoint="https://agent.example.com",
+        communication_policy={"mode": "open"},
+    )
+
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://agent.example.com", None, True, False)),
+    ):
+        resp = await _join_agent_impl(
+            body,
+            BackgroundTasks(),
+            ref=None,
+            agent_service=svc,
+        )
+
+    assert resp.endpoint_reachable is True
+    assert resp.a2a_handshake_ok is False
+    assert resp.next_step_hint is not None
+    hint = resp.next_step_hint.lower()
+    assert "a2a" in hint and "/endpoint" in resp.next_step_hint
 
 
 # ---------------------------------------------------------------------------

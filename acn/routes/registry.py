@@ -193,7 +193,14 @@ class AgentJoinRequest(BaseModel):
     a2a_endpoint: str | None = Field(
         None,
         max_length=500,
-        description="Direct A2A JSON-RPC endpoint URL used for message delivery.",
+        description=(
+            "Direct A2A JSON-RPC endpoint URL used for message delivery. MUST "
+            "be the COMPLETE URL your A2A server listens on, including any path "
+            "(e.g. https://host/a2a, not https://host) — ACN posts each message "
+            "to this exact URL verbatim and never appends a path. A handshake "
+            "probe at registration returns a2a_handshake_ok=false if the URL "
+            "does not answer as a JSON-RPC endpoint."
+        ),
     )
     agent_card_url: str | None = Field(
         None,
@@ -383,6 +390,22 @@ class AgentJoinResponse(BaseModel):
         ),
     )
 
+    # A2A handshake probe result (soft check). Distinct from endpoint_reachable:
+    # a host can be reachable (any HTTP response) yet NOT speak A2A at the exact
+    # registered URL — the bare-origin / wrong-path footgun where ACN's direct
+    # push silently 404s. False here is a warning, not a failure.
+    a2a_handshake_ok: bool = Field(
+        default=False,
+        description=(
+            "Whether the registered endpoint answered a JSON-RPC handshake "
+            "probe like an A2A server. False (with endpoint_reachable True) "
+            "means the host responded but this exact URL is not an A2A "
+            "JSON-RPC endpoint — verify the path (e.g. it should be "
+            "https://host/a2a, not https://host). Soft signal: registration "
+            "still succeeds, but direct delivery will likely fail until fixed."
+        ),
+    )
+
     # Resolved inbound delivery mode, echoed back so the caller does not
     # have to read it from the agent record. One of
     # ``open | manifest | allowlist | closed``.
@@ -458,6 +481,60 @@ async def _probe_endpoint_http(endpoint: str, *, timeout: float = 3.0) -> bool:
         return False
 
 
+# A2A handshake probe. The HEAD reachability probe above only proves "some HTTP
+# server answers at this host" — an nginx 404 counts as reachable. That gap let
+# agents register a bare origin (e.g. https://host) while their A2A server is
+# actually mounted at /a2a, so ACN's direct push (which POSTs to the VERBATIM
+# registered URL) silently 404'd every delivered message and parked it in the
+# inbox. The handshake probe closes that gap: it POSTs a JSON-RPC request with a
+# deliberately-unknown method. A compliant A2A / JSON-RPC server answers with a
+# structured error (``-32601 method not found``) WITHOUT executing anything,
+# while a bare origin / wrong path / non-A2A server returns HTML, a redirect, or
+# a connection error. See scripts/audit_push_mode_paths.sql for the audit that
+# surfaced this failure class (agentmother / Samantha).
+_A2A_HANDSHAKE_METHOD = "__acn_handshake_probe__"
+
+
+async def _probe_a2a_handshake(endpoint: str, *, timeout: float = 3.0) -> bool:
+    """Return True iff *endpoint* answers a JSON-RPC probe like an A2A server.
+
+    SOFT signal only — callers MUST treat False as a warning, never a hard
+    block: the agent's A2A server may legitimately not be deployed yet at
+    registration time, or may sit behind a path the operator fixes later. The
+    probe never raises; any transport / parse failure resolves to False.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "acn-handshake-probe",
+        "method": _A2A_HANDSHAKE_METHOD,
+        "params": {},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            resp = await client.post(
+                endpoint,
+                json=payload,
+                headers={"content-type": "application/json"},
+            )
+    except Exception:  # noqa: BLE001 — any transport failure = not an A2A endpoint here
+        return False
+    # A JSON-RPC server commonly answers method-not-found with HTTP 200 + an
+    # error object, so we key off the BODY shape, not the status code. A bare
+    # origin / wrong path returns HTML (nginx 404) which fails the JSON parse.
+    if "json" not in resp.headers.get("content-type", "").lower():
+        return False
+    try:
+        data = resp.json()
+    except Exception:  # noqa: BLE001 — non-JSON body = not JSON-RPC
+        return False
+    if not isinstance(data, dict):
+        return False
+    if "jsonrpc" in data or "result" in data:
+        return True
+    err = data.get("error")
+    return isinstance(err, dict) and isinstance(err.get("code"), int)
+
+
 async def _check_endpoint_reachability(endpoint: str) -> bool:
     """Run the two-layer reachability check for a direct A2A endpoint.
 
@@ -510,6 +587,7 @@ def _build_next_step_hint(
     mode: str,
     has_endpoint: bool,
     endpoint_reachable: bool,
+    a2a_handshake_ok: bool = True,
     agent_id: str,
     base_url: str,
 ) -> str | None:
@@ -547,6 +625,20 @@ def _build_next_step_hint(
             "Messages will fall back to the inbox queue until your server "
             "responds. Once the server is up, no further action is required."
         )
+    # Reachable host but the exact URL did not speak A2A JSON-RPC — the
+    # bare-origin / wrong-path footgun. ACN posts the A2A message to the
+    # VERBATIM registered URL, so a host that answers HTTP at / but mounts its
+    # A2A server at /a2a will silently 404 every delivered message. Surface a
+    # concrete fix (re-point the endpoint at the real A2A path).
+    if has_endpoint and endpoint_reachable and not a2a_handshake_ok:
+        return (
+            "Endpoint is reachable but did NOT respond as an A2A JSON-RPC "
+            "server. ACN delivers to this exact URL, so if your A2A server is "
+            "mounted at a sub-path (e.g. /a2a) you must register that full "
+            f"URL: PATCH {base_url}/api/v1/agents/{agent_id}/endpoint with the "
+            "complete A2A JSON-RPC URL. Until then, direct delivery will fall "
+            "back to the inbox queue."
+        )
     return None
 
 
@@ -555,14 +647,21 @@ async def _resolve_registration_endpoint(
     direct_endpoint: str | None,
     agent_card_url: str | None,
     agent_card: dict | None,
-) -> tuple[str, dict | None, bool]:
+) -> tuple[str, dict | None, bool, bool]:
     """Resolve the direct A2A endpoint while preserving the discovery card.
 
-    Returns ``(endpoint, agent_card, endpoint_reachable)``.
+    Returns ``(endpoint, agent_card, endpoint_reachable, a2a_handshake_ok)``.
 
     ``endpoint_reachable`` reflects the HTTP HEAD probe result:
     - True  → server responded (any HTTP status counts as reachable)
     - False → DNS resolved but no HTTP response within the probe timeout
+
+    ``a2a_handshake_ok`` reflects the JSON-RPC handshake probe (see
+    ``_probe_a2a_handshake``): True only when this EXACT URL answered like an
+    A2A endpoint. It is strictly a soft signal — a False here never blocks
+    registration — but it distinguishes "host answers HTTP" (reachable) from
+    "this URL actually speaks A2A", catching the bare-origin / wrong-path
+    footgun that the HEAD probe alone misses.
 
     DNS failures are hard errors (raise HTTPException); HTTP probe
     failures are soft — callers propagate the flag to the client so
@@ -571,14 +670,18 @@ async def _resolve_registration_endpoint(
     if direct_endpoint:
         _validate_resolved_a2a_endpoint(direct_endpoint)
         reachable = await _check_endpoint_reachability(direct_endpoint)
-        return direct_endpoint, agent_card, reachable
+        handshake_ok = await _probe_a2a_handshake(direct_endpoint) if reachable else False
+        return direct_endpoint, agent_card, reachable, handshake_ok
 
     if agent_card:
         direct_endpoint = _extract_jsonrpc_endpoint_from_agent_card(agent_card)
         if direct_endpoint:
             _validate_resolved_a2a_endpoint(direct_endpoint)
             reachable = await _check_endpoint_reachability(direct_endpoint)
-            return direct_endpoint, agent_card, reachable
+            handshake_ok = (
+                await _probe_a2a_handshake(direct_endpoint) if reachable else False
+            )
+            return direct_endpoint, agent_card, reachable, handshake_ok
 
     if not agent_card_url:
         raise HTTPException(
@@ -609,8 +712,9 @@ async def _resolve_registration_endpoint(
     # The card URL was already fetched successfully, so at minimum the card host
     # is alive. Still probe the extracted endpoint — it may differ from the card URL.
     reachable = await _check_endpoint_reachability(direct_endpoint)
+    handshake_ok = await _probe_a2a_handshake(direct_endpoint) if reachable else False
 
-    return direct_endpoint, fetched_card, reachable
+    return direct_endpoint, fetched_card, reachable, handshake_ok
 
 
 class AgentClaimRequest(BaseModel):
@@ -737,7 +841,7 @@ async def dev_register_agent(
         # outbound WebSocket (`acn listen`), never dialled — skip endpoint
         # resolution and store no direct URL even in push modes.
         if _policy_mode in _PUSH_MODES and request.delivery != "relay":
-            endpoint, agent_card, _ = await _resolve_registration_endpoint(
+            endpoint, agent_card, _, _ = await _resolve_registration_endpoint(
                 direct_endpoint=request.get_direct_a2a_endpoint(),
                 agent_card_url=request.agent_card_url,
                 agent_card=request.agent_card,
@@ -967,7 +1071,7 @@ async def register_agent(
         # outbound WebSocket (`acn listen`), never dialled — skip endpoint
         # resolution and store no direct URL even in push modes.
         if _policy_mode in _PUSH_MODES and request.delivery != "relay":
-            endpoint, agent_card, _ = await _resolve_registration_endpoint(
+            endpoint, agent_card, _, _ = await _resolve_registration_endpoint(
                 direct_endpoint=request.get_direct_a2a_endpoint(),
                 agent_card_url=request.agent_card_url,
                 agent_card=request.agent_card,
@@ -1607,7 +1711,12 @@ async def _join_agent_impl(
         # outbound WebSocket (`acn listen`), never dialled — skip endpoint
         # resolution and store no direct URL even in push modes.
         if _policy_mode in _PUSH_MODES and body.delivery != "relay":
-            endpoint, agent_card, endpoint_reachable = await _resolve_registration_endpoint(
+            (
+                endpoint,
+                agent_card,
+                endpoint_reachable,
+                a2a_handshake_ok,
+            ) = await _resolve_registration_endpoint(
                 direct_endpoint=body.get_direct_a2a_endpoint(),
                 agent_card_url=body.agent_card_url,
                 agent_card=body.agent_card,
@@ -1618,6 +1727,7 @@ async def _join_agent_impl(
             # Not probed (mode doesn't push); senders consult
             # ``communication_mode`` to choose manifest-notify over direct.
             endpoint_reachable = False
+            a2a_handshake_ok = False
 
         agent, api_key = await agent_service.join_agent(
             name=body.name,
@@ -1683,6 +1793,7 @@ async def _join_agent_impl(
             mode=_mode,
             has_endpoint=endpoint is not None,
             endpoint_reachable=endpoint_reachable,
+            a2a_handshake_ok=a2a_handshake_ok,
             agent_id=agent.agent_id,
             base_url=base_url,
         )
@@ -1698,6 +1809,7 @@ async def _join_agent_impl(
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
             agent_card_url=f"{base_url}/api/v1/agents/{agent.agent_id}/.well-known/agent-card.json",
             endpoint_reachable=endpoint_reachable,
+            a2a_handshake_ok=a2a_handshake_ok,
             communication_mode=_mode,
             next_step_hint=_hint,
         )
@@ -2283,11 +2395,16 @@ async def update_agent_endpoint(
     current_mode = (agent.communication_policy or {}).get("mode", "open")
 
     endpoint_reachable = False
+    a2a_handshake_ok = False
     if body.endpoint is not None:
         # Two-layer check identical to registration: DNS + HTTP probe,
         # both hard-fail with 400. Scheme / gateway-host / SSRF were
         # already enforced by the request validator.
         endpoint_reachable = await _check_endpoint_reachability(body.endpoint)
+        # Soft A2A handshake probe — never blocks. Catches the pull→push
+        # upgrade case where the operator points the endpoint at a bare origin
+        # while their A2A server is mounted at /a2a (would silently 404).
+        a2a_handshake_ok = await _probe_a2a_handshake(body.endpoint)
     else:
         # Clearing while in a push mode would leave the agent in the
         # exact inconsistent state the registration validator forbids.
@@ -2316,12 +2433,14 @@ async def update_agent_endpoint(
         caller_agent_id=caller.get("agent_id"),
         endpoint_set=updated.endpoint is not None,
         endpoint_reachable=endpoint_reachable,
+        a2a_handshake_ok=a2a_handshake_ok,
     )
 
     return {
         "agent_id": agent_id,
         "endpoint": updated.endpoint,
         "endpoint_reachable": endpoint_reachable,
+        "a2a_handshake_ok": a2a_handshake_ok,
         "communication_mode": current_mode,
     }
 

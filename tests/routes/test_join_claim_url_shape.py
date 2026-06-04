@@ -89,7 +89,7 @@ async def test_claim_url_uses_query_token_form(stub_join_service, fake_agent):
     the path form must fail this test."""
     with patch(
         "acn.routes.registry._resolve_registration_endpoint",
-        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True)),
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
     ):
         resp = await _join_agent_impl(
             _make_body(),
@@ -125,7 +125,7 @@ async def test_claim_url_url_encodes_reserved_characters(stub_join_service, fake
 
     with patch(
         "acn.routes.registry._resolve_registration_endpoint",
-        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True)),
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
     ):
         resp = await _join_agent_impl(
             _make_body(),
@@ -151,7 +151,7 @@ async def test_join_emits_agent_registered_audit_for_real_visibility(stub_join_s
     with (
         patch(
             "acn.routes.registry._resolve_registration_endpoint",
-            new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True)),
+            new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
         ),
         patch("acn.routes.registry.get_audit_singleton", return_value=object()),
         patch("acn.routes.registry.fire_and_forget_event") as fire,
@@ -181,7 +181,7 @@ async def test_join_emits_internal_audit_for_non_real_visibility(
     with (
         patch(
             "acn.routes.registry._resolve_registration_endpoint",
-            new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True)),
+            new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
         ),
         patch("acn.routes.registry.get_audit_singleton", return_value=object()),
         patch("acn.routes.registry.fire_and_forget_event") as fire,
