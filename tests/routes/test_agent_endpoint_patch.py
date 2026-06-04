@@ -190,9 +190,14 @@ class TestSetEndpoint:
         assert r.status_code == 400, r.text
         stub_agent_service.update_endpoint.assert_not_awaited()
 
-    def test_acn_gateway_host_rejected_at_validation(self, stub_agent_service):
+    def test_acn_gateway_host_rejected_at_validation(self, stub_agent_service, monkeypatch):
         """Same gateway-host guard as registration — must 422 before the
         route body runs, so no probe / persistence happens."""
+        # Pin the gateway host so the guard does not depend on the ambient .env
+        # (which points gateway_base_url at localhost, not api.acnlabs.dev).
+        monkeypatch.setattr(
+            "acn.routes.registry.settings.gateway_base_url", "https://api.acnlabs.dev"
+        )
         _wire(stub_agent_service)
         with TestClient(app) as client:
             r = client.patch(

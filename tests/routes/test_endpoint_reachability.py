@@ -495,11 +495,17 @@ async def test_join_blocked_on_dns_failure():
 # ---------------------------------------------------------------------------
 
 
-def test_join_request_rejects_acn_gateway_as_endpoint():
+def test_join_request_rejects_acn_gateway_as_endpoint(monkeypatch):
     """An endpoint that points at ACN's own gateway (GATEWAY_BASE_URL host)
     must be rejected at Pydantic validation time with a clear error message."""
     import pytest
     from pydantic import ValidationError
+
+    # Pin the gateway host the validator compares against so the test does not
+    # depend on the ambient .env (which sets gateway_base_url to localhost).
+    monkeypatch.setattr(
+        "acn.routes.registry.settings.gateway_base_url", "https://api.acnlabs.dev"
+    )
 
     with pytest.raises(ValidationError) as exc_info:
         AgentJoinRequest(
@@ -514,11 +520,15 @@ def test_join_request_rejects_acn_gateway_as_endpoint():
     )
 
 
-def test_join_request_rejects_acn_gateway_subpath():
+def test_join_request_rejects_acn_gateway_subpath(monkeypatch):
     """Any path under the ACN gateway host must be rejected — not just the
     exact gateway URL."""
     import pytest
     from pydantic import ValidationError
+
+    monkeypatch.setattr(
+        "acn.routes.registry.settings.gateway_base_url", "https://api.acnlabs.dev"
+    )
 
     with pytest.raises(ValidationError) as exc_info:
         AgentJoinRequest(
