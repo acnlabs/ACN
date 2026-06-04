@@ -17,11 +17,20 @@ import { loadConfig } from '../config.js';
  *   agent -> ACN  : {type:"a2a_response", id, status, headers, body, body_encoding}
  *   keepalive     : {type:"ping"} ⇄ {type:"pong"}
  *
+ * ADR-0012 P2d streaming (#171): when the forwarded local server answers with
+ * an SSE response (content-type text/event-stream), the listener streams it
+ * back as chunk frames instead of one buffered response:
+ *   agent -> ACN  : {type:"a2a_stream_chunk", id, seq, data, data_encoding}
+ *   agent -> ACN  : {type:"a2a_stream_end",   id, status?, error?}
+ * Non-SSE responses keep using a single a2a_response — purely additive.
+ *
  * Two handler modes:
  *   --forward <url>  tunnel each request to a local HTTP server (the agent's
- *                    existing A2A server, e.g. http://localhost:8080)
+ *                    existing A2A server, e.g. http://localhost:8080).
+ *                    SSE responses are streamed (P2d).
  *   --exec <command> run a shell command per request; the request body is fed
- *                    on stdin and the command's stdout becomes the response
+ *                    on stdin and the command's stdout becomes the response.
+ *                    Always buffered (exec streaming is deferred, see #171).
  */
 
 export interface A2aRequestFrame {
@@ -43,6 +52,27 @@ export interface A2aResponseFrame {
   body: string;
   body_encoding?: 'utf-8' | 'base64';
 }
+
+// ADR-0012 P2d streaming (#171) — agent -> ACN reply frames for an SSE response.
+export interface A2aStreamChunkFrame {
+  type: 'a2a_stream_chunk';
+  id: string;
+  seq: number;
+  data: string;
+  data_encoding?: 'utf-8' | 'base64';
+}
+
+export interface A2aStreamEndFrame {
+  type: 'a2a_stream_end';
+  id: string;
+  status?: number;
+  error?: string;
+}
+
+export type OutboundFrame = A2aResponseFrame | A2aStreamChunkFrame | A2aStreamEndFrame;
+
+/** Emit one reply frame to ACN over the control channel. */
+export type SendFrame = (frame: OutboundFrame) => void;
 
 export interface HandlerOptions {
   forward?: string;
@@ -91,60 +121,147 @@ function errorResponse(id: string, status: number, detail: string): A2aResponseF
 }
 
 /**
- * Turn a relayed request into a response by invoking the configured handler.
- * Pure except for the injected ``fetch`` / ``spawn`` deps, so it is unit
- * testable without a live socket.
+ * Dispatch a relayed request to the configured handler, emitting one or more
+ * reply frames via ``send``. This is the streaming-capable entry used by the
+ * live socket: a ``--forward`` SSE response is streamed as chunk frames, every
+ * other case emits a single ``a2a_response``. Pure except for the injected
+ * ``fetch`` / ``spawn`` deps, so it is unit testable without a live socket.
+ */
+export async function dispatchA2aRequest(
+  frame: A2aRequestFrame,
+  opts: HandlerOptions,
+  send: SendFrame,
+  deps: HandlerDeps = {}
+): Promise<void> {
+  const bodyBuf = decodeBody(frame);
+  try {
+    if (opts.forward) {
+      await forwardToHttp(frame, bodyBuf, opts.forward, deps.fetchFn ?? fetch, send);
+      return;
+    }
+    if (opts.exec) {
+      send(await runExec(frame, bodyBuf, opts.exec, deps.spawnFn ?? spawn));
+      return;
+    }
+    send(errorResponse(frame.id, 500, 'no handler configured'));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    send(errorResponse(frame.id, 502, `handler failed: ${msg}`));
+  }
+}
+
+/**
+ * Back-compat single-frame API: collect the frames ``dispatchA2aRequest``
+ * emits into one ``A2aResponseFrame``. A streamed (SSE) response is buffered by
+ * concatenating its chunks. Kept for non-streaming callers and unit tests.
  */
 export async function handleA2aRequest(
   frame: A2aRequestFrame,
   opts: HandlerOptions,
   deps: HandlerDeps = {}
 ): Promise<A2aResponseFrame> {
-  const bodyBuf = decodeBody(frame);
-  try {
-    if (opts.forward) {
-      return await forwardToHttp(frame, bodyBuf, opts.forward, deps.fetchFn ?? fetch);
-    }
-    if (opts.exec) {
-      return await runExec(frame, bodyBuf, opts.exec, deps.spawnFn ?? spawn);
-    }
-    return errorResponse(frame.id, 500, 'no handler configured');
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return errorResponse(frame.id, 502, `handler failed: ${msg}`);
+  const frames: OutboundFrame[] = [];
+  await dispatchA2aRequest(frame, opts, (f) => frames.push(f), deps);
+
+  if (frames.length === 1 && frames[0].type === 'a2a_response') {
+    return frames[0];
   }
+  // Streamed response: fold the chunks back into a single buffered body.
+  const chunks = frames.filter(
+    (f): f is A2aStreamChunkFrame => f.type === 'a2a_stream_chunk'
+  );
+  if (chunks.length > 0) {
+    const buf = Buffer.concat(
+      chunks.map((c) =>
+        c.data_encoding === 'base64'
+          ? Buffer.from(c.data, 'base64')
+          : Buffer.from(c.data, 'utf-8')
+      )
+    );
+    const end = frames.find(
+      (f): f is A2aStreamEndFrame => f.type === 'a2a_stream_end'
+    );
+    return {
+      type: 'a2a_response',
+      id: frame.id,
+      status: end?.status ?? 200,
+      headers: { 'content-type': 'text/event-stream' },
+      body: buf.toString('utf-8'),
+    };
+  }
+  const single = frames.find(
+    (f): f is A2aResponseFrame => f.type === 'a2a_response'
+  );
+  return single ?? errorResponse(frame.id, 500, 'no response produced');
+}
+
+/** Headers to replay to the downstream handler (transport headers stripped). */
+function buildForwardHeaders(frame: A2aRequestFrame): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(frame.headers ?? {})) {
+    if (!STRIP_HEADERS.has(k.toLowerCase())) headers[k] = v;
+  }
+  return headers;
 }
 
 async function forwardToHttp(
   frame: A2aRequestFrame,
   bodyBuf: Buffer,
   base: string,
-  fetchFn: typeof fetch
-): Promise<A2aResponseFrame> {
+  fetchFn: typeof fetch,
+  send: SendFrame
+): Promise<void> {
   const suffix =
     frame.path && frame.path !== '/' ? '/' + frame.path.replace(/^\//, '') : '';
   const targetUrl = base.replace(/\/$/, '') + suffix;
   const method = (frame.method ?? 'POST').toUpperCase();
 
-  const headers: Record<string, string> = {};
-  for (const [k, v] of Object.entries(frame.headers ?? {})) {
-    if (!STRIP_HEADERS.has(k.toLowerCase())) headers[k] = v;
-  }
-
-  const init: RequestInit = { method, headers };
+  const init: RequestInit = { method, headers: buildForwardHeaders(frame) };
   if (method !== 'GET' && method !== 'HEAD') {
     init.body = bodyBuf;
   }
 
   const res = await fetchFn(targetUrl, init);
+  const contentType = res.headers.get('content-type') ?? 'application/json';
+
+  // ADR-0012 P2d (#171): an SSE response is streamed back chunk-by-chunk.
+  // Chunks are base64-encoded so a multi-byte UTF-8 sequence split across two
+  // network reads is never corrupted — ACN reassembles the raw bytes in order.
+  if (contentType.includes('text/event-stream') && res.body) {
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    let seq = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.length > 0) {
+          send({
+            type: 'a2a_stream_chunk',
+            id: frame.id,
+            seq: seq++,
+            data: Buffer.from(value).toString('base64'),
+            data_encoding: 'base64',
+          });
+        }
+      }
+      send({ type: 'a2a_stream_end', id: frame.id, status: res.status });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      send({ type: 'a2a_stream_end', id: frame.id, error: msg });
+    } finally {
+      reader.releaseLock();
+    }
+    return;
+  }
+
   const respText = await res.text();
-  return {
+  send({
     type: 'a2a_response',
     id: frame.id,
     status: res.status,
-    headers: { 'content-type': res.headers.get('content-type') ?? 'application/json' },
+    headers: { 'content-type': contentType },
     body: respText,
-  };
+  });
 }
 
 function runExec(
@@ -234,11 +351,14 @@ function runListener(cfg: ListenerConfig): void {
       if (!frame || typeof frame !== 'object') return;
       const f = frame as Partial<A2aRequestFrame>;
       if (f.type === 'a2a_request' && typeof f.id === 'string') {
-        void handleA2aRequest(f as A2aRequestFrame, cfg).then((response) => {
+        // Stream-aware: dispatch emits one a2a_response, OR a run of
+        // a2a_stream_chunk frames + a2a_stream_end for an SSE response (P2d).
+        const send: SendFrame = (out) => {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(response));
+            ws.send(JSON.stringify(out));
           }
-        });
+        };
+        void dispatchA2aRequest(f as A2aRequestFrame, cfg, send);
       }
       // {type:"pong"} keepalive ack and the {type:"system"} welcome frame
       // need no action.

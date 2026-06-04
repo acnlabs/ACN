@@ -13,9 +13,13 @@ import { EventEmitter } from 'events';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  dispatchA2aRequest,
   handleA2aRequest,
   toWebsocketUrl,
   type A2aRequestFrame,
+  type A2aStreamChunkFrame,
+  type A2aStreamEndFrame,
+  type OutboundFrame,
 } from '../src/commands/listen.js';
 
 function makeRequest(overrides: Partial<A2aRequestFrame> = {}): A2aRequestFrame {
@@ -98,6 +102,66 @@ describe('handleA2aRequest --forward', () => {
     expect(resp.status).toBe(502);
     expect(resp.id).toBe('corr-1');
     expect(JSON.parse(resp.body).error).toContain('ECONNREFUSED');
+  });
+});
+
+function sseResponse(chunks: string[], status = 200) {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const c of chunks) controller.enqueue(encoder.encode(c));
+      controller.close();
+    },
+  });
+  return {
+    status,
+    headers: {
+      get: (k: string) =>
+        k.toLowerCase() === 'content-type' ? 'text/event-stream' : null,
+    },
+    body,
+  } as unknown as Response;
+}
+
+describe('dispatchA2aRequest --forward streaming (ADR-0012 P2d #171)', () => {
+  it('streams an SSE response as chunk frames terminated by an end frame', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValue(sseResponse(['data: a\n\n', 'data: b\n\n']));
+    const frames: OutboundFrame[] = [];
+
+    await dispatchA2aRequest(
+      makeRequest(),
+      { forward: 'http://localhost:8080' },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+
+    const chunks = frames.filter(
+      (f): f is A2aStreamChunkFrame => f.type === 'a2a_stream_chunk'
+    );
+    expect(chunks.length).toBe(2);
+    expect(chunks.map((c) => c.seq)).toEqual([0, 1]);
+    expect(Buffer.from(chunks[0].data, 'base64').toString('utf-8')).toBe('data: a\n\n');
+    expect(Buffer.from(chunks[1].data, 'base64').toString('utf-8')).toBe('data: b\n\n');
+
+    const end = frames[frames.length - 1] as A2aStreamEndFrame;
+    expect(end).toMatchObject({ type: 'a2a_stream_end', id: 'corr-1', status: 200 });
+  });
+
+  it('emits a single a2a_response for a non-SSE response', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(fakeResponse(200, '{"result":"ok"}'));
+    const frames: OutboundFrame[] = [];
+
+    await dispatchA2aRequest(
+      makeRequest(),
+      { forward: 'http://localhost:8080' },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
   });
 });
 
