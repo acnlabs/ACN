@@ -12,9 +12,10 @@ Responsibilities:
 """
 
 import asyncio
+import base64
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -78,6 +79,20 @@ class MessageType(StrEnum):
     #                 ``id`` ({id, status, headers, body, body_encoding}).
     A2A_REQUEST = "a2a_request"
     A2A_RESPONSE = "a2a_response"
+
+    # ADR-0012 P2d streaming (#171) — when the agent's local A2A server answers
+    # an a2a_request with an SSE (text/event-stream) response, the agent streams
+    # it back as a sequence of chunk frames terminated by one end frame, all
+    # correlated by the original ``id``. Non-streaming replies keep using a
+    # single ``a2a_response`` (the agent picks per response content-type), so
+    # this is purely additive — old agents and non-stream calls are untouched.
+    #   a2a_stream_chunk: agent -> ACN. One SSE chunk ({id, seq, data,
+    #                     data_encoding}). ``seq`` is a 0-based monotonic index
+    #                     for gap detection / debugging.
+    #   a2a_stream_end:   agent -> ACN. Terminates the stream ({id, status?,
+    #                     headers?, error?}). ``error`` set ⇒ aborted mid-stream.
+    A2A_STREAM_CHUNK = "a2a_stream_chunk"
+    A2A_STREAM_END = "a2a_stream_end"
 
 
 @dataclass
@@ -167,6 +182,14 @@ class WebSocketManager:
         # on the same worker (ACN deploys single-instance; multi-replica
         # would need sticky routing or a pub/sub relay, tracked separately).
         self._relay_futures: dict[str, asyncio.Future] = {}
+
+        # ADR-0012 P2d streaming (#171) correlation: correlation_id -> bounded
+        # Queue the streaming caller drains while the WS receive loop enqueues
+        # chunk/end frames. Same in-process single-worker constraint as the
+        # single-shot futures above. ``_relay_stream_aborted`` tracks ids whose
+        # consumer fell behind so the backpressure end-frame is emitted once.
+        self._relay_streams: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._relay_stream_aborted: set[str] = set()
 
         # Pub/Sub subscriber
         self._pubsub: redis.client.PubSub | None = None
@@ -793,3 +816,180 @@ class WebSocketManager:
             return False
         future.set_result(payload)
         return True
+
+    # --- ADR-0012 P2d streaming (#171): SSE relay over the WS channel ---
+
+    # Bounded so a slow SSE consumer cannot make the WS receive loop buffer an
+    # unbounded number of chunks (memory) — on overflow the stream is aborted
+    # (see ``enqueue_relay_stream_frame``) rather than blocking the shared loop.
+    _RELAY_STREAM_QUEUE_MAXSIZE = 256
+
+    @staticmethod
+    def _encode_relay_body(body: bytes | str) -> tuple[str, str]:
+        """Encode a request body for transport in a JSON frame.
+
+        Returns ``(body_text, body_encoding)`` — UTF-8 when the bytes decode
+        cleanly, base64 otherwise. Mirrors the inline logic in
+        ``relay_request_to_agent`` so single-shot and streaming frames carry
+        identical bytes for the same input.
+        """
+        if isinstance(body, bytes):
+            try:
+                return body.decode("utf-8"), "utf-8"
+            except UnicodeDecodeError:
+                return base64.b64encode(body).decode("ascii"), "base64"
+        return (body or ""), "utf-8"
+
+    async def relay_request_open(
+        self,
+        agent_id: str,
+        *,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: bytes | str,
+        timeout: float = 30.0,
+    ) -> "tuple[dict[str, Any], asyncio.Queue[dict[str, Any]]] | None":
+        """Send an ``a2a_request`` and await the agent's FIRST reply frame.
+
+        This is the stream-aware entry point. The agent decides per response:
+        a non-streaming handler replies with a single ``a2a_response`` (first
+        frame is terminal); a streaming (SSE) handler replies with one or more
+        ``a2a_stream_chunk`` frames then ``a2a_stream_end``.
+
+        Returns ``(first_frame, queue)`` — inspect ``first_frame["type"]``:
+        ``a2a_response`` means single-shot (ignore the queue); ``a2a_stream_chunk``
+        means drain ``queue`` for the remaining chunks until an ``a2a_stream_end``
+        frame. Returns ``None`` when the agent holds no live WS connection (the
+        caller falls back to inbox / 503, exactly like ``relay_request_to_agent``).
+
+        Raises ``TimeoutError`` when the agent is connected but sends no frame
+        within ``timeout`` (surfaced by callers as 504 — "connected but silent").
+
+        The caller MUST drain/close the returned queue via ``close_relay_stream``
+        when done so the registry cannot leak.
+        """
+        connection = self._first_connection_for(agent_id)
+        if connection is None:
+            return None
+
+        correlation_id = uuid4().hex
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=self._RELAY_STREAM_QUEUE_MAXSIZE
+        )
+        self._relay_streams[correlation_id] = queue
+
+        body_text, body_encoding = self._encode_relay_body(body)
+        frame = {
+            "type": MessageType.A2A_REQUEST.value,
+            "id": correlation_id,
+            "method": method,
+            "path": path or "/",
+            "headers": headers,
+            "body": body_text,
+            "body_encoding": body_encoding,
+            "deadline_ms": int(timeout * 1000),
+        }
+
+        try:
+            await self._send(connection, frame)
+            first = await asyncio.wait_for(queue.get(), timeout=timeout)
+        except BaseException:
+            # Timeout / cancellation before any frame: drop the registration so
+            # a late frame from the agent does not leak the queue.
+            self.close_relay_stream(correlation_id)
+            raise
+        return first, queue
+
+    def enqueue_relay_stream_frame(self, correlation_id: str, frame: dict[str, Any]) -> bool:
+        """Hand a streaming frame from the WS receive loop to the waiting caller.
+
+        Non-blocking by contract: the WS receive loop is shared across every
+        agent connection, so it must never ``await`` on a slow consumer's queue.
+        On overflow (consumer fell behind) the stream is ABORTED — the oldest
+        buffered chunk is dropped to free a slot and a synthetic ``a2a_stream_end``
+        with ``error="relay_backpressure_abort"`` is enqueued exactly once, so the
+        consumer terminates cleanly instead of stalling the loop or leaking memory.
+
+        Returns True when a stream with ``correlation_id`` is registered (the
+        frame was accepted or the abort sentinel was queued), False for an
+        unknown / already-closed id (stale frame after timeout/disconnect).
+        """
+        queue = self._relay_streams.get(correlation_id)
+        if queue is None:
+            return False
+        try:
+            queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            if correlation_id in self._relay_stream_aborted:
+                # Already aborted; drop silently — the end sentinel is queued.
+                return True
+            self._relay_stream_aborted.add(correlation_id)
+            try:
+                queue.get_nowait()  # free one slot (ordering moot once aborted)
+            except asyncio.QueueEmpty:  # pragma: no cover - defensive
+                pass
+            try:
+                queue.put_nowait(
+                    {
+                        "type": MessageType.A2A_STREAM_END.value,
+                        "id": correlation_id,
+                        "error": "relay_backpressure_abort",
+                    }
+                )
+            except asyncio.QueueFull:  # pragma: no cover - defensive
+                pass
+        return True
+
+    def close_relay_stream(self, correlation_id: str) -> None:
+        """Drop a stream's registration. Idempotent; safe to call in finally."""
+        self._relay_streams.pop(correlation_id, None)
+        self._relay_stream_aborted.discard(correlation_id)
+
+    async def relay_request_to_agent_stream(
+        self,
+        agent_id: str,
+        *,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: bytes | str,
+        timeout: float = 30.0,
+    ) -> "AsyncGenerator[dict[str, Any], None]":
+        """High-level streaming relay: yield reply frames until the stream ends.
+
+        Yields the agent's reply frames in order: either a single
+        ``a2a_response`` (non-streaming handler) or a run of ``a2a_stream_chunk``
+        frames followed by ``a2a_stream_end``. Raises ``LookupError`` when the
+        agent is offline (no live WS) and ``TimeoutError`` on first-frame /
+        inter-chunk silence, so the SSE caller can surface a clear error.
+
+        Used by ``MessageRouter.route_stream``; the HTTP gateway proxy uses the
+        lower-level ``relay_request_open`` directly so it can choose between a
+        buffered ``Response`` and a ``StreamingResponse`` on the first frame.
+        """
+        opened = await self.relay_request_open(
+            agent_id,
+            method=method,
+            path=path,
+            headers=headers,
+            body=body,
+            timeout=timeout,
+        )
+        if opened is None:
+            raise LookupError(f"agent {agent_id!r} has no live relay connection")
+        first, queue = opened
+        correlation_id = first.get("id", "")
+        try:
+            frame = first
+            while True:
+                yield frame
+                ftype = frame.get("type")
+                if ftype in (
+                    MessageType.A2A_RESPONSE.value,
+                    MessageType.A2A_STREAM_END.value,
+                ):
+                    return
+                frame = await asyncio.wait_for(queue.get(), timeout=timeout)
+        finally:
+            self.close_relay_stream(correlation_id)

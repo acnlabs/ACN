@@ -201,3 +201,135 @@ async def _await_frame(ws: FakeWebSocket) -> dict:
             return requests[-1]
         await asyncio.sleep(0.005)
     raise AssertionError(f"a2a_request frame never arrived; sent={ws.sent}")
+
+
+# ---------------------------------------------------------------------------
+# ADR-0012 P2d streaming (#171) — relay_request_open / stream queue
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relay_open_offline_returns_none(manager: WebSocketManager) -> None:
+    result = await manager.relay_request_open(
+        "agent-offline", method="POST", path="/", headers={}, body=b"{}", timeout=0.1
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_relay_open_single_shot_first_frame_is_response(
+    manager: WebSocketManager,
+) -> None:
+    """A non-streaming handler replies with a single a2a_response as the FIRST
+    frame: relay_request_open returns it so the caller buffers (no streaming)."""
+    agent_id = "agent-buffered"
+    ws = await _connect(manager, agent_id)
+
+    open_task = asyncio.create_task(
+        manager.relay_request_open(
+            agent_id, method="POST", path="/", headers={}, body=b"{}", timeout=2.0
+        )
+    )
+    frame = await asyncio.wait_for(_await_frame(ws), timeout=1.0)
+    cid = frame["id"]
+    assert manager.enqueue_relay_stream_frame(
+        cid, {"type": "a2a_response", "id": cid, "status": 200, "body": "{}"}
+    )
+
+    opened = await asyncio.wait_for(open_task, timeout=1.0)
+    assert opened is not None
+    first, _queue = opened
+    assert first["type"] == "a2a_response"
+    manager.close_relay_stream(cid)
+
+
+@pytest.mark.asyncio
+async def test_relay_stream_yields_chunks_in_order(manager: WebSocketManager) -> None:
+    agent_id = "agent-sse"
+    ws = await _connect(manager, agent_id)
+
+    gen = manager.relay_request_to_agent_stream(
+        agent_id, method="POST", path="/", headers={}, body=b"{}", timeout=2.0
+    )
+    collect_task = asyncio.create_task(_collect(gen))
+
+    frame = await asyncio.wait_for(_await_frame(ws), timeout=1.0)
+    cid = frame["id"]
+    manager.enqueue_relay_stream_frame(
+        cid, {"type": "a2a_stream_chunk", "id": cid, "seq": 0, "data": "a"}
+    )
+    manager.enqueue_relay_stream_frame(
+        cid, {"type": "a2a_stream_chunk", "id": cid, "seq": 1, "data": "b"}
+    )
+    manager.enqueue_relay_stream_frame(cid, {"type": "a2a_stream_end", "id": cid})
+
+    frames = await asyncio.wait_for(collect_task, timeout=1.0)
+    types = [f["type"] for f in frames]
+    assert types == ["a2a_stream_chunk", "a2a_stream_chunk", "a2a_stream_end"]
+    assert [f.get("data") for f in frames[:2]] == ["a", "b"]
+    # Registry is cleaned up once the generator completes.
+    assert manager._relay_streams == {}
+
+
+@pytest.mark.asyncio
+async def test_relay_stream_first_frame_timeout_raises_and_cleans_up(
+    manager: WebSocketManager,
+) -> None:
+    agent_id = "agent-silent-stream"
+    await _connect(manager, agent_id)
+
+    with pytest.raises(TimeoutError):
+        await manager.relay_request_open(
+            agent_id, method="POST", path="/", headers={}, body=b"{}", timeout=0.1
+        )
+    # No queue may leak after a first-frame timeout.
+    assert manager._relay_streams == {}
+
+
+@pytest.mark.asyncio
+async def test_relay_stream_backpressure_aborts_with_end_frame(
+    manager: WebSocketManager,
+) -> None:
+    """A consumer that falls behind must not block the WS receive loop: once the
+    bounded queue overflows the stream is aborted with a synthetic end frame so
+    the consumer terminates and memory stays bounded."""
+    agent_id = "agent-slow-consumer"
+    ws = await _connect(manager, agent_id)
+
+    open_task = asyncio.create_task(
+        manager.relay_request_open(
+            agent_id, method="POST", path="/", headers={}, body=b"{}", timeout=2.0
+        )
+    )
+    frame = await asyncio.wait_for(_await_frame(ws), timeout=1.0)
+    cid = frame["id"]
+    # First frame consumed by relay_request_open.
+    manager.enqueue_relay_stream_frame(
+        cid, {"type": "a2a_stream_chunk", "id": cid, "seq": 0, "data": "x"}
+    )
+    _first, queue = await asyncio.wait_for(open_task, timeout=1.0)
+
+    # Flood far past the bound without anyone draining → enqueue stays
+    # non-blocking and the stream is aborted exactly once.
+    overflow = manager._RELAY_STREAM_QUEUE_MAXSIZE + 50
+    for i in range(overflow):
+        assert manager.enqueue_relay_stream_frame(
+            cid, {"type": "a2a_stream_chunk", "id": cid, "seq": i + 1, "data": "x"}
+        )
+
+    drained = []
+    while not queue.empty():
+        drained.append(queue.get_nowait())
+    assert drained, "queue should hold buffered frames"
+    assert drained[-1]["type"] == "a2a_stream_end"
+    assert drained[-1].get("error") == "relay_backpressure_abort"
+    manager.close_relay_stream(cid)
+
+
+@pytest.mark.asyncio
+async def test_enqueue_unknown_stream_is_noop(manager: WebSocketManager) -> None:
+    assert manager.enqueue_relay_stream_frame("nope", {"type": "a2a_stream_end"}) is False
+
+
+async def _collect(gen) -> list[dict]:
+    return [frame async for frame in gen]

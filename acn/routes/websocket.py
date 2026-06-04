@@ -506,7 +506,15 @@ async def websocket_endpoint(
             if frame_type == "a2a_response":
                 correlation_id = frame.get("id")
                 if correlation_id:
+                    # An a2a_response can settle either a single-shot relay
+                    # (Future) or be the FIRST frame of a stream-aware relay
+                    # whose handler turned out non-streaming (Queue). Try the
+                    # single-shot registry first, then the streaming one.
                     matched = ws_manager.resolve_relay_response(correlation_id, frame)
+                    if not matched:
+                        matched = ws_manager.enqueue_relay_stream_frame(
+                            correlation_id, frame
+                        )
                     if not matched:
                         logger.warning(
                             "ws_relay_response_unmatched",
@@ -514,6 +522,13 @@ async def websocket_endpoint(
                             correlation_id=correlation_id,
                             request_id=request_id,
                         )
+            elif frame_type in ("a2a_stream_chunk", "a2a_stream_end"):
+                # ADR-0012 P2d (#171): streaming reply frames are correlated to
+                # a stream-aware relay's Queue. Unmatched ⇒ stale frame after a
+                # timeout/abort/disconnect — drop quietly (forward-compatible).
+                correlation_id = frame.get("id")
+                if correlation_id:
+                    ws_manager.enqueue_relay_stream_frame(correlation_id, frame)
             elif frame_type == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
 

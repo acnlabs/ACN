@@ -654,13 +654,19 @@ class MessageRouter:
 
     _RELAY_TIMEOUT_SECONDS = 30.0
 
-    def _build_relay_send_body(self, route_id: str, message: Message) -> bytes:
-        """Serialize ``message`` into a JSON-RPC ``message/send`` request body.
+    def _build_relay_send_body(
+        self, route_id: str, message: Message, *, method: str = "message/send"
+    ) -> bytes:
+        """Serialize ``message`` into a JSON-RPC request body for relay.
 
         Mirrors ``a2a.compat.v0_3.jsonrpc_transport.CompatJsonRpcTransport``
         so the bytes pushed over the WebSocket are byte-for-byte what a direct
         HTTP A2A POST would carry — the receiving agent's A2A server cannot
         tell the difference between Mode A (HTTP) and Mode B (relay).
+
+        ``method`` selects the JSON-RPC method: ``message/send`` (default,
+        non-streaming) or ``message/stream`` (ADR-0012 P2d #171 — the agent's
+        A2A server answers with an SSE stream the relay chunks back).
         """
         compat_request = SendMessageRequest(
             id=route_id,
@@ -669,7 +675,7 @@ class MessageRouter:
         core_request = to_core_send_message_request(compat_request)
         req_v03 = to_compat_send_message_request(core_request, request_id=0)
         rpc_request = JSONRPC20Request(
-            method="message/send",
+            method=method,
             params=req_v03.params.model_dump(
                 by_alias=True, exclude_none=True, mode="json"
             ),
@@ -693,6 +699,54 @@ class MessageRouter:
         except json.JSONDecodeError:
             return {"raw": body_text}
         return data if isinstance(data, dict) else {"result": data}
+
+    async def _route_stream_relay(
+        self,
+        *,
+        from_agent: str,
+        to_agent: str,
+        message: Message,
+    ) -> AsyncGenerator[bytes, None]:
+        """Stream from a relay-delivery agent over its WS channel (ADR-0012 P2d).
+
+        Sends a ``message/stream`` request down the agent's outbound WebSocket
+        and yields the raw SSE byte chunks it relays back, in order, until the
+        stream ends. Yields the body bytes of a terminal ``a2a_response`` too
+        (handler answered non-streaming). Raises ``LookupError`` when the agent
+        holds no live WS connection (caller surfaces "offline").
+        """
+        if self.ws_manager is None:
+            raise LookupError(
+                f"Agent {to_agent!r} is relay-delivery but no WS relay is configured"
+            )
+        route_id = str(uuid4())
+        body = self._build_relay_send_body(route_id, message, method="message/stream")
+        logger.info(f"Starting relay stream: {from_agent} -> {to_agent}")
+        async for frame in self.ws_manager.relay_request_to_agent_stream(
+            to_agent,
+            method="POST",
+            path="/",
+            headers={
+                "content-type": "application/json",
+                VERSION_HEADER.lower(): PROTOCOL_VERSION_0_3,
+            },
+            body=body,
+            timeout=self._RELAY_TIMEOUT_SECONDS,
+        ):
+            ftype = frame.get("type")
+            if ftype == "a2a_stream_chunk":
+                raw, enc = frame.get("data") or "", frame.get("data_encoding")
+            elif ftype == "a2a_response":
+                raw, enc = frame.get("body") or "", frame.get("body_encoding")
+            else:  # a2a_stream_end (or unknown) — terminates the stream
+                continue
+            if enc == "base64":
+                try:
+                    yield base64.b64decode(raw)
+                except Exception:  # noqa: BLE001 — skip a malformed chunk
+                    continue
+            elif raw:
+                yield raw.encode("utf-8") if isinstance(raw, str) else raw
 
     async def _route_relay_or_inbox(
         self,
@@ -861,15 +915,17 @@ class MessageRouter:
             raise ValueError(f"Agent not found: {to_agent}")
 
         endpoint = _agent_delivery_endpoint(agent_info)
-        # ADR-0012 Mode B relay covers non-streaming message/send only. A
-        # relay-delivery agent has no direct endpoint, so surface a clear
-        # error instead of letting _get_client crash on an empty URL.
+        # ADR-0012 P2d (#171): a relay-delivery agent has no direct endpoint —
+        # stream over its outbound WebSocket instead of dialing it. Yields the
+        # agent's raw SSE byte chunks verbatim (the bytes ARE the agent's
+        # text/event-stream); there is no A2A client object to wrap as in the
+        # Mode-A path below. Raises LookupError when the agent is offline.
         if not endpoint:
-            raise ValueError(
-                f"Agent {to_agent!r} has no direct endpoint (relay-delivery); "
-                "streaming (message/stream) is not supported over the WebSocket "
-                "relay — use POST /communication/send (message/send) instead."
-            )
+            async for chunk in self._route_stream_relay(
+                from_agent=from_agent, to_agent=to_agent, message=message
+            ):
+                yield chunk
+            return
         logger.info(f"Starting stream: {from_agent} -> {to_agent}")
 
         # Get A2A client and stream

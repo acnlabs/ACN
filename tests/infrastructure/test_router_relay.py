@@ -216,27 +216,65 @@ class TestRelayDelivery:
         mock_agent_service.is_alive.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_route_stream_rejects_relay_agent(
+    async def test_route_stream_relays_chunks_for_relay_agent(
         self, mock_agent_service, fake_redis
     ):
-        """Streaming is not relayed (P2d covers message/send only): a relay
-        agent (no direct endpoint) must surface a clear error, not crash in
-        _get_client on an empty URL."""
+        """ADR-0012 P2d (#171): streaming IS relayed for a relay agent. The
+        router must push a message/stream over the WS and yield the agent's raw
+        SSE byte chunks verbatim, never touching _get_client (no direct URL)."""
         mock_agent_service.find_agent = AsyncMock(return_value=_relay_agent_info())
+
+        async def _fake_stream(*_args, **_kwargs):
+            yield {"type": "a2a_stream_chunk", "id": "c", "seq": 0, "data": "data: a\n\n"}
+            yield {"type": "a2a_stream_chunk", "id": "c", "seq": 1, "data": "data: b\n\n"}
+            yield {"type": "a2a_stream_end", "id": "c"}
+
+        ws_manager = MagicMock()
+        ws_manager.relay_request_to_agent_stream = _fake_stream
         router = MessageRouter(
             agent_service=mock_agent_service,
             redis_client=fake_redis,
-            ws_manager=MagicMock(),
+            ws_manager=ws_manager,
         )
         # _get_client must never be reached for a relay agent.
         router._get_client = AsyncMock()
 
-        with pytest.raises(ValueError, match="streaming"):
+        chunks = [
+            chunk
+            async for chunk in router.route_stream(
+                from_agent="agent-a",
+                to_agent="agent-b",
+                message=create_text_message("ping"),
+            )
+        ]
+
+        assert chunks == [b"data: a\n\n", b"data: b\n\n"]
+        router._get_client.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_route_stream_relay_offline_raises(
+        self, mock_agent_service, fake_redis
+    ):
+        """A relay agent with no live WS connection surfaces LookupError so the
+        SSE caller can report 'offline' (no streaming inbox fallback)."""
+        mock_agent_service.find_agent = AsyncMock(return_value=_relay_agent_info())
+
+        async def _offline_stream(*_args, **_kwargs):
+            raise LookupError("no live relay connection")
+            yield  # pragma: no cover — makes this an async generator
+
+        ws_manager = MagicMock()
+        ws_manager.relay_request_to_agent_stream = _offline_stream
+        router = MessageRouter(
+            agent_service=mock_agent_service,
+            redis_client=fake_redis,
+            ws_manager=ws_manager,
+        )
+
+        with pytest.raises(LookupError):
             async for _ in router.route_stream(
                 from_agent="agent-a",
                 to_agent="agent-b",
                 message=create_text_message("ping"),
             ):
                 pass
-
-        router._get_client.assert_not_awaited()

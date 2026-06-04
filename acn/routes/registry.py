@@ -8,6 +8,7 @@ Supports two registration modes:
 3. Self-service: GET /me - agent gets own info via API key
 """
 
+import asyncio
 import base64
 import json
 import re
@@ -1550,6 +1551,98 @@ async def _proxy_to_agent(
 _WS_RELAY_TIMEOUT_SECONDS: float = 30.0
 
 
+def _request_wants_a2a_stream(body: bytes) -> bool:
+    """True when the relayed body is an A2A ``message/stream`` JSON-RPC call.
+
+    ADR-0012 P2d (#171): the gateway proxy is otherwise method-agnostic, but
+    streaming needs a different relay shape (chunk frames vs a single reply),
+    so we peek the JSON-RPC ``method``. Non-JSON / non-dict bodies are treated
+    as non-streaming (the safe default — falls back to the single-shot path).
+    """
+    try:
+        data = json.loads(body) if body else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("method") == "message/stream"
+
+
+def _decode_relay_frame_payload(frame: dict) -> bytes:
+    """Extract the raw bytes carried by a streaming chunk or a reply frame.
+
+    ``a2a_stream_chunk`` carries the SSE bytes in ``data``/``data_encoding``;
+    a terminal ``a2a_response`` (non-streaming handler) carries them in
+    ``body``/``body_encoding``. Both decode to the bytes to write to the SSE
+    response stream.
+    """
+    if frame.get("type") == "a2a_stream_chunk":
+        raw, enc = frame.get("data") or "", frame.get("data_encoding")
+    else:
+        raw, enc = frame.get("body") or "", frame.get("body_encoding")
+    if enc == "base64":
+        try:
+            return base64.b64decode(raw)
+        except Exception:  # noqa: BLE001 — malformed chunk → emit nothing
+            return b""
+    return raw.encode("utf-8") if isinstance(raw, str) else (raw or b"")
+
+
+def _relay_first_frame_to_response(ws_manager, agent_id: str, opened: tuple) -> Response:
+    """Turn the first relayed reply frame into an HTTP response.
+
+    ADR-0012 P2d (#171): mirrors the Mode-A behaviour of deciding stream vs
+    buffered by what the agent ACTUALLY returns — if the first frame is a
+    stream chunk, return a ``StreamingResponse`` that drains the rest until
+    ``a2a_stream_end``; if it is a terminal ``a2a_response`` (the handler did
+    not stream after all), buffer it into a normal ``Response``.
+    """
+    first, queue = opened
+    correlation_id = first.get("id", "")
+
+    if first.get("type") == "a2a_stream_chunk":
+        async def _sse():
+            frame = first
+            try:
+                while True:
+                    ftype = frame.get("type")
+                    if ftype == "a2a_stream_end":
+                        return
+                    payload = _decode_relay_frame_payload(frame)
+                    if payload:
+                        yield payload
+                    if ftype == "a2a_response":
+                        # Defensive: a terminal reply mixed into the stream.
+                        return
+                    frame = await asyncio.wait_for(
+                        queue.get(), timeout=_WS_RELAY_TIMEOUT_SECONDS
+                    )
+            except (TimeoutError, asyncio.CancelledError):
+                # Inter-chunk silence or client disconnect: end the SSE stream
+                # (status already committed; nothing more we can signal here).
+                return
+            finally:
+                ws_manager.close_relay_stream(correlation_id)
+
+        return StreamingResponse(_sse(), media_type="text/event-stream")
+
+    # Terminal a2a_response as the first frame: not actually streaming. Buffer
+    # it exactly like the single-shot path and release the (unused) stream.
+    ws_manager.close_relay_stream(correlation_id)
+    status_code = int(first.get("status", 200))
+    resp_headers = first.get("headers") or {}
+    media_type = (
+        resp_headers.get("content-type")
+        or resp_headers.get("Content-Type")
+        or "application/json"
+    )
+    resp_body = first.get("body") or ""
+    content: bytes | str = (
+        base64.b64decode(resp_body)
+        if first.get("body_encoding") == "base64"
+        else resp_body
+    )
+    return Response(content=content, status_code=status_code, media_type=media_type)
+
+
 async def _relay_or_inbox(
     *,
     request: Request,
@@ -1590,7 +1683,30 @@ async def _relay_or_inbox(
     except Exception:  # noqa: BLE001 — uninitialized manager == offline
         ws_manager = None
 
-    if ws_manager is not None:
+    if ws_manager is not None and _request_wants_a2a_stream(body):
+        # ADR-0012 P2d (#171): streaming relay. Open a stream-aware channel and
+        # let the agent's first frame decide buffered vs SSE. Offline (None)
+        # falls through to the shared backstop below.
+        try:
+            opened = await ws_manager.relay_request_open(
+                agent_id,
+                method=method,
+                path=rest_path or "/",
+                headers=forward_headers,
+                body=body,
+                timeout=_WS_RELAY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("ws_relay_stream_timeout", agent_id=agent_id, method=method)
+            raise HTTPException(
+                status_code=504,
+                detail="Agent is connected but did not respond in time.",
+            ) from None
+        if opened is not None:
+            logger.info("ws_relay_stream_opened", agent_id=agent_id, method=method)
+            return _relay_first_frame_to_response(ws_manager, agent_id, opened)
+
+    elif ws_manager is not None:
         try:
             relayed = await ws_manager.relay_request_to_agent(
                 agent_id,

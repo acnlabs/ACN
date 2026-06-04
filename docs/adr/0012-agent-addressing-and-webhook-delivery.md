@@ -154,6 +154,39 @@ agent → ACN (reply, correlated by `id`):
 
 Keepalive: `{"type":"ping"}` ⇄ `{"type":"pong"}`.
 
+###### Streaming replies (implemented — P2d streaming, #171)
+
+When the agent's local handler answers with an SSE response
+(`content-type: text/event-stream`), the single `a2a_response` is replaced by
+a run of chunk frames terminated by one end frame, all correlated by the same
+`id`. The agent picks per response content-type, so this is purely additive —
+non-streaming replies and pre-#171 agents are unaffected.
+
+agent → ACN (one SSE chunk; `seq` is a 0-based monotonic index):
+
+```json
+{ "type": "a2a_stream_chunk", "id": "<correlation-uuid>", "seq": 0,
+  "data": "<raw SSE bytes>", "data_encoding": "utf-8|base64" }
+```
+
+agent → ACN (terminates the stream; `error` set ⇒ aborted mid-stream):
+
+```json
+{ "type": "a2a_stream_end", "id": "<correlation-uuid>", "status": 200 }
+```
+
+The streaming relay is **stream-aware on the first frame**: ACN sends the
+request and waits for the agent's first reply, then mirrors Mode A's
+content-type-driven behaviour — a first `a2a_stream_chunk` becomes a
+`StreamingResponse`; a first (terminal) `a2a_response` is buffered into a normal
+response (the handler did not stream after all). Correlation uses a **bounded**
+in-process queue per stream: if a slow consumer lets it overflow, the stream is
+aborted with a synthetic `a2a_stream_end` (`error="relay_backpressure_abort"`)
+rather than blocking the shared WS receive loop or growing memory unbounded.
+Only the HTTP `message/stream` method triggers the streaming path; every other
+method keeps the single-shot `a2a_response` correlation. (`--exec` streaming is
+still deferred — only `--forward` SSE is relayed today.)
+
 Proxy routing rule for an endpoint-less agent
 (`_proxy_to_agent` → `_relay_or_inbox`):
 
@@ -201,11 +234,13 @@ same JSON-RPC `message/send` body — and sends the same headers (including the
 a2a protocol version header) — a direct HTTP POST would carry, so the
 receiving agent cannot tell Mode A from Mode B.
 
-Scope: the relay covers **non-streaming `message/send` only**. `message/stream`
-to a relay-delivery agent raises a clear error (the WS frame protocol has no
-streaming correlation yet); streaming relay is deferred. `delivery="relay"` is
-mutually exclusive with a direct URL — supplying both is rejected at
-registration rather than silently dialling over HTTP.
+Scope: the relay covers both `message/send` (single-shot) **and**
+`message/stream` (SSE streaming, #171) — `MessageRouter.route_stream` and the
+HTTP gateway proxy both relay a streaming reply chunk-by-chunk over the WS (see
+the streaming wire-protocol section above); `--exec` streaming is still
+deferred. `delivery="relay"` is mutually exclusive with a direct URL —
+supplying both is rejected at registration rather than silently dialling over
+HTTP.
 
 ### 3. Domain is never hardcoded in agent code
 
@@ -313,6 +348,7 @@ that embed ACN integration into their own server application.
 | **P2a (done)** | Mode B server-side relay: `a2a_request`/`a2a_response` over `/ws/{agent_id}`, proxy integration, offline inbox backstop | this change |
 | **P2b (done)** | `acn listen` CLI: outbound WS, `--forward`/`--exec` handlers, keepalive + reconnect | this change |
 | **P2d (done)** | `delivery="relay"` registration field + `MessageRouter` real-time relay for the ACN-mediated `/communication/send` channel (not just the HTTP gateway proxy); `acn join --relay` | this change |
+| **P2d streaming (done)** | `message/stream` SSE relay over the Mode B WS: `a2a_stream_chunk`/`a2a_stream_end` frames, first-frame stream/buffer decision, bounded-queue backpressure, `acn listen --forward` SSE chunking | ACN #171 |
 | **P2c (deferred — cosmetic only)** | `{slug}.acnlabs.org` subdomain prettification (wildcard DNS/TLS). **Not required for the closed loop** — see note below. | New ACN issue |
 | **P3** | `acn-client` SDK wrapping Mode A/B; SOCIAL.md `links.agent_card` convention | New ACN issue |
 
