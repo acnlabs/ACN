@@ -18,14 +18,19 @@ Safety
 - Railway's deploy model is single-instance stop-old/start-new; alembic
   upgrade head runs before uvicorn binds the port.
 
-Revision ID: a1b2c3d4e5f6
-Revises: f7b9c2d4e8a1
+Revision ID: c2d3e4f5a6b7
+Revises: b1c2d3e4f5a6
 """
 
 from alembic import op
 
-revision = "a1b2c3d4e5f6"
-down_revision = "f7b9c2d4e8a1"
+# NOTE: this migration originally shipped with revision id "a1b2c3d4e5f6",
+# which collided with the pre-existing add_agent_wallet_fields migration of the
+# same id — breaking ``alembic upgrade head`` (duplicate revision) on every
+# deploy. Re-issued with a unique id and re-chained onto the real head
+# (b1c2d3e4f5a6) so there is exactly one linear head again.
+revision = "c2d3e4f5a6b7"
+down_revision = "b1c2d3e4f5a6"
 branch_labels = None
 depends_on = None
 
