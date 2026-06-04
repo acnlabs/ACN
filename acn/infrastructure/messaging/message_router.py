@@ -12,6 +12,7 @@ Based on: https://github.com/a2aproject/A2A
 import base64
 import json
 import logging
+import time
 from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime
 from inspect import isawaitable
@@ -541,6 +542,13 @@ class MessageRouter:
         # must NOT be mistaken for a delivery failure (which would duplicate the
         # message to the inbox, queue a spurious DLQ retry, and raise to the
         # caller for a message that already arrived).
+        # Wall-clock cost of the direct push attempt. Emitted on both paths so
+        # production log aggregation can answer the #173 question — "is the
+        # bounded connect-timeout probe to long-down Mode A agents a meaningful
+        # cost?" — with evidence (group failed probes by to_agent + probe_ms)
+        # before we decide whether a circuit breaker is worth building. Pure
+        # observation: no new state, no gating.
+        probe_started = time.monotonic()
         try:
             client = await self._get_client(endpoint)
             request = SendMessageRequest(
@@ -555,9 +563,20 @@ class MessageRouter:
             raise
 
         except Exception as e:
+            probe_ms = (time.monotonic() - probe_started) * 1000.0
+            # Stable key=value tokens (stdlib logging here, not structlog) so
+            # the event is greppable/aggregatable: a long-down agent shows up
+            # as repeated direct_delivery_failed with believed_alive=False and
+            # a probe_ms near the connect timeout.
             logger.info(
-                f"[{route_id}] Direct delivery to {to_agent!r} failed"
-                f" (alive={alive_now}): {e}; parking in inbox"
+                "direct_delivery_failed route_id=%s to_agent=%s believed_alive=%s "
+                "probe_ms=%.1f parked=inbox dlq=%s error=%r",
+                route_id,
+                to_agent,
+                alive_now,
+                probe_ms,
+                alive_now,
+                str(e),
             )
             await self._log_message(
                 route_id=route_id,
@@ -600,6 +619,7 @@ class MessageRouter:
             }
 
         # --- Reached only on a confirmed successful delivery. ---
+        probe_ms = (time.monotonic() - probe_started) * 1000.0
         # A completed delivery is the strongest liveness signal there is, so
         # renew the alive TTL (touch_alive swallows its own errors). The audit
         # write is best-effort too: it records the real "outbound" direction
@@ -618,7 +638,16 @@ class MessageRouter:
                 f"[{route_id}] audit log after successful delivery failed: {log_err}"
             )
         logger.debug(f"[{route_id}] Received response: {type(response)}")
-        logger.info(f"[{route_id}] Message delivered successfully")
+        # Same stable shape as the failure event so success/fail probe latency
+        # is comparable in aggregation (baseline for the #173 cost question).
+        logger.info(
+            "direct_delivery_succeeded route_id=%s to_agent=%s believed_alive=%s "
+            "probe_ms=%.1f",
+            route_id,
+            to_agent,
+            alive_now,
+            probe_ms,
+        )
         return response
 
     # --- ADR-0012 Mode B: real-time relay over the agent's WebSocket ---
