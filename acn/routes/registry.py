@@ -199,7 +199,8 @@ class AgentJoinRequest(BaseModel):
             "(e.g. https://host/a2a, not https://host) — ACN posts each message "
             "to this exact URL verbatim and never appends a path. A handshake "
             "probe at registration returns a2a_handshake_ok=false if the URL "
-            "does not answer as a JSON-RPC endpoint."
+            "responds but is not a JSON-RPC endpoint (null if the probe is "
+            "indeterminate, e.g. it timed out)."
         ),
     )
     agent_card_url: str | None = Field(
@@ -390,19 +391,21 @@ class AgentJoinResponse(BaseModel):
         ),
     )
 
-    # A2A handshake probe result (soft check). Distinct from endpoint_reachable:
-    # a host can be reachable (any HTTP response) yet NOT speak A2A at the exact
-    # registered URL — the bare-origin / wrong-path footgun where ACN's direct
-    # push silently 404s. False here is a warning, not a failure.
-    a2a_handshake_ok: bool = Field(
-        default=False,
+    # A2A handshake probe result (soft, tri-state). Distinct from
+    # endpoint_reachable: a host can be reachable (any HTTP response) yet NOT
+    # speak A2A at the exact registered URL — the bare-origin / wrong-path
+    # footgun where ACN's direct push silently 404s. Never a failure.
+    a2a_handshake_ok: bool | None = Field(
+        default=None,
         description=(
-            "Whether the registered endpoint answered a JSON-RPC handshake "
-            "probe like an A2A server. False (with endpoint_reachable True) "
-            "means the host responded but this exact URL is not an A2A "
-            "JSON-RPC endpoint — verify the path (e.g. it should be "
-            "https://host/a2a, not https://host). Soft signal: registration "
-            "still succeeds, but direct delivery will likely fail until fixed."
+            "Tri-state result of the JSON-RPC handshake probe against the "
+            "registered endpoint. true = confirmed A2A endpoint. false (with "
+            "endpoint_reachable true) = the host responded but this exact URL "
+            "is NOT an A2A JSON-RPC endpoint — verify the path (e.g. it should "
+            "be https://host/a2a, not https://host). null = indeterminate "
+            "(probe timed out / no endpoint probed) — no conclusion, could be "
+            "a slow-but-valid server. Soft signal: registration always "
+            "succeeds regardless."
         ),
     )
 
@@ -495,13 +498,24 @@ async def _probe_endpoint_http(endpoint: str, *, timeout: float = 3.0) -> bool:
 _A2A_HANDSHAKE_METHOD = "__acn_handshake_probe__"
 
 
-async def _probe_a2a_handshake(endpoint: str, *, timeout: float = 3.0) -> bool:
-    """Return True iff *endpoint* answers a JSON-RPC probe like an A2A server.
+async def _probe_a2a_handshake(endpoint: str, *, timeout: float = 8.0) -> bool | None:
+    """Probe whether *endpoint* answers a JSON-RPC request like an A2A server.
 
-    SOFT signal only — callers MUST treat False as a warning, never a hard
-    block: the agent's A2A server may legitimately not be deployed yet at
-    registration time, or may sit behind a path the operator fixes later. The
-    probe never raises; any transport / parse failure resolves to False.
+    Tri-state, because "the host did not answer in time" and "the host answered
+    but is not A2A" are very different signals and must not be conflated:
+
+    - ``True``  — got a JSON-RPC-shaped response → confirmed A2A endpoint.
+    - ``False`` — got a response that is DEFINITELY not JSON-RPC (HTML body,
+      non-JSON content-type, JSON that is not an RPC envelope). High-confidence
+      "wrong path / not A2A" (the nginx-404 / bare-origin case).
+    - ``None``  — indeterminate: timeout, connection error, or any transport
+      failure. Could be a slow-but-valid A2A server (agents that do real work
+      on every request can take >timeout to answer even an unknown method), so
+      callers MUST NOT surface a "not A2A" warning on ``None``.
+
+    SOFT signal only — never blocks registration regardless of the result.
+    The timeout is generous (vs the HEAD probe's 3s) precisely so a slow valid
+    server resolves to None rather than a false ``False``.
     """
     payload = {
         "jsonrpc": "2.0",
@@ -516,11 +530,12 @@ async def _probe_a2a_handshake(endpoint: str, *, timeout: float = 3.0) -> bool:
                 json=payload,
                 headers={"content-type": "application/json"},
             )
-    except Exception:  # noqa: BLE001 — any transport failure = not an A2A endpoint here
-        return False
-    # A JSON-RPC server commonly answers method-not-found with HTTP 200 + an
-    # error object, so we key off the BODY shape, not the status code. A bare
-    # origin / wrong path returns HTML (nginx 404) which fails the JSON parse.
+    except Exception:  # noqa: BLE001 — timeout / transport failure → indeterminate
+        return None
+    # We got a response, so we CAN make a determination. A JSON-RPC server
+    # commonly answers method-not-found with HTTP 200 + an error object, so we
+    # key off the BODY shape, not the status code. A bare origin / wrong path
+    # returns HTML (nginx 404) which fails the JSON-RPC checks below → False.
     if "json" not in resp.headers.get("content-type", "").lower():
         return False
     try:
@@ -587,7 +602,7 @@ def _build_next_step_hint(
     mode: str,
     has_endpoint: bool,
     endpoint_reachable: bool,
-    a2a_handshake_ok: bool = True,
+    a2a_handshake_ok: bool | None = True,
     agent_id: str,
     base_url: str,
 ) -> str | None:
@@ -625,12 +640,14 @@ def _build_next_step_hint(
             "Messages will fall back to the inbox queue until your server "
             "responds. Once the server is up, no further action is required."
         )
-    # Reachable host but the exact URL did not speak A2A JSON-RPC — the
+    # Reachable host that CONFIRMED it does not speak A2A JSON-RPC — the
     # bare-origin / wrong-path footgun. ACN posts the A2A message to the
     # VERBATIM registered URL, so a host that answers HTTP at / but mounts its
     # A2A server at /a2a will silently 404 every delivered message. Surface a
-    # concrete fix (re-point the endpoint at the real A2A path).
-    if has_endpoint and endpoint_reachable and not a2a_handshake_ok:
+    # concrete fix (re-point the endpoint at the real A2A path). NOTE: only a
+    # confirmed ``False`` triggers this — ``None`` (timeout / slow server) is
+    # indeterminate and must not mislabel a slow-but-valid agent as "not A2A".
+    if has_endpoint and endpoint_reachable and a2a_handshake_ok is False:
         return (
             "Endpoint is reachable but did NOT respond as an A2A JSON-RPC "
             "server. ACN delivers to this exact URL, so if your A2A server is "
@@ -647,7 +664,7 @@ async def _resolve_registration_endpoint(
     direct_endpoint: str | None,
     agent_card_url: str | None,
     agent_card: dict | None,
-) -> tuple[str, dict | None, bool, bool]:
+) -> tuple[str, dict | None, bool, bool | None]:
     """Resolve the direct A2A endpoint while preserving the discovery card.
 
     Returns ``(endpoint, agent_card, endpoint_reachable, a2a_handshake_ok)``.
@@ -656,12 +673,12 @@ async def _resolve_registration_endpoint(
     - True  → server responded (any HTTP status counts as reachable)
     - False → DNS resolved but no HTTP response within the probe timeout
 
-    ``a2a_handshake_ok`` reflects the JSON-RPC handshake probe (see
-    ``_probe_a2a_handshake``): True only when this EXACT URL answered like an
-    A2A endpoint. It is strictly a soft signal — a False here never blocks
-    registration — but it distinguishes "host answers HTTP" (reachable) from
-    "this URL actually speaks A2A", catching the bare-origin / wrong-path
-    footgun that the HEAD probe alone misses.
+    ``a2a_handshake_ok`` is the tri-state JSON-RPC handshake probe result (see
+    ``_probe_a2a_handshake``): ``True`` confirmed A2A, ``False`` confirmed NOT
+    A2A (the bare-origin / wrong-path footgun), ``None`` indeterminate (timeout
+    / slow server). It is strictly a soft signal — never blocks registration —
+    and only a confirmed ``False`` should drive a "wrong path" warning so a
+    slow-but-valid server is not mislabelled.
 
     DNS failures are hard errors (raise HTTPException); HTTP probe
     failures are soft — callers propagate the flag to the client so
@@ -670,7 +687,7 @@ async def _resolve_registration_endpoint(
     if direct_endpoint:
         _validate_resolved_a2a_endpoint(direct_endpoint)
         reachable = await _check_endpoint_reachability(direct_endpoint)
-        handshake_ok = await _probe_a2a_handshake(direct_endpoint) if reachable else False
+        handshake_ok = await _probe_a2a_handshake(direct_endpoint) if reachable else None
         return direct_endpoint, agent_card, reachable, handshake_ok
 
     if agent_card:
@@ -679,7 +696,7 @@ async def _resolve_registration_endpoint(
             _validate_resolved_a2a_endpoint(direct_endpoint)
             reachable = await _check_endpoint_reachability(direct_endpoint)
             handshake_ok = (
-                await _probe_a2a_handshake(direct_endpoint) if reachable else False
+                await _probe_a2a_handshake(direct_endpoint) if reachable else None
             )
             return direct_endpoint, agent_card, reachable, handshake_ok
 
@@ -712,7 +729,7 @@ async def _resolve_registration_endpoint(
     # The card URL was already fetched successfully, so at minimum the card host
     # is alive. Still probe the extracted endpoint — it may differ from the card URL.
     reachable = await _check_endpoint_reachability(direct_endpoint)
-    handshake_ok = await _probe_a2a_handshake(direct_endpoint) if reachable else False
+    handshake_ok = await _probe_a2a_handshake(direct_endpoint) if reachable else None
 
     return direct_endpoint, fetched_card, reachable, handshake_ok
 
@@ -1727,7 +1744,7 @@ async def _join_agent_impl(
             # Not probed (mode doesn't push); senders consult
             # ``communication_mode`` to choose manifest-notify over direct.
             endpoint_reachable = False
-            a2a_handshake_ok = False
+            a2a_handshake_ok = None
 
         agent, api_key = await agent_service.join_agent(
             name=body.name,
@@ -2395,7 +2412,7 @@ async def update_agent_endpoint(
     current_mode = (agent.communication_policy or {}).get("mode", "open")
 
     endpoint_reachable = False
-    a2a_handshake_ok = False
+    a2a_handshake_ok: bool | None = None
     if body.endpoint is not None:
         # Two-layer check identical to registration: DNS + HTTP probe,
         # both hard-fail with 400. Scheme / gateway-host / SSRF were

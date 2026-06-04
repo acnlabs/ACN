@@ -117,8 +117,9 @@ async def test_handshake_false_on_non_dict_json():
 
 
 @pytest.mark.asyncio
-async def test_handshake_false_on_connect_error():
-    """Transport failures resolve to False, never raise."""
+async def test_handshake_none_on_connect_error():
+    """Transport failures are INDETERMINATE (None), never raise and never a
+    confident False — the host might just be momentarily unreachable."""
     import httpx
 
     with patch(
@@ -127,7 +128,23 @@ async def test_handshake_false_on_connect_error():
             side_effect=httpx.ConnectError("refused")
         )(),
     ):
-        assert await _probe_a2a_handshake("https://agent.example.com/a2a") is False
+        assert await _probe_a2a_handshake("https://agent.example.com/a2a") is None
+
+
+@pytest.mark.asyncio
+async def test_handshake_none_on_timeout():
+    """A slow-but-valid A2A server that times out the probe must resolve to
+    None (indeterminate), NOT False — otherwise we mislabel it 'not A2A'.
+    This is exactly the agentmother case the tri-state guards against."""
+    import httpx
+
+    with patch(
+        "httpx.AsyncClient",
+        side_effect=lambda *a, **k: _mock_post_client(
+            side_effect=httpx.ReadTimeout("timed out")
+        )(),
+    ):
+        assert await _probe_a2a_handshake("https://agent.example.com/a2a") is None
 
 # ---------------------------------------------------------------------------
 # _probe_endpoint_http — unit tests
@@ -920,6 +937,41 @@ async def test_join_response_hint_when_reachable_but_not_a2a():
     assert resp.next_step_hint is not None
     hint = resp.next_step_hint.lower()
     assert "a2a" in hint and "/endpoint" in resp.next_step_hint
+
+
+@pytest.mark.asyncio
+async def test_join_response_no_a2a_hint_when_handshake_indeterminate():
+    """Reachable host whose handshake probe TIMED OUT (None) must NOT be
+    warned as 'not A2A' — a slow-but-valid server (the agentmother case) is
+    indeterminate, not wrong. No bare-origin hint should fire."""
+    fake_agent = _make_fake_agent()
+    fake_agent.communication_policy = {"mode": "open"}
+    svc = AsyncMock()
+    svc.join_agent = AsyncMock(return_value=(fake_agent, "acn_test_key"))
+
+    body = AgentJoinRequest(
+        name="SlowButValidAgent",
+        description="Tests that a timed-out handshake does not mislabel.",
+        tags=["test"],
+        a2a_endpoint="https://agent.example.com/a2a",
+        communication_policy={"mode": "open"},
+    )
+
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, True, None)),
+    ):
+        resp = await _join_agent_impl(
+            body,
+            BackgroundTasks(),
+            ref=None,
+            agent_service=svc,
+        )
+
+    assert resp.endpoint_reachable is True
+    assert resp.a2a_handshake_ok is None
+    # Reachable + open + indeterminate handshake = happy path, no warning.
+    assert resp.next_step_hint is None
 
 
 # ---------------------------------------------------------------------------

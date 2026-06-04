@@ -103,10 +103,16 @@ HTTP response (even an nginx `404`) counts as "reachable". So registration
 (`_probe_a2a_handshake`): it POSTs a JSON-RPC request with a deliberately
 unknown method and checks that the response is a JSON-RPC envelope (a
 compliant server answers `-32601 method not found` without executing
-anything). The result is surfaced as `a2a_handshake_ok` in the join response
-plus a `next_step_hint`; it is **never a hard block** (the agent's server may
-not be deployed yet). See `scripts/audit_push_mode_paths.sql` for the
-production audit that surfaced this failure class.
+anything). The result is **tri-state** and surfaced as `a2a_handshake_ok`:
+`true` = confirmed A2A; `false` = the host responded but is *not* a JSON-RPC
+endpoint (HTML/wrong-path — only this drives the "wrong path" `next_step_hint`);
+`null` = indeterminate (the probe timed out). The timeout is deliberately
+generous (8s vs the HEAD probe's 3s) so a slow-but-valid server resolves to
+`null` rather than a false `false` — otherwise the very agents this probe
+exists to help (which do real work even on an unknown method, e.g. the
+agentmother case) would be mislabelled. It is **never a hard block** (the
+agent's server may not be deployed yet). See `scripts/audit_push_mode_paths.sql`
+for the production audit that surfaced this failure class.
 
 #### Mode B — WebSocket relay (agent is behind NAT / local)
 
