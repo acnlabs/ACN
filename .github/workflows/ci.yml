@@ -68,6 +68,41 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check .
 
+      # Guard against the failure mode that froze production deploys for ~23h:
+      # a duplicate revision id (or a branched history) makes the container's
+      # boot-time `alembic upgrade head` abort, so uvicorn never binds and the
+      # Railway deploy fails. Two independent checks (alembic's own exit code is
+      # NOT reliable — a duplicate id only WARNS unless something also references
+      # it, so we detect duplicates explicitly):
+      #   1. no two migration files declare the same revision id
+      #   2. the graph resolves to exactly one head (no branch)
+      - name: Migrations — one alembic head, no duplicate revisions
+        run: |
+          uv run python - <<'PY'
+          import re, sys, pathlib
+          ids: dict[str, list[str]] = {}
+          for f in sorted(pathlib.Path("alembic/versions").glob("*.py")):
+              m = re.search(r'^revision[^=\n]*=\s*[\'"]([0-9a-zA-Z_]+)[\'"]', f.read_text(), re.M)
+              if m:
+                  ids.setdefault(m.group(1), []).append(f.name)
+          dups = {r: fs for r, fs in ids.items() if len(fs) > 1}
+          if dups:
+              print("❌ duplicate alembic revision id(s) — breaks 'alembic upgrade head':")
+              for r, fs in dups.items():
+                  print(f"   {r}: {', '.join(fs)}")
+              sys.exit(1)
+          print(f"✅ {len(ids)} unique revision ids")
+          PY
+          heads=$(uv run alembic heads 2>&1) || { echo "$heads"; echo "❌ alembic could not build the revision graph"; exit 1; }
+          echo "$heads"
+          count=$(echo "$heads" | grep -c "(head)")
+          if [ "$count" -ne 1 ]; then
+            echo "❌ expected exactly 1 alembic head, found $count — a branched"
+            echo "   migration history breaks 'alembic upgrade head' on deploy."
+            exit 1
+          fi
+          echo "✅ single linear alembic head"
+
       - name: Type check (mypy)
         run: uv run mypy acn
 
