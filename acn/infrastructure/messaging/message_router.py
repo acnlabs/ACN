@@ -20,7 +20,6 @@ from uuid import uuid4
 
 import httpx
 import redis.asyncio as redis
-from jsonrpc.jsonrpc2 import JSONRPC20Request  # type: ignore[import-untyped]
 
 # Official A2A SDK
 from a2a.client import Client, ClientConfig, ClientFactory  # type: ignore[import-untyped]
@@ -47,6 +46,7 @@ from a2a.utils.constants import (  # type: ignore[import-untyped]
     PROTOCOL_VERSION_0_3,
     VERSION_HEADER,
 )
+from jsonrpc.jsonrpc2 import JSONRPC20Request  # type: ignore[import-untyped]
 
 from ...config import get_settings
 from ...core.exceptions import PolicyRejected
