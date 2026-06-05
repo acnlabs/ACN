@@ -137,6 +137,42 @@ class TestHappyPath:
         assert kwargs["to_agent_id"] == "agent-target-uuid"
         assert kwargs["priority"] == "normal"
 
+    def test_realtime_success_model_result_does_not_500(
+        self, stub_metrics, stub_audit
+    ):
+        """Regression: a confirmed real-time push makes ``route()`` return the
+        A2A SDK's ``SendStreamingMessageSuccessResponse`` *model* (no ``.get``),
+        not a dict. The route previously called ``result.get("message_id")``
+        unconditionally and 500'd on every live delivery even though the
+        recipient already received the message. The audit message_id degrades
+        to ``None`` for non-dict results; the response must still be 200.
+        """
+        from pydantic import BaseModel
+
+        class _FakeSuccess(BaseModel):
+            kind: str = "task"
+            id: str = "task-xyz"
+
+        svc = AsyncMock()
+        svc.send_message = AsyncMock(return_value=_FakeSuccess())
+        _wire_dep_overrides(stub_metrics, svc, stub_audit)
+
+        with patch(
+            "acn.routes.dependencies.settings.internal_api_token",
+            VALID_INTERNAL_TOKEN,
+        ), patch("acn.routes.communication.Message", return_value=MagicMock()):
+            with TestClient(app) as client:
+                r = client.post(
+                    "/api/v1/communication/internal/send",
+                    json=_good_body(),
+                    headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+                )
+
+        assert r.status_code == 200, r.text
+        assert r.json()["kind"] == "task"
+        stub_audit.log_event.assert_awaited_once()
+        assert stub_audit.log_event.await_args.kwargs["message_id"] is None
+
     def test_audit_records_actor_type_system(
         self, stub_metrics, stub_message_service, stub_audit
     ):

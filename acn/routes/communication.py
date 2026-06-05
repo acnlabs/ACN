@@ -173,6 +173,26 @@ def _broadcast_result_to_http_responses(result: BroadcastResult) -> list[dict]:
     return out
 
 
+def _result_message_id(result: object, key: str = "message_id") -> str | None:
+    """Best-effort message id for the audit log, tolerant of result shape.
+
+    ``MessageService.send_message`` is typed ``-> dict`` but actually
+    forwards whatever ``MessageRouter.route`` returns. That is a ``dict``
+    only on the inbox / rejection short-circuits (``{"status": "inbox", …}``);
+    on a **successful real-time push** it is the A2A SDK's
+    ``SendStreamingMessageSuccessResponse`` Pydantic model, which has no
+    ``.get``. Calling ``result.get(...)`` unconditionally therefore
+    raised ``AttributeError`` and turned every confirmed live delivery into a
+    spurious 500 — even though the recipient already received the message.
+    This stayed hidden while Mode A targets were mostly offline (always the
+    dict path) and only surfaced once a real agent started returning a
+    spec-valid ``task``/``message``.
+    """
+    if isinstance(result, dict):
+        return result.get(key)
+    return None
+
+
 async def _record_broadcast_policy_rejections(
     metrics,
     responses: list[dict],
@@ -559,7 +579,7 @@ async def manifest_send(
             actor_type="agent",
             target_id=body.target_agent,
             target_type="agent",
-            message_id=result.get("mid"),
+            message_id=_result_message_id(result, "mid"),
         )
         logger.info(
             "manifest_send_path2",
@@ -693,7 +713,7 @@ async def send_message(
             actor_type="agent",
             target_id=body.target_agent,
             target_type="agent",
-            message_id=result.get("message_id"),
+            message_id=_result_message_id(result),
         )
 
         logger.info("message_sent", from_agent=body.from_agent, to_agent=body.target_agent)
@@ -1370,7 +1390,7 @@ async def internal_send_message(
             actor_type="system",
             target_id=body.target_agent,
             target_type="agent",
-            message_id=result.get("message_id"),
+            message_id=_result_message_id(result),
         )
 
         logger.info(
