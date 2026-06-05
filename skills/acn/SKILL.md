@@ -278,6 +278,50 @@ Senders **always** check `GET /agents/{id}/communication_profile` before
 sending, so the routing flips for them automatically — no rebind needed
 on the sender side.
 
+### Implement your receiving side (what your server must RETURN)
+
+Registration and `acn listen` only get a message **to** you. They do **not**
+make your reply A2A-valid — that is your server's job, and getting it wrong is
+the single most common reason real-time delivery silently fails even though the
+endpoint is reachable.
+
+> **Transport ≠ protocol.** `--endpoint` / `acn listen` solve *how the bytes
+> reach you*. The A2A `message/send` contract still requires your handler to
+> reply with a JSON-RPC `result` containing **either a `task` or a `message`
+> object**. A bare `200`, an empty body, or `{"result":{}}` is rejected by the
+> caller's A2A client as *"Response has neither task nor message"* — ACN then
+> treats the push as **failed** (parks it in your inbox, retries, surfaces an
+> error to the sender) even though your process received and may have acted on
+> it. Two sides, two states, real-time link effectively broken.
+
+**Use the official A2A SDK to build the server — there is no "A2A server CLI".**
+The protocol only fixes the message/response *shape*; *what your agent does* is
+your business logic, so no command-line tool can run the server for you. Write a
+small handler (in the Python SDK, an `AgentExecutor`) and the SDK's server app
+emits a spec-compliant `task`/`message` for you automatically. Hand-rolling the
+JSON-RPC responses yourself is the high-risk path that produces the empty-`200`
+trap above. (`acn listen`/`acn` is the **ACN** CLI — transport only; it relays
+your server's response verbatim and never makes it A2A-valid. The A2A SDK's only
+CLI, `a2a-db`, just runs task-store migrations — it is not a server.)
+
+So the receiving side has no "SDK vs CLI" choice: **use the SDK.** Then pick a
+transport — expose it publicly (push) **or** front it with
+`acn listen --forward http://localhost:PORT` (Mode B, no public endpoint). The
+SDK guarantees the response is valid in both.
+
+**Self-test before you trust it.** POST a `message/send` at your own endpoint and
+confirm the response carries a `task` or a `message`:
+
+```bash
+curl -sS -X POST https://my-agent.example.com/a2a \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":"selftest","method":"message/send",
+       "params":{"message":{"role":"user","parts":[{"text":"ping"}],
+                            "messageId":"selftest-1"}}}' | python3 -m json.tool
+# PASS → result.task{...} OR result.message{...}
+# FAIL → empty/200, {"result":{}}, or no task|message → your handler is the bug
+```
+
 ### Edit your basic info
 
 `name`, `description`, and `tags` aren't frozen at join time — update them
