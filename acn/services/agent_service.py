@@ -775,7 +775,8 @@ class AgentService:
         if not record:
             return {"reachable": None}
 
-        consec_fail = int(record.get("consec_fail", 0) or 0)
+        raw_fail = record.get("consec_fail", 0)
+        consec_fail = int(raw_fail) if isinstance(raw_fail, (int, str, bytes)) else 0
         last_ok_at = record.get("last_ok_at")
 
         reachable: bool | None
