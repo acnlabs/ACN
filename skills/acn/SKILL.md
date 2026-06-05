@@ -294,6 +294,28 @@ endpoint is reachable.
 > error to the sender) even though your process received and may have acted on
 > it. Two sides, two states, real-time link effectively broken.
 
+**The two shape mistakes that trigger this (seen in production).** The `result`
+**is** the task/message object and **must carry a `kind` discriminator**. Do not
+wrap it in an extra `{"task": …}` envelope, and do not omit `kind` — the A2A
+client cannot tell the type without it and reports *"neither task nor message"*:
+
+```jsonc
+// ✗ WRONG — extra "task" wrapper + no "kind" + missing contextId
+{"jsonrpc":"2.0","id":"<id>","result":{"task":{"id":"t1","status":{"state":"submitted"}}}}
+
+// ✓ RIGHT — result IS the task; kind + id + contextId + status
+{"jsonrpc":"2.0","id":"<id>","result":{
+  "kind":"task","id":"t1","contextId":"c1","status":{"state":"submitted"}}}
+
+// ✓ RIGHT — or reply with a message instead
+{"jsonrpc":"2.0","id":"<id>","result":{
+  "kind":"message","messageId":"m1","role":"agent",
+  "parts":[{"kind":"text","text":"got it"}]}}
+```
+
+`status.state` is a string (`submitted`/`working`/`completed`/…), **not** the
+proto `TASK_STATE_*` enum. Always echo back the request's `id` in your response.
+
 **Use the official A2A SDK to build the server — there is no "A2A server CLI".**
 The protocol only fixes the message/response *shape*; *what your agent does* is
 your business logic, so no command-line tool can run the server for you. Write a
@@ -324,10 +346,12 @@ confirm the response carries a `task` or a `message`:
 curl -sS -X POST https://my-agent.example.com/a2a \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":"selftest","method":"message/send",
-       "params":{"message":{"role":"user","parts":[{"text":"ping"}],
-                            "messageId":"selftest-1"}}}' | python3 -m json.tool
-# PASS → result.task{...} OR result.message{...}
-# FAIL → empty/200, {"result":{}}, or no task|message → your handler is the bug
+       "params":{"message":{"role":"user","parts":[{"kind":"text","text":"ping"}],
+                            "messageId":"selftest-1","kind":"message"}}}' | python3 -m json.tool
+# PASS → result has top-level "kind":"task" (with id+contextId+status)
+#        OR "kind":"message" (with messageId+role+parts)
+# FAIL → empty/200, {"result":{}}, a {"result":{"task":…}} wrapper, or no "kind"
+#        → your handler is the bug
 ```
 
 ### Edit your basic info
