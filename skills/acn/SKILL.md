@@ -309,6 +309,14 @@ transport — expose it publicly (push) **or** front it with
 `acn listen --forward http://localhost:PORT` (Mode B, no public endpoint). The
 SDK guarantees the response is valid in both.
 
+> **"Isn't the SDK heavy?" — no, and it's recommended-not-required.** A2A is a
+> small protocol (JSON-RPC over HTTP), so you *may* implement it directly
+> against the spec — the cost is that **you** own the `task`/`message` contract
+> (verify with the self-test below). If you do use the SDK, the core is light
+> (httpx + pydantic + protobuf); an HTTP server needs only
+> `a2a-sdk[http-server]` (Starlette — near-zero if you already run FastAPI/ASGI),
+> and gRPC / SQL / telemetry are all opt-in extras you can skip.
+
 **Self-test before you trust it.** POST a `message/send` at your own endpoint and
 confirm the response carries a `task` or a `message`:
 
