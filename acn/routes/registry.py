@@ -1291,9 +1291,13 @@ async def get_agent(
         # failure must never block agent retrieval, so the fields stay None.
         try:
             health = await agent_service.get_inbound_health(agent_id)
-            info.inbound_reachable = health.get("reachable")
-            info.last_inbound_ok_at = health.get("last_ok_at")
-            info.consec_push_failures = health.get("consec_fail")
+            # Only trust a real mapping — a non-dict (e.g. a test double's
+            # auto-mock) would otherwise leak unserializable values such as a
+            # ``.get`` coroutine into the response model and 500 the read.
+            if isinstance(health, dict):
+                info.inbound_reachable = health.get("reachable")
+                info.last_inbound_ok_at = health.get("last_ok_at")
+                info.consec_push_failures = health.get("consec_fail")
         except Exception as e:  # noqa: BLE001 — diagnostic field is best-effort
             logger.warning("inbound_health_lookup_failed", agent_id=agent_id, error=str(e))
         try:
