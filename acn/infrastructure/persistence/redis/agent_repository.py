@@ -5,7 +5,7 @@ Concrete implementation using Redis for agent persistence.
 
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 
 import redis.asyncio as redis  # type: ignore[import-untyped]
 
@@ -319,6 +319,53 @@ class RedisAgentRepository(IAgentRepository):
             pipe.exists(f"acn:agents:{agent_id}:alive")
         results = await pipe.execute()
         return {aid for aid, alive in zip(agent_ids, results, strict=True) if alive}
+
+    async def record_inbound_delivery(
+        self,
+        agent_id: str,
+        *,
+        ok: bool,
+        probe_ms: float | None = None,
+        error: str | None = None,
+        ttl: int,
+    ) -> None:
+        """Record a real inbound direct-push outcome (decoupled from ``alive``)."""
+        key = f"acn:agents:{agent_id}:inbound"
+        now = datetime.now(UTC).isoformat()
+        pipe = self.redis.pipeline()
+        if ok:
+            pipe.hset(key, mapping={"last_ok_at": now, "consec_fail": 0})
+        else:
+            pipe.hincrby(key, "consec_fail", 1)
+            pipe.hset(key, "last_fail_at", now)
+            if error is not None:
+                pipe.hset(key, "last_error", error[:200])
+        if probe_ms is not None:
+            pipe.hset(key, "last_probe_ms", f"{probe_ms:.1f}")
+        pipe.expire(key, ttl)
+        await pipe.execute()
+
+    async def get_inbound_health(self, agent_id: str) -> dict[str, object] | None:
+        """Return the raw inbound-reachability record, or ``None`` if absent."""
+        raw = await self.redis.hgetall(f"acn:agents:{agent_id}:inbound")
+        if not raw:
+            return None
+
+        def _s(v: object) -> str | None:
+            if v is None:
+                return None
+            return v.decode() if isinstance(v, bytes | bytearray) else str(v)
+
+        data = {_s(k): _s(v) for k, v in raw.items()}
+        out: dict[str, object] = {}
+        for field in ("last_ok_at", "last_fail_at", "last_error"):
+            if data.get(field):
+                out[field] = data[field]
+        if data.get("consec_fail") is not None:
+            out["consec_fail"] = int(data["consec_fail"])
+        if data.get("last_probe_ms") is not None:
+            out["last_probe_ms"] = float(data["last_probe_ms"])
+        return out or None
 
     # ``mark_offline_stale`` deliberately removed — see
     # ``PostgresAgentRepository`` for the rationale. Redis ``alive`` TTL

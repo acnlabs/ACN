@@ -1286,6 +1286,16 @@ async def get_agent(
             strip_sensitive=True,
             public_subnet_slugs=public_slugs,
         )
+        # Inbound reachability (single-agent read only — avoids the extra
+        # per-agent Redis round-trip on listing paths). Best-effort: a lookup
+        # failure must never block agent retrieval, so the fields stay None.
+        try:
+            health = await agent_service.get_inbound_health(agent_id)
+            info.inbound_reachable = health.get("reachable")
+            info.last_inbound_ok_at = health.get("last_ok_at")
+            info.consec_push_failures = health.get("consec_fail")
+        except Exception as e:  # noqa: BLE001 — diagnostic field is best-effort
+            logger.warning("inbound_health_lookup_failed", agent_id=agent_id, error=str(e))
         try:
             from . import dependencies as _deps
 

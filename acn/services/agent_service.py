@@ -26,12 +26,39 @@ from ..protocols.ap2.core import (
 ALIVE_GRACE_TTL = 1800  # 30 min — grace period after join, no heartbeat yet
 ALIVE_RENEW_TTL = 3600  # 60 min — renewed on each heartbeat call
 
+# Inbound reachability policy (decoupled from ``alive``). These describe how a
+# real direct-push history is summarized into a tri-state ``reachable``:
+#   - retain the per-agent record for a week so an abandoned endpoint's last
+#     known state stays inspectable without growing unbounded;
+#   - treat a success as "reachable" only while it is fresher than one hour
+#     (matches ALIVE_RENEW_TTL — same staleness horizon as online-ness);
+#   - declare "unreachable" once N consecutive pushes have failed, so a single
+#     blip never flips the verdict.
+INBOUND_HEALTH_TTL = 7 * 24 * 3600  # 7 days — record retention
+INBOUND_REACHABLE_WINDOW = 3600  # 60 min — a success older than this is stale
+INBOUND_UNREACHABLE_FAILS = 3  # consecutive failures → reachable=False
+
 # How long an agent-initiated deletion request stays open for the human
 # owner to confirm before it expires. 72h covers a long weekend so a
 # request raised Friday isn't silently dead by Monday.
 DELETION_REQUEST_TTL_SECONDS = 72 * 3600
 
 logger = structlog.get_logger()
+
+
+def _within_window(iso_ts: str, window_seconds: int) -> bool:
+    """True if ISO-8601 ``iso_ts`` is within ``window_seconds`` of now (UTC).
+
+    Tolerant of malformed/empty timestamps (returns ``False``) so a corrupt
+    Redis value can never raise on the read path.
+    """
+    try:
+        ts = datetime.fromisoformat(iso_ts)
+    except (ValueError, TypeError):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - ts).total_seconds() <= window_seconds
 
 
 def generate_api_key() -> str:
@@ -696,6 +723,70 @@ class AgentService:
                 agent_id=agent_id,
                 error=str(e),
             )
+
+    async def record_inbound_delivery(
+        self,
+        agent_id: str,
+        *,
+        ok: bool,
+        probe_ms: float | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Record a real inbound direct-push outcome.
+
+        Source of truth for **inbound reachability** — distinct from ``alive``,
+        which conflates outbound liveness (heartbeats / authenticated calls)
+        with inbound deliverability. Only ``MessageRouter.route()``'s Mode-A
+        push result writes here. Best-effort: a Redis blip must never turn a
+        delivered (or correctly-parked) message into a failure, so all
+        exceptions are swallowed.
+        """
+        try:
+            await self.repository.record_inbound_delivery(
+                agent_id,
+                ok=ok,
+                probe_ms=probe_ms,
+                error=error,
+                ttl=INBOUND_HEALTH_TTL,
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort observability write
+            logger.warning(
+                "record_inbound_delivery_failed",
+                agent_id=agent_id,
+                error=str(e),
+            )
+
+    async def get_inbound_health(self, agent_id: str) -> dict[str, object]:
+        """Inbound reachability for *agent_id*, driven by real push outcomes.
+
+        Returns a dict always carrying a tri-state ``reachable``:
+          - ``True``  — a recent successful push (``last_ok_at`` within
+            ``INBOUND_REACHABLE_WINDOW``) and not currently in a failure streak
+          - ``False`` — ``consec_fail`` has reached
+            ``INBOUND_UNREACHABLE_FAILS`` (the endpoint is consistently failing)
+          - ``None``  — unknown: no push has been attempted, or the last
+            success has aged out without a failure streak
+
+        ``reachable`` intentionally answers a different question from
+        ``is_alive``: "can ACN actually push to this agent right now?" rather
+        than "has this agent done anything recently?".
+        """
+        record = await self.repository.get_inbound_health(agent_id)
+        if not record:
+            return {"reachable": None}
+
+        consec_fail = int(record.get("consec_fail", 0) or 0)
+        last_ok_at = record.get("last_ok_at")
+
+        reachable: bool | None
+        if consec_fail >= INBOUND_UNREACHABLE_FAILS:
+            reachable = False
+        elif last_ok_at and _within_window(str(last_ok_at), INBOUND_REACHABLE_WINDOW):
+            reachable = True
+        else:
+            reachable = None
+
+        return {"reachable": reachable, **record}
 
     async def get_agents_by_owner(self, owner: str) -> list[Agent]:
         """

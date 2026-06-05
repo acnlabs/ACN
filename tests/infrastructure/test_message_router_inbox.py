@@ -388,3 +388,47 @@ class TestDirectDelivery:
 
         # No inbox fallback for a security rejection.
         fake_pipe.zadd.assert_not_called()
+        # A security block is not an inbound-reachability signal — never record it.
+        router.agent_service.record_inbound_delivery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_success_records_inbound_reachable(self, router, fake_redis):
+        """A confirmed delivery stamps the inbound-reachability record (ok=True)."""
+        from acn.infrastructure.messaging.message_router import create_text_message
+
+        router.agent_service.find_agent = AsyncMock(
+            return_value=self._make_agent_info("offline")
+        )
+        router.agent_service.is_alive = AsyncMock(return_value=False)
+        stub_client = AsyncMock()
+        stub_client.send_message = AsyncMock(return_value={"ok": True})
+        router._get_client = AsyncMock(return_value=stub_client)
+
+        await router.route(
+            from_agent="agent-a", to_agent="agent-b", message=create_text_message("hi")
+        )
+
+        router.agent_service.record_inbound_delivery.assert_awaited_once()
+        call = router.agent_service.record_inbound_delivery.await_args
+        assert call.args[0] == "agent-b"
+        assert call.kwargs["ok"] is True
+        assert call.kwargs.get("probe_ms") is not None
+
+    @pytest.mark.asyncio
+    async def test_failure_records_inbound_unreachable(self, router):
+        """A failed push records ok=False with the error (drives reachable=False)."""
+        router.agent_service.find_agent = AsyncMock(
+            return_value=self._make_agent_info("offline")
+        )
+        router.agent_service.is_alive = AsyncMock(return_value=False)
+        router._get_client = AsyncMock(side_effect=RuntimeError("connect failed"))
+        message = MagicMock()
+        message.model_dump.return_value = {"role": "user", "parts": []}
+
+        await router.route(from_agent="agent-a", to_agent="agent-b", message=message)
+
+        router.agent_service.record_inbound_delivery.assert_awaited_once()
+        call = router.agent_service.record_inbound_delivery.await_args
+        assert call.args[0] == "agent-b"
+        assert call.kwargs["ok"] is False
+        assert "connect failed" in call.kwargs.get("error", "")

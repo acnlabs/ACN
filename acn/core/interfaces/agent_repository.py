@@ -196,3 +196,36 @@ class IAgentRepository(ABC):
         """
         pass
 
+    @abstractmethod
+    async def record_inbound_delivery(
+        self,
+        agent_id: str,
+        *,
+        ok: bool,
+        probe_ms: float | None = None,
+        error: str | None = None,
+        ttl: int,
+    ) -> None:
+        """Record the outcome of a real inbound direct-push to *agent_id*.
+
+        This is the source of truth for **inbound reachability**, deliberately
+        kept separate from the ``alive`` key (which conflates outbound liveness
+        — heartbeats / authenticated calls — with inbound deliverability). Only
+        ``MessageRouter.route()``'s actual Mode-A push result writes here.
+
+        On success: stamp ``last_ok_at`` and reset the consecutive-failure
+        counter. On failure: increment ``consec_fail`` and stamp
+        ``last_fail_at`` / ``last_error``. Best-effort; callers swallow errors.
+        """
+        pass
+
+    @abstractmethod
+    async def get_inbound_health(self, agent_id: str) -> dict[str, object] | None:
+        """Return the raw inbound-reachability record for *agent_id*.
+
+        Keys (all optional): ``last_ok_at``, ``last_fail_at``, ``consec_fail``,
+        ``last_error``, ``last_probe_ms``. Returns ``None`` if nothing has ever
+        been recorded (no direct push has been attempted).
+        """
+        pass
+

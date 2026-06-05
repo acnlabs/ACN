@@ -564,6 +564,13 @@ class MessageRouter:
 
         except Exception as e:
             probe_ms = (time.monotonic() - probe_started) * 1000.0
+            # Record the real inbound-push failure (decoupled from ``alive``):
+            # this is the source of truth for "can ACN actually reach this
+            # agent right now?", independent of any heartbeat the agent emits.
+            # Best-effort — never affects the delivery/inbox outcome below.
+            await self.agent_service.record_inbound_delivery(
+                to_agent, ok=False, probe_ms=probe_ms, error=str(e)
+            )
             # Stable key=value tokens (stdlib logging here, not structlog) so
             # the event is greppable/aggregatable: a long-down agent shows up
             # as repeated direct_delivery_failed with believed_alive=False and
@@ -625,6 +632,13 @@ class MessageRouter:
         # write is best-effort too: it records the real "outbound" direction
         # but must never turn a delivered message into a failure.
         await self.agent_service.touch_alive(to_agent)
+        # A confirmed delivery is the ground truth for inbound reachability —
+        # stamp it (and reset the failure streak) on the dedicated record, kept
+        # separate from ``alive`` so "reachable" reflects real deliverability
+        # rather than mere outbound activity. Best-effort; see record method.
+        await self.agent_service.record_inbound_delivery(
+            to_agent, ok=True, probe_ms=probe_ms
+        )
         try:
             await self._log_message(
                 route_id=route_id,

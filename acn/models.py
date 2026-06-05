@@ -113,6 +113,30 @@ class AgentInfo(BaseModel):
         description="Number of agents this agent follows.",
     )
 
+    # Inbound reachability — driven by REAL direct-push outcomes in
+    # MessageRouter.route(), deliberately distinct from ``status``/alive
+    # (which conflates outbound liveness with inbound deliverability).
+    # Populated only on single-agent reads (GET /agents/{id}); left ``None``
+    # on hot listing paths to avoid an extra Redis round-trip per agent.
+    # ``inbound_reachable`` is tri-state: True (recent push succeeded),
+    # False (consecutive pushes failing), None (unknown / never pushed).
+    inbound_reachable: bool | None = Field(
+        default=None,
+        description=(
+            "Whether ACN could actually push to this agent recently. Tri-state: "
+            "true=recent success, false=consistently failing, null=unknown. "
+            "Distinct from ``status`` (alive), which only reflects activity."
+        ),
+    )
+    last_inbound_ok_at: str | None = Field(
+        default=None,
+        description="ISO-8601 timestamp of the last successful inbound push, if any.",
+    )
+    consec_push_failures: int | None = Field(
+        default=None,
+        description="Consecutive failed inbound pushes since the last success.",
+    )
+
     # [REMOVED] Agent Wallet fields (balance, total_earned, total_spent, owner_share)
     # 钱包数据由 Backend Wallet API 管理
 

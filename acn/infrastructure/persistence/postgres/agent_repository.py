@@ -18,6 +18,15 @@ from .models import AgentModel
 logger = structlog.get_logger()
 
 _ALIVE_KEY = "acn:agents:{agent_id}:alive"
+_INBOUND_KEY = "acn:agents:{agent_id}:inbound"
+
+
+def _as_str(v: object) -> str | None:
+    """Normalize a Redis hash value (bytes or str, depending on the client's
+    ``decode_responses`` setting) to ``str``."""
+    if v is None:
+        return None
+    return v.decode() if isinstance(v, bytes | bytearray) else str(v)
 
 
 def _tz(dt: datetime | None) -> datetime | None:
@@ -303,6 +312,50 @@ class PostgresAgentRepository(IAgentRepository):
                 pipe.exists(_ALIVE_KEY.format(agent_id=aid))
             results = await pipe.execute()
         return {aid for aid, exists in zip(agent_ids, results, strict=False) if exists}
+
+    # =========================================================================
+    # Inbound reachability (Redis hash — decoupled from ``alive``)
+    # =========================================================================
+
+    async def record_inbound_delivery(
+        self,
+        agent_id: str,
+        *,
+        ok: bool,
+        probe_ms: float | None = None,
+        error: str | None = None,
+        ttl: int,
+    ) -> None:
+        key = _INBOUND_KEY.format(agent_id=agent_id)
+        now = datetime.now(UTC).isoformat()
+        async with self._redis.pipeline(transaction=False) as pipe:
+            if ok:
+                pipe.hset(key, mapping={"last_ok_at": now, "consec_fail": 0})
+            else:
+                pipe.hincrby(key, "consec_fail", 1)
+                pipe.hset(key, "last_fail_at", now)
+                if error is not None:
+                    pipe.hset(key, "last_error", error[:200])
+            if probe_ms is not None:
+                pipe.hset(key, "last_probe_ms", f"{probe_ms:.1f}")
+            pipe.expire(key, ttl)
+            await pipe.execute()
+
+    async def get_inbound_health(self, agent_id: str) -> dict[str, object] | None:
+        key = _INBOUND_KEY.format(agent_id=agent_id)
+        raw = await self._redis.hgetall(key)
+        if not raw:
+            return None
+        data = {_as_str(k): _as_str(v) for k, v in raw.items()}
+        out: dict[str, object] = {}
+        for field in ("last_ok_at", "last_fail_at", "last_error"):
+            if data.get(field):
+                out[field] = data[field]
+        if data.get("consec_fail") is not None:
+            out["consec_fail"] = int(data["consec_fail"])
+        if data.get("last_probe_ms") is not None:
+            out["last_probe_ms"] = float(data["last_probe_ms"])
+        return out or None
 
     # ``mark_offline_stale`` deliberately removed alongside the
     # heartbeat watchdog. Online-ness is now a function over the Redis
