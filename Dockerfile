@@ -5,8 +5,13 @@ LABEL description="ACN - Agent Collaboration Network"
 
 WORKDIR /app
 
+# Optional CN build acceleration (empty by default; overseas builds unaffected)
+ARG APT_MIRROR=
+ARG PIP_INDEX_URL=
+
 # Install system dependencies including curl for health checks
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN if [ -n "$APT_MIRROR" ]; then sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources; fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     git \
     curl \
@@ -20,7 +25,7 @@ COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
 # Install Python dependencies
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ${PIP_INDEX_URL:+-i $PIP_INDEX_URL} .
 
 # Run as non-root user for security
 RUN useradd --no-create-home --shell /bin/false appuser \
