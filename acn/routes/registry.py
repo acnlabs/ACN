@@ -3726,9 +3726,9 @@ async def claim_agent(
 @router.post("/{agent_id}/transfer", response_model=AgentTransferResponse)
 @limiter.limit("10/hour")
 async def transfer_agent(
-    _request: Request,
+    request: Request,
     agent_id: AgentIdPath,
-    request: AgentTransferRequest,
+    body: AgentTransferRequest,
     payload: dict = Depends(require_permission("acn:write")),
     agent_service: AgentServiceDep = None,
 ):
@@ -3743,14 +3743,14 @@ async def transfer_agent(
         agent = await agent_service.transfer_agent(
             agent_id=agent_id,
             current_owner=token_owner,
-            new_owner=request.new_owner,
+            new_owner=body.new_owner,
         )
 
         logger.info(
             "agent_transferred",
             agent_id=agent_id,
             from_owner=token_owner,
-            to_owner=request.new_owner,
+            to_owner=body.new_owner,
         )
 
         return AgentTransferResponse(
@@ -3758,7 +3758,7 @@ async def transfer_agent(
             agent_id=agent.agent_id,
             previous_owner=token_owner,
             new_owner=agent.owner,
-            message=f"Agent '{agent.name}' transferred to {request.new_owner}",
+            message=f"Agent '{agent.name}' transferred to {body.new_owner}",
         )
     except AgentNotFoundException as e:
         raise ACNHTTPError(
