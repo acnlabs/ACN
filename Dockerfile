@@ -8,6 +8,9 @@ WORKDIR /app
 # Optional CN build acceleration (empty by default; overseas builds unaffected)
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=
+# Optional github proxy for the git+https AP2 dependency (GFW resets large
+# github clones inside the build). Empty default = direct github (overseas).
+ARG GITHUB_MIRROR=
 
 # Install system dependencies including curl for health checks
 RUN if [ -n "$APT_MIRROR" ]; then sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources; fi \
@@ -16,6 +19,9 @@ RUN if [ -n "$APT_MIRROR" ]; then sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/a
     git \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Redirect github.com → mirror for the build only (pip clones AP2 over git+https)
+RUN if [ -n "$GITHUB_MIRROR" ]; then git config --global url."$GITHUB_MIRROR".insteadOf "https://github.com/"; fi
 
 # Copy project files
 COPY pyproject.toml README.md ./
