@@ -4,6 +4,7 @@ ACN Configuration
 Settings for ACN service
 """
 
+import json
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
@@ -127,6 +128,26 @@ class Settings(BaseSettings):
         if v and not v.startswith(("https://", "http://")):
             v = f"https://{v}"
         return v.rstrip("/")
+
+    # Additional human identity providers, beyond Auth0 (issue: pluggable
+    # OIDC issuer registry). Lets a region (e.g. China) verify human users
+    # against a domestic, self-issued OIDC IdP instead of Auth0 — without
+    # giving up the offline RS256 JWKS model. Auth0 (``auth0_domain`` /
+    # ``auth0_audience``) remains the implicit default provider and is
+    # verified exactly as before; this registry is purely *additive*.
+    #
+    # JSON array of objects (parsed in ``auth/middleware.py``):
+    #   [
+    #     {
+    #       "name": "cn-wechat",                 # audit label
+    #       "issuer": "https://api.acnlabs.cn/u",# exact ``iss`` claim value
+    #       "audience": "https://api.acnlabs.cn",# expected ``aud``
+    #       "jwks_url": "https://api.acnlabs.cn/u/.well-known/jwks.json",
+    #       "jwks": "{...}",                     # OR pre-seeded JWKS JSON (offline)
+    #       "sub_prefix": "wechat|"              # optional: pin sub namespace
+    #     }
+    #   ]
+    human_oidc_providers_json: str | None = None
 
     # ------------------------------------------------------------------
     # Agent JWT issuance (ADR-0007) — ACN as the agent identity authority.
@@ -410,8 +431,74 @@ class Settings(BaseSettings):
                 "Set it to the list of allowed origins."
             )
 
-        if not self.dev_mode and (not self.auth0_domain or not self.auth0_audience):
-            errors.append("AUTH0_DOMAIN and AUTH0_AUDIENCE must be set when DEV_MODE=false.")
+        if (
+            not self.dev_mode
+            and (not self.auth0_domain or not self.auth0_audience)
+            and not self.human_oidc_providers_json
+        ):
+            errors.append(
+                "Configure human identity verification when DEV_MODE=false: set "
+                "AUTH0_DOMAIN + AUTH0_AUDIENCE, and/or HUMAN_OIDC_PROVIDERS_JSON "
+                "(a region may run with only a domestic OIDC provider)."
+            )
+
+        # Validate the human OIDC provider registry. A non-empty but
+        # unparseable / all-invalid value would otherwise leave the gateway
+        # "configured" yet 503-ing every human login — fail loud at boot
+        # instead (security review hardening, below-threshold but cheap).
+        if self.human_oidc_providers_json:
+            valid_providers: list[dict] = []
+            try:
+                items = json.loads(self.human_oidc_providers_json)
+                if not isinstance(items, list):
+                    raise ValueError("must be a JSON array")
+            except Exception as exc:  # noqa: BLE001
+                items = None
+                errors.append(f"HUMAN_OIDC_PROVIDERS_JSON is not valid JSON: {exc}")
+            if items is not None:
+                for idx, item in enumerate(items):
+                    if (
+                        not isinstance(item, dict)
+                        or not item.get("issuer")
+                        or not item.get("audience")
+                        or not (item.get("jwks_url") or item.get("jwks"))
+                    ):
+                        errors.append(
+                            f"HUMAN_OIDC_PROVIDERS_JSON[{idx}] needs issuer, audience "
+                            "and jwks_url or jwks."
+                        )
+                    else:
+                        valid_providers.append(item)
+                if not valid_providers:
+                    errors.append(
+                        "HUMAN_OIDC_PROVIDERS_JSON is set but has no valid provider entries."
+                    )
+                auth0_iss = self.auth0_domain.rstrip("/") if self.auth0_domain else None
+                # ACN-issued agent JWTs are routed by ``iss`` *before* the human
+                # path; a registry provider sharing that issuer would be dead
+                # config (agent path wins) — reject so misconfig fails loud.
+                agent_iss = (self.agent_jwt_issuer or self.gateway_base_url or "").rstrip("/") or None
+                for item in valid_providers:
+                    iss = str(item["issuer"]).rstrip("/")
+                    # A registry issuer that shadows Auth0 would intercept Auth0
+                    # traffic with no fallback — reject it outright.
+                    if auth0_iss and iss == auth0_iss:
+                        errors.append(
+                            f"HUMAN_OIDC_PROVIDERS_JSON issuer {iss!r} collides with "
+                            "AUTH0_DOMAIN; a registry provider must not shadow Auth0."
+                        )
+                    if agent_iss and iss == agent_iss:
+                        errors.append(
+                            f"HUMAN_OIDC_PROVIDERS_JSON issuer {iss!r} collides with the "
+                            "ACN agent JWT issuer; a human provider must not shadow it."
+                        )
+                    # When Auth0 users share the owner namespace, a registry
+                    # provider without sub_prefix could mint colliding subs.
+                    if auth0_iss and not item.get("sub_prefix"):
+                        errors.append(
+                            f"HUMAN_OIDC_PROVIDERS_JSON[{item.get('name', iss)}] must set "
+                            "sub_prefix when AUTH0 is also configured (owner namespace isolation)."
+                        )
 
         # M14: in dev mode we always allow the query-token WS auth path,
         # regardless of any explicit env setting. Reasoning: the only

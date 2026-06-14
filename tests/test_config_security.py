@@ -34,6 +34,7 @@ _ALL_KEYS = (
     "CORS_ORIGINS",
     "AUTH0_DOMAIN",
     "AUTH0_AUDIENCE",
+    "HUMAN_OIDC_PROVIDERS_JSON",
 )
 
 
@@ -158,6 +159,99 @@ class TestProductionDefenses:
         self._prod_env(monkeypatch, INTERNAL_API_TOKEN="short")
         with pytest.raises(ValidationError):
             _build_settings()
+
+
+class TestHumanOidcProviderRegistry:
+    """Validation of the pluggable human OIDC provider registry."""
+
+    _GOOD = (
+        '[{"name":"cn-wechat","issuer":"https://mp.acnlabs.cn/u",'
+        '"audience":"https://api.acnlabs.cn",'
+        '"jwks_url":"http://bff:8800/u/.well-known/jwks.json","sub_prefix":"wechat|"}]'
+    )
+
+    def _prod_env(self, monkeypatch: pytest.MonkeyPatch, **overrides: str | None) -> None:
+        prod_defaults: dict[str, str | None] = {
+            "DEV_MODE": "false",
+            "HOST": "0.0.0.0",
+            "CORS_ORIGINS": '["https://example.com"]',
+        }
+        prod_defaults.update(overrides)
+        _mk_env(monkeypatch, **prod_defaults)
+
+    def test_cn_only_provider_satisfies_prod(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # No Auth0 — a region may run with only a domestic provider.
+        self._prod_env(monkeypatch, HUMAN_OIDC_PROVIDERS_JSON=self._GOOD)
+        s = _build_settings()
+        assert s.human_oidc_providers_json == self._GOOD
+
+    def test_malformed_json_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._prod_env(monkeypatch, HUMAN_OIDC_PROVIDERS_JSON="not json{")
+        with pytest.raises(ValidationError) as exc:
+            _build_settings()
+        assert "HUMAN_OIDC_PROVIDERS_JSON" in str(exc.value)
+
+    def test_provider_missing_audience_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._prod_env(
+            monkeypatch,
+            HUMAN_OIDC_PROVIDERS_JSON='[{"issuer":"https://x/u","jwks_url":"http://x/jwks"}]',
+        )
+        with pytest.raises(ValidationError) as exc:
+            _build_settings()
+        assert "issuer, audience" in str(exc.value)
+
+    def test_registry_issuer_shadowing_auth0_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        bad = (
+            '[{"name":"shadow","issuer":"https://example.auth0.com",'
+            '"audience":"a","jwks_url":"http://x/jwks","sub_prefix":"wechat|"}]'
+        )
+        self._prod_env(
+            monkeypatch,
+            AUTH0_DOMAIN="example.auth0.com",
+            AUTH0_AUDIENCE="https://api.example.com",
+            HUMAN_OIDC_PROVIDERS_JSON=bad,
+        )
+        with pytest.raises(ValidationError) as exc:
+            _build_settings()
+        assert "shadow Auth0" in str(exc.value)
+
+    def test_missing_sub_prefix_with_auth0_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        no_prefix = (
+            '[{"name":"cn","issuer":"https://mp.acnlabs.cn/u",'
+            '"audience":"https://api.acnlabs.cn","jwks_url":"http://bff:8800/jwks"}]'
+        )
+        self._prod_env(
+            monkeypatch,
+            AUTH0_DOMAIN="example.auth0.com",
+            AUTH0_AUDIENCE="https://api.example.com",
+            HUMAN_OIDC_PROVIDERS_JSON=no_prefix,
+        )
+        with pytest.raises(ValidationError) as exc:
+            _build_settings()
+        assert "sub_prefix" in str(exc.value)
+
+    def test_registry_issuer_shadowing_agent_jwt_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No AGENT_JWT_ISSUER set → effective agent issuer is gateway_base_url
+        # default (https://api.acnlabs.dev). A registry provider must not use it.
+        bad = (
+            '[{"name":"clash","issuer":"https://api.acnlabs.dev",'
+            '"audience":"a","jwks_url":"http://x/jwks","sub_prefix":"wechat|"}]'
+        )
+        self._prod_env(monkeypatch, HUMAN_OIDC_PROVIDERS_JSON=bad)
+        with pytest.raises(ValidationError) as exc:
+            _build_settings()
+        assert "ACN agent JWT issuer" in str(exc.value)
+
+    def test_auth0_plus_distinct_provider_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._prod_env(
+            monkeypatch,
+            AUTH0_DOMAIN="example.auth0.com",
+            AUTH0_AUDIENCE="https://api.example.com",
+            HUMAN_OIDC_PROVIDERS_JSON=self._GOOD,
+        )
+        _build_settings()  # no raise
 
 
 class TestNoLegacyDefault:

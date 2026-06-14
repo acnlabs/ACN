@@ -17,7 +17,10 @@ Protocol dispatch (verify_token)
 ---------------------------------
 1. ``acn_*`` prefix → opaque API-key path (Redis/PG lookup), legacy + mint.
 2. Unverified ``iss`` == ACN issuer → ACN-issued RS256 agent JWT path (offline).
-3. Everything else → Auth0 human JWT path (network JWKS).
+3. Everything else → human JWT path (``_verify_jwt``), which itself routes by
+   ``iss``: a configured ``HUMAN_OIDC_PROVIDERS_JSON`` provider (e.g. a
+   domestic, self-issued region IdP) is verified offline against its JWKS;
+   otherwise the default Auth0 path (network JWKS) is used.
 
 See ADR-0007 D6 (issue #156) for the rationale.
 """
@@ -94,6 +97,152 @@ def _get_settings():
     from ..config import get_settings
 
     return get_settings()
+
+
+# ---------------------------------------------------------------------------
+# Human OIDC provider registry  (pluggable issuer verification)
+# ---------------------------------------------------------------------------
+# ACN's human-JWT path historically pinned a single Auth0 issuer. The registry
+# generalises this to a list of trusted OIDC issuers routed by the token's
+# ``iss`` claim, so a region (e.g. China) can verify users against a domestic,
+# self-issued IdP. Auth0 keeps its dedicated code path (``_verify_jwt`` body)
+# for byte-for-byte back-compat; the registry is an *additive* fast path taken
+# only when a token's ``iss`` matches a configured non-Auth0 provider.
+
+
+class _HumanProvider:
+    """A trusted human OIDC issuer (parsed from ``HUMAN_OIDC_PROVIDERS_JSON``)."""
+
+    __slots__ = ("name", "issuer", "audience", "jwks_url", "preseeded_jwks", "sub_prefix")
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        issuer: str,
+        audience: str,
+        jwks_url: str | None,
+        preseeded_jwks: dict | None,
+        sub_prefix: str | None,
+    ) -> None:
+        self.name = name
+        # Store the issuer exactly as the IdP emits it (used verbatim in
+        # ``jwt.decode(issuer=...)``); match by a trailing-slash-tolerant key.
+        self.issuer = issuer
+        self.audience = audience
+        self.jwks_url = jwks_url
+        self.preseeded_jwks = preseeded_jwks
+        self.sub_prefix = sub_prefix
+
+
+# Parsed registry cache, keyed by the raw JSON string so a settings change
+# (or a test monkeypatching the env) transparently rebuilds it.
+_human_providers_cache: dict[str, list[_HumanProvider]] = {}
+
+
+def _parse_human_providers(raw: str | None) -> list[_HumanProvider]:
+    """Parse ``HUMAN_OIDC_PROVIDERS_JSON`` into provider objects (cached).
+
+    Malformed entries are skipped with a warning rather than crashing auth —
+    a typo in one extra provider must never take down the whole gateway.
+    """
+    if not raw:
+        return []
+    cached = _human_providers_cache.get(raw)
+    if cached is not None:
+        return cached
+    providers: list[_HumanProvider] = []
+    try:
+        items = json.loads(raw)
+        if not isinstance(items, list):
+            raise ValueError("HUMAN_OIDC_PROVIDERS_JSON must be a JSON array")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("human_oidc_providers_parse_failed", error=str(exc))
+        _human_providers_cache[raw] = providers
+        return providers
+
+    for idx, item in enumerate(items):
+        try:
+            issuer = str(item["issuer"]).strip()
+            audience = str(item["audience"]).strip()
+            if not issuer or not audience:
+                raise ValueError("issuer and audience are required")
+            jwks_url = item.get("jwks_url")
+            preseeded_raw = item.get("jwks")
+            preseeded = None
+            if preseeded_raw:
+                preseeded = (
+                    json.loads(preseeded_raw)
+                    if isinstance(preseeded_raw, str)
+                    else preseeded_raw
+                )
+            if not jwks_url and not preseeded:
+                raise ValueError("each provider needs jwks_url or jwks")
+            providers.append(
+                _HumanProvider(
+                    name=str(item.get("name") or f"provider-{idx}"),
+                    issuer=issuer,
+                    audience=audience,
+                    jwks_url=str(jwks_url).strip() if jwks_url else None,
+                    preseeded_jwks=preseeded,
+                    sub_prefix=(str(item["sub_prefix"]) if item.get("sub_prefix") else None),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("human_oidc_provider_invalid", index=idx, error=str(exc))
+
+    _human_providers_cache[raw] = providers
+    return providers
+
+
+def _resolve_human_provider(settings, token_iss: str | None) -> _HumanProvider | None:
+    """Return the registry provider whose issuer matches ``token_iss``.
+
+    Matching is trailing-slash tolerant. Auth0 is intentionally *not* in this
+    registry — it keeps its dedicated, unchanged path in ``_verify_jwt``.
+    """
+    if not token_iss:
+        return None
+    needle = token_iss.rstrip("/")
+    for provider in _parse_human_providers(settings.human_oidc_providers_json):
+        if provider.issuer.rstrip("/") == needle:
+            return provider
+    return None
+
+
+# Per-issuer JWKS cache for registry providers (the Auth0 path uses the
+# separate ``_jwks_cache`` single-slot cache above, unchanged).
+_oidc_jwks_caches: dict[str, dict[str, Any]] = {}
+_oidc_jwks_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _get_provider_jwks(provider: _HumanProvider) -> dict:
+    """Return the JWKS for *provider*, from pre-seeded JSON or its URL.
+
+    Pre-seeded keys are returned directly (no network). URL-backed keys are
+    fetched and cached per-issuer with the same TTL as the Auth0 cache.
+    """
+    if provider.preseeded_jwks is not None:
+        return provider.preseeded_jwks
+
+    key = provider.jwks_url or provider.issuer
+    now = time.monotonic()
+    cache = _oidc_jwks_caches.get(key)
+    if cache and cache.get("keys") is not None and now - cache["fetched_at"] < _JWKS_CACHE_TTL:
+        return cache["keys"]
+
+    lock = _oidc_jwks_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        cache = _oidc_jwks_caches.get(key)
+        if cache and cache.get("keys") is not None and now - cache["fetched_at"] < _JWKS_CACHE_TTL:
+            return cache["keys"]
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(provider.jwks_url)  # type: ignore[arg-type]
+            resp.raise_for_status()
+            jwks = resp.json()
+        _oidc_jwks_caches[key] = {"keys": jwks, "fetched_at": now}
+        return jwks
 
 
 async def _resolve_agent_id_from_api_key(token: str | None) -> str | None:
@@ -400,11 +549,144 @@ async def _verify_acn_agent_jwt(
 # ---------------------------------------------------------------------------
 
 
+async def _verify_human_oidc(
+    token: str,
+    provider: _HumanProvider,
+    request: Request | None = None,
+) -> dict:
+    """Verify a human JWT against a registry OIDC provider (non-Auth0).
+
+    Mirrors ``_verify_acn_agent_jwt``: offline RS256 verification against the
+    provider's JWKS with strict ``kid``, ``aud`` and ``iss`` pinning. On
+    success returns ``{"sub": ..., "type": "user", ...}`` so downstream ACLs
+    branch identically to the Auth0 path. Raises ``ACNHTTPError(401)`` on any
+    verification failure.
+    """
+    src_ip = _peer_ip(request)
+    path, method = _request_path(request)
+
+    try:
+        jwks = await _get_provider_jwks(provider)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("human_oidc_jwks_unavailable", provider=provider.name, error=str(exc))
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Unable to fetch signing keys.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    try:
+        unverified_header = jwt.get_unverified_header(token)
+        kid = unverified_header.get("kid")
+        rsa_key = next(
+            (k for k in jwks.get("keys", []) if k.get("kid") == kid),
+            None,
+        )
+        if rsa_key is None:
+            record_auth_failure(
+                reason="human_oidc_unknown_kid",
+                source_ip=src_ip,
+                path=path,
+                method=method,
+                extra={"provider": provider.name, "kid": str(kid)},
+            )
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
+                401,
+                message="Unable to find appropriate signing key.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        payload = jwt.decode(
+            token,
+            rsa_key,
+            algorithms=["RS256"],
+            audience=provider.audience,
+            issuer=provider.issuer,
+        )
+    except ExpiredSignatureError:
+        record_auth_failure(
+            reason="human_oidc_expired",
+            source_ip=src_ip,
+            path=path,
+            method=method,
+            extra={"provider": provider.name},
+        )
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Token has expired.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+    except JWTError as exc:
+        logger.warning("human_oidc_verification_failed", provider=provider.name, error=str(exc))
+        record_auth_failure(
+            reason="human_oidc_invalid",
+            source_ip=src_ip,
+            path=path,
+            method=method,
+            extra={"provider": provider.name, "jwt_error": type(exc).__name__},
+        )
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Invalid token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    sub = payload.get("sub")
+    if not sub:
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Token missing sub claim.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    # Optional namespace pinning: a provider that only ever issues
+    # ``wechat|<openid>`` subs can declare ``sub_prefix`` so a misconfigured
+    # or hostile issuer cannot mint subs that collide with another provider's
+    # owner namespace (e.g. ``auth0|...``).
+    if provider.sub_prefix and not str(sub).startswith(provider.sub_prefix):
+        record_auth_failure(
+            reason="human_oidc_sub_prefix_mismatch",
+            source_ip=src_ip,
+            path=path,
+            method=method,
+            extra={"provider": provider.name},
+        )
+        raise ACNHTTPError(
+            ErrorCode.AUTHENTICATION_REQUIRED,
+            401,
+            message="Invalid token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    logger.debug("human_oidc_verified", provider=provider.name, sub=sub)
+    payload.setdefault("type", "user")
+    return payload
+
+
 async def _verify_jwt(token: str, request: Request | None = None) -> dict:
-    """Verify an Auth0 JWT and return its payload."""
+    """Verify a human JWT and return its payload.
+
+    Routing: if the token's ``iss`` matches a configured registry provider
+    (``HUMAN_OIDC_PROVIDERS_JSON``), verify against it; otherwise fall through
+    to the default Auth0 path below (unchanged).
+    """
     settings = _get_settings()
     src_ip = _peer_ip(request)
     path, method = _request_path(request)
+
+    # Registry fast path: route non-Auth0 issuers to their provider. Peeking
+    # the unverified ``iss`` is safe — verification still happens below with
+    # full signature + aud + iss checks against the matched provider's JWKS.
+    try:
+        _iss = (jwt.get_unverified_claims(token).get("iss") or "").strip()
+    except Exception:  # noqa: BLE001
+        _iss = ""
+    _provider = _resolve_human_provider(settings, _iss)
+    if _provider is not None:
+        return await _verify_human_oidc(token, _provider, request)
 
     if not settings.auth0_domain or not settings.auth0_audience:
         if settings.dev_mode:
