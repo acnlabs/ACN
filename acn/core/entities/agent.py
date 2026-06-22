@@ -25,6 +25,7 @@ class ClaimStatus(StrEnum):
 
     UNCLAIMED = "unclaimed"  # No owner yet
     CLAIMED = "claimed"  # Has owner
+    PENDING_TRANSFER = "pending_transfer"  # Owner issued a one-time transfer invite
 
 
 @dataclass
@@ -225,12 +226,41 @@ class Agent:
         return self.owner is not None
 
     def is_claimed(self) -> bool:
-        """Check if agent has been claimed"""
-        return self.claim_status == ClaimStatus.CLAIMED
+        """Check if agent has been claimed (includes pending transfer)."""
+        return self.claim_status in (ClaimStatus.CLAIMED, ClaimStatus.PENDING_TRANSFER)
+
+    def is_pending_transfer(self) -> bool:
+        return self.claim_status == ClaimStatus.PENDING_TRANSFER
 
     def can_be_claimed(self) -> bool:
         """Check if agent can be claimed"""
-        return self.claim_status == ClaimStatus.UNCLAIMED
+        return self.claim_status in (ClaimStatus.UNCLAIMED, ClaimStatus.PENDING_TRANSFER)
+
+    def transfer_invite_expires_at(self) -> datetime | None:
+        raw = (self.metadata or {}).get("transfer_invite_expires_at")
+        if not raw:
+            return None
+        return datetime.fromisoformat(raw)
+
+    def begin_transfer_invite(self, verification_code: str, expires_at: datetime) -> None:
+        """Issue a one-time transfer invite; owner anchor stays on current owner."""
+        if self.claim_status != ClaimStatus.CLAIMED:
+            raise ValueError("Agent must be claimed to create a transfer invite")
+        self.verification_code = verification_code
+        self.claim_status = ClaimStatus.PENDING_TRANSFER
+        meta = dict(self.metadata or {})
+        meta["transfer_invite_expires_at"] = expires_at.isoformat()
+        self.metadata = meta
+
+    def cancel_transfer_invite(self) -> None:
+        """Revoke a pending transfer invite and restore claimed state."""
+        if self.claim_status != ClaimStatus.PENDING_TRANSFER:
+            raise ValueError("No pending transfer invite")
+        self.verification_code = None
+        self.claim_status = ClaimStatus.CLAIMED
+        meta = dict(self.metadata or {})
+        meta.pop("transfer_invite_expires_at", None)
+        self.metadata = meta
 
     def claim(self, owner: str) -> None:
         """
@@ -244,10 +274,15 @@ class Agent:
         """
         if self.claim_status == ClaimStatus.CLAIMED:
             raise ValueError("Agent is already claimed")
+        if self.claim_status not in (ClaimStatus.UNCLAIMED, ClaimStatus.PENDING_TRANSFER):
+            raise ValueError("Agent cannot be claimed in its current state")
 
         self.owner = owner
         self.claim_status = ClaimStatus.CLAIMED
         self.owner_changed_at = datetime.now(UTC)
+        meta = dict(self.metadata or {})
+        meta.pop("transfer_invite_expires_at", None)
+        self.metadata = meta
 
     def transfer(self, new_owner: str) -> None:
         """

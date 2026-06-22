@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     # Defaults to gateway_base_url if not set
     frontend_base_url: str | None = None
 
+    # P3 transfer invite: default TTL (7 days) and hard cap for owner-scoped invites
+    transfer_invite_default_ttl_seconds: int = 7 * 24 * 3600
+    transfer_invite_max_ttl_seconds: int = 7 * 24 * 3600
+
     # Backend URL (for escrow and other integrations)
     backend_url: str = "http://localhost:8000"
 

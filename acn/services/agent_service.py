@@ -996,17 +996,74 @@ class AgentService:
         if agent.claim_status == ClaimStatus.CLAIMED:
             raise ValueError(f"Agent {agent_id} is already claimed")
 
-        # Claim token is always required — prevents unauthorized claim of any unclaimed agent
+        # Claim token is always required — prevents unauthorized claim
         if not verification_code:
             raise ValueError("Claim token is required")
         if not secrets.compare_digest(agent.verification_code or "", verification_code):
             raise ValueError("Invalid claim token")
+
+        if agent.claim_status == ClaimStatus.PENDING_TRANSFER:
+            expires_at = agent.transfer_invite_expires_at()
+            if expires_at and datetime.now(UTC) > expires_at:
+                raise ValueError("Transfer invite expired")
 
         agent.claim(owner)
         agent.verification_code = None  # One-time use: invalidate after claim
         await self.repository.save(agent)
 
         logger.info("agent_claimed", agent_id=agent_id, owner=owner)
+        return agent
+
+    async def create_transfer_invite(
+        self,
+        agent_id: str,
+        owner: str,
+        ttl_seconds: int | None = None,
+        *,
+        settings: Settings | None = None,
+    ) -> Agent:
+        """Issue a one-time transfer invite for a claimed agent (owner unchanged until claim)."""
+        from ..config import get_settings
+
+        cfg = settings or get_settings()
+        ttl = ttl_seconds if ttl_seconds is not None else cfg.transfer_invite_default_ttl_seconds
+        ttl = min(max(ttl, 60), cfg.transfer_invite_max_ttl_seconds)
+
+        agent = await self.get_agent(agent_id)
+
+        if agent.owner != owner:
+            raise PermissionError("Only owner can create transfer invite")
+        if agent.claim_status == ClaimStatus.PENDING_TRANSFER:
+            raise ValueError("Agent already has a pending transfer invite")
+        if agent.claim_status != ClaimStatus.CLAIMED:
+            raise ValueError("Agent must be claimed to create a transfer invite")
+
+        code = generate_verification_code()
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
+        agent.begin_transfer_invite(code, expires_at)
+        await self.repository.save(agent)
+
+        logger.info(
+            "transfer_invite_created",
+            agent_id=agent_id,
+            owner=owner,
+            expires_at=expires_at.isoformat(),
+        )
+        return agent
+
+    async def cancel_transfer_invite(self, agent_id: str, owner: str) -> Agent:
+        """Revoke a pending transfer invite; restore claimed state."""
+        agent = await self.get_agent(agent_id)
+
+        if agent.owner != owner:
+            raise PermissionError("Only owner can cancel transfer invite")
+        if agent.claim_status != ClaimStatus.PENDING_TRANSFER:
+            raise ValueError("No pending transfer invite")
+
+        agent.cancel_transfer_invite()
+        await self.repository.save(agent)
+
+        logger.info("transfer_invite_cancelled", agent_id=agent_id, owner=owner)
         return agent
 
     async def transfer_agent(

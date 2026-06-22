@@ -775,6 +775,32 @@ class AgentReleaseResponse(BaseModel):
     message: str
 
 
+class AgentTransferInviteRequest(BaseModel):
+    """Request to create a transfer invite"""
+
+    ttl_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        description="Invite TTL in seconds (default 7 days, capped by server config)",
+    )
+
+
+class AgentTransferInviteResponse(BaseModel):
+    """Response after creating a transfer invite"""
+
+    agent_id: str
+    verification_code: str = Field(..., description="One-time claim token for the recipient")
+    expires_at: str = Field(..., description="ISO8601 expiry timestamp")
+
+
+class AgentTransferInviteCancelResponse(BaseModel):
+    """Response after cancelling a transfer invite"""
+
+    success: bool
+    agent_id: str
+    message: str
+
+
 class AgentRotateKeyResponse(BaseModel):
     """Response after rotating an agent's API key (H1).
 
@@ -3771,6 +3797,97 @@ async def transfer_agent(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
             details={"agent_id": agent_id, "reason": "owner_mismatch"},
+        ) from e
+
+
+@router.post("/{agent_id}/transfer-invite", response_model=AgentTransferInviteResponse)
+@limiter.limit("10/hour")
+async def create_transfer_invite(
+    request: Request,
+    agent_id: AgentIdPath,
+    body: AgentTransferInviteRequest,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """Create a one-time transfer invite (P3 free gift).
+
+    Owner remains the current user until the recipient claims with the returned token.
+    Sets claim_status to ``pending_transfer``.
+    """
+    token_owner: str = payload.get("sub", "")
+
+    try:
+        agent = await agent_service.create_transfer_invite(
+            agent_id=agent_id,
+            owner=token_owner,
+            ttl_seconds=body.ttl_seconds,
+        )
+        expires_at = agent.transfer_invite_expires_at()
+        return AgentTransferInviteResponse(
+            agent_id=agent.agent_id,
+            verification_code=agent.verification_code or "",
+            expires_at=expires_at.isoformat() if expires_at else "",
+        )
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+    except PermissionError as e:
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"agent_id": agent_id, "reason": "owner_mismatch"},
+        ) from e
+    except ValueError as e:
+        msg = str(e)
+        status = 409 if "pending" in msg.lower() else 400
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            status,
+            details={"agent_id": agent_id, "reason": msg},
+        ) from e
+
+
+@router.post("/{agent_id}/transfer-invite/cancel", response_model=AgentTransferInviteCancelResponse)
+@limiter.limit("10/hour")
+async def cancel_transfer_invite(
+    request: Request,
+    agent_id: AgentIdPath,
+    payload: dict = Depends(require_permission("acn:write")),
+    agent_service: AgentServiceDep = None,
+):
+    """Cancel a pending transfer invite and restore claimed state."""
+    token_owner: str = payload.get("sub", "")
+
+    try:
+        agent = await agent_service.cancel_transfer_invite(
+            agent_id=agent_id,
+            owner=token_owner,
+        )
+        return AgentTransferInviteCancelResponse(
+            success=True,
+            agent_id=agent.agent_id,
+            message=f"Transfer invite for '{agent.name}' cancelled",
+        )
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+    except PermissionError as e:
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"agent_id": agent_id, "reason": "owner_mismatch"},
+        ) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"agent_id": agent_id, "reason": str(e)},
         ) from e
 
 
