@@ -308,6 +308,57 @@ class WebSocketManager:
 
         logger.info(f"WebSocket disconnected: {connection_id} (total={len(self._connections)})")
 
+    async def disconnect_user(
+        self,
+        user_id: str,
+        *,
+        code: int = 4001,
+        reason: str = "credentials_rotated",
+    ) -> int:
+        """Force-close every live connection held by a principal.
+
+        Used by the ownership hand-off path (P3 §15.7 C2): rotating an
+        agent's API key invalidates *future* authentication, but a socket
+        that authenticated with the OLD key *before* rotation stays open —
+        a "live tail" that keeps relaying A2A traffic on the previous
+        owner's behalf. Tearing those sockets down forces a reconnect,
+        where the now-stale old key fails the auth handshake and the
+        previous owner is locked out for real.
+
+        Sends a structured close frame (``code``/``reason``) so a
+        conformant client can distinguish a forced rotation from a network
+        drop and avoid hammering reconnect with a dead key. Returns the
+        number of connections closed.
+        """
+        target_ids = [
+            cid for cid, conn in self._connections.items() if conn.user_id == user_id
+        ]
+        for connection_id in target_ids:
+            conn = self._connections.get(connection_id)
+            if conn is None:  # pragma: no cover - concurrent disconnect
+                continue
+            try:
+                async with conn.send_lock:
+                    await conn.websocket.close(code=code, reason=reason)
+            except Exception:  # noqa: BLE001 — best-effort close frame
+                pass
+            # Channel + registry cleanup, mirroring disconnect() but WITHOUT a
+            # second close(): on a real socket that double-close raises (caught
+            # but wasteful), and it would clobber the structured close code we
+            # just sent. The route's receive loop will also call disconnect()
+            # once the closed socket unblocks its recv — a harmless no-op since
+            # we already removed the entry here.
+            for channel in list(conn.subscriptions):
+                await self.unsubscribe(connection_id, channel)
+            self._connections.pop(connection_id, None)
+
+        if target_ids:
+            logger.info(
+                f"Force-disconnected {len(target_ids)} connection(s) "
+                f"for {user_id} ({reason})"
+            )
+        return len(target_ids)
+
     async def subscribe(
         self,
         connection_id: str,

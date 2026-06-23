@@ -116,6 +116,33 @@ _SDK_MIN_VERSION_HEADER = "X-ACN-SDK-Min-Version"
 _PUSH_MODES: frozenset[str] = frozenset({"open", "allowlist"})
 
 
+async def _force_disconnect_agent_sessions(agent_id: str, *, reason: str) -> None:
+    """Tear down any live agent WebSocket sessions after an API-key rotation.
+
+    P3 §15.7 C2: evicting the auth cache stops the *old* key from passing
+    a fresh handshake, but a socket that authenticated *before* the rotation
+    keeps relaying A2A traffic until it drops. We must actively close those
+    sessions so the previous owner's still-running instance loses its live
+    tail and is forced to reconnect with the now-dead key.
+
+    Best-effort: a missing manager (narrow unit-test contexts) or a close
+    failure must never break the ownership-flip response that already
+    committed.
+    """
+    try:
+        from .dependencies import get_ws_manager
+
+        ws_manager = get_ws_manager()
+    except Exception:  # noqa: BLE001 — no manager wired (e.g. unit test)
+        return
+    if ws_manager is None:
+        return
+    try:
+        await ws_manager.disconnect_user(agent_id, reason=reason)
+    except Exception as e:  # noqa: BLE001 — never block the committed flip
+        logger.warning("force_disconnect_failed", agent_id=agent_id, error=str(e))
+
+
 def _validate_agent_endpoint_url(v: str | None) -> str | None:
     """Validate an agent-supplied delivery URL (shared by join + PATCH).
 
@@ -3745,9 +3772,11 @@ async def claim_agent(
 
         # If the claim rotated the key (transfer-invite hand-off), evict the
         # old key from the auth cache immediately so the giver's previous key
-        # stops authenticating within the same request, not after the TTL.
+        # stops authenticating within the same request, not after the TTL, and
+        # force-close any live WS session the giver's instance still holds (C2).
         if agent.rotated_api_key:
             evict_agent_from_cache(agent_id)
+            await _force_disconnect_agent_sessions(agent_id, reason="ownership_transfer")
 
         # Grant claim_agent reward to the user who claimed
         background_tasks.add_task(
@@ -3809,11 +3838,13 @@ async def transfer_agent(
         )
 
         # The transfer rotated the key to lock out the previous owner; evict
-        # the old key from the auth cache now. The new plaintext is NOT
-        # returned to this caller (the giver) — the new owner mints a working
-        # key via /rotate-key.
+        # the old key from the auth cache now and force-close any live WS
+        # session the giver's instance still holds (C2). The new plaintext is
+        # NOT returned to this caller (the giver) — the new owner mints a
+        # working key via /rotate-key.
         if agent.rotated_api_key:
             evict_agent_from_cache(agent_id)
+            await _force_disconnect_agent_sessions(agent_id, reason="ownership_transfer")
 
         return AgentTransferResponse(
             success=True,
@@ -4068,8 +4099,10 @@ async def rotate_agent_api_key(
     # key (M3). Without this the rotated key wins on lookup but the
     # OLD key can still authenticate for up to ``_API_KEY_CACHE_TTL``
     # (60s) seconds — exactly the gap a leak-and-rotate flow tries to
-    # close.
+    # close. Also force-close any live WS session still riding the old
+    # key (C2), so a leaked/compromised credential loses its live tail.
     evict_agent_from_cache(agent_id)
+    await _force_disconnect_agent_sessions(agent_id, reason="key_rotated")
 
     logger.info(
         "agent_api_key_rotated",
