@@ -223,6 +223,18 @@ class AgentJoinRequest(BaseModel):
     )
     referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
     agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
+    self_hosted: bool = Field(
+        default=False,
+        description=(
+            "True if the agent is operated by its human owner directly (the "
+            "owner holds the API key). When such an agent changes owner "
+            "(transfer-invite claim or transfer), ACN rotates the API key so "
+            "the previous owner is locked out, and returns the fresh key to "
+            "the new owner. Leave false for platform-managed agents whose key "
+            "is held by a hosting operator (e.g. AgentMother) — those keep the "
+            "key and the operator re-keys on the owner_changed event instead."
+        ),
+    )
 
     @field_validator("agent_card")
     @classmethod
@@ -748,6 +760,10 @@ class AgentClaimResponse(BaseModel):
     agent_id: str
     owner: str | None
     message: str
+    # Present only on a transfer-invite claim of an autonomous agent: a freshly
+    # rotated plaintext API key, returned exactly once so the new owner can
+    # (re)deploy their own instance. The giver's old key is now invalid.
+    api_key: str | None = None
 
 
 class AgentTransferRequest(BaseModel):
@@ -1902,6 +1918,12 @@ async def _join_agent_impl(
             endpoint_reachable = False
             a2a_handshake_ok = None
 
+        join_metadata = dict(default_metadata) if default_metadata else {}
+        if body.self_hosted:
+            # Marks the owner as the operator → rotate the key on ownership
+            # change so a previous owner's extracted key is invalidated.
+            join_metadata["self_hosted"] = True
+
         agent, api_key = await agent_service.join_agent(
             name=body.name,
             description=body.description,
@@ -1909,7 +1931,7 @@ async def _join_agent_impl(
             endpoint=endpoint,
             a2a_endpoint=endpoint,
             referrer_id=referrer_id,
-            metadata=dict(default_metadata) if default_metadata else None,
+            metadata=join_metadata or None,
             agent_card=agent_card,
             wallet_addresses=wallet_addresses,
             accepts_payment=body.accepts_payment,
@@ -3721,6 +3743,12 @@ async def claim_agent(
 
         logger.info("agent_claimed", agent_id=agent_id, owner=token_owner)
 
+        # If the claim rotated the key (transfer-invite hand-off), evict the
+        # old key from the auth cache immediately so the giver's previous key
+        # stops authenticating within the same request, not after the TTL.
+        if agent.rotated_api_key:
+            evict_agent_from_cache(agent_id)
+
         # Grant claim_agent reward to the user who claimed
         background_tasks.add_task(
             _grant_claim_reward,
@@ -3733,6 +3761,7 @@ async def claim_agent(
             agent_id=agent.agent_id,
             owner=agent.owner,
             message=f"Agent '{agent.name}' successfully claimed",
+            api_key=agent.rotated_api_key,
         )
     except AgentNotFoundException as e:
         raise ACNHTTPError(
@@ -3779,6 +3808,13 @@ async def transfer_agent(
             to_owner=body.new_owner,
         )
 
+        # The transfer rotated the key to lock out the previous owner; evict
+        # the old key from the auth cache now. The new plaintext is NOT
+        # returned to this caller (the giver) — the new owner mints a working
+        # key via /rotate-key.
+        if agent.rotated_api_key:
+            evict_agent_from_cache(agent_id)
+
         return AgentTransferResponse(
             success=True,
             agent_id=agent.agent_id,
@@ -3797,6 +3833,13 @@ async def transfer_agent(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
             details={"agent_id": agent_id, "reason": "owner_mismatch"},
+        ) from e
+    except ValueError as e:
+        # e.g. a pending transfer invite blocks a direct transfer.
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            409,
+            details={"agent_id": agent_id, "reason": str(e)},
         ) from e
 
 
@@ -3932,6 +3975,13 @@ async def release_agent(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
             details={"agent_id": agent_id, "reason": "owner_mismatch"},
+        ) from e
+    except ValueError as e:
+        # e.g. a pending transfer invite blocks a direct release.
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            409,
+            details={"agent_id": agent_id, "reason": str(e)},
         ) from e
 
 

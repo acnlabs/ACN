@@ -65,6 +65,12 @@ class Agent:
     # Authentication (for autonomous agents)
     api_key: str | None = None
 
+    # Transient (NOT persisted, NOT serialized): carries a freshly rotated
+    # plaintext API key out to the route layer for one-time delivery to the
+    # new owner. Set by AgentService.claim_agent / transfer_agent when an
+    # ownership change rotates the key; never read back from storage.
+    rotated_api_key: str | None = field(default=None, repr=False, compare=False)
+
     # Claim status (for autonomous agents)
     claim_status: ClaimStatus | None = None
     verification_code: str | None = None  # Short code for human verification

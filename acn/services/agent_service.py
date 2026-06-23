@@ -104,6 +104,12 @@ class AgentService:
         """
         self.repository = agent_repository
         self.payment_discovery = payment_discovery
+        # Optional WebhookService — wired post-construction in lifespan
+        # (see api.py). When present, ownership changes (claim / transfer /
+        # release) emit ``agent.owner_changed`` to the platform Backend so
+        # it can re-point the agent wallet's owner. Left None in unit tests
+        # and webhook-disabled deployments (emit is then a no-op).
+        self.webhook_service: object | None = None
         # Optional FollowService — wired post-construction in lifespan
         # because the follow subsystem depends on this service (would
         # otherwise create a circular dependency).  When present,
@@ -970,6 +976,57 @@ class AgentService:
         """
         return await self.repository.find_by_api_key(hash_api_key(api_key))
 
+    @staticmethod
+    def _is_self_hosted(agent: Agent) -> bool:
+        """True when the owner operates the agent directly (holds the key).
+
+        Marked at ``/join`` via ``self_hosted=true`` and stored in metadata.
+        Gates key rotation on ownership change: only self-hosted agents rotate
+        (lock out the previous owner). Platform/operator-managed agents keep
+        their key and the operator re-keys on the owner_changed event.
+        """
+        return bool((agent.metadata or {}).get("self_hosted"))
+
+    async def _emit_owner_changed(
+        self,
+        agent: Agent,
+        previous_owner: str | None,
+        change_type: str,
+    ) -> None:
+        """Notify the platform Backend that an agent's owner changed.
+
+        Best-effort: a webhook failure must never roll back the ownership
+        mutation (the DB is the source of truth; the durable outbox retries
+        delivery). No-op when no WebhookService is wired (unit tests /
+        webhook-disabled deployments).
+        """
+        if self.webhook_service is None:
+            return
+        from acn.protocols.ap2.webhook import WebhookEventType
+
+        try:
+            await self.webhook_service.send_event(
+                event=WebhookEventType.AGENT_OWNER_CHANGED,
+                task_id=agent.agent_id,
+                data={
+                    "agent_id": agent.agent_id,
+                    "previous_owner": previous_owner,
+                    "new_owner": agent.owner,
+                    "change_type": change_type,
+                    "owner_changed_at": (
+                        agent.owner_changed_at.isoformat() if agent.owner_changed_at else None
+                    ),
+                },
+                outbox=True,
+            )
+        except Exception as e:  # noqa: BLE001 — webhook must not break ownership ops
+            logger.warning(
+                "agent_owner_changed_webhook_failed",
+                agent_id=agent.agent_id,
+                change_type=change_type,
+                error=str(e),
+            )
+
     async def claim_agent(
         self,
         agent_id: str,
@@ -1007,11 +1064,33 @@ class AgentService:
             if expires_at and datetime.now(UTC) > expires_at:
                 raise ValueError("Transfer invite expired")
 
+        previous_owner = agent.owner  # giver during PENDING_TRANSFER; None on first claim
         agent.claim(owner)
         agent.verification_code = None  # One-time use: invalidate after claim
+        # P3 gift hand-off: when ownership actually moves between two humans
+        # (previous_owner set → transfer-invite claim) for a SELF-HOSTED agent
+        # (owner holds the key), rotate the API key so the giver's still-running
+        # instance — which kept the old key — can no longer operate the agent or
+        # move its wallet assets. The fresh plaintext rides out on the transient
+        # ``rotated_api_key`` for one-time delivery to the claimer (the caller).
+        # Skipped when: first claim (previous_owner None, nobody to lock out and
+        # the deployer's key must keep working), no api_key (platform-managed),
+        # or the agent is operator-managed (e.g. AgentMother) — there the
+        # operator re-keys on the owner_changed event instead, so rotating here
+        # would break the running instance with no security gain.
+        if previous_owner is not None and agent.api_key and self._is_self_hosted(agent):
+            new_plaintext = generate_api_key()
+            agent.api_key = hash_api_key(new_plaintext)
+            agent.rotated_api_key = new_plaintext
         await self.repository.save(agent)
 
-        logger.info("agent_claimed", agent_id=agent_id, owner=owner)
+        logger.info(
+            "agent_claimed",
+            agent_id=agent_id,
+            owner=owner,
+            key_rotated=agent.rotated_api_key is not None,
+        )
+        await self._emit_owner_changed(agent, previous_owner, "claim")
         return agent
 
     async def create_transfer_invite(
@@ -1091,8 +1170,25 @@ class AgentService:
 
         if agent.owner != current_owner:
             raise PermissionError("Only owner can transfer agent")
+        if agent.claim_status == ClaimStatus.PENDING_TRANSFER:
+            # An invite is outstanding; transferring directly would race the
+            # pending claim (recipient's verification_code is still live).
+            # Force the owner to cancel the invite first.
+            raise ValueError("Cancel the pending transfer invite before transferring")
 
+        previous_owner = agent.owner
         agent.transfer(new_owner)
+        # A direct transfer moves the agent to a different principal. For a
+        # self-hosted agent (owner holds the key), rotate to lock out the
+        # previous owner's deployed instance. The new plaintext is NOT surfaced
+        # to the caller here (the caller is the *giver*, whom we are locking
+        # out) — the new owner mints a working key via /rotate-key. Managed
+        # agents (no marker) keep their key; the operator re-keys on the
+        # owner_changed event.
+        if agent.api_key and self._is_self_hosted(agent):
+            new_plaintext = generate_api_key()
+            agent.api_key = hash_api_key(new_plaintext)
+            agent.rotated_api_key = new_plaintext
         await self.repository.save(agent)
 
         logger.info(
@@ -1100,7 +1196,9 @@ class AgentService:
             agent_id=agent_id,
             from_owner=current_owner,
             to_owner=new_owner,
+            key_rotated=agent.rotated_api_key is not None,
         )
+        await self._emit_owner_changed(agent, previous_owner, "transfer")
         return agent
 
     async def release_agent(self, agent_id: str, owner: str) -> Agent:
@@ -1122,11 +1220,18 @@ class AgentService:
 
         if agent.owner != owner:
             raise PermissionError("Only owner can release agent")
+        if agent.claim_status == ClaimStatus.PENDING_TRANSFER:
+            # release() would drop to public UNCLAIMED while leaving the
+            # invite's verification_code live — cancel the invite first so
+            # the one-time token is invalidated deterministically.
+            raise ValueError("Cancel the pending transfer invite before releasing")
 
+        previous_owner = agent.owner
         agent.release()
         await self.repository.save(agent)
 
         logger.info("agent_released", agent_id=agent_id, previous_owner=owner)
+        await self._emit_owner_changed(agent, previous_owner, "release")
         return agent
 
     async def get_unclaimed_agents(self, limit: int = 100) -> list[Agent]:

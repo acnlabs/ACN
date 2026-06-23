@@ -81,6 +81,16 @@ class WebhookEventType(StrEnum):
     AGENT_JOINED_SUBNET = "agent.joined_subnet"
     AGENT_LEFT_SUBNET = "agent.left_subnet"
 
+    # ===== Ownership Events =====
+
+    # Fired to the platform ``WEBHOOK_URL`` (Backend) whenever an agent's
+    # human owner changes — first claim, P3 transfer-invite claim, direct
+    # transfer, or release. Backend re-points the agent wallet's
+    # ``owner_id`` so the new owner controls top-up/withdraw and the old
+    # owner loses access (otherwise the giver could drain the wallet after
+    # gifting). Delivered with the durable outbox (at-least-once).
+    AGENT_OWNER_CHANGED = "agent.owner_changed"
+
     # ADR-0004 §"Webhook event catalogue" — eight new join-flow
     # lifecycle events fired through the same ``WebhookService.send_to``
     # transport as the two ``agent.*_subnet`` events above. The string

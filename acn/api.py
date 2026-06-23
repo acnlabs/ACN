@@ -557,6 +557,9 @@ async def lifespan(app: FastAPI):
     payment_discovery_instance = PaymentDiscoveryService(redis_client)
     # Inject payment_discovery into AgentService so registration auto-syncs the index
     agent_service_instance.payment_discovery = payment_discovery_instance
+    # Inject webhook_service so ownership changes (claim/transfer/release) emit
+    # ``agent.owner_changed`` to the platform Backend for wallet owner re-pointing.
+    agent_service_instance.webhook_service = webhook_service_instance
     payment_tasks_instance = PaymentTaskManager(
         redis=redis_client,
         discovery=payment_discovery_instance,
