@@ -1030,6 +1030,17 @@ class AgentService:
                     "owner_changed_at": (
                         agent.owner_changed_at.isoformat() if agent.owner_changed_at else None
                     ),
+                    # Re-key signal for the platform Backend (P3 §15.5). When a
+                    # platform-managed agent's key is rotated on transfer, ACN
+                    # burns the old key to a fresh hash it cannot surface as
+                    # plaintext (``key_invalidated``). The managed instance can
+                    # no longer authenticate and must be re-keyed out-of-band by
+                    # the hosting operator (AgentMother): the Backend uses this
+                    # flag to enqueue a re-key work order. Self-hosted agents
+                    # (``self_hosted``) instead mint a working key via
+                    # /rotate-key themselves, so no work order is created.
+                    "key_invalidated": bool(agent.key_invalidated),
+                    "self_hosted": self._is_self_hosted(agent),
                 },
                 outbox=True,
             )

@@ -389,6 +389,41 @@ async def test_self_hosted_still_returns_plaintext_when_rotate_all_enabled(servi
 
 
 @pytest.mark.asyncio
+async def test_owner_changed_webhook_carries_key_invalidated_for_managed(service, repo, monkeypatch):
+    """The owner_changed webhook must carry ``key_invalidated`` so the Backend
+    knows a managed agent needs an out-of-band re-key work order (P3 §15.5)."""
+    monkeypatch.setattr(AgentService, "_managed_rotate_enabled", staticmethod(lambda: True))
+    old_hash = hash_api_key("acn_managed_key")
+    agent = _claimed_agent(api_key=old_hash, metadata={})  # managed (no self_hosted)
+    repo.find_by_id.return_value = agent
+    service.webhook_service = AsyncMock()
+
+    await service.transfer_agent("agt-gift", "wechat|giver", "wechat|new")
+
+    data = service.webhook_service.send_event.await_args.kwargs["data"]
+    assert data["key_invalidated"] is True
+    assert data["self_hosted"] is False
+
+
+@pytest.mark.asyncio
+async def test_owner_changed_webhook_self_hosted_not_invalidated(service, repo, monkeypatch):
+    """Self-hosted transfer rotates via ``rotated_api_key`` (new owner mints its
+    own key); the webhook must report ``key_invalidated=False`` so the Backend
+    does NOT enqueue a re-key work order."""
+    monkeypatch.setattr(AgentService, "_managed_rotate_enabled", staticmethod(lambda: True))
+    old_hash = hash_api_key("acn_old_giver_key")
+    agent = _claimed_agent(api_key=old_hash, metadata={"self_hosted": True})
+    repo.find_by_id.return_value = agent
+    service.webhook_service = AsyncMock()
+
+    await service.transfer_agent("agt-gift", "wechat|giver", "wechat|new")
+
+    data = service.webhook_service.send_event.await_args.kwargs["data"]
+    assert data["key_invalidated"] is False
+    assert data["self_hosted"] is True
+
+
+@pytest.mark.asyncio
 async def test_unclaimed_index_excludes_pending(repo):
     """PENDING_TRANSFER must never enter the public unclaimed pool."""
     from acn.core.entities import Agent
