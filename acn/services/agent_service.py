@@ -981,11 +981,25 @@ class AgentService:
         """True when the owner operates the agent directly (holds the key).
 
         Marked at ``/join`` via ``self_hosted=true`` and stored in metadata.
-        Gates key rotation on ownership change: only self-hosted agents rotate
-        (lock out the previous owner). Platform/operator-managed agents keep
-        their key and the operator re-keys on the owner_changed event.
+        Gates key rotation on ownership change: self-hosted agents always rotate
+        and the new plaintext is returned to the claimer. Managed agents rotate
+        only when ``managed_rotate_on_transfer`` is enabled, and then the key is
+        invalidated without surfacing plaintext (re-keyed out-of-band).
         """
         return bool((agent.metadata or {}).get("self_hosted"))
+
+    @staticmethod
+    def _managed_rotate_enabled() -> bool:
+        """True when managed agents should also rotate (invalidate) on transfer.
+
+        Off by default: invalidating a managed key drops the running instance
+        until the platform re-keys it, so this is gated until the new-key
+        delivery path (L0 AM rekey queue / L1 WS hot-swap) is live. See
+        ``Settings.managed_rotate_on_transfer`` and P3 §15.7.
+        """
+        from ..config import get_settings
+
+        return bool(getattr(get_settings(), "managed_rotate_on_transfer", False))
 
     async def _emit_owner_changed(
         self,
@@ -1078,10 +1092,18 @@ class AgentService:
         # or the agent is operator-managed (e.g. AgentMother) — there the
         # operator re-keys on the owner_changed event instead, so rotating here
         # would break the running instance with no security gain.
-        if previous_owner is not None and agent.api_key and self._is_self_hosted(agent):
-            new_plaintext = generate_api_key()
-            agent.api_key = hash_api_key(new_plaintext)
-            agent.rotated_api_key = new_plaintext
+        if previous_owner is not None and agent.api_key:
+            if self._is_self_hosted(agent):
+                new_plaintext = generate_api_key()
+                agent.api_key = hash_api_key(new_plaintext)
+                agent.rotated_api_key = new_plaintext
+            elif self._managed_rotate_enabled():
+                # Managed: invalidate the old key (defense-in-depth against a
+                # leak during the giver's tenure) but DO NOT surface a plaintext
+                # to the claimer — the platform re-keys the running instance
+                # out-of-band. Burn the key to a fresh random hash nobody holds.
+                agent.api_key = hash_api_key(generate_api_key())
+                agent.key_invalidated = True
         await self.repository.save(agent)
 
         logger.info(
@@ -1089,6 +1111,7 @@ class AgentService:
             agent_id=agent_id,
             owner=owner,
             key_rotated=agent.rotated_api_key is not None,
+            key_invalidated=agent.key_invalidated,
         )
         await self._emit_owner_changed(agent, previous_owner, "claim")
         return agent
@@ -1185,10 +1208,16 @@ class AgentService:
         # out) — the new owner mints a working key via /rotate-key. Managed
         # agents (no marker) keep their key; the operator re-keys on the
         # owner_changed event.
-        if agent.api_key and self._is_self_hosted(agent):
-            new_plaintext = generate_api_key()
-            agent.api_key = hash_api_key(new_plaintext)
-            agent.rotated_api_key = new_plaintext
+        if agent.api_key:
+            if self._is_self_hosted(agent):
+                new_plaintext = generate_api_key()
+                agent.api_key = hash_api_key(new_plaintext)
+                agent.rotated_api_key = new_plaintext
+            elif self._managed_rotate_enabled():
+                # Managed: invalidate without surfacing plaintext (platform
+                # re-keys the instance out-of-band). See claim_agent.
+                agent.api_key = hash_api_key(generate_api_key())
+                agent.key_invalidated = True
         await self.repository.save(agent)
 
         logger.info(
@@ -1197,6 +1226,7 @@ class AgentService:
             from_owner=current_owner,
             to_owner=new_owner,
             key_rotated=agent.rotated_api_key is not None,
+            key_invalidated=agent.key_invalidated,
         )
         await self._emit_owner_changed(agent, previous_owner, "transfer")
         return agent

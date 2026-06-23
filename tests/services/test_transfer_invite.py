@@ -262,9 +262,9 @@ async def test_transfer_invite_claim_rotates_api_key(service, repo):
 
 @pytest.mark.asyncio
 async def test_managed_agent_with_key_is_not_rotated_on_claim(service, repo):
-    """Platform/operator-managed agent (no self_hosted marker) keeps its key —
-    the operator (e.g. AgentMother) re-keys on owner_changed, so rotating here
-    would break the running instance."""
+    """With managed_rotate_on_transfer OFF (default), a platform-managed agent
+    (no self_hosted marker) keeps its key — rotating it would brick the running
+    instance until the platform re-keys it out-of-band."""
     exp = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
     old_hash = hash_api_key("acn_managed_key")
     agent = _claimed_agent(
@@ -329,6 +329,63 @@ async def test_managed_agent_claim_skips_rotation(service, repo):
 
     assert out.api_key is None
     assert out.rotated_api_key is None
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_invalidated_on_claim_when_enabled(service, repo, monkeypatch):
+    """rotate-all ON: a managed agent's key is INVALIDATED on a gift claim, but
+    no plaintext is surfaced (the platform re-keys the instance out-of-band)."""
+    monkeypatch.setattr(AgentService, "_managed_rotate_enabled", staticmethod(lambda: True))
+    exp = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    old_hash = hash_api_key("acn_managed_key")
+    agent = _claimed_agent(
+        claim_status=ClaimStatus.PENDING_TRANSFER,
+        verification_code="tok",
+        api_key=old_hash,
+        metadata={"transfer_invite_expires_at": exp},  # no self_hosted → managed
+    )
+    repo.find_by_id.return_value = agent
+
+    out = await service.claim_agent("agt-gift", "wechat|recipient", verification_code="tok")
+
+    assert out.api_key != old_hash  # old key invalidated (leaked key dies)
+    assert out.key_invalidated is True
+    assert out.rotated_api_key is None  # NOT surfaced to the claimer
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_invalidated_on_transfer_when_enabled(service, repo, monkeypatch):
+    monkeypatch.setattr(AgentService, "_managed_rotate_enabled", staticmethod(lambda: True))
+    old_hash = hash_api_key("acn_managed_key")
+    agent = _claimed_agent(api_key=old_hash, metadata={})  # managed
+    repo.find_by_id.return_value = agent
+
+    out = await service.transfer_agent("agt-gift", "wechat|giver", "wechat|new")
+
+    assert out.api_key != old_hash
+    assert out.key_invalidated is True
+    assert out.rotated_api_key is None
+
+
+@pytest.mark.asyncio
+async def test_self_hosted_still_returns_plaintext_when_rotate_all_enabled(service, repo, monkeypatch):
+    """rotate-all ON must not change self-hosted behaviour: still surface the key."""
+    monkeypatch.setattr(AgentService, "_managed_rotate_enabled", staticmethod(lambda: True))
+    exp = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    old_hash = hash_api_key("acn_old_giver_key")
+    agent = _claimed_agent(
+        claim_status=ClaimStatus.PENDING_TRANSFER,
+        verification_code="tok",
+        api_key=old_hash,
+        metadata={"transfer_invite_expires_at": exp, "self_hosted": True},
+    )
+    repo.find_by_id.return_value = agent
+
+    out = await service.claim_agent("agt-gift", "wechat|recipient", verification_code="tok")
+
+    assert out.api_key != old_hash
+    assert out.rotated_api_key  # plaintext still surfaced to the claimer
+    assert out.key_invalidated is False  # self-hosted uses rotated_api_key, not the invalidate path
 
 
 @pytest.mark.asyncio

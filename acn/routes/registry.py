@@ -3770,11 +3770,13 @@ async def claim_agent(
 
         logger.info("agent_claimed", agent_id=agent_id, owner=token_owner)
 
-        # If the claim rotated the key (transfer-invite hand-off), evict the
-        # old key from the auth cache immediately so the giver's previous key
-        # stops authenticating within the same request, not after the TTL, and
-        # force-close any live WS session the giver's instance still holds (C2).
-        if agent.rotated_api_key:
+        # If the claim rotated/invalidated the key (transfer-invite hand-off),
+        # evict the old key from the auth cache immediately so the giver's
+        # previous key stops authenticating within the same request, not after
+        # the TTL, and force-close any live WS session the giver's instance
+        # still holds (C2). Fires for both self-hosted (key returned to B) and
+        # managed (key invalidated, re-keyed out-of-band).
+        if agent.rotated_api_key or agent.key_invalidated:
             evict_agent_from_cache(agent_id)
             await _force_disconnect_agent_sessions(agent_id, reason="ownership_transfer")
 
@@ -3837,12 +3839,13 @@ async def transfer_agent(
             to_owner=body.new_owner,
         )
 
-        # The transfer rotated the key to lock out the previous owner; evict
-        # the old key from the auth cache now and force-close any live WS
-        # session the giver's instance still holds (C2). The new plaintext is
-        # NOT returned to this caller (the giver) — the new owner mints a
-        # working key via /rotate-key.
-        if agent.rotated_api_key:
+        # The transfer rotated/invalidated the key to lock out the previous
+        # owner; evict the old key from the auth cache now and force-close any
+        # live WS session the giver's instance still holds (C2). The new
+        # plaintext is NOT returned to this caller (the giver) — self-hosted new
+        # owners mint a working key via /rotate-key; managed instances are
+        # re-keyed out-of-band by the platform.
+        if agent.rotated_api_key or agent.key_invalidated:
             evict_agent_from_cache(agent_id)
             await _force_disconnect_agent_sessions(agent_id, reason="ownership_transfer")
 

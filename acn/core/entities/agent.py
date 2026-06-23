@@ -71,6 +71,15 @@ class Agent:
     # ownership change rotates the key; never read back from storage.
     rotated_api_key: str | None = field(default=None, repr=False, compare=False)
 
+    # Transient (NOT persisted/serialized): True when an ownership change
+    # INVALIDATED the api_key without surfacing a deliverable plaintext — the
+    # managed-agent case (P3 §15.7 rotate-all). The old key is dead, but the new
+    # plaintext is NOT returned to the owner/claimer; the platform re-keys the
+    # running instance out-of-band (L0 AM rekey queue / L1 WS hot-swap). The
+    # route layer uses this (alongside ``rotated_api_key``) to fire cache
+    # eviction + session force-disconnect.
+    key_invalidated: bool = field(default=False, repr=False, compare=False)
+
     # Claim status (for autonomous agents)
     claim_status: ClaimStatus | None = None
     verification_code: str | None = None  # Short code for human verification

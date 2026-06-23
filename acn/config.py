@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     transfer_invite_default_ttl_seconds: int = 7 * 24 * 3600
     transfer_invite_max_ttl_seconds: int = 7 * 24 * 3600
 
+    # P3 §15.7: on ownership change, also rotate (invalidate) the api_key of
+    # PLATFORM-MANAGED agents — not just self-hosted ones — so a key that may
+    # have leaked during the previous owner's tenure dies the instant the agent
+    # changes hands (defense-in-depth; revocation is global via the unified
+    # auth resolver). Default OFF because rotating a managed key drops the
+    # running instance until the platform re-keys it: enable ONLY once the
+    # new-key delivery path is live (L0 AM rekey queue / L1 WS hot-swap),
+    # otherwise every managed hand-off bricks the instance until reload.
+    managed_rotate_on_transfer: bool = False
+
     # Backend URL (for escrow and other integrations)
     backend_url: str = "http://localhost:8000"
 
