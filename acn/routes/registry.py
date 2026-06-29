@@ -44,6 +44,7 @@ from ..config import Settings, get_settings
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..core.validators import check_dict_size_64k
+from ..identity import build_agent_urn
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from ..monitoring import AuditEventType, AuditLevel, fire_and_forget_event, get_audit_singleton
 from ..security import SSRFViolation, safe_resolve_target, validate_endpoint_url
@@ -1042,6 +1043,7 @@ def _agent_entity_to_info(
 
     return AgentInfo(
         agent_id=agent.agent_id,
+        urn=build_agent_urn(agent.agent_id),
         owner=agent.owner or "unowned",
         name=agent.name,
         description=agent.description,

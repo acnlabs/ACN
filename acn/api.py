@@ -99,6 +99,7 @@ from .routes import (
     agent_subnets,
     allowlist,
     analytics,
+    ard,
     communication,
     dependencies,
     follows,
@@ -1387,6 +1388,11 @@ app.include_router(websocket.router)
 # discovery. ACN mints short-lived agent JWTs that resource servers
 # verify offline; the long-lived acn_* key is the client credential.
 app.include_router(oauth.router)
+# ARD (Agentic Resource Discovery) compatibility layer — root-level
+# ``GET /.well-known/ai-catalog.json`` + ``POST /search`` so ARD clients
+# can discover ACN agents. Discovery-only adapter over AgentService; does
+# not touch any business logic. See routes/ard.py.
+app.include_router(ard.router)
 
 # Note: onboarding.py removed - functionality migrated to:
 # - /api/v1/agents/join (registry.py)

@@ -50,6 +50,15 @@ class AgentInfo(BaseModel):
         None,
         description="A2A Agent Card discovery URL, if provided by the registrant.",
     )
+    urn: str | None = Field(
+        None,
+        description=(
+            "ARD discovery handle (urn:air:<publisher>:agent:<id>, "
+            "https://agenticresourcediscovery.org §4.2.1). A cross-network "
+            "stable identifier derived from the deployment's publisher domain; "
+            "complements (does not replace) ``agent_id``."
+        ),
+    )
     tags: list[str] = Field(default_factory=list, description="Agent capability tags (e.g. ['coding', 'search'])")
     status: AgentStatus = Field(default=AgentStatus.ONLINE, description="Agent status")
     # 支持多子网归属

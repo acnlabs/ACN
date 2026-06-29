@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     # Gateway
     gateway_base_url: str = "https://api.acnlabs.dev"
 
+    # ARD (Agentic Resource Discovery, https://agenticresourcediscovery.org)
+    # Publisher domain anchor for the ``urn:air:<publisher>:agent:<id>``
+    # identifiers emitted by the ARD discovery layer (routes/ard.py). ARD
+    # §4.2.1 requires this to be a verifiable FQDN, so it MUST be a bare
+    # host (no scheme / path). Defaults to the host parsed from
+    # ``gateway_base_url`` when unset, so a standard deployment is
+    # spec-compliant out of the box; override via ``ARD_PUBLISHER_DOMAIN``
+    # when ACN is fronted by a branded domain whose ownership it can prove.
+    ard_publisher_domain: str | None = None
+
     # Frontend base URL — used for human-facing links (e.g. claim pages)
     # Defaults to gateway_base_url if not set
     frontend_base_url: str | None = None
