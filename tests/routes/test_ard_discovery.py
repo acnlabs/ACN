@@ -241,3 +241,51 @@ class TestSearch:
             "fill out a visa application",
         ]
         assert entry["score"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+
+class TestObservability:
+    """The adapter records a bounded (endpoint, outcome) counter on every
+    call. We assert the *wiring* (correct outcome per path) by intercepting
+    ``_record_request`` — no Redis/event-loop coupling in the test."""
+
+    @staticmethod
+    def _capture(monkeypatch) -> list[tuple[str, str]]:
+        import acn.routes.ard as ard_mod
+
+        calls: list[tuple[str, str]] = []
+
+        async def _fake(metrics, *, endpoint: str, outcome: str) -> None:
+            calls.append((endpoint, outcome))
+
+        monkeypatch.setattr(ard_mod, "_record_request", _fake)
+        return calls
+
+    def test_manifest_records_ok(self, client, monkeypatch):
+        calls = self._capture(monkeypatch)
+        assert client.get("/.well-known/ai-catalog.json").status_code == 200
+        assert ("manifest", "ok") in calls
+
+    def test_search_records_ok(self, client, monkeypatch):
+        calls = self._capture(monkeypatch)
+        assert client.post(
+            "/search", json={"query": {"text": "book me a flight"}}
+        ).status_code == 200
+        assert ("search", "ok") in calls
+
+    def test_search_records_empty(self, client, monkeypatch):
+        calls = self._capture(monkeypatch)
+        # A token that overlaps no agent haystack → zero results → "empty".
+        assert client.post(
+            "/search", json={"query": {"text": "zzzznomatchqqq"}}
+        ).status_code == 200
+        assert ("search", "empty") in calls
+
+    def test_search_records_invalid(self, client, monkeypatch):
+        calls = self._capture(monkeypatch)
+        assert client.post("/search", json={"query": {}}).status_code == 400
+        assert ("search", "invalid") in calls

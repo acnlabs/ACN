@@ -38,7 +38,7 @@ from ..config import get_settings
 from ..core.entities.agent import Agent
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..identity import build_agent_urn, resolve_publisher_domain
-from .dependencies import AgentServiceDep, limiter
+from .dependencies import AgentServiceDep, MetricsDep, limiter
 
 router = APIRouter(tags=["ard"], responses=ACN_DEFAULT_RESPONSES)
 logger = structlog.get_logger()
@@ -232,6 +232,51 @@ def _decode_page_token(token: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Observability — lightweight adoption signal for the ARD adapter.
+#
+# Goal (deliberately minimal): answer "are external ARD clients calling us,
+# from where, and for what" with data, so future ARD investment is demand-led
+# rather than speculative. Two cheap signals:
+#   - a bounded Prometheus counter (acn_ard_requests_total) for volume, and
+#   - a structured access log carrying the client *source* (UA / IP / referer).
+# Both are strictly best-effort: a metrics/Redis hiccup must NEVER turn a
+# discovery request into a 500, so every recording path swallows its errors.
+# ---------------------------------------------------------------------------
+
+# Cap the logged query so the access log can't be turned into an unbounded
+# write sink, while still capturing enough to see *what* clients search for.
+_QUERY_LOG_PREVIEW_LEN = 120
+
+
+def _client_source(request: Request) -> dict[str, str]:
+    """Best-effort caller fingerprint for the access log (no PII storage).
+
+    The User-Agent is the high-value signal here — it's how we tell which ARD
+    client (GitHub Agent Finder, HF Discover, a crawler, …) is reaching us.
+    """
+    return {
+        "client_ip": request.client.host if request.client else "",
+        "user_agent": request.headers.get("user-agent", ""),
+        "referer": request.headers.get("referer", ""),
+    }
+
+
+async def _record_request(metrics: Any, *, endpoint: str, outcome: str) -> None:
+    """Increment ``acn_ard_requests_total`` — never raises (observability only)."""
+    if metrics is None:
+        return
+    try:
+        await metrics.inc_counter(
+            "ard_requests_total",
+            labels={"endpoint": endpoint, "outcome": outcome},
+        )
+    except Exception:  # noqa: BLE001 — discovery must not break on a metrics fault
+        logger.debug(
+            "ard_metric_record_failed", endpoint=endpoint, outcome=outcome, exc_info=True
+        )
+
+
+# ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
 
@@ -289,7 +334,7 @@ class ARDSearchResponse(BaseModel):
 
 @router.get("/.well-known/ai-catalog.json")
 @limiter.limit("60/minute")
-async def ard_catalog_manifest(request: Request):
+async def ard_catalog_manifest(request: Request, metrics: MetricsDep = None):
     """ARD static capability manifest (§4.1).
 
     Advertises this deployment as a dynamic, searchable Agent Registry.
@@ -298,6 +343,8 @@ async def ard_catalog_manifest(request: Request):
     """
     base = _registry_base_url()
     publisher = resolve_publisher_domain()
+    await _record_request(metrics, endpoint="manifest", outcome="ok")
+    logger.info("ard_manifest", **_client_source(request))
     return {
         "specVersion": "1.0",
         "host": {
@@ -327,6 +374,7 @@ async def ard_search(
     request: Request,
     body: ARDSearchRequest,
     agent_service: AgentServiceDep = None,
+    metrics: MetricsDep = None,
 ):
     """ARD search (§7.2): natural-language + structured agent discovery.
 
@@ -335,57 +383,79 @@ async def ard_search(
     accepted but ACN currently runs no upstream registries, so
     ``referrals`` is always empty regardless of mode.
     """
-    text = (body.query.text or "").strip()
-    if not text:
-        raise ACNHTTPError(
-            ErrorCode.INVALID_REQUEST,
-            status_code=400,
-            details={"reason": "query.text_required_for_search"},
-        )
-
     publisher = resolve_publisher_domain()
     source = _registry_base_url()
     filter_obj = body.query.filter or {}
 
-    # Discovery is about the *existence* of a capability, not momentary
-    # liveness — index every registered agent (status="all") and let the
-    # client handle invocation-time reachability, mirroring how a web
-    # search engine indexes pages regardless of current uptime.
-    agents = await agent_service.search_agents(tags=None, status="all")
+    # All client-error (400) paths live inside this block so they can be
+    # recorded as outcome="invalid" before re-raising — observability must
+    # never swallow the error itself, only count it.
+    try:
+        text = (body.query.text or "").strip()
+        if not text:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                status_code=400,
+                details={"reason": "query.text_required_for_search"},
+            )
 
-    # Data-hygiene: agents without an explicit visibility tag are treated
-    # as production ("real"); hidden / spam / archived agents never surface
-    # in public discovery (matches the registry list endpoint contract).
-    agents = [
-        a for a in agents if (a.metadata or {}).get("visibility", "real") == "real"
-    ]
+        # Discovery is about the *existence* of a capability, not momentary
+        # liveness — index every registered agent (status="all") and let the
+        # client handle invocation-time reachability, mirroring how a web
+        # search engine indexes pages regardless of current uptime.
+        agents = await agent_service.search_agents(tags=None, status="all")
 
-    # Structured filter (may raise 400 on an unsupported field path).
-    agents = [
-        a for a in agents if _passes_filter(a, filter_obj=filter_obj, publisher=publisher)
-    ]
+        # Data-hygiene: agents without an explicit visibility tag are treated
+        # as production ("real"); hidden / spam / archived agents never surface
+        # in public discovery (matches the registry list endpoint contract).
+        agents = [
+            a for a in agents if (a.metadata or {}).get("visibility", "real") == "real"
+        ]
 
-    # Score + relevance cutoff, then rank by descending relevance. Ties are
-    # broken by name for deterministic, stable pagination.
-    scored: list[tuple[int, Agent]] = []
-    for agent in agents:
-        score = _relevance_score(text, agent)
-        if score > _RELEVANCE_CUTOFF:
-            scored.append((score, agent))
-    scored.sort(key=lambda pair: (-pair[0], pair[1].name or ""))
+        # Structured filter (may raise 400 on an unsupported field path).
+        agents = [
+            a for a in agents if _passes_filter(a, filter_obj=filter_obj, publisher=publisher)
+        ]
 
-    offset = _decode_page_token(body.pageToken) if body.pageToken else 0
-    window = scored[offset : offset + body.pageSize]
+        # Score + relevance cutoff, then rank by descending relevance. Ties are
+        # broken by name for deterministic, stable pagination.
+        scored: list[tuple[int, Agent]] = []
+        for agent in agents:
+            score = _relevance_score(text, agent)
+            if score > _RELEVANCE_CUTOFF:
+                scored.append((score, agent))
+        scored.sort(key=lambda pair: (-pair[0], pair[1].name or ""))
 
-    results = [
-        _agent_to_catalog_entry(agent, publisher=publisher, source=source, score=score)
-        for score, agent in window
-    ]
+        offset = _decode_page_token(body.pageToken) if body.pageToken else 0
+        window = scored[offset : offset + body.pageSize]
 
-    next_token = (
-        _encode_page_token(offset + body.pageSize)
-        if offset + body.pageSize < len(scored)
-        else None
+        results = [
+            _agent_to_catalog_entry(agent, publisher=publisher, source=source, score=score)
+            for score, agent in window
+        ]
+
+        next_token = (
+            _encode_page_token(offset + body.pageSize)
+            if offset + body.pageSize < len(scored)
+            else None
+        )
+    except ACNHTTPError:
+        await _record_request(metrics, endpoint="search", outcome="invalid")
+        raise
+
+    await _record_request(
+        metrics, endpoint="search", outcome="ok" if results else "empty"
+    )
+    logger.info(
+        "ard_search",
+        **_client_source(request),
+        federation=body.federation,
+        page_size=body.pageSize,
+        has_filter=bool(filter_obj),
+        query_len=len(text),
+        query_preview=text[:_QUERY_LOG_PREVIEW_LEN],
+        matched=len(scored),
+        returned=len(results),
     )
 
     return ARDSearchResponse(results=results, referrals=[], pageToken=next_token)

@@ -152,6 +152,22 @@ class MetricsCollector:
             "help": "Total number of errors",
             "labels": ["type", "component"],
         },
+        "acn_ard_requests_total": {
+            "type": MetricType.COUNTER,
+            "help": (
+                "ARD (Agentic Resource Discovery) compatibility-layer requests, "
+                "split by endpoint and outcome. Lets operators see external ARD "
+                "client adoption without any per-client cardinality."
+            ),
+            # endpoint: "manifest" (GET /.well-known/ai-catalog.json) |
+            #           "search"   (POST /search)
+            # outcome:  "ok"      request served with >=1 result (search) or
+            #                      manifest returned;
+            #           "empty"   search ran but matched zero agents;
+            #           "invalid" client error (400 — bad query/filter/token).
+            # Cardinality: 2 × 3 = O(6) combos. No per-client dimension.
+            "labels": ["endpoint", "outcome"],
+        },
         # Gauges
         "acn_agents_registered": {
             "type": MetricType.GAUGE,
