@@ -15,13 +15,13 @@ from acn.services.agent_service import (
 
 
 def _claimed_agent(**overrides) -> Agent:
-    base = dict(
-        agent_id="agt-gift",
-        name="Gift Bot",
-        owner="wechat|giver",
-        claim_status=ClaimStatus.CLAIMED,
-        verification_code=None,
-    )
+    base = {
+        "agent_id": "agt-gift",
+        "name": "Gift Bot",
+        "owner": "wechat|giver",
+        "claim_status": ClaimStatus.CLAIMED,
+        "verification_code": None,
+    }
     base.update(overrides)
     return Agent(**base)
 
