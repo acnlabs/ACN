@@ -116,6 +116,11 @@ class ITaskRepository(ABC):
         pass
 
     @abstractmethod
+    async def find_by_board(self, board_id: str, limit: int = 100) -> list[Task]:
+        """Find tasks by TaskBoard id (metadata hint; ACN candidate set only — SoT is backend board_tasks)"""
+        pass
+
+    @abstractmethod
     async def delete(self, task_id: str) -> bool:
         """Delete a task"""
         pass

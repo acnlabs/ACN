@@ -928,6 +928,11 @@ class TaskService:
                     provider_amount=reward_result.get("provider_amount"),
                 )
 
+        # 批准事件（auto_approve 路径）：与人工审批路径对称，驱动 backend XP 等下游
+        await self._notify_participation_webhook(
+            WebhookEventType.PARTICIPATION_APPROVED, task, p
+        )
+
         # Check if task is exhausted (all slots filled)
         await self._check_and_finalize_exhaustion(task, new_count)
 
@@ -1015,6 +1020,11 @@ class TaskService:
                 task_id=task_id,
                 participation_id=p.participation_id,
                 new_completed_count=new_count,
+            )
+
+            # 对称于 PARTICIPATION_REJECTED：批准事件驱动下游（backend 驯养师 XP 等）
+            await self._notify_participation_webhook(
+                WebhookEventType.PARTICIPATION_APPROVED, task, p
             )
         else:
             # Reject participation — set status to REJECTED and decrement active count
@@ -1759,6 +1769,7 @@ class TaskService:
         assignee_id: str | None = None,
         tags: list[str] | None = None,
         group_id: str | None = None,
+        board_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
         requesting_agent_id: str | None = None,
@@ -1773,6 +1784,7 @@ class TaskService:
             assignee_id: Filter by assignee
             tags: Filter by agent tags
             group_id: Filter by collaboration group
+            board_id: Filter by TaskBoard (metadata hint; SoT enforced by backend)
             limit: Maximum tasks to return
             offset: Pagination offset
 
@@ -1780,7 +1792,12 @@ class TaskService:
             List of tasks
         """
         # Use different repository methods based on filters
-        if group_id:
+        if board_id:
+            tasks = await self.repository.find_by_board(board_id, limit)
+            # find_by_board 不带状态条件，这里补后置过滤（板内视图常配 status=open）
+            if status:
+                tasks = [t for t in tasks if t.status == status]
+        elif group_id:
             tasks = await self.repository.find_by_group(group_id, limit)
         elif creator_id:
             tasks = await self.repository.find_by_creator(creator_id, limit)
@@ -2017,6 +2034,10 @@ class TaskService:
             "reward_currency": task.reward_currency,
             "max_participants": task.max_participants,
             "slug": task.subnet_slug,
+            "task_type": task.task_type,
+            # TaskBoard hints（backend XP 处理器用；SoT 仍是 backend board_tasks 表）
+            "board_id": (task.metadata or {}).get("board_id"),
+            "xp_reward": (task.metadata or {}).get("xp_reward"),
         }
 
         try:
@@ -2076,6 +2097,12 @@ class TaskService:
             "resubmit_count": participation.resubmit_count,
             "max_resubmit_attempts": task.max_resubmit_attempts,
             "rejection_reason": participation.rejection_reason,
+            "reward": task.reward,
+            "reward_currency": task.reward_currency,
+            "task_type": task.task_type,
+            # TaskBoard hints（backend XP 处理器用；SoT 仍是 backend board_tasks 表）
+            "board_id": (task.metadata or {}).get("board_id"),
+            "xp_reward": (task.metadata or {}).get("xp_reward"),
         }
 
         try:

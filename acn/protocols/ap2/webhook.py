@@ -70,6 +70,7 @@ class WebhookEventType(StrEnum):
     TASK_CANCELLED = "task.cancelled"
 
     # Participation events (multi-participant tasks)
+    PARTICIPATION_APPROVED = "participation.approved"
     PARTICIPATION_REJECTED = "participation.rejected"
 
     # ===== Subnet / Org Harness Events =====

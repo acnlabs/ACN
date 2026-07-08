@@ -720,6 +720,7 @@ async def list_tasks(
     creator_id: str | None = Query(None, description="Filter by creator"),
     assignee_id: str | None = Query(None, description="Filter by assignee"),
     group_id: str | None = Query(None, description="Filter by collaboration group"),
+    board_id: str | None = Query(None, description="Filter by TaskBoard (metadata hint; SoT enforced by backend)"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     task_service: TaskServiceDep = None,
@@ -764,6 +765,7 @@ async def list_tasks(
         assignee_id=assignee_id,
         tags=tag_list,
         group_id=group_id,
+        board_id=board_id,
         limit=limit + 1,  # Get one extra to check has_more
         offset=offset,
         requesting_agent_id=requesting_agent_id,

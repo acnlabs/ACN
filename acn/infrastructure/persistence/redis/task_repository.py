@@ -462,6 +462,24 @@ class RedisTaskRepository(ITaskRepository):
                     break
         return tasks
 
+    async def find_by_board(self, board_id: str, limit: int = 100) -> list[Task]:
+        """Find tasks by TaskBoard id (metadata hint; scan-based, suitable for small data sets).
+
+        SoT 由 backend board_tasks 表保证；此处仅提供 ACN 候选集。
+        用全状态 by_status 索引取并集（与 PG 版语义一致——不限 open），
+        再按 metadata.board_id 过滤、created_at 倒序截断。
+        """
+        status_keys = [f"acn:tasks:by_status:{s.value}" for s in TaskStatus]
+        raw_ids = await self.redis.sunion(*status_keys)
+        tasks: list[Task] = []
+        for raw_id in raw_ids:
+            task_id = raw_id.decode() if isinstance(raw_id, bytes) else raw_id
+            task = await self.find_by_id(task_id)
+            if task and isinstance(task.metadata, dict) and task.metadata.get("board_id") == board_id:
+                tasks.append(task)
+        tasks.sort(key=lambda t: t.created_at, reverse=True)
+        return tasks[:limit]
+
     async def delete(self, task_id: str) -> bool:
         """Delete a task and all its participation side-car keys.
 

@@ -449,6 +449,18 @@ class PostgresTaskRepository(ITaskRepository):
             rows = result.scalars().all()
         return await self._rows_to_tasks(rows)
 
+    async def find_by_board(self, board_id: str, limit: int = 100) -> list[Task]:
+        """Filter by TaskBoard metadata hint (ACN 候选集；SoT 由 backend board_tasks 表保证)。"""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(TaskModel)
+                .where(TaskModel.task_metadata["board_id"].astext == board_id)
+                .order_by(TaskModel.created_at.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+        return await self._rows_to_tasks(rows)
+
     async def delete(self, task_id: str) -> bool:
         """Delete a task and its Redis side-car keys.
 
