@@ -1015,6 +1015,23 @@ async def create_task(
         raise HTTPException(status_code=500, detail="Task creation failed") from e
 
 
+def _task_requires_cultivator_human(task) -> bool:
+    """驯养相关任务仅人类可接（与 backend Labs is_cultivator_work 元数据启发式对齐）。
+
+    ACN 无 board xp_eligible SoT；以任务级 xp_reward / agent_feedback 作防线，
+    堵住 agent API key 直连 /accept 绕过 Labs 门禁。
+    """
+    meta = task.metadata if isinstance(getattr(task, "metadata", None), dict) else {}
+    raw = meta.get("xp_reward")
+    try:
+        if int(raw) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    task_type = getattr(task, "task_type", None) or meta.get("task_type") or ""
+    return task_type == "agent_feedback"
+
+
 @router.post("/{task_id}/accept", response_model=TaskAcceptResponse)
 @limiter.limit("60/minute")
 async def accept_task(
@@ -1041,6 +1058,16 @@ async def accept_task(
             404,
             details={"task_id": task_id},
         ) from None
+
+    if _task_requires_cultivator_human(task) and agent_type != "human":
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={
+                "task_id": task_id,
+                "reason": "cultivator_humans_only",
+            },
+        )
 
     # Gate: private subnet task — caller must be a subnet member.
     if task.subnet_slug and "acn:admin" not in payload.get("permissions", []):
@@ -1614,6 +1641,16 @@ async def agent_accept_task(
                     "reason": "not_subnet_member",
                 },
             )
+
+    if _task_requires_cultivator_human(task_entity):
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={
+                "task_id": task_id,
+                "reason": "cultivator_humans_only",
+            },
+        )
 
     try:
         task, _participation_id = await task_service.accept_task(
