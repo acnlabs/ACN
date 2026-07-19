@@ -971,8 +971,13 @@ export interface WSConnectionOptions {
 
 /** ACN Client configuration */
 export interface ACNClientOptions {
-  /** ACN server base URL */
-  baseUrl: string;
+  /** ACN server base URL (origin, no `/api/v1`). Required unless `region` or `ACN_BASE_URL` is set. */
+  baseUrl?: string;
+  /**
+   * Hosted preset: `global` (`api.acnlabs.dev`) or `cn` (`acn.acnlabs.cn`).
+   * Mutually exclusive with `baseUrl`. See ADR-0013.
+   */
+  region?: 'global' | 'cn';
   /** Request timeout in ms */
   timeout?: number;
   /** Custom headers */

@@ -46,7 +46,21 @@ export ACN_BASE_URL=https://acn.acnlabs.cn   # overrides config for this shell
 acn config set region cn                     # persists base-url + region
 ```
 
-Precedence: `--base-url` → `--region` → `ACN_BASE_URL` → `~/.acn/config.json` → global.  
+Precedence: `--base-url` → `--region` → `ACN_BASE_URL` → `~/.acn/config.json` → global.
+
+SDK (same presets):
+
+```python
+from acn_client import ACNClient
+async with ACNClient(region="cn", api_key="acn_...") as client:
+    ...
+```
+
+```typescript
+import { ACNClient } from 'acn-client';
+const client = new ACNClient({ region: 'cn', apiKey: 'acn_...' });
+```
+  
 See [ADR-0013](../../docs/adr/0013-dual-region-acn-routing.md).
 
 > Examples below use the **global** host. For CN, swap the origin to

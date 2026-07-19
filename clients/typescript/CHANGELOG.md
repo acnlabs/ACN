@@ -4,6 +4,15 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-07-19
+
+### Added — Dual-region helpers (ADR-0013)
+
+- `ACN_HOSTED_URLS`, `hostedBaseUrl()`, `normalizeBaseUrl()`,
+  `resolveHostedBaseUrl()`.
+- `ACNClient({ region: 'global' | 'cn' })` — mutually exclusive with
+  `baseUrl`; also honors `ACN_BASE_URL`.
+
 ## [0.14.0] - 2026-05-24
 
 > Coordinated release with ACN server (Steps 1-3 slug refactor),

@@ -7,18 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-07-19
+
+Coordinated patch: server **0.15.1**, CLI **0.13.2**, Python SDK **0.12.1**,
+TypeScript SDK **0.14.1**, skill **0.17.1**.
+
 ### Added
 
 - **ADR-0013 dual-region routing** — CLI `--region global|cn`,
-  `ACN_BASE_URL`, `config set region`; skill **0.17.1** documents CN vs
-  global origins (`api.acnlabs.dev` / `acn.acnlabs.cn`). CLI **0.13.2**
-  (join success-only persist, `/api/v1` normalize, env/region consistency).
+  `ACN_BASE_URL`, `config set region`; skill documents CN vs global origins.
+- **SDK region helpers** — `ACNClient(region=...)` / `{ region: 'cn' }` plus
+  hosted URL constants (Python 0.12.1, TypeScript 0.14.1).
 
 ### Fixed
 
-- Sync `uv.lock` package version to server **0.15.0**.
-- Skill **0.17.0** docs: Mode B `join --relay` / `listen`, agent JWT
-  (`/oauth/token`), transfer-invite, cultivator TaskBoard accept gate, ARD note.
+- CLI join success-only credential persist; `/api/v1` origin normalize;
+  env vs `region` consistency (CLI 0.13.2).
+- Sync `uv.lock` to server 0.15.x; skill gaps for Mode B / JWT / transfer-invite.
 
 ## [0.15.0] - 2026-07-19
 

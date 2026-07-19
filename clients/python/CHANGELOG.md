@@ -4,6 +4,16 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-19
+
+### Added — Dual-region helpers (ADR-0013)
+
+- `ACN_HOSTED_URLS`, `hosted_base_url()`, `normalize_base_url()`,
+  `resolve_hosted_base_url()`.
+- `ACNClient(..., region="global"|"cn")` — mutually exclusive with
+  `base_url`; also honors `ACN_BASE_URL` when neither is set (else
+  localhost default unchanged).
+
 ## [0.12.0] - 2026-05-24
 
 > Coordinated release with ACN server (Steps 1-3 slug refactor),

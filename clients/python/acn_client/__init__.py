@@ -10,6 +10,12 @@ Example:
 """
 
 from .client import ACNClient, ACNError
+from .regions import (
+    ACN_HOSTED_URLS,
+    hosted_base_url,
+    normalize_base_url,
+    resolve_hosted_base_url,
+)
 from .models import (
     KNOWN_INBOX_MESSAGE_STATUSES,
     KNOWN_PAYMENT_TASK_STATUSES,
@@ -69,6 +75,11 @@ __all__ = [
     "ACNRealtimeOptions",
     "AuthMode",
     "WSState",
+    # Regions (ADR-0013)
+    "ACN_HOSTED_URLS",
+    "hosted_base_url",
+    "normalize_base_url",
+    "resolve_hosted_base_url",
     # Agent models
     "AgentInfo",
     "AgentJoinRequest",

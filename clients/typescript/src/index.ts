@@ -24,6 +24,15 @@
 // HTTP Client
 export { ACNClient, ACNError } from './client';
 
+// Hosted regions (ADR-0013)
+export {
+  ACN_HOSTED_URLS,
+  hostedBaseUrl,
+  normalizeBaseUrl,
+  resolveHostedBaseUrl,
+} from './regions';
+export type { AcnRegion } from './regions';
+
 // WebSocket Client
 export { ACNRealtime, subscribeToACN } from './realtime';
 export type { WSEventHandler, WSState } from './realtime';

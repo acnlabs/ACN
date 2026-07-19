@@ -4,6 +4,7 @@ ACN HTTP Client
 Official Python client for ACN REST API.
 """
 
+import os
 from typing import Any
 
 import httpx
@@ -220,16 +221,20 @@ class ACNClient:
 
     def __init__(
         self,
-        base_url: str = "http://localhost:9000",
+        base_url: str | None = None,
         timeout: float = 30.0,
         api_key: str | None = None,
         bearer_token: str | None = None,
+        *,
+        region: str | None = None,
     ):
         """
         Initialize ACN Client
 
         Args:
-            base_url: ACN server URL
+            base_url: ACN server URL (origin, no ``/api/v1``). Default
+                ``http://localhost:9000`` when neither ``base_url``,
+                ``region``, nor ``ACN_BASE_URL`` is set.
             timeout: Request timeout in seconds
             api_key: Optional agent API key (sent as ``Authorization: Bearer <key>``).
                 Use this for all per-agent operations (tasks, messaging, payments).
@@ -240,8 +245,22 @@ class ACNClient:
                 (``Authorization: Bearer <token>``).  Required for platform-level
                 operations that need ``acn:write`` / ``acn:admin`` scope.
                 Takes precedence over ``api_key`` when both are supplied.
+            region: Hosted preset ``global`` or ``cn`` (ADR-0013). Mutually
+                exclusive with ``base_url``.
         """
-        self.base_url = base_url.rstrip("/")
+        from .regions import normalize_base_url, resolve_hosted_base_url
+
+        if base_url is not None and region is not None:
+            raise ValueError("Use either base_url or region, not both")
+        if region is not None:
+            resolved = resolve_hosted_base_url(region=region)
+        elif base_url is not None:
+            resolved = normalize_base_url(base_url)
+        else:
+            env = (os.environ.get("ACN_BASE_URL") or "").strip()
+            resolved = normalize_base_url(env) if env else "http://localhost:9000"
+
+        self.base_url = resolved
         self.timeout = timeout
 
         headers: dict[str, str] = {}

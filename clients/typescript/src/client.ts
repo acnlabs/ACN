@@ -67,6 +67,7 @@ import type {
   SubnetJoinRequestRow,
   SystemHealth,
 } from './types';
+import { normalizeBaseUrl, resolveHostedBaseUrl } from './regions';
 
 /**
  * ACN Client - HTTP API
@@ -76,6 +77,7 @@ import type {
  * import { ACNClient } from '@acn/client';
  * 
  * const client = new ACNClient({ baseUrl: 'http://localhost:9000' });
+ * // or hosted: new ACNClient({ region: 'cn', apiKey: 'acn_...' })
  * 
  * // Search agents
  * const { agents } = await client.searchAgents({ skills: 'coding' });
@@ -91,11 +93,20 @@ export class ACNClient {
 
   constructor(options: ACNClientOptions | string) {
     if (typeof options === 'string') {
-      this.baseUrl = options.replace(/\/$/, '');
+      this.baseUrl = normalizeBaseUrl(options);
       this.timeout = 30000;
       this.headers = {};
     } else {
-      this.baseUrl = options.baseUrl.replace(/\/$/, '');
+      const resolved = resolveHostedBaseUrl({
+        region: options.region,
+        baseUrl: options.baseUrl,
+      });
+      if (!resolved) {
+        throw new Error(
+          'ACNClient requires baseUrl, region (global|cn), or ACN_BASE_URL',
+        );
+      }
+      this.baseUrl = resolved;
       this.timeout = options.timeout ?? 30000;
       this.headers = options.headers ?? {};
       if (options.apiKey) {
