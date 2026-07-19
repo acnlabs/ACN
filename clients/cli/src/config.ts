@@ -24,8 +24,11 @@ export interface AcnConfig {
   region?: AcnRegion;
 }
 
-function normalizeBaseUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '');
+/** Strip trailing slashes and a mistaken `/api/v1` suffix (acnFetch adds it). */
+export function normalizeBaseUrl(url: string): string {
+  let u = url.trim().replace(/\/+$/, '');
+  u = u.replace(/\/api\/v1$/i, '');
+  return u.replace(/\/+$/, '');
 }
 
 export function baseUrlForRegion(region: string): string {
@@ -89,34 +92,45 @@ export function resolveBaseUrl(overrides?: {
 export function loadConfig(): AcnConfig {
   const file = readConfigFile();
   const base_url = resolveBaseUrl();
-  const region =
-    file.region === 'global' || file.region === 'cn'
-      ? file.region
-      : inferRegion(base_url);
+  // Always derive region from the *effective* base_url so ACN_BASE_URL
+  // cannot disagree with a stale file `region` field.
   return {
     base_url,
     api_key: file.api_key,
     agent_id: file.agent_id,
-    region,
+    region: inferRegion(base_url),
   };
 }
 
+/**
+ * Persist config. Merges against the on-disk file (not loadConfig), so a
+ * transient `ACN_BASE_URL` env override cannot rewrite the saved base_url.
+ */
 export function saveConfig(updates: Partial<AcnConfig>): void {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
-  const current = loadConfig();
+  const file = readConfigFile();
+  const current: AcnConfig = {
+    base_url: file.base_url ? normalizeBaseUrl(file.base_url) : DEFAULT_BASE_URL,
+    api_key: file.api_key,
+    agent_id: file.agent_id,
+    region:
+      file.region === 'global' || file.region === 'cn' ? file.region : undefined,
+  };
   const next: AcnConfig = { ...current, ...updates };
   if (updates.region && !updates.base_url) {
     next.base_url = baseUrlForRegion(updates.region);
   }
-  if (updates.base_url && !updates.region) {
+  if (updates.base_url && updates.region === undefined) {
     next.region = inferRegion(updates.base_url);
   }
   const clean: AcnConfig = { base_url: normalizeBaseUrl(next.base_url) };
   if (next.api_key !== undefined) clean.api_key = next.api_key;
   if (next.agent_id !== undefined) clean.agent_id = next.agent_id;
-  if (next.region !== undefined) clean.region = next.region;
+  // Persist inferred region when known; omit for custom origins.
+  const region = next.region ?? inferRegion(clean.base_url);
+  if (region !== undefined) clean.region = region;
   writeFileSync(CONFIG_FILE, JSON.stringify(clean, null, 2), 'utf-8');
 }
 

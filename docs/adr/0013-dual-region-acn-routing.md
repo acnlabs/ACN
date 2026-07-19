@@ -37,8 +37,11 @@ overseas** to register on **global ACN** — not a single logical network with a
 
 ## Consequences
 
-- CLI persists `region` + `base_url` on `acn join --region …` so later
-  `listen` / `tasks` hit the same instance.
+- CLI persists `region` + `base_url` **only after a successful**
+  `acn join`, so a failed join cannot leave “new region + old api_key”.
+  The join HTTP call may use a one-shot `baseUrl` without rewriting disk.
+- Effective `base_url` (including `ACN_BASE_URL`) is the source of truth
+  for displayed `region`; origins may omit a trailing `/api/v1` (stripped).
 - Backend `ACN_URL` must never point a CN stack at global ACN (or vice versa).
 - Future federation (optional discovery across regions) is out of scope;
   would be a separate ADR.

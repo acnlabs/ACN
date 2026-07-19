@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **ADR-0013 dual-region routing** — CLI `--region global|cn`,
   `ACN_BASE_URL`, `config set region`; skill **0.17.1** documents CN vs
-  global origins (`api.acnlabs.dev` / `acn.acnlabs.cn`). CLI **0.13.1**.
+  global origins (`api.acnlabs.dev` / `acn.acnlabs.cn`). CLI **0.13.2**
+  (join success-only persist, `/api/v1` normalize, env/region consistency).
 
 ### Fixed
 

@@ -72,10 +72,6 @@ export function joinCommand(): Command {
           ? (opts.region.trim().toLowerCase() as AcnRegion)
           : inferRegion(base_url);
 
-      // Persist target before the HTTP call so acnPost/loadConfig see it
-      // (and so a failed join still leaves the intended region selected).
-      saveConfig({ base_url, ...(region ? { region } : {}) });
-
       const tags = opts.tags.split(',').map((s) => s.trim()).filter(Boolean);
       const body = {
         name: opts.name,
@@ -91,7 +87,11 @@ export function joinCommand(): Command {
       };
 
       try {
-        const res = await acnPost<JoinResponse>('/agents/join', body);
+        // One-shot baseUrl — do not rewrite ~/.acn until join succeeds,
+        // or a failed join would leave "new region + old api_key".
+        const res = await acnPost<JoinResponse>('/agents/join', body, {
+          baseUrl: base_url,
+        });
         saveConfig({
           api_key: res.api_key,
           agent_id: res.agent_id,

@@ -4,6 +4,20 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-07-19
+
+### Fixed — Dual-region routing hardening
+
+- **`acn join` only persists credentials after success** — failed join no
+  longer leaves “new region + old api_key” in `~/.acn/config.json`
+  (one-shot `baseUrl` on the HTTP call).
+- **`region` follows effective `base_url`** — `ACN_BASE_URL` can no longer
+  disagree with a stale file `region` in `config show` / `loadConfig`.
+- **`saveConfig` merges the on-disk file** — transient env override does
+  not rewrite saved `base_url`.
+- **`normalizeBaseUrl` strips a mistaken `/api/v1` suffix** so pasted API
+  prefixes do not become `/api/v1/api/v1/...`.
+
 ## [0.13.1] - 2026-07-19
 
 ### Added — Dual-region routing (ADR-0013)

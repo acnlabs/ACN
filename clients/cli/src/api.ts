@@ -1,4 +1,4 @@
-import { loadConfig } from './config.js';
+import { loadConfig, normalizeBaseUrl } from './config.js';
 
 export class AcnApiError extends Error {
   constructor(
@@ -26,14 +26,23 @@ function extractDetail(body: unknown): string {
   return JSON.stringify(b);
 }
 
+export type AcnFetchOptions = RequestInit & {
+  params?: Record<string, string | number | boolean | undefined>;
+  /** One-shot origin override (does not write ~/.acn/config.json). */
+  baseUrl?: string;
+};
+
 export async function acnFetch<T>(
   path: string,
-  options: RequestInit & { params?: Record<string, string | number | boolean | undefined> } = {}
+  options: AcnFetchOptions = {}
 ): Promise<T> {
   const config = loadConfig();
-  const { params, ...fetchOptions } = options;
+  const { params, baseUrl: baseUrlOverride, ...fetchOptions } = options;
+  const origin = baseUrlOverride
+    ? normalizeBaseUrl(baseUrlOverride)
+    : config.base_url;
 
-  const url = new URL(`${config.base_url}/api/v1${path}`);
+  const url = new URL(`${origin}/api/v1${path}`);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined) url.searchParams.set(k, String(v));
@@ -65,25 +74,36 @@ export async function acnFetch<T>(
 
 export function acnGet<T>(
   path: string,
-  params?: Record<string, string | number | boolean | undefined>
+  params?: Record<string, string | number | boolean | undefined>,
+  opts?: { baseUrl?: string }
 ): Promise<T> {
-  return acnFetch<T>(path, { method: 'GET', params });
+  return acnFetch<T>(path, { method: 'GET', params, baseUrl: opts?.baseUrl });
 }
 
-export function acnPost<T>(path: string, body?: unknown): Promise<T> {
+export function acnPost<T>(
+  path: string,
+  body?: unknown,
+  opts?: { baseUrl?: string }
+): Promise<T> {
   return acnFetch<T>(path, {
     method: 'POST',
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    baseUrl: opts?.baseUrl,
   });
 }
 
-export function acnPatch<T>(path: string, body?: unknown): Promise<T> {
+export function acnPatch<T>(
+  path: string,
+  body?: unknown,
+  opts?: { baseUrl?: string }
+): Promise<T> {
   return acnFetch<T>(path, {
     method: 'PATCH',
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    baseUrl: opts?.baseUrl,
   });
 }
 
-export function acnDelete<T>(path: string): Promise<T> {
-  return acnFetch<T>(path, { method: 'DELETE' });
+export function acnDelete<T>(path: string, opts?: { baseUrl?: string }): Promise<T> {
+  return acnFetch<T>(path, { method: 'DELETE', baseUrl: opts?.baseUrl });
 }
