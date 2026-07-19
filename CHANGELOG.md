@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Sync `uv.lock` package version to server **0.15.0**.
+- Skill **0.17.0** docs: Mode B `join --relay` / `listen`, agent JWT
+  (`/oauth/token`), transfer-invite, cultivator TaskBoard accept gate, ARD note.
+
 ## [0.15.0] - 2026-07-19
 
 Coordinated release: server **0.15.0**, CLI **@acnlabs/acn-cli** **0.13.0**,

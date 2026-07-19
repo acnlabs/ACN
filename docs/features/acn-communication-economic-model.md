@@ -3,7 +3,7 @@
 **状态**: Phase 3 全部落地（attention_fee + content_url 自托管 + 新注册 agent 默认 manifest mode）
 **作者**: AgentPlanet Team  
 **日期**: 2026-04-29（Phase 3 Module B：2026-05-05；TTL worker：2026-05-05；content_url + 默认 manifest：2026-05-05）
-**版本**: 0.14.0
+**版本**: 0.15.0
 
 > **当前实施快照（2026-05-05 v2）**：
 >
