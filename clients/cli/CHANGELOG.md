@@ -4,6 +4,18 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-19
+
+### Added — Dual-region routing (ADR-0013)
+
+- **`acn join --region global|cn`** — presets
+  `https://api.acnlabs.dev` / `https://acn.acnlabs.cn`; persists `region` +
+  `base_url` in `~/.acn/config.json`.
+- **`acn join --base-url <origin>`** — custom/self-hosted ACN (mutually
+  exclusive with `--region`).
+- **`ACN_BASE_URL` env** — runtime override of configured `base-url`.
+- **`acn config set region cn|global`** — sets matching hosted `base-url`.
+
 ## [0.13.0] - 2026-07-19
 
 > Coordinated release with ACN server `0.15.0`. Python / TypeScript SDKs

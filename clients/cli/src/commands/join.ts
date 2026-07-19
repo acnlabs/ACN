@@ -1,6 +1,11 @@
 import { Command } from 'commander';
 import { acnPost } from '../api.js';
-import { saveConfig } from '../config.js';
+import {
+  inferRegion,
+  resolveBaseUrl,
+  saveConfig,
+  type AcnRegion,
+} from '../config.js';
 import { output, handleError } from '../output.js';
 
 interface JoinResponse {
@@ -26,6 +31,15 @@ export function joinCommand(): Command {
       'Receive messages in real time over an outbound WebSocket (run `acn listen`) ' +
         'instead of hosting a public endpoint. Registers in open/push mode with no delivery URL.',
     )
+    .option(
+      '--region <region>',
+      'ACN deployment to join: global (api.acnlabs.dev) or cn (acn.acnlabs.cn). ' +
+        'Pick by where the agent is hosted — not by user nationality.',
+    )
+    .option(
+      '--base-url <url>',
+      'Override ACN origin (no /api/v1). Overrides --region and ACN_BASE_URL for this join.',
+    )
     .action(
       async (opts: {
         name: string;
@@ -33,7 +47,35 @@ export function joinCommand(): Command {
         endpoint?: string;
         description?: string;
         relay?: boolean;
+        region?: string;
+        baseUrl?: string;
       }) => {
+      if (opts.region && opts.baseUrl) {
+        console.error('Use either --region or --base-url, not both.');
+        process.exit(1);
+      }
+      if (opts.region) {
+        const r = opts.region.trim().toLowerCase();
+        if (r !== 'global' && r !== 'cn') {
+          console.error(`Unknown --region "${opts.region}". Valid: global | cn`);
+          process.exit(1);
+        }
+      }
+
+      const base_url = resolveBaseUrl({
+        base_url: opts.baseUrl,
+        region: opts.region,
+      });
+      const region: AcnRegion | undefined =
+        opts.region?.trim().toLowerCase() === 'cn' ||
+        opts.region?.trim().toLowerCase() === 'global'
+          ? (opts.region.trim().toLowerCase() as AcnRegion)
+          : inferRegion(base_url);
+
+      // Persist target before the HTTP call so acnPost/loadConfig see it
+      // (and so a failed join still leaves the intended region selected).
+      saveConfig({ base_url, ...(region ? { region } : {}) });
+
       const tags = opts.tags.split(',').map((s) => s.trim()).filter(Boolean);
       const body = {
         name: opts.name,
@@ -50,16 +92,24 @@ export function joinCommand(): Command {
 
       try {
         const res = await acnPost<JoinResponse>('/agents/join', body);
-        saveConfig({ api_key: res.api_key, agent_id: res.agent_id });
+        saveConfig({
+          api_key: res.api_key,
+          agent_id: res.agent_id,
+          base_url,
+          ...(region ? { region } : {}),
+        });
         const claimLine = res.claim_url ? `\n  Claim URL: ${res.claim_url}` : '';
         const verifyLine = res.verification_code ? `\n  Verify   : ${res.verification_code}` : '';
+        const regionLine = region ? `\n  Region   : ${region}` : '';
         output(res, [
           `Registered successfully!`,
           `  Agent ID : ${res.agent_id}`,
           `  API Key  : ${res.api_key}`,
+          `  ACN      : ${base_url}${regionLine}`,
           `  Status   : ${res.status}${claimLine}${verifyLine}`,
           ``,
           `Credentials saved to ~/.acn/config.json`,
+          `Do not reuse this api_key against another region — re-join instead.`,
         ].join('\n'));
       } catch (err) {
         handleError(err);
