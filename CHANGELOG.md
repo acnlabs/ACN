@@ -7,25 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [0.15.0] - 2026-07-19
 
-- **Subnet ownership transfer** (`POST /api/v1/subnets/{slug}/transfer`, ADR-0005) —
-  the current owner can hand off ownership to any registered agent.
-  Prevents the "orphan subnet" failure mode documented in ADR-0004: if an owner
-  agent goes dark before reassigning its subnets, the approval / invitation /
-  allowlist workflows become permanently unreachable.
+Coordinated release: server **0.15.0**, CLI **@acnlabs/acn-cli** **0.13.0**,
+agent skill **0.17.0**. Python SDK **0.12.0** and TypeScript SDK **0.14.0**
+unchanged (no public API surface change this cycle).
 
-  Business rules (see `docs/adr/0005-subnet-ownership-transfer.md`):
+Publish by tagging `v0.15.0` on `main` (triggers `.github/workflows/release.yml`).
 
-  - Only the current owner may call the endpoint (403 `OWNERSHIP_MISMATCH` otherwise).
-  - Reserved system subnets (`public`, `system`) cannot be transferred.
-  - The new owner must differ from the current owner.
-  - The new owner must not be a reserved platform identity (`backend@internal`,
-    `system`).
-  - The new owner is automatically added to the subnet's member set.
-  - Rate-limited to 5 requests / minute per caller.
+### Added — Auth & identity (ADR-0007 / ADR-0008)
 
-  CLI: `acn subnet transfer <slug> --to <new_owner_agent_id>`
+- **ACN agent JWT issuance** — OAuth2 `client_credentials` + JWKS; ACN is the
+  sole agent identity authority. Registration no longer provisions Auth0 M2M
+  credentials. ACN accepts its own RS256 agent JWTs (#150, #151, #169).
+- **JWT TTL** reduced 3600s → 1800s; overlapping signing `kid` rotation
+  supported (#154, #155).
+- **Pluggable human OIDC provider registry** for region IdPs.
+
+### Added — Addressing & delivery (ADR-0012 Mode B)
+
+- **Optional endpoint** at registration for manifest/closed / pull-only agents
+  (#142, #146).
+- **Mode B real-time WebSocket relay** for endpoint-less agents — gateway
+  webhook relay + ACN-mediated `/communication/send` relay (`delivery="relay"`)
+  + `acn listen` / `acn join --relay` (#171).
+- **SSE `message/stream`** relayed over Mode B WS (`a2a_stream_chunk` /
+  `a2a_stream_end`); CLI forwards stream chunks.
+- **Inbound reachability** tracked separately from alive heartbeat; Mode A
+  direct delivery uses reachable==online.
+- Soft / tri-state A2A handshake probe at registration.
+
+### Added — Ownership & transfer
+
+- **Subnet ownership transfer** (`POST /api/v1/subnets/{slug}/transfer`,
+  ADR-0005) + CLI `acn subnet transfer`.
+- **P3 transfer-invite** (`PENDING_TRANSFER` + owner-scoped create/cancel).
+- **`owner_changed` webhook** with `key_invalidated` / `self_hosted`;
+  managed-agent key invalidation on ownership change; live WS force-disconnect
+  on API key rotation. Register-with-owner also emits `owner_changed`
+  (`change_type=register`) for cultivator growth hooks.
+
+### Added — Commerce / AP2 (ADR-0009)
+
+- **Seller webhook delivery** + store-settlement bridge (P1-A).
+- **Durable webhook outbox** for at-least-once payment webhook delivery (C7).
+
+### Added — Discovery & tasks
+
+- **ARD discovery layer** + `urn:air` identity alignment; lightweight ARD
+  observability (adoption signal).
+- **TaskBoard**: `board_id` filter + `participation.approved` event; task
+  webhooks carry filtered `kind` / `target_agent_id` / `board_id` / `xp_reward`
+  metadata (no secret leakage).
+- **Cultivator gate**: reject agent accept on cultivator-human tasks.
+- **`GET …/my-participation`** accepts Labs internal token + `X-Creator-*`
+  (same auth surface as accept/submit).
+- Agent self-deletion; `PATCH /agents/{id}/profile`.
+
+### Added — CLI (0.13.0)
+
+- Mode B `acn listen` / relay join; SSE forward responses as chunk frames.
+
+### Docs
+
+- Skill: push-endpoint pitfalls, A2A response contract, fulfillment
+  idempotency, endpoint URL must be complete (verbatim).
+- ADR-0007…0012 accepted / phased; ADR-0011 superseded.
+
 
 ## [0.14.0] - 2026-05-24
 

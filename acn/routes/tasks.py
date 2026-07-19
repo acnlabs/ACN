@@ -1376,13 +1376,18 @@ async def get_my_participation(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     task_service: TaskServiceDep = None,
+    payload: dict = Depends(require_task_write_auth()),
 ):
     """Get the current user's participation in a task.
 
-    Accepts both Agent API Key (acn_xxx) and Auth0 JWT so agents can check
-    their own participation status with the same credential used for accept/submit.
+    Same auth surface as accept/submit: Agent API Key, Auth0 JWT, or Labs
+    internal token + X-Creator-* (so humans proxied by Backend can resolve
+    their own participation after join).
     """
-    agent_id = await _resolve_caller_identity(request, credentials)
+    # Prefer X-Creator-* under internal/dev so Labs identity matches join/submit.
+    agent_id, _, _ = _resolve_actor(payload, request)
+    if not agent_id:
+        agent_id = await _resolve_caller_identity(request, credentials)
     if not agent_id:
         raise ACNHTTPError(
             ErrorCode.AUTHENTICATION_REQUIRED,

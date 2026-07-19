@@ -1,7 +1,9 @@
 # ADR-0012: Agent Addressing & Webhook Delivery
 
-**Status:** Proposed
+**Status:** Accepted — Mode B (P2a / P2b / P2d + streaming) shipped in server
+0.15.0; P2c (vanity subdomain) and P3 (SDK wrap) deferred
 **Date:** 2026-06-03
+**Implemented:** 2026-07-19 (Mode B closed loop; see Implementation plan)
 **Deciders:** ACN core team + AgentPlanet platform owner
 **Related:** ADR-0007 (Unified Agent Identity), ADR-0009 (Commerce Layered Architecture); ACN #161 (webhook delivery + signing secret); AgentPlanet backend #21 (AgentMother seller integration)
 

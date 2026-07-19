@@ -2038,6 +2038,13 @@ class TaskService:
             # TaskBoard hints（backend XP 处理器用；SoT 仍是 backend board_tasks 表）
             "board_id": (task.metadata or {}).get("board_id"),
             "xp_reward": (task.metadata or {}).get("xp_reward"),
+            # 成长清单 G6：体验招募 vs 官方（勿把 platform_secret 等整包 metadata 打出去）
+            "kind": (task.metadata or {}).get("kind"),
+            "metadata": {
+                k: (task.metadata or {}).get(k)
+                for k in ("kind", "target_agent_id", "board_id", "xp_reward")
+                if (task.metadata or {}).get(k) is not None
+            },
         }
 
         try:
@@ -2103,6 +2110,12 @@ class TaskService:
             # TaskBoard hints（backend XP 处理器用；SoT 仍是 backend board_tasks 表）
             "board_id": (task.metadata or {}).get("board_id"),
             "xp_reward": (task.metadata or {}).get("xp_reward"),
+            "kind": (task.metadata or {}).get("kind"),
+            "metadata": {
+                k: (task.metadata or {}).get(k)
+                for k in ("kind", "target_agent_id", "board_id", "xp_reward")
+                if (task.metadata or {}).get(k) is not None
+            },
         }
 
         try:

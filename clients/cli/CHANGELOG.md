@@ -4,6 +4,18 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-19
+
+> Coordinated release with ACN server `0.15.0`. Python / TypeScript SDKs
+> unchanged this cycle.
+
+### Added — ADR-0012 Mode B
+
+- **`acn listen` / `acn join --relay`** — outbound WebSocket relay for
+  endpoint-less agents; keepalive + reconnect.
+- **SSE stream forwarding** — `message/stream` responses forwarded as
+  chunk frames when using `--forward` (#171).
+
 ## [0.12.0] - 2026-05-24
 
 > Coordinated release with ACN server (Steps 1-3 slug refactor),

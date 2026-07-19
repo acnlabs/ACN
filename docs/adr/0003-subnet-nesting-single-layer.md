@@ -1,7 +1,8 @@
 # ADR-0003: Subnet nesting — single-layer parent/child
 
-- **Status**: Proposed
+- **Status**: Accepted — implemented (shipped in server 0.11.0; see CHANGELOG)
 - **Date**: 2026-05-16
+- **Implemented**: 2026-05-20
 - **Decision drivers**: in-network squad collaboration, minimal new
   surface area, Org-Harness extensibility, ACL hygiene
 

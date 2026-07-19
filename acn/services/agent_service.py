@@ -246,6 +246,10 @@ class AgentService:
         # registration. Identity is the acn_* API key (minted into short-lived
         # JWTs at /oauth/token), so there is no backend provisioning call here.
 
+        # Notify platform Backend for cultivator growth G2 (create+register with owner).
+        if owner:
+            await self._emit_owner_changed(agent, None, "register")
+
         return agent
 
     async def get_agent(self, agent_id: str) -> Agent:
