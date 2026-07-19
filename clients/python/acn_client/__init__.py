@@ -10,12 +10,6 @@ Example:
 """
 
 from .client import ACNClient, ACNError
-from .regions import (
-    ACN_HOSTED_URLS,
-    hosted_base_url,
-    normalize_base_url,
-    resolve_hosted_base_url,
-)
 from .models import (
     KNOWN_INBOX_MESSAGE_STATUSES,
     KNOWN_PAYMENT_TASK_STATUSES,
@@ -50,6 +44,12 @@ from .models import (
     TaskSubmitRequest,
 )
 from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState
+from .regions import (
+    ACN_HOSTED_URLS,
+    hosted_base_url,
+    normalize_base_url,
+    resolve_hosted_base_url,
+)
 
 # Single source of truth: pyproject.toml ``[project].version``.
 # Hard-coded ``__version__`` strings drifted by 3 minor versions in the past
