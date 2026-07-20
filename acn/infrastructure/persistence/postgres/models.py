@@ -748,3 +748,67 @@ class SubnetAllowlistModel(Base):
         # cheap enough to keep around for future API surfaces.
         Index("ix_subnet_allowlist_agent_id", "agent_id"),
     )
+
+
+# =============================================================================
+# Org Harness (ADR-0014)
+# =============================================================================
+
+
+class OrgModel(Base):
+    __tablename__ = "orgs"
+
+    org_id: Mapped[str] = mapped_column(String, primary_key=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    charter: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    owner_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    owner_subject: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_by_subject: Mapped[str] = mapped_column(String, nullable=False)
+    subnet_id: Mapped[str] = mapped_column(
+        String, nullable=False, index=True, unique=True
+    )
+    steward_agent_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    plugins: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    roles: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class OrgMembershipModel(Base):
+    __tablename__ = "org_memberships"
+
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    agent_id: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False, default="worker")
+    reports_to: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint("org_id", "agent_id"),
+        Index("ix_org_memberships_agent_id", "agent_id"),
+    )
+
+
+class OrgWorkItemModel(Base):
+    __tablename__ = "org_work_items"
+
+    work_id: Mapped[str] = mapped_column(String, primary_key=True)
+    org_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="todo")
+    assignee_agent_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )

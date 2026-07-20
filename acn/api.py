@@ -57,6 +57,7 @@ from .infrastructure.persistence.postgres import (
     PostgresBillingRepository,
     PostgresReputationRepository,
     PostgresSettlementOutboxRepository,
+    PostgresOrgRepository,
     PostgresSubnetAllowlistRepository,
     PostgresSubnetJoinRequestRepository,
     PostgresSubnetRepository,
@@ -71,6 +72,7 @@ from .infrastructure.persistence.redis import (
     RedisFollowRepository,
     RedisSubnetRepository,
 )
+from .infrastructure.persistence.redis.org_repository import RedisOrgRepository
 
 # See note in acn/infrastructure/persistence/redis/__init__.py — these
 # two are imported via their submodules to keep the package-level
@@ -108,6 +110,7 @@ from .routes import (
     monitoring,
     oauth,
     onchain,
+    orgs,
     payments,
     registry,
     sessions,
@@ -132,6 +135,7 @@ from .services import (
 )
 from .services.activity_service import ActivityService
 from .services.erc8004_client import ERC8004Client
+from .services.org_service import OrgService
 from .services.escrow_client import AgentPlanetEscrowProvider
 from .services.join_flow_service import JoinFlowService
 from .services.reputation_query_service import ReputationQueryService
@@ -300,6 +304,7 @@ async def lifespan(app: FastAPI):
         agent_repository = PostgresAgentRepository(_pg_session, redis_client)
         subnet_repository = PostgresSubnetRepository(_pg_session)
         task_repository = PostgresTaskRepository(_pg_session, redis_client)
+        org_repository = PostgresOrgRepository(_pg_session)
         _billing_repository = PostgresBillingRepository(_pg_session)
         _activity_repository = PostgresActivityRepository(_pg_session)
         _settlement_outbox_repository = PostgresSettlementOutboxRepository(_pg_session)
@@ -310,6 +315,7 @@ async def lifespan(app: FastAPI):
         agent_repository = RedisAgentRepository(redis_client)
         subnet_repository = RedisSubnetRepository(redis_client)
         task_repository = RedisTaskRepository(redis_client)
+        org_repository = RedisOrgRepository(redis_client)
 
     agent_service_instance = AgentService(agent_repository)
     # ADR-0003: SubnetService now takes an optional task_repository
@@ -555,6 +561,14 @@ async def lifespan(app: FastAPI):
     subnet_service_instance.event_publisher = _join_flow_webhook_publisher
     join_flow_service_instance._event_publisher = _join_flow_webhook_publisher
 
+    # Org Harness Kernel (ADR-0014) — needs subnet + agent + webhook.
+    org_service_instance = OrgService(
+        org_repository=org_repository,
+        subnet_service=subnet_service_instance,
+        agent_service=agent_service_instance,
+        webhook_service=webhook_service_instance,
+    )
+
     payment_discovery_instance = PaymentDiscoveryService(redis_client)
     # Inject payment_discovery into AgentService so registration auto-syncs the index
     agent_service_instance.payment_discovery = payment_discovery_instance
@@ -693,6 +707,7 @@ async def lifespan(app: FastAPI):
         reputation_service=reputation_service_instance,
         reputation_query_service=reputation_query_service_instance,
         join_flow_service=join_flow_service_instance,
+        org_service=org_service_instance,
     )
 
     # Phase 1 wiring guard
@@ -1383,6 +1398,7 @@ app.include_router(monitoring.router)
 app.include_router(analytics.router)
 app.include_router(payments.router)
 app.include_router(tasks.router)  # Task Pool API
+app.include_router(orgs.router)  # Org Harness Kernel (ADR-0014)
 app.include_router(websocket.router)
 # ADR-0007: agent JWT issuance (OAuth2 client_credentials) + JWKS / OIDC
 # discovery. ACN mints short-lived agent JWTs that resource servers

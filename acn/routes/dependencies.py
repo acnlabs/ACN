@@ -48,6 +48,7 @@ from ..services import (
 from ..services.activity_service import ActivityService
 from ..services.agent_service import hash_api_key
 from ..services.join_flow_service import JoinFlowService
+from ..services.org_service import OrgService
 from ..services.reputation_query_service import ReputationQueryService
 from ..services.reputation_service import ReputationService
 
@@ -339,6 +340,7 @@ _reputation_query_service: ReputationQueryService | None = None
 # ``None`` default mirrors the SubnetService pattern: legacy test
 # fixtures that don't exercise admission can still bring the app up.
 _join_flow_service: JoinFlowService | None = None
+_org_service: OrgService | None = None
 
 
 def init_services(
@@ -366,6 +368,7 @@ def init_services(
     reputation_service: ReputationService | None = None,
     reputation_query_service: ReputationQueryService | None = None,
     join_flow_service: JoinFlowService | None = None,
+    org_service: OrgService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -382,6 +385,7 @@ def init_services(
     global _allowlist_service, _escrow_provider, _session_service
     global _reputation_service, _reputation_query_service
     global _join_flow_service
+    global _org_service
 
     _agent_service = agent_service
     _message_service = message_service
@@ -408,6 +412,7 @@ def init_services(
     _reputation_service = reputation_service
     _reputation_query_service = reputation_query_service
     _join_flow_service = join_flow_service
+    _org_service = org_service
 
 
 # Dependency functions
@@ -648,6 +653,13 @@ def get_reputation_service() -> ReputationService | None:
     return _reputation_service
 
 
+def get_org_service() -> OrgService:
+    """Get OrgService instance (Org Harness Kernel)."""
+    if _org_service is None:
+        raise RuntimeError("OrgService not initialized")
+    return _org_service
+
+
 def get_join_flow_service() -> JoinFlowService:
     """Get the JoinFlowService instance.
 
@@ -706,6 +718,7 @@ ReputationQueryServiceDep = Annotated[
     "ReputationQueryService | None", Depends(get_reputation_query_service)
 ]
 JoinFlowServiceDep = Annotated[JoinFlowService, Depends(get_join_flow_service)]
+OrgServiceDep = Annotated[OrgService, Depends(get_org_service)]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]
