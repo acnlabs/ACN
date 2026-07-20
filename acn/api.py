@@ -55,9 +55,9 @@ from .infrastructure.persistence.postgres import (
     PostgresAgentRepository,
     PostgresAllowlistRepository,
     PostgresBillingRepository,
+    PostgresOrgRepository,
     PostgresReputationRepository,
     PostgresSettlementOutboxRepository,
-    PostgresOrgRepository,
     PostgresSubnetAllowlistRepository,
     PostgresSubnetJoinRequestRepository,
     PostgresSubnetRepository,
@@ -135,9 +135,9 @@ from .services import (
 )
 from .services.activity_service import ActivityService
 from .services.erc8004_client import ERC8004Client
-from .services.org_service import OrgService
 from .services.escrow_client import AgentPlanetEscrowProvider
 from .services.join_flow_service import JoinFlowService
+from .services.org_service import OrgService
 from .services.reputation_query_service import ReputationQueryService
 from .services.reputation_service import ReputationService
 from .services.settlement_worker import SettlementWorker

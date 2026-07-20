@@ -19,11 +19,11 @@ from .join_flow_event_publisher import (
     JoinFlowEventType,
     JoinFlowEventVia,
 )
+from .org_repository import IOrgRepository
 from .settlement_outbox_repository import (
     ISettlementOutboxRepository,
     SettlementEvent,
 )
-from .org_repository import IOrgRepository
 from .subnet_allowlist_repository import ISubnetAllowlistRepository
 from .subnet_join_request_repository import ISubnetJoinRequestRepository
 from .subnet_repository import ISubnetRepository

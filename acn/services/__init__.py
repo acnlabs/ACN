@@ -18,6 +18,7 @@ from .follow_service import (
 )
 from .manifest_service import ManifestEntry, ManifestService
 from .message_service import MessageService
+from .org_service import OrgService
 from .policy_service import PolicyCheckService, PolicyDecision
 from .reputation_query_service import (
     OffChainReputationSummary,
@@ -27,7 +28,6 @@ from .reputation_query_service import (
 )
 from .reputation_service import ReputationService
 from .session_service import SessionEntry, SessionService
-from .org_service import OrgService
 from .subnet_service import SubnetService
 from .task_service import TaskNotFoundException, TaskService
 from .wallet_client import WalletClient

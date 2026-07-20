@@ -87,7 +87,7 @@ export function orgCommand(): Command {
           if (opts.harnessUrl) body.harness_url = opts.harnessUrl;
           if (opts.harnessSecret) body.harness_secret = opts.harnessSecret;
           const org = await acnPost<OrgInfo>('/orgs', body);
-          output(formatOrg(org), org);
+          output(org, formatOrg(org));
         } catch (err) {
           handleError(err);
         }
@@ -100,7 +100,7 @@ export function orgCommand(): Command {
     .action(async (orgId: string) => {
       try {
         const org = await acnGet<OrgInfo>(`/orgs/${orgId}`);
-        output(formatOrg(org), org);
+        output(org, formatOrg(org));
       } catch (err) {
         handleError(err);
       }
@@ -123,7 +123,7 @@ export function orgCommand(): Command {
           if (opts.charter) body.charter = JSON.parse(opts.charter) as unknown;
           if (opts.plugins) body.plugins = JSON.parse(opts.plugins) as unknown;
           const org = await acnPatch<OrgInfo>(`/orgs/${orgId}`, body);
-          output(formatOrg(org), org);
+          output(org, formatOrg(org));
         } catch (err) {
           handleError(err);
         }
@@ -157,7 +157,7 @@ export function orgCommand(): Command {
           res.degraded_count || res.fence_missing
             ? `  (degraded=${res.degraded_count} fence_missing=${res.fence_missing})\n`
             : '';
-        output(header + (text || '  (no members)'), res);
+        output(res, header + (text || '  (no members)'));
       } catch (err) {
         handleError(err);
       }
@@ -173,7 +173,7 @@ export function orgCommand(): Command {
           agent_id: agentId,
           role: opts.role,
         });
-        output(`Added ${m.agent_id} as ${m.role}`, m);
+        output(m, `Added ${m.agent_id} as ${m.role}`);
       } catch (err) {
         handleError(err);
       }
@@ -185,7 +185,7 @@ export function orgCommand(): Command {
     .action(async (orgId: string, agentId: string) => {
       try {
         const m = await acnDelete<MemberInfo>(`/orgs/${orgId}/members/${agentId}`);
-        output(`Removed ${m.agent_id}`, m);
+        output(m, `Removed ${m.agent_id}`);
       } catch (err) {
         handleError(err);
       }
@@ -202,7 +202,7 @@ export function orgCommand(): Command {
         if (opts.as) body.owner_kind = opts.as;
         if (opts.subject) body.owner_subject = opts.subject;
         const org = await acnPost<OrgInfo>(`/orgs/${orgId}/claim`, body);
-        output(formatOrg(org), org);
+        output(org, formatOrg(org));
       } catch (err) {
         handleError(err);
       }
@@ -219,7 +219,7 @@ export function orgCommand(): Command {
           new_owner_kind: opts.kind,
           new_owner_subject: opts.subject,
         });
-        output(formatOrg(org), org);
+        output(org, formatOrg(org));
       } catch (err) {
         handleError(err);
       }
@@ -231,7 +231,7 @@ export function orgCommand(): Command {
     .action(async (orgId: string) => {
       try {
         const org = await acnPost<OrgInfo>(`/orgs/${orgId}/release`, {});
-        output(formatOrg(org), org);
+        output(org, formatOrg(org));
       } catch (err) {
         handleError(err);
       }
@@ -243,7 +243,7 @@ export function orgCommand(): Command {
     .action(async (orgId: string) => {
       try {
         const org = await acnPost<OrgInfo>(`/orgs/${orgId}/dissolve`, {});
-        output(formatOrg(org), org);
+        output(org, formatOrg(org));
       } catch (err) {
         handleError(err);
       }
@@ -268,7 +268,7 @@ export function orgCommand(): Command {
               (w.assignee_agent_id ? `  → ${w.assignee_agent_id}` : ''),
           )
           .join('\n');
-        output(text || '  (no work)', res);
+        output(res, text || '  (no work)');
       } catch (err) {
         handleError(err);
       }
@@ -284,7 +284,7 @@ export function orgCommand(): Command {
         const body: Record<string, unknown> = { title: opts.title };
         if (opts.assignee) body.assignee_agent_id = opts.assignee;
         const w = await acnPost<WorkInfo>(`/orgs/${orgId}/work`, body);
-        output(`Created ${w.work_id}: ${w.title}`, w);
+        output(w, `Created ${w.work_id}: ${w.title}`);
       } catch (err) {
         handleError(err);
       }
@@ -308,7 +308,7 @@ export function orgCommand(): Command {
             `/orgs/${orgId}/work/${workId}`,
             body,
           );
-          output(`Updated ${w.work_id} → ${w.status}`, w);
+          output(w, `Updated ${w.work_id} → ${w.status}`);
         } catch (err) {
           handleError(err);
         }
@@ -324,7 +324,7 @@ export function orgCommand(): Command {
           `/orgs/${orgId}/loop/tick`,
           {},
         );
-        output(`Loop tick: ${res.open_count} open work item(s)`, res);
+        output(res, `Loop tick: ${res.open_count} open work item(s)`);
       } catch (err) {
         handleError(err);
       }

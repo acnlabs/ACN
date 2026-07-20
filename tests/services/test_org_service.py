@@ -76,14 +76,14 @@ def org_service(mock_org_repo, mock_subnet_service, mock_agent_service, mock_web
 
 
 def _stored_org(**overrides) -> Org:
-    defaults = dict(
-        org_id="org_test",
-        display_name="Test Org",
-        created_by=OrgPrincipal(kind="agent", subject="agt_steward"),
-        subnet_id="org-test-abc",
-        steward_agent_id="agt_steward",
-        owner=OrgOwner(kind="none"),
-    )
+    defaults = {
+        "org_id": "org_test",
+        "display_name": "Test Org",
+        "created_by": OrgPrincipal(kind="agent", subject="agt_steward"),
+        "subnet_id": "org-test-abc",
+        "steward_agent_id": "agt_steward",
+        "owner": OrgOwner(kind="none"),
+    }
     defaults.update(overrides)
     return Org(**defaults)
 
