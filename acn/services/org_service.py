@@ -18,7 +18,12 @@ from ..core.entities.org import (
     OrgWorkItem,
     WorkStatus,
 )
-from ..core.exceptions import AgentNotFoundException, SubnetNotFoundException
+from ..core.entities.subnet import Subnet
+from ..core.exceptions import (
+    AgentNotFoundException,
+    OrgSubnetBindingConflictError,
+    SubnetNotFoundException,
+)
 from ..core.interfaces.org_repository import IOrgRepository
 from ..protocols.ap2 import WebhookEventType
 from ..protocols.ap2.webhook import WebhookService
@@ -289,7 +294,7 @@ class OrgService:
                     status="active",
                 )
             )
-        except Exception:
+        except Exception as save_exc:
             if created_subnet:
                 try:
                     await self.subnet_service.delete_subnet(subnet.slug, steward)
@@ -309,6 +314,13 @@ class OrgService:
                     org_id=org_id,
                     exc_info=True,
                 )
+            if isinstance(save_exc, OrgSubnetBindingConflictError):
+                # Concurrent create won the fence claim after our
+                # pre-check — same 409 surface as the pre-check path.
+                raise OrgConflictError(
+                    "subnet_already_bound",
+                    str(save_exc),
+                ) from save_exc
             raise
 
         if harness_url:
@@ -344,24 +356,147 @@ class OrgService:
             raise OrgNotFoundError(org_id)
         return org
 
-    async def get_org_view(self, org_id: str) -> dict[str, Any]:
-        """Org dict enriched with live fence / harness fields."""
+    # ------------------------------------------------------------------
+    # Private-Org read ACL (aligned with subnet ACL V6 / issue #114)
+    # ------------------------------------------------------------------
+
+    async def _is_entitled_private_reader(
+        self,
+        org: Org,
+        subnet: Subnet | None,
+        caller_type: CallerType | None,
+        caller_sub: str | None,
+        *,
+        admin: bool = False,
+    ) -> bool:
+        """True when the caller may read a private Org in full.
+
+        Entitled principals (mirrors ``routes/subnets.py``
+        ``_resolve_caller_access`` plus Org-native relationships):
+
+        - internal token / ``acn:admin``
+        - Org owner or ``created_by`` (human or agent)
+        - the steward agent, the fence subnet owner, or any subnet member
+        - any agent holding an **active** OrgMembership (covers degraded
+          members not yet propagated into the fence)
+        - a human who owns the steward agent (ownership-chain bridge)
+
+        Deliberately narrow, matching subnet ACL V6 § 2: a human who owns
+        a mere *member* (worker) agent is NOT entitled — membership is a
+        collaboration edge and does not extend read trust upward to the
+        member agent's holder. Such humans read via their agent's own
+        API key.
+        """
+        if admin:
+            return True
+        if caller_type is None or not caller_sub:
+            return False
+        if self._is_owner(org, caller_type, caller_sub):
+            return True
+        if self._is_created_by(org, caller_type, caller_sub):
+            return True
+        if caller_type == "agent":
+            if caller_sub == org.steward_agent_id:
+                return True
+            if subnet is not None and (
+                caller_sub == subnet.owner or subnet.has_member(caller_sub)
+            ):
+                return True
+            membership = await self.repository.find_membership(
+                org.org_id, caller_sub
+            )
+            return membership is not None and membership.status == "active"
+        # Human ownership-chain bridge: owning the steward agent grants read.
+        try:
+            steward = await self.agent_service.get_agent(org.steward_agent_id)
+        except AgentNotFoundException:
+            return False
+        return steward.owner == caller_sub
+
+    @staticmethod
+    def _redacted_org_view(org: Org, *, fence_missing: bool) -> dict[str, Any]:
+        """Minimal public projection of a private Org.
+
+        Mirrors the ``SubnetStub`` philosophy: existence is not hidden
+        (org_id is required to query at all), but ``charter``, ``plugins``,
+        ``created_by``, owner subject, steward, subnet slug, and harness
+        details are withheld from unauthorised readers.
+        """
+        return {
+            "org_id": org.org_id,
+            "status": org.status,
+            "owner": {"kind": org.owner.kind},
+            "private": True,
+            "fencing": {"is_private": True, "missing": fence_missing},
+        }
+
+    async def ensure_private_readable(
+        self,
+        org_id: str,
+        *,
+        caller_type: CallerType | None = None,
+        caller_sub: str | None = None,
+        admin: bool = False,
+    ) -> Org:
+        """Gate member/work listings of a private Org.
+
+        Raises ``OrgPermissionError("private_org")`` for unauthorised
+        readers. A missing fence subnet is treated as private
+        (conservative: we can no longer prove the fence was public).
+        """
+        org = await self.get_org(org_id)
+        subnet: Subnet | None
+        try:
+            subnet = await self.subnet_service.get_subnet(org.subnet_id)
+        except SubnetNotFoundException:
+            subnet = None
+        is_private = subnet.is_private if subnet is not None else True
+        if not is_private:
+            return org
+        if await self._is_entitled_private_reader(
+            org, subnet, caller_type, caller_sub, admin=admin
+        ):
+            return org
+        raise OrgPermissionError(
+            "private_org",
+            "Org is bound to a private subnet; caller is not entitled to read it",
+        )
+
+    async def get_org_view(
+        self,
+        org_id: str,
+        *,
+        caller_type: CallerType | None = None,
+        caller_sub: str | None = None,
+        admin: bool = False,
+    ) -> dict[str, Any]:
+        """Org dict enriched with live fence / harness fields.
+
+        Private-fence Orgs are redacted for unauthorised viewers (see
+        ``_redacted_org_view``); public-fence Orgs are fully visible.
+        """
         org = await self.get_org(org_id)
         view = org.to_dict()
         try:
             subnet = await self.subnet_service.get_subnet(org.subnet_id)
         except SubnetNotFoundException:
+            if org.status == "active":
+                org.status = "fence_missing"
+                org.updated_at = datetime.now(UTC)
+                await self.repository.save_org(org)
+            # Fence gone → privacy no longer provable; restrict to
+            # entitled readers (conservative default).
+            if not await self._is_entitled_private_reader(
+                org, None, caller_type, caller_sub, admin=admin
+            ):
+                return self._redacted_org_view(org, fence_missing=True)
+            view["status"] = org.status
             view["harness_webhook"] = {"url": None, "registered": False}
             view["fencing"] = {
                 **(view.get("fencing") or {}),
                 "subnet_id": org.subnet_id,
                 "missing": True,
             }
-            if org.status == "active":
-                org.status = "fence_missing"
-                org.updated_at = datetime.now(UTC)
-                await self.repository.save_org(org)
-                view["status"] = "fence_missing"
             return view
 
         if org.status == "fence_missing":
@@ -369,6 +504,11 @@ class OrgService:
             org.updated_at = datetime.now(UTC)
             await self.repository.save_org(org)
             view["status"] = "active"
+
+        if subnet.is_private and not await self._is_entitled_private_reader(
+            org, subnet, caller_type, caller_sub, admin=admin
+        ):
+            return self._redacted_org_view(org, fence_missing=False)
 
         view["harness_webhook"] = {
             "url": subnet.harness_url,
@@ -796,6 +936,15 @@ class OrgService:
         caller_type: CallerType,
         caller_sub: str,
     ) -> Org:
+        """Soft-dissolve: status flip only, by design.
+
+        Memberships, work items, and the fence subnet are intentionally
+        NOT cleaned up here — the subnet (and its members) survive so the
+        same steward can rebind it to a new Org (``create_org`` accepts a
+        subnet whose bound Org is dissolved), and rows stay for audit.
+        Hard cleanup is the operator-path ``delete_org`` +
+        ``delete_memberships_for_org`` / ``delete_work_for_org``.
+        """
         org = await self.get_org(org_id)
         self._require_governance(org, caller_type, caller_sub)
         org.status = "dissolved"

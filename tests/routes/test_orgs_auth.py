@@ -1,4 +1,4 @@
-"""Route-level auth gate for Org Harness write paths."""
+"""Route-level auth gate for Org Harness write paths + optional reader."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from fastapi import BackgroundTasks, Request
 from starlette.datastructures import Headers
 
 from acn.core.errors import ACNHTTPError, ErrorCode
-from acn.routes.orgs import require_org_auth
+from acn.routes.orgs import require_org_auth, resolve_org_reader
 
 
 @pytest.mark.asyncio
@@ -67,3 +67,100 @@ async def test_jwt_write_accepted_by_org_auth():
         )
     assert payload["sub"] == "auth0|writer"
     assert payload["type"] == "human"
+
+
+# ---------------------------------------------------------------------------
+# Optional reader dependency (private-Org read ACL) — never 401s;
+# anonymous / invalid credentials resolve to None.
+# ---------------------------------------------------------------------------
+
+
+def _request() -> MagicMock:
+    request = MagicMock(spec=Request)
+    request.state = MagicMock()
+    request.headers = Headers({})
+    return request
+
+
+@pytest.mark.asyncio
+async def test_org_reader_anonymous_resolves_to_none():
+    checker = resolve_org_reader()
+    with patch("acn.routes.orgs.get_settings") as gs:
+        gs.return_value = MagicMock(dev_mode=False, internal_api_token="tok")
+        payload = await checker(
+            request=_request(),
+            background_tasks=BackgroundTasks(),
+            credentials=None,
+            x_internal_token=None,
+            agent_service=AsyncMock(),
+        )
+    assert payload is None
+
+
+@pytest.mark.asyncio
+async def test_org_reader_invalid_jwt_resolves_to_none():
+    checker = resolve_org_reader()
+    credentials = MagicMock()
+    credentials.credentials = "not-a-valid-jwt"
+
+    async def boom(req, creds):
+        raise RuntimeError("bad token")
+
+    with patch("acn.routes.orgs.verify_token", new=boom), patch(
+        "acn.routes.orgs.get_settings"
+    ) as gs:
+        gs.return_value = MagicMock(dev_mode=False, internal_api_token="tok")
+        payload = await checker(
+            request=_request(),
+            background_tasks=BackgroundTasks(),
+            credentials=credentials,
+            x_internal_token=None,
+            agent_service=AsyncMock(),
+        )
+    assert payload is None
+
+
+@pytest.mark.asyncio
+async def test_org_reader_invalid_agent_key_resolves_to_none():
+    checker = resolve_org_reader()
+    credentials = MagicMock()
+    credentials.credentials = "acn_deadbeef"
+    agent_service = AsyncMock()
+    agent_service.get_agent_by_api_key.return_value = None
+
+    with patch("acn.routes.orgs.get_settings") as gs:
+        gs.return_value = MagicMock(dev_mode=False, internal_api_token="tok")
+        payload = await checker(
+            request=_request(),
+            background_tasks=BackgroundTasks(),
+            credentials=credentials,
+            x_internal_token=None,
+            agent_service=agent_service,
+        )
+    assert payload is None
+
+
+@pytest.mark.asyncio
+async def test_org_reader_agent_key_resolves_to_agent_payload():
+    checker = resolve_org_reader()
+    credentials = MagicMock()
+    credentials.credentials = "acn_goodkey"
+    agent = MagicMock()
+    agent.agent_id = "agt_reader"
+    agent_service = AsyncMock()
+    agent_service.get_agent_by_api_key.return_value = agent
+
+    with patch("acn.routes.orgs.get_settings") as gs:
+        gs.return_value = MagicMock(dev_mode=False, internal_api_token="tok")
+        payload = await checker(
+            request=_request(),
+            background_tasks=BackgroundTasks(),
+            credentials=credentials,
+            x_internal_token=None,
+            agent_service=agent_service,
+        )
+    assert payload == {
+        "sub": "agt_reader",
+        "type": "agent",
+        "permissions": ["acn:read", "acn:write"],
+    }

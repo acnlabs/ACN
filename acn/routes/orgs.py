@@ -126,12 +126,104 @@ def require_org_auth():
 OrgAuthDep = Depends(require_org_auth())
 
 
+# ---------------------------------------------------------------------------
+# Optional read-path auth: never rejects — anonymous / invalid credentials
+# resolve to ``None`` so private-Org reads degrade to a redacted view
+# (mirrors GET /subnets/{slug}: invalid token → treated as anonymous).
+# ---------------------------------------------------------------------------
+
+
+def resolve_org_reader():
+    async def checker(
+        request: Request,
+        background_tasks: BackgroundTasks,
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+        x_internal_token: str | None = Header(default=None),
+        agent_service: AgentService = Depends(get_agent_service),
+    ) -> dict | None:
+        s = get_settings()
+        if s.dev_mode:
+            if credentials and credentials.credentials.startswith("acn_"):
+                agent = await agent_service.get_agent_by_api_key(
+                    credentials.credentials
+                )
+                if agent:
+                    _schedule_alive_renewal(
+                        background_tasks, agent_service, agent.agent_id
+                    )
+                    return {
+                        "sub": agent.agent_id,
+                        "type": "agent",
+                        "permissions": ["acn:read", "acn:write"],
+                    }
+            sub = credentials.credentials if credentials else "dev@clients"
+            return {
+                "sub": sub,
+                "type": "human",
+                "permissions": ["acn:read", "acn:write", "acn:admin"],
+            }
+
+        if (
+            x_internal_token
+            and s.internal_api_token
+            and secrets.compare_digest(x_internal_token, s.internal_api_token)
+        ):
+            return {
+                "sub": "backend@internal",
+                "type": "internal",
+                "permissions": ["acn:read", "acn:write", "acn:admin"],
+            }
+
+        if not credentials:
+            return None
+
+        if credentials.credentials.startswith("acn_"):
+            agent = await agent_service.get_agent_by_api_key(credentials.credentials)
+            if not agent:
+                return None  # invalid key → anonymous (read path never 401s)
+            _schedule_alive_renewal(background_tasks, agent_service, agent.agent_id)
+            return {
+                "sub": agent.agent_id,
+                "type": "agent",
+                "permissions": ["acn:read", "acn:write"],
+            }
+
+        try:
+            payload = await verify_token(request, credentials)
+        except Exception:  # noqa: BLE001 — invalid JWT → anonymous
+            return None
+        return {
+            "sub": payload.get("sub", ""),
+            "type": "human",
+            "permissions": payload.get("permissions", []),
+        }
+
+    return checker
+
+
+OrgReaderDep = Depends(resolve_org_reader())
+
+
 def _caller(payload: dict) -> tuple[Literal["human", "agent"], str]:
     ptype = payload.get("type", "human")
     if ptype == "agent":
         return "agent", payload["sub"]
     # internal / human / dev → treat as human principal for created_by
     return "human", payload.get("sub", "")
+
+
+def _reader_ctx(
+    payload: dict | None,
+) -> tuple[Literal["human", "agent"] | None, str | None, bool]:
+    """(caller_type, caller_sub, admin) for optional read-path payloads."""
+    if not payload:
+        return None, None, False
+    admin = (
+        payload.get("type") == "internal"
+        or "acn:admin" in payload.get("permissions", [])
+    )
+    caller_type, caller_sub = _caller(payload)
+    return caller_type, caller_sub, admin
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +297,7 @@ def _map_permission(exc: OrgPermissionError, org_id: str) -> ACNHTTPError:
         "owner_subject_mismatch",
         "owner_agent_not_owned",
         "cannot_remove_steward",
+        "private_org",
     }
     code = (
         ErrorCode.OWNERSHIP_MISMATCH
@@ -245,7 +338,10 @@ async def create_org(
             harness_url=body.harness_url,
             harness_secret=body.harness_secret,
         )
-        return await org_service.get_org_view(org.org_id)
+        # Creator is trivially entitled to the full view of its new Org.
+        return await org_service.get_org_view(
+            org.org_id, caller_type=caller_type, caller_sub=caller_sub
+        )
     except OrgPermissionError as e:
         raise _map_permission(e, org_id="(new)") from e
     except ValueError as e:
@@ -265,10 +361,23 @@ async def create_org(
 @router.get("/{org_id}")
 async def get_org(
     org_id: OrgIdPath,
+    reader: dict | None = OrgReaderDep,
     org_service: OrgService = Depends(get_org_service),
 ):
+    """Get an Org.
+
+    Orgs fenced by a **private** subnet are redacted for anonymous /
+    unentitled callers (same philosophy as ``GET /subnets/{slug}``
+    returning a ``SubnetStub``); public-fence Orgs are fully visible.
+    """
+    caller_type, caller_sub, admin = _reader_ctx(reader)
     try:
-        return await org_service.get_org_view(org_id)
+        return await org_service.get_org_view(
+            org_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            admin=admin,
+        )
     except OrgNotFoundError as e:
         raise ACNHTTPError(
             ErrorCode.ORG_NOT_FOUND,
@@ -302,7 +411,10 @@ async def update_org(
             charter=body.charter,
             plugins=body.plugins,
         )
-        return await org_service.get_org_view(org_id)
+        # update_org already enforced governance; return the full view.
+        return await org_service.get_org_view(
+            org_id, caller_type=caller_type, caller_sub=caller_sub
+        )
     except OrgNotFoundError as e:
         raise ACNHTTPError(
             ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
@@ -432,14 +544,25 @@ async def dissolve_org(
 @router.get("/{org_id}/members")
 async def list_members(
     org_id: OrgIdPath,
+    reader: dict | None = OrgReaderDep,
     org_service: OrgService = Depends(get_org_service),
 ):
+    """List members. Private-fence Orgs require an entitled reader (403)."""
+    caller_type, caller_sub, admin = _reader_ctx(reader)
     try:
+        await org_service.ensure_private_readable(
+            org_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            admin=admin,
+        )
         return await org_service.list_members_view(org_id)
     except OrgNotFoundError as e:
         raise ACNHTTPError(
             ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
         ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
 
 
 @router.post("/{org_id}/members")
@@ -544,9 +667,18 @@ async def create_work(
 async def list_work(
     org_id: OrgIdPath,
     open_only: bool = False,
+    reader: dict | None = OrgReaderDep,
     org_service: OrgService = Depends(get_org_service),
 ):
+    """List work items. Private-fence Orgs require an entitled reader (403)."""
+    caller_type, caller_sub, admin = _reader_ctx(reader)
     try:
+        await org_service.ensure_private_readable(
+            org_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            admin=admin,
+        )
         items = await org_service.list_work(org_id, open_only=open_only)
         return {
             "org_id": org_id,
@@ -557,6 +689,8 @@ async def list_work(
         raise ACNHTTPError(
             ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
         ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
 
 
 @router.patch("/{org_id}/work/{work_id}")
