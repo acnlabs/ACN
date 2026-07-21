@@ -24,6 +24,7 @@ from .settlement_outbox_repository import (
     ISettlementOutboxRepository,
     SettlementEvent,
 )
+from .work_pattern import IWorkPattern
 from .subnet_allowlist_repository import ISubnetAllowlistRepository
 from .subnet_join_request_repository import ISubnetJoinRequestRepository
 from .subnet_repository import ISubnetRepository
@@ -49,6 +50,7 @@ __all__ = [
     "ISubnetRepository",
     "ITaskRepository",
     "IUnitOfWork",
+    "IWorkPattern",
     "IEscrowProvider",
     "ReleaseResult",
     "EscrowResult",

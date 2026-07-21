@@ -85,8 +85,8 @@ class Org:
     charter: dict[str, Any] = field(default_factory=dict)
     plugins: dict[str, str] = field(
         default_factory=lambda: {
-            "work": "minimal",
-            "loop": "thin",
+            "work": "builtin_work",
+            "loop": "heartbeat",
             "memory": "noop",
         }
     )
@@ -144,7 +144,11 @@ class Org:
             owner=OrgOwner.from_dict(data.get("owner")),
             charter=data.get("charter") or {},
             plugins=data.get("plugins")
-            or {"work": "minimal", "loop": "thin", "memory": "noop"},
+            or {
+                "work": "builtin_work",
+                "loop": "heartbeat",
+                "memory": "noop",
+            },
             roles=list(data.get("roles") or _DEFAULT_ROLES),
             status=data.get("status") or "active",
             steward_agent_id=data.get("steward_agent_id") or "",

@@ -34,7 +34,8 @@ class PostgresOrgRepository(IOrgRepository):
             ),
             subnet_id=row.subnet_id,
             steward_agent_id=row.steward_agent_id,
-            plugins=row.plugins or {"work": "minimal", "loop": "thin", "memory": "noop"},
+            plugins=row.plugins
+            or {"work": "builtin_work", "loop": "heartbeat", "memory": "noop"},
             roles=list(row.roles or ["manager", "worker", "reviewer"]),
             status=row.status,  # type: ignore[arg-type]
             created_at=row.created_at,

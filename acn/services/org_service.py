@@ -1,4 +1,4 @@
-"""Org Harness service — Kernel + minimal work + thin Loop (ADR-0014)."""
+"""Org Harness service — Kernel + Work Port + thin Loop (ADR-0014 / Phase 2a)."""
 
 from __future__ import annotations
 
@@ -29,6 +29,11 @@ from ..protocols.ap2 import WebhookEventType
 from ..protocols.ap2.webhook import WebhookService
 from .agent_service import AgentService
 from .subnet_service import SubnetService
+from .work_patterns import (
+    normalize_org_plugins,
+    resolve_work_pattern,
+    validate_org_plugins,
+)
 
 logger = structlog.get_logger()
 
@@ -79,6 +84,11 @@ class OrgService:
         self.subnet_service = subnet_service
         self.agent_service = agent_service
         self.webhook_service = webhook_service
+
+    def _work_pattern_for(self, org: Org):
+        """Resolve ``IWorkPattern`` from ``org.plugins.work`` (aliases allowed)."""
+        plugin_id = (org.plugins or {}).get("work", "builtin_work")
+        return resolve_work_pattern(plugin_id, self.repository)
 
     # ------------------------------------------------------------------
     # Auth helpers
@@ -229,6 +239,10 @@ class OrgService:
         if is_private and join_policy == "open":
             join_policy = "approval"
 
+        # Validate plugins before creating a fence subnet (avoid orphans).
+        resolved_plugins = normalize_org_plugins(plugins)
+        validate_org_plugins(resolved_plugins)
+
         slug = subnet_id or self._generate_subnet_slug(display_name)
         try:
             existing = await self.subnet_service.get_subnet(slug)
@@ -279,8 +293,7 @@ class OrgService:
             steward_agent_id=steward,
             owner=OrgOwner(kind="none"),
             charter=charter or {},
-            plugins=plugins
-            or {"work": "minimal", "loop": "thin", "memory": "noop"},
+            plugins=resolved_plugins,
             created_at=now,
             updated_at=now,
         )
@@ -541,8 +554,8 @@ class OrgService:
         if charter is not None:
             org.charter = charter
         if plugins is not None:
-            merged = dict(org.plugins)
-            merged.update(plugins)
+            merged = normalize_org_plugins({**org.plugins, **plugins})
+            validate_org_plugins(merged)
             org.plugins = merged
         org.updated_at = datetime.now(UTC)
         await self.repository.save_org(org)
@@ -954,7 +967,7 @@ class OrgService:
         return org
 
     # ------------------------------------------------------------------
-    # Minimal work + thin Loop
+    # Work Port + thin Loop
     # ------------------------------------------------------------------
 
     async def create_work(
@@ -968,17 +981,11 @@ class OrgService:
     ) -> OrgWorkItem:
         org = await self.get_org(org_id)
         self._require_governance(org, caller_type, caller_sub)
-        now = datetime.now(UTC)
-        work = OrgWorkItem(
-            work_id=f"work_{uuid4().hex[:16]}",
-            org_id=org_id,
+        work = await self._work_pattern_for(org).create_work(
+            org_id,
             title=title,
             assignee_agent_id=assignee_agent_id,
-            status="todo",
-            created_at=now,
-            updated_at=now,
         )
-        await self.repository.save_work(work)
         await self._emit(
             org,
             WebhookEventType.ORG_WORK_CREATED,
@@ -998,14 +1005,12 @@ class OrgService:
     ) -> OrgWorkItem:
         org = await self.get_org(org_id)
         self._require_governance(org, caller_type, caller_sub)
-        work = await self.repository.find_work(org_id, work_id)
-        if not work:
-            raise OrgWorkNotFoundError(org_id, work_id)
-        work.status = status
-        if assignee_agent_id is not None:
-            work.assignee_agent_id = assignee_agent_id
-        work.updated_at = datetime.now(UTC)
-        await self.repository.save_work(work)
+        work = await self._work_pattern_for(org).update_work(
+            org_id,
+            work_id,
+            status=status,
+            assignee_agent_id=assignee_agent_id,
+        )
         await self._emit(
             org,
             WebhookEventType.ORG_WORK_UPDATED,
@@ -1016,8 +1021,10 @@ class OrgService:
     async def list_work(
         self, org_id: str, *, open_only: bool = False
     ) -> list[OrgWorkItem]:
-        await self.get_org(org_id)
-        return await self.repository.list_work(org_id, open_only=open_only)
+        org = await self.get_org(org_id)
+        return await self._work_pattern_for(org).list_work(
+            org_id, open_only=open_only
+        )
 
     async def tick_loop(
         self,
@@ -1026,13 +1033,15 @@ class OrgService:
         caller_type: CallerType,
         caller_sub: str,
     ) -> dict[str, Any]:
-        """Thin Loop tick: list open work and emit org.loop_tick."""
+        """Thin Loop tick: list open work via Work Port and emit org.loop_tick."""
         org = await self.get_org(org_id)
         self._require_governance(org, caller_type, caller_sub)
         if org.status != "active":
             raise OrgPermissionError("org_not_active", "Org Loop requires active status")
 
-        open_work = await self.repository.list_work(org_id, open_only=True)
+        open_work = await self._work_pattern_for(org).list_work(
+            org_id, open_only=True
+        )
         payload = {
             "open_count": len(open_work),
             "work_ids": [w.work_id for w in open_work],
