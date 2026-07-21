@@ -425,7 +425,7 @@ class TestUpdateAndMembersView:
         assert updated.display_name == "Renamed"
         assert updated.charter["mission"] == "ship"
         assert updated.plugins["loop"] == "heartbeat"
-        assert updated.plugins["work"] == "minimal"
+        assert updated.plugins["work"] == "builtin_work"
         mock_org_repo.save_org.assert_awaited()
 
     async def test_list_members_marks_degraded(
@@ -697,3 +697,111 @@ class TestGovernanceGate:
                 caller_type="agent",
                 caller_sub="agt_steward",
             )
+
+
+class TestOrgPluginResolve:
+    async def test_create_rejects_unknown_plugin(self, org_service, mock_org_repo):
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.create_org(
+                display_name="Bad Plugins",
+                caller_type="agent",
+                caller_sub="agt_steward",
+                plugins={"work": "no_such_plugin"},
+            )
+        assert ei.value.reason == "unknown_plugin"
+        mock_org_repo.save_org.assert_not_called()
+
+    async def test_create_rejects_unavailable_task_pool(
+        self, org_service, mock_org_repo
+    ):
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.create_org(
+                display_name="Bad Plugins",
+                caller_type="agent",
+                caller_sub="agt_steward",
+                plugins={"work": "task_pool"},
+            )
+        assert ei.value.reason == "plugin_unavailable"
+        mock_org_repo.save_org.assert_not_called()
+
+    async def test_create_normalizes_legacy_aliases(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        subnet = Subnet(
+            slug="org-legacy-1",
+            name="Legacy Aliases",
+            owner="agt_steward",
+            member_agent_ids={"agt_steward"},
+        )
+        mock_subnet_service.get_subnet = AsyncMock(
+            side_effect=[SubnetNotFoundException("x"), subnet]
+        )
+        mock_subnet_service.create_subnet = AsyncMock(return_value=subnet)
+        org = await org_service.create_org(
+            display_name="Legacy Aliases",
+            caller_type="agent",
+            caller_sub="agt_steward",
+            subnet_id="org-legacy-1",
+            plugins={"work": "minimal", "loop": "thin"},
+        )
+        assert org.plugins["work"] == "builtin_work"
+        assert org.plugins["loop"] == "heartbeat"
+
+    async def test_update_rejects_unavailable_plugin(
+        self, org_service, mock_org_repo
+    ):
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.update_org(
+                org.org_id,
+                plugins={"work": "paperclip"},
+                caller_type="agent",
+                caller_sub="agt_steward",
+            )
+        assert ei.value.reason == "plugin_unavailable"
+        mock_org_repo.save_org.assert_not_called()
+
+    async def test_work_paths_reject_legacy_unavailable_plugin(
+        self, org_service, mock_org_repo
+    ):
+        """Phase 1 could store plugins.work=task_pool; work paths must raise, not 500."""
+        org = _stored_org(
+            plugins={
+                "work": "task_pool",
+                "loop": "heartbeat",
+                "memory": "noop",
+            }
+        )
+        mock_org_repo.find_org.return_value = org
+
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.list_work(org.org_id)
+        assert ei.value.reason == "plugin_unavailable"
+
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.create_work(
+                org.org_id,
+                title="x",
+                caller_type="agent",
+                caller_sub="agt_steward",
+            )
+        assert ei.value.reason == "plugin_unavailable"
+
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.update_work_status(
+                org.org_id,
+                "work_x",
+                status="todo",
+                caller_type="agent",
+                caller_sub="agt_steward",
+            )
+        assert ei.value.reason == "plugin_unavailable"
+
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.tick_loop(
+                org.org_id,
+                caller_type="agent",
+                caller_sub="agt_steward",
+            )
+        assert ei.value.reason == "plugin_unavailable"

@@ -249,6 +249,13 @@ class OrgCreateRequest(BaseModel):
         default=None,
         description="HMAC secret for harness_url (optional)",
     )
+    plugins: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Org plugin map; work defaults to builtin_work. "
+            "Legacy aliases minimal→builtin_work, thin→heartbeat."
+        ),
+    )
 
 
 class OrgUpdateRequest(BaseModel):
@@ -335,6 +342,7 @@ async def create_org(
             subnet_id=body.subnet_id,
             join_policy=body.join_policy,
             is_private=body.is_private,
+            plugins=body.plugins,
             harness_url=body.harness_url,
             harness_secret=body.harness_secret,
         )
@@ -421,6 +429,12 @@ async def update_org(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
@@ -661,6 +675,13 @@ async def create_work(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        # Legacy Phase 1 Orgs may store unavailable work plugins.
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e
 
 
 @router.get("/{org_id}/work")
@@ -691,6 +712,12 @@ async def list_work(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e
 
 
 @router.patch("/{org_id}/work/{work_id}")
@@ -726,6 +753,12 @@ async def update_work(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e
 
 
 @router.post("/{org_id}/loop/tick")
@@ -748,3 +781,9 @@ async def tick_loop(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e

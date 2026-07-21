@@ -150,7 +150,7 @@ Membership **不是**「加人产品」：进围栏走既有 subnet admission；
 
 | Port | 问题 | v0 默认 | 可替换示例 |
 |---|---|---|---|
-| **`IWorkPattern`** | 活怎么建模、认领、状态 | Builtin TaskPool（轻量） | Paperclip Issues、自研 DAG |
+| **`IWorkPattern`** | 活怎么建模、认领、状态 | **`builtin_work`**（Phase 1 `OrgWorkItem`） | TaskPool（可选）、Paperclip Issues、自研 DAG |
 | **`IOrgLoop`** | 看队列→分派/唤醒→回收 | Heartbeat / 简单 dispatcher | ClawTeam 适配、自定义巡检 |
 | **`ICapabilityPool`** | 组织能力目录 | 聚合成员 ACN skills（可先内置非插件） | 外挂 MCP catalog |
 | **`IOrgMemory`** | 集体记忆 / SOP | `noop` | Mem0、PG+vector、Skills 包 |
@@ -189,9 +189,9 @@ Work Graph（IWorkPattern 策略，易变）:
 按 **Org** 配置插件组合，而非全局唯一：
 
 ```text
-Org A → Work=task_pool     Loop=heartbeat      Memory=noop
-Org B → Work=paperclip     Loop=paperclip_wake Memory=vector
-Org C → Work=swarm_handoff Loop=heartbeat      Memory=noop
+Org A → Work=builtin_work  Loop=heartbeat      Memory=noop
+Org B → Work=task_pool     Loop=heartbeat      Memory=noop
+Org C → Work=paperclip     Loop=paperclip_wake Memory=vector
 ```
 
 ---
@@ -257,7 +257,7 @@ Org Harness **消费** Core，不重新实现：
     "subnet_id": "acme-agent-co"
   },
   "plugins": {
-    "work": "task_pool",
+    "work": "builtin_work",
     "loop": "heartbeat",
     "memory": "noop"
   },
@@ -314,15 +314,17 @@ Org Harness **消费** Core，不重新实现：
 
 ### Phase 2 — Work Port
 
-1. 将 Task Pool 收编为默认 `IWorkPattern` 插件
-2. Plugin 配置按 org 切换
-3. 与 `paperclip-acn-plugin` 对齐：Issues ↔ WorkPort（逐步弱化「仅 Task 镜像」）
+> **短方案（实施准绳）：** [phase2-work-port-v0.md](./phase2-work-port-v0.md)
+
+1. **P2a（必做）** 最小 Port 插座 + 默认 `builtin_work`（现有 `OrgWorkItem`）；`smoke_org_kernel.sh` 行为不变  
+2. **P2b（按需）** `plugins.work=task_pool` 进程内可选适配（非默认；外部 Pattern 仍禁绑 `/tasks/*`）  
+3. **P2c（可并行）** `paperclip-acn-plugin`：Issues ↔ Org work + `org.*`，弱化 Task 镜像  
 
 ### Phase 3 — 增强 Port
 
 - Policy/Budget、Memory、Capability 真插件化  
 - ClawTeam / Swarm 适配器实验  
-- 统一 Plugin 宿主  
+- 统一 Plugin 宿主（发现 / 版本 / 热加载；Phase 2 仅最小 resolve）  
 
 ### 明确后置
 

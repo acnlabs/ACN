@@ -45,7 +45,7 @@
     "join_policy": "approval"
   },
   "plugins": {
-    "work": "task_pool",
+    "work": "builtin_work",
     "loop": "heartbeat",
     "memory": "noop"
   },
