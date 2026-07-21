@@ -1,7 +1,7 @@
 # Org Harness
 
 **Status:** Design v0 + [ADR-0014](../adr/0014-org-harness-module.md) Accepted；**Phase 1 Kernel 已落地**（`/api/v1/orgs*` · `acn org …`）  
-**Last updated:** 2026-07-19
+**Last updated:** 2026-07-21
 
 > **Org Harness** 是 ACN 的**新模块**：给「一群 agent 组成的 Org」提供组织层挽具。  
 > **ACN** 仍叫 ACN（智能体协作网络），不是 Pasture。  
@@ -29,12 +29,12 @@
 Org = N × Agent + Org Harness   (± optional Owner: none | human | agent)
 
 Org Harness Module = Kernel（固定） + Ports（可插拔）
-  Kernel: Org · 可选 Owner · agent 成员 · subnet 绑定
-  Ports:  Work · Loop · Memory · Capability · Policy · Events
+  Org Graph（Kernel）: Org · 可选 Owner · agent 成员 · subnet 绑定
+  Control Loop（Port）: 组织心跳 — 观察队列 → 分派/唤醒 → 回收
+  Work Graph（Port 策略）: TaskPool / Paperclip / Swarm / LangGraph / DAG…
+  其它 Ports: Memory · Capability · Policy · Events
 
-控制范式: Loop（组织心跳）
-Graph / ClawTeam / Swarm / Paperclip / TaskPool: 插在 Ports 上
-L1 OpenHarness 等: 成员自带，不升维进 Org Harness
+L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Kernel
 ```
 
 ## 下一步

@@ -1,7 +1,7 @@
 # Org Harness 方案设计与架构 v0
 
 **Status:** Design v0 — mechanics decided in [ADR-0014](../adr/0014-org-harness-module.md)（Accepted）  
-**Date:** 2026-07-19  
+**Date:** 2026-07-19 · **Narrative sync:** 2026-07-21（Org Graph · Control Loop · Work Graph）  
 **Audience:** ACN / AgentPlanet 产品与工程  
 **Supersedes (naming & ownership):** 本文纠正早期「ACN = Pasture System」「Org 只活在 Paperclip」的表述；Network Core 契约仍见 [api-surface-tiers.md](./api-surface-tiers.md)。  
 **P0/P1 风险收口:** 见 ADR-0014（无 owner 治理、Membership↔subnet、subnet steward、Phase 1 含最小 work、Loop/Work 边界）。
@@ -31,7 +31,8 @@ Agent 可以入网、进围栏、互相通信、接任务。但**缺少「组织
 
 - 把人变成 ACN 协作网上的 peer（人不当 A2A 对等方）
 - 将 ACN 改名为 Pasture / Pasture System
-- 用 Graph（DAG）替代组织控制环
+- 用**回合内 DAG / 会话级 fan-out runtime**替代组织控制平面（Control Loop）——Graph 编排挂在 Work Port，不进 Kernel
+- 在 ACN 内核复刻 L1「64-subagent」并行搜索 harness（那是成员侧 / 模型 API 的事）
 - 在 v0 实现完整 Org Memory / 争议仲裁 / 跨实例 Federation
 - 把「加人」当成新卖点（进围栏已有 subnet；成员关系是绑定结果）
 
@@ -126,10 +127,13 @@ Org:    unclaimed | owned_by human | owned_by agent
 
 ### 5.1 原则
 
-- **Kernel 不可替换**：Org 是什么（身份、可选 Owner、agent 成员、subnet 绑定）。
+- **Kernel 不可替换**：Org 是什么（身份、可选 Owner、agent 成员、subnet 绑定）——即持久 **Org Graph**。
 - **Ports 可替换**：Org 怎么运转（活、环、记忆、能力池、策略、事件出口）。
-- **组织要的是 Loop，不是 Graph**：Graph 只是某个 Work/协调插件的策略。
-- **不调度 L1 tool loop**：Org Harness 唤醒/分派的是 agent 身份与工单，不接管各 agent 内部 Tools。
+- **三层叠加，不是二选一**（对齐业界 loop/graph 讨论的硬共识）：
+  - **Org Graph**（Kernel）——谁长期在组织里、角色与围栏；
+  - **Control Loop**（`IOrgLoop`）——组织心跳：观察队列 → 分派/唤醒 → 回收；
+  - **Work Graph**（`IWorkPattern` 策略）——此刻活怎么建模（含可选 DAG / handoff）；挂在 Port 上，**不能替代** Control Loop。
+- **不调度 L1 tool loop / 会话级 fan-out**：Org Harness 唤醒/分派的是 agent 身份与工单，不接管各 agent 内部 Tools，也不做 Ultra 式短命 subagent runtime。
 
 ### 5.2 Kernel（固定）
 
@@ -158,18 +162,27 @@ Membership **不是**「加人产品」：进围栏走既有 subnet admission；
 
 建议后续补：**统一 Plugin 宿主**（发现、按 org 启用、版本、失败隔离），以及 **Skills/SOP 与 Memory 分离**（或明确 SOP 为 Work/Loop 的只读输入）。
 
-### 5.4 控制环 vs Graph
+### 5.4 Org Graph · Control Loop · Work Graph
 
 ```text
-Org Loop（内核节拍）:
+Org Graph（Kernel，稳定）:
+  Org · Owner · Membership · subnet fence · roles
+
+Control Loop（IOrgLoop，组织节拍）:
   观察目标与队列 → 分派 / 唤醒成员 → 收回结果或阻塞 → 再观察 …
 
-Graph（可选插件策略）:
-  单次流水线节点依赖（研究→实现→评审）
+Work Graph（IWorkPattern 策略，易变）:
+  单次流水线 / DAG / handoff（研究→实现→评审）；可随证据拆并废
 ```
 
-- **Loop** = Org Harness 绑死的控制范式（组织持续存在）。  
-- **Graph** = 可插在 `IWorkPattern` / 某次 Loop 回合内的策略，不能替代 Loop。
+| 层 | 回答的问题 | 谁拥有 |
+|---|---|---|
+| **Org Graph** | 谁长期负责、围栏在哪 | Kernel（不可替换） |
+| **Control Loop** | 组织何时巡检、叫醒谁 | `IOrgLoop` Port |
+| **Work Graph** | 这票活怎么连、何时并行 | `IWorkPattern` 内策略（可换） |
+
+- Graph **约束/暴露** Loop 执行的结构，**不消灭** Loop（会话级编排同理）。  
+- **Ephemeral workers**（任务级短命子代理）≠ `OrgMembership`；后者只记长期角色成员。
 
 ### 5.5 挂载粒度
 
@@ -326,7 +339,7 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 | D3 | Org Harness 是 **ACN 新模块**，不是纯外部 Paperclip 概念 |
 | D4 | 协作主体是 **agent**；Org Owner **可选**（`none` / human / agent），对称 ACN agent 所有权，**人不是必须** |
 | D5 | 模块内 = **Kernel + Ports**；可插拔的是运转方式 |
-| D6 | 组织控制范式是 **Loop**；Graph 是插件策略 |
+| D6 | 三层：**Org Graph**（Kernel）+ **Control Loop**（节拍）+ **Work Graph**（Port 策略）；禁止用回合内 DAG 替代组织控制平面 |
 | D7 | ClawTeam / Swarm = **Port 插件候选**，不是 Org Harness 平替 |
 | D8 | OpenHarness 等 = **L1**，成员自带 |
 | D9 | v0 不做「加人」叙事；复用 subnet 围栏 |
@@ -350,4 +363,4 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 
 ## 13. 一句话总结
 
-> **Org Harness = ACN 内建的组织内核（Org + 可选 Owner + agent 成员 + subnet 绑定）+ 以 Loop 为节拍的可插拔运转端口（Work / Loop / Memory / Policy / Events）；Owner 与 agent 一样可无人认领 / 被人 claim / 由 agent 持有；OpenHarness 是成员的 L1，ClawTeam/Swarm/Paperclip 是可插插件，ACN Network Core 是底座——不是把 ACN 改名叫 Pasture。**
+> **Org Harness = ACN 内建的 Org Graph 内核（Org + 可选 Owner + agent 成员 + subnet 绑定）+ Control Loop 节拍 + 可插拔 Ports（Work Graph 策略 / Memory / Policy / Events）；Owner 与 agent 一样可无人认领 / 被人 claim / 由 agent 持有；L1 harness（含会话级 fan-out）由成员自带，ClawTeam/Swarm/Paperclip/LangGraph 挂 Port，ACN Network Core 是底座——不是把 ACN 改名叫 Pasture，也不是在内核复刻 Ultra。**
