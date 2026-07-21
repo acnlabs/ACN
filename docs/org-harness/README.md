@@ -17,6 +17,7 @@
 | [org-model-v0.md](./org-model-v0.md) | Org / Membership 数据模型 |
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core 消费契约（外部 Pattern 用） |
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（过渡期 Task 镜像）；服从 design-v0 + ADR |
+| **[phase2-work-port-v0.md](./phase2-work-port-v0.md)** | **Phase 2 Work Port 短方案（默认 builtin_work · 切片 P2a/b/c）** |
 
 理论草稿（隐喻 / 协议史）：
 
@@ -39,4 +40,4 @@ L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Ke
 
 ## 下一步
 
-Phase 1 Kernel + P1 polish 已落地。Phase 2：Task Pool 收编为 `IWorkPattern`、Paperclip 迁到 Org work ports。详见 [design-v0.md §10](./design-v0.md#10-分阶段落地)。
+Phase 1 Kernel + 加固已落地。Phase 2 见 **[phase2-work-port-v0.md](./phase2-work-port-v0.md)**（先 P2a 插座 + 默认小工单）。

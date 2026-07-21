@@ -889,7 +889,7 @@ minimal work + thin Loop. Design: [`docs/org-harness/`](org-harness/README.md).
 
 Still deferred (Phase 2+):
 
-- **DEF-WORK-PLUGIN** — Task Pool as full `IWorkPattern` plugin host
+- **DEF-WORK-PLUGIN** — Phase 2 Work Port：见 [`org-harness/phase2-work-port-v0.md`](org-harness/phase2-work-port-v0.md)（P2a 默认 `builtin_work`；Task Pool 为可选 Builtin）
 - **DEF-MEM** — Org Memory / SOPs (Pattern-local; Mem0/Zep/PG+vector)
 - **DEF-ORGREP** — Cross-org reputation (beyond per-agent ERC-8004 reads)
 - **DEF-DISPUTE** — Dispute / jury after escrow window (ADR-0010 Future)

@@ -136,7 +136,7 @@ Operations: `claim` / `transfer` / `release` mirror agent ownership semantics (e
 | Thin Loop | Tick: list open work → noop or invoke configured wakeup hook (v0 may only emit events) |
 | EventSink | Reuse subnet harness webhook; add `org.*` event types |
 
-Full Task Pool as `IWorkPattern` plugin moves to **Phase 2** (can migrate minimal work → Task Pool or keep parallel).
+Full Task Pool as an **optional** `IWorkPattern` moves to **Phase 2** ([phase2-work-port-v0.md](../org-harness/phase2-work-port-v0.md)): default remains Phase 1 minimal work as `builtin_work`; Task Pool is opt-in via `plugins.work=task_pool`.
 
 **Rejected:** Phase 1 Loop with zero work model (empty ticker).
 
@@ -212,4 +212,5 @@ Exact HTTP status codes follow ACN flat error schema (`OWNERSHIP_MISMATCH`, `AUT
 
 ## Changelog
 
+- 2026-07-21: Phase 2 sequencing locked in [phase2-work-port-v0.md](../org-harness/phase2-work-port-v0.md) — default `builtin_work`, Task Pool optional.
 - 2026-07-19: Proposed — resolves design review P0/P1 for Org Harness Module.
