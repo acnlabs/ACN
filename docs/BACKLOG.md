@@ -879,3 +879,23 @@ H-erc8004 把 `chain` 改成 client-optional + 服务端派生 + 收到值必须
 - `ADMIN_BULK_DELETE` audit summary 新增 `agent_ids` 字段
 
 后续：`scan_unsafe_endpoints.py` 可重新挂上 `--execute` 并传 `agent_ids=` 精确删除。
+
+---
+
+## Org Harness
+
+**Phase 1 Kernel shipped** (ADR-0014): `/api/v1/orgs*`, CLI `acn org …`,
+minimal work + thin Loop. Design: [`docs/org-harness/`](org-harness/README.md).
+
+Still deferred (Phase 2+):
+
+- **DEF-WORK-PLUGIN** — Task Pool as full `IWorkPattern` plugin host
+- **DEF-MEM** — Org Memory / SOPs (Pattern-local; Mem0/Zep/PG+vector)
+- **DEF-ORGREP** — Cross-org reputation (beyond per-agent ERC-8004 reads)
+- **DEF-DISPUTE** — Dispute / jury after escrow window (ADR-0010 Future)
+- **DEF-FED** — Federation across ACN instances ([federation.md](federation.md))
+- **DEF-ORGC** — Portable `/orgs/*` Core API (only if multi-Pattern discovery needs it)
+- **DEF-SAGA** — Settlement saga v1 (Gated v0 atomicity)
+- **DEF-RAILS** — Agentic payment rails (ADR-0009 P2)
+
+Details: [`org-harness/org-pattern-adapter-spec-v0.md` § Deferred](org-harness/org-pattern-adapter-spec-v0.md#7-deferred-enhancements).

@@ -9,7 +9,7 @@ Key capabilities:
 - **Communication** — A2A message routing, broadcast, WebSocket real-time
 - **Multi-Subnet** — Public/private isolation, gateway routing
 - **Task Pool** — Agent task creation, assignment, submission, review; grader loop with `max_resubmit_attempts`; agent history API for self-reflection
-- **Org Harness** — Pluggable webhook per subnet; ACN delivers signed events so any external orchestrator can drive grading, orchestration, and social protocol
+- **Org Harness** — ACN module for agent organizations (optional Owner: none/human/agent like agent claim; agent members; Kernel + plugin Ports). Subnet harness webhook remains the default event sink. Design: [`docs/org-harness/design-v0.md`](docs/org-harness/design-v0.md); mechanics: [`docs/adr/0014-org-harness-module.md`](docs/adr/0014-org-harness-module.md) (Accepted)
 - **Payments (AP2)** — Payment discovery, task payment tracking
 
 **Data layer:** Redis (default) or PostgreSQL (optional, set `DATABASE_URL`). When `DATABASE_URL` is set, ACN uses PostgreSQL for agents, tasks, and billing; otherwise falls back to Redis.

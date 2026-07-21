@@ -82,6 +82,18 @@ class WebhookEventType(StrEnum):
     AGENT_JOINED_SUBNET = "agent.joined_subnet"
     AGENT_LEFT_SUBNET = "agent.left_subnet"
 
+    # ===== Org Harness Kernel Events (ADR-0014) =====
+    # Delivered to the Org's bound subnet ``harness_url`` (same transport
+    # as agent.*_subnet). Failures must not break the mutating request.
+    ORG_CREATED = "org.created"
+    ORG_MEMBER_ADDED = "org.member_added"
+    ORG_MEMBER_REMOVED = "org.member_removed"
+    ORG_OWNER_CHANGED = "org.owner_changed"
+    ORG_DISSOLVED = "org.dissolved"
+    ORG_WORK_CREATED = "org.work_created"
+    ORG_WORK_UPDATED = "org.work_updated"
+    ORG_LOOP_TICK = "org.loop_tick"
+
     # ===== Ownership Events =====
 
     # Fired to the platform ``WEBHOOK_URL`` (Backend) whenever an agent's

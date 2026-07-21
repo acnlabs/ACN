@@ -19,6 +19,7 @@ from .join_flow_event_publisher import (
     JoinFlowEventType,
     JoinFlowEventVia,
 )
+from .org_repository import IOrgRepository
 from .settlement_outbox_repository import (
     ISettlementOutboxRepository,
     SettlementEvent,
@@ -40,6 +41,7 @@ __all__ = [
     "JoinFlowEventTrigger",
     "JoinFlowEventType",
     "JoinFlowEventVia",
+    "IOrgRepository",
     "ISettlementOutboxRepository",
     "SettlementEvent",
     "ISubnetAllowlistRepository",

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
+  / minimal `OrgWorkItem` with Redis + Postgres repos, `/api/v1/orgs*`
+  (create/show/members/claim/transfer/release/dissolve/work/loop tick),
+  CLI `acn org …`, harness webhook events `org.*`, alembic
+  `d3e4f5a6b7c8_add_org_harness_tables` + `e4f5a6b7c8d9` unique `subnet_id`.
+  Smoke: `scripts/smoke_org_kernel.sh`.
+  Hardening: Org writes require `acn:write`; human steward must be owned by
+  caller; one Org per subnet; claim/transfer compensate subnet owner on
+  persist failure; create rolls back newly created subnet.
+  P1 polish: `PATCH /orgs/{id}`; members view with subnet `degraded`;
+  create-time optional `harness_url`; CLI `update` / `dissolve` /
+  `--join-policy` / `--harness-url`.
+
+### Docs
+
+- **Org Harness design v0 + ADR-0014** — `docs/org-harness/design-v0.md`: ACN
+  module (optional Owner none/human/agent, agent members), Kernel + Ports,
+  Loop-first. **ADR-0014 Accepted**: none-owner steward rules, Membership↔subnet
+  order, subnet steward agent, Phase 1 = Kernel + minimal work + thin Loop.
+  Supporting: API tiers, org model, adapter spec (Task-mirror transitional),
+  `scripts/smoke_org_harness_four_links.sh`.
+
 ## [0.15.1] - 2026-07-19
 
 Coordinated patch: server **0.15.1**, CLI **0.13.2**, Python SDK **0.12.1**,

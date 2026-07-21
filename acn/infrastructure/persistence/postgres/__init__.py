@@ -5,6 +5,7 @@ from .agent_repository import PostgresAgentRepository
 from .allowlist_repository import PostgresAllowlistRepository
 from .billing_repository import PostgresBillingRepository
 from .database import get_engine, get_session_factory
+from .org_repository import PostgresOrgRepository
 from .reputation_repository import PostgresReputationRepository
 from .settlement_outbox_repository import PostgresSettlementOutboxRepository
 from .subnet_allowlist_repository import PostgresSubnetAllowlistRepository
@@ -18,6 +19,7 @@ __all__ = [
     "PostgresAgentRepository",
     "PostgresAllowlistRepository",
     "PostgresBillingRepository",
+    "PostgresOrgRepository",
     "PostgresReputationRepository",
     "PostgresSettlementOutboxRepository",
     "PostgresSubnetAllowlistRepository",

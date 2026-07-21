@@ -18,6 +18,7 @@ from .follow_service import (
 )
 from .manifest_service import ManifestEntry, ManifestService
 from .message_service import MessageService
+from .org_service import OrgService
 from .policy_service import PolicyCheckService, PolicyDecision
 from .reputation_query_service import (
     OffChainReputationSummary,
@@ -47,6 +48,7 @@ __all__ = [
     "SessionEntry",
     "SessionService",
     "MessageService",
+    "OrgService",
     "PolicyCheckService",
     "PolicyDecision",
     "OffChainReputationSummary",

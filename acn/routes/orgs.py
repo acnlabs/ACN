@@ -1,0 +1,616 @@
+"""Org Harness HTTP API — ``/api/v1/orgs*`` (ADR-0014 Phase 1)."""
+
+from __future__ import annotations
+
+import secrets
+from typing import Annotated, Any, Literal
+
+import structlog  # type: ignore[import-untyped]
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Path, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
+
+from ..auth.middleware import verify_token
+from ..config import get_settings
+from ..core.errors import ACNHTTPError, ErrorCode
+from ..routes.dependencies import (
+    _schedule_alive_renewal,
+    get_agent_service,
+    get_org_service,
+    limiter,
+)
+from ..services.agent_service import AgentService
+from ..services.org_service import (
+    OrgConflictError,
+    OrgMembershipNotFoundError,
+    OrgNotFoundError,
+    OrgPermissionError,
+    OrgService,
+    OrgWorkNotFoundError,
+)
+
+logger = structlog.get_logger()
+router = APIRouter(prefix="/api/v1/orgs", tags=["orgs"])
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+OrgIdPath = Annotated[
+    str,
+    Path(max_length=128, description="Organisation identifier"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Auth: agent API key OR human JWT (same shape as task write auth)
+# ---------------------------------------------------------------------------
+
+
+def require_org_auth():
+    async def checker(
+        request: Request,
+        background_tasks: BackgroundTasks,
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+        x_internal_token: str | None = Header(default=None),
+        agent_service: AgentService = Depends(get_agent_service),
+    ) -> dict:
+        s = get_settings()
+        if s.dev_mode:
+            if credentials and credentials.credentials.startswith("acn_"):
+                agent = await agent_service.get_agent_by_api_key(
+                    credentials.credentials
+                )
+                if agent:
+                    request.state.rate_limit_key = f"agent:{agent.agent_id}"
+                    _schedule_alive_renewal(
+                        background_tasks, agent_service, agent.agent_id
+                    )
+                    return {
+                        "sub": agent.agent_id,
+                        "type": "agent",
+                        "permissions": ["acn:read", "acn:write"],
+                    }
+            sub = credentials.credentials if credentials else "dev@clients"
+            request.state.rate_limit_key = f"dev:{sub}"
+            return {
+                "sub": sub,
+                "type": "human",
+                "permissions": ["acn:read", "acn:write", "acn:admin"],
+            }
+
+        if (
+            x_internal_token
+            and s.internal_api_token
+            and secrets.compare_digest(x_internal_token, s.internal_api_token)
+        ):
+            request.state.rate_limit_key = "internal:backend"
+            return {
+                "sub": "backend@internal",
+                "type": "internal",
+                "permissions": ["acn:read", "acn:write", "acn:admin"],
+            }
+
+        if credentials and credentials.credentials.startswith("acn_"):
+            agent = await agent_service.get_agent_by_api_key(credentials.credentials)
+            if not agent:
+                raise ACNHTTPError(
+                    ErrorCode.AUTHENTICATION_REQUIRED,
+                    401,
+                    details={"reason": "invalid_agent_api_key"},
+                )
+            request.state.rate_limit_key = f"agent:{agent.agent_id}"
+            _schedule_alive_renewal(background_tasks, agent_service, agent.agent_id)
+            return {
+                "sub": agent.agent_id,
+                "type": "agent",
+                "permissions": ["acn:read", "acn:write"],
+            }
+
+        payload = await verify_token(request, credentials)
+        perms: list[str] = payload.get("permissions", [])
+        # Align with task write auth: Org mutations require acn:write.
+        if "acn:write" not in perms:
+            raise ACNHTTPError(
+                ErrorCode.MISSING_PERMISSION,
+                403,
+                details={"required": "acn:write"},
+            )
+        request.state.rate_limit_key = f"user:{payload.get('sub', '')}"
+        return {
+            "sub": payload.get("sub", ""),
+            "type": "human",
+            "permissions": perms,
+        }
+
+    return checker
+
+
+OrgAuthDep = Depends(require_org_auth())
+
+
+def _caller(payload: dict) -> tuple[Literal["human", "agent"], str]:
+    ptype = payload.get("type", "human")
+    if ptype == "agent":
+        return "agent", payload["sub"]
+    # internal / human / dev → treat as human principal for created_by
+    return "human", payload.get("sub", "")
+
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
+
+
+class OrgCreateRequest(BaseModel):
+    display_name: str = Field(..., min_length=1, max_length=200)
+    steward_agent_id: str | None = Field(
+        default=None,
+        description="Required when caller is a human JWT; ignored for agent callers",
+    )
+    charter: dict[str, Any] | None = None
+    subnet_id: str | None = Field(default=None, max_length=100)
+    join_policy: Literal["open", "approval"] = "open"
+    is_private: bool = False
+    harness_url: str | None = Field(
+        default=None,
+        description="Optional Org Harness webhook URL registered on the fence subnet",
+    )
+    harness_secret: str | None = Field(
+        default=None,
+        description="HMAC secret for harness_url (optional)",
+    )
+
+
+class OrgUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    charter: dict[str, Any] | None = None
+    plugins: dict[str, str] | None = None
+
+
+class OrgClaimRequest(BaseModel):
+    owner_kind: Literal["human", "agent"] | None = None
+    owner_subject: str | None = None
+
+
+class OrgTransferRequest(BaseModel):
+    new_owner_kind: Literal["human", "agent"]
+    new_owner_subject: str = Field(..., min_length=1)
+
+
+class OrgMemberAddRequest(BaseModel):
+    agent_id: str = Field(..., min_length=1, max_length=128)
+    role: str = Field(default="worker", max_length=64)
+    reports_to: str | None = None
+
+
+class OrgWorkCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    assignee_agent_id: str | None = None
+
+
+class OrgWorkUpdateRequest(BaseModel):
+    status: Literal["todo", "in_progress", "done", "cancelled"]
+    assignee_agent_id: str | None = None
+
+
+def _org_response(org) -> dict[str, Any]:
+    return org.to_dict()
+
+
+def _map_permission(exc: OrgPermissionError, org_id: str) -> ACNHTTPError:
+    ownership_reasons = {
+        "ownership_mismatch",
+        "created_by_only",
+        "unclaimed",
+        "steward_not_owned",
+        "steward_mismatch",
+        "owner_subject_mismatch",
+        "owner_agent_not_owned",
+        "cannot_remove_steward",
+    }
+    code = (
+        ErrorCode.OWNERSHIP_MISMATCH
+        if exc.reason in ownership_reasons
+        else ErrorCode.INVALID_REQUEST
+    )
+    return ACNHTTPError(
+        code,
+        403 if code == ErrorCode.OWNERSHIP_MISMATCH else 400,
+        details={"org_id": org_id, "reason": exc.reason},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@router.post("")
+@limiter.limit("10/minute")
+async def create_org(
+    request: Request,
+    body: OrgCreateRequest,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        org = await org_service.create_org(
+            display_name=body.display_name,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            steward_agent_id=body.steward_agent_id,
+            charter=body.charter,
+            subnet_id=body.subnet_id,
+            join_policy=body.join_policy,
+            is_private=body.is_private,
+            harness_url=body.harness_url,
+            harness_secret=body.harness_secret,
+        )
+        return await org_service.get_org_view(org.org_id)
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id="(new)") from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"reason": str(e)},
+        ) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e
+
+
+@router.get("/{org_id}")
+async def get_org(
+    org_id: OrgIdPath,
+    org_service: OrgService = Depends(get_org_service),
+):
+    try:
+        return await org_service.get_org_view(org_id)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND,
+            404,
+            details={"org_id": org_id},
+        ) from e
+
+
+@router.patch("/{org_id}")
+@limiter.limit("30/minute")
+async def update_org(
+    request: Request,
+    body: OrgUpdateRequest,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    if body.display_name is None and body.charter is None and body.plugins is None:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"reason": "no_fields_to_update"},
+        )
+    caller_type, caller_sub = _caller(payload)
+    try:
+        await org_service.update_org(
+            org_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            display_name=body.display_name,
+            charter=body.charter,
+            plugins=body.plugins,
+        )
+        return await org_service.get_org_view(org_id)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
+        ) from e
+
+
+@router.post("/{org_id}/claim")
+@limiter.limit("10/minute")
+async def claim_org(
+    request: Request,
+    body: OrgClaimRequest,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        org = await org_service.claim(
+            org_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            owner_kind=body.owner_kind,
+            owner_subject=body.owner_subject,
+        )
+        return _org_response(org)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT, 409, details={"reason": e.reason}
+        ) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
+        ) from e
+
+
+@router.post("/{org_id}/transfer")
+@limiter.limit("10/minute")
+async def transfer_org(
+    request: Request,
+    body: OrgTransferRequest,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        org = await org_service.transfer(
+            org_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            new_owner_kind=body.new_owner_kind,
+            new_owner_subject=body.new_owner_subject,
+        )
+        return _org_response(org)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
+        ) from e
+
+
+@router.post("/{org_id}/release")
+@limiter.limit("10/minute")
+async def release_org(
+    request: Request,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        org = await org_service.release(
+            org_id, caller_type=caller_type, caller_sub=caller_sub
+        )
+        return _org_response(org)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT, 409, details={"reason": e.reason}
+        ) from e
+
+
+@router.post("/{org_id}/dissolve")
+@limiter.limit("5/minute")
+async def dissolve_org(
+    request: Request,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        org = await org_service.dissolve(
+            org_id, caller_type=caller_type, caller_sub=caller_sub
+        )
+        return _org_response(org)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+
+
+@router.get("/{org_id}/members")
+async def list_members(
+    org_id: OrgIdPath,
+    org_service: OrgService = Depends(get_org_service),
+):
+    try:
+        return await org_service.list_members_view(org_id)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+
+
+@router.post("/{org_id}/members")
+@limiter.limit("30/minute")
+async def add_member(
+    request: Request,
+    body: OrgMemberAddRequest,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        m = await org_service.add_member(
+            org_id,
+            body.agent_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            role=body.role,
+            reports_to=body.reports_to,
+        )
+        return m.to_dict()
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        status = 503 if e.reason == "membership_sync_failed" else 409
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            status,
+            details={"reason": e.reason},
+        ) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
+        ) from e
+
+
+@router.delete("/{org_id}/members/{agent_id}")
+@limiter.limit("30/minute")
+async def remove_member(
+    request: Request,
+    org_id: OrgIdPath,
+    agent_id: str = Path(max_length=128),
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        m = await org_service.remove_member(
+            org_id,
+            agent_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+        )
+        return m.to_dict()
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgMembershipNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"org_id": org_id, "agent_id": agent_id},
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+
+
+@router.post("/{org_id}/work")
+@limiter.limit("60/minute")
+async def create_work(
+    request: Request,
+    body: OrgWorkCreateRequest,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        work = await org_service.create_work(
+            org_id,
+            title=body.title,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            assignee_agent_id=body.assignee_agent_id,
+        )
+        return work.to_dict()
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+
+
+@router.get("/{org_id}/work")
+async def list_work(
+    org_id: OrgIdPath,
+    open_only: bool = False,
+    org_service: OrgService = Depends(get_org_service),
+):
+    try:
+        items = await org_service.list_work(org_id, open_only=open_only)
+        return {
+            "org_id": org_id,
+            "count": len(items),
+            "work": [w.to_dict() for w in items],
+        }
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+
+
+@router.patch("/{org_id}/work/{work_id}")
+@limiter.limit("60/minute")
+async def update_work(
+    request: Request,
+    body: OrgWorkUpdateRequest,
+    org_id: OrgIdPath,
+    work_id: str = Path(max_length=128),
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        work = await org_service.update_work_status(
+            org_id,
+            work_id,
+            status=body.status,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            assignee_agent_id=body.assignee_agent_id,
+        )
+        return work.to_dict()
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgWorkNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_WORK_NOT_FOUND,
+            404,
+            details={"org_id": org_id, "work_id": work_id},
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+
+
+@router.post("/{org_id}/loop/tick")
+@limiter.limit("30/minute")
+async def tick_loop(
+    request: Request,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    caller_type, caller_sub = _caller(payload)
+    try:
+        result = await org_service.tick_loop(
+            org_id, caller_type=caller_type, caller_sub=caller_sub
+        )
+        return {"org_id": org_id, **result}
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
