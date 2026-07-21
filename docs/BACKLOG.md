@@ -897,5 +897,13 @@ Still deferred (Phase 2+):
 - **DEF-ORGC** — Portable `/orgs/*` Core API (only if multi-Pattern discovery needs it)
 - **DEF-SAGA** — Settlement saga v1 (Gated v0 atomicity)
 - **DEF-RAILS** — Agentic payment rails (ADR-0009 P2)
+- **DEF-ORG-ACL** — Org read ACL v1 ships a **redacted view** for private-fence
+  Orgs (`get_org_view` + `ensure_private_readable`, mirroring subnet ACL V6
+  Stub). Deferred: full V6 alignment — opaque-UUID stubs, per-row rendering in
+  future list endpoints, invite-to-read tokens.
+- **DEF-ORG-LUA** — Redis fence claim uses `SET NX` + guarded release; the
+  stale/dissolved-takeover retry window is not atomic (no Lua — fakeredis in CI
+  lacks an interpreter). Promote to a Lua script if takeover races are ever
+  observed in production.
 
 Details: [`org-harness/org-pattern-adapter-spec-v0.md` § Deferred](org-harness/org-pattern-adapter-spec-v0.md#7-deferred-enhancements).

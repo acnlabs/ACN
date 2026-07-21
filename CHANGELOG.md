@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   P1 polish: `PATCH /orgs/{id}`; members view with subnet `degraded`;
   create-time optional `harness_url`; CLI `update` / `dissolve` /
   `--join-policy` / `--harness-url`.
+- **Org Harness hardening (review follow-up)** — private-fence Orgs now
+  redact `GET /orgs/{id}` for unentitled readers and gate `…/members` /
+  `…/work` with 403 (`private_org`), mirroring subnet ACL V6; entitled =
+  owner / created_by / steward / subnet owner-member / active OrgMembership /
+  steward-owner human / `acn:admin` / internal. Redis fence binding
+  (`acn:orgs:by_subnet`) claimed via `SET NX` with dissolved/dangling-holder
+  eviction and guarded release; Postgres maps `uq_orgs_subnet_id` violations
+  to `OrgSubnetBindingConflictError` → 409 `subnet_already_bound`. New
+  repository-layer tests (fakeredis + mock-session).
 
 ### Docs
 

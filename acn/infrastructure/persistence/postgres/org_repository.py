@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ....core.entities.org import (
@@ -12,6 +13,7 @@ from ....core.entities.org import (
     OrgPrincipal,
     OrgWorkItem,
 )
+from ....core.exceptions import OrgSubnetBindingConflictError
 from ....core.interfaces.org_repository import IOrgRepository
 from .models import OrgMembershipModel, OrgModel, OrgWorkItemModel
 
@@ -69,7 +71,24 @@ class PostgresOrgRepository(IOrgRepository):
                 )
             else:
                 session.add(OrgModel(**values))
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError as e:
+                # ``uq_orgs_subnet_id`` (one Org per fence, ADR-0014):
+                # surface as the domain conflict instead of a bare 500 so
+                # a create that loses the pre-check race gets a 409.
+                await session.rollback()
+                if "uq_orgs_subnet_id" not in str(e.orig or e):
+                    raise
+                holder = await session.execute(
+                    select(OrgModel.org_id)
+                    .where(OrgModel.subnet_id == org.subnet_id)
+                    .limit(1)
+                )
+                bound_org_id = holder.scalar_one_or_none() or "(unknown)"
+                raise OrgSubnetBindingConflictError(
+                    org.subnet_id, bound_org_id
+                ) from e
 
     async def find_org(self, org_id: str) -> Org | None:
         async with self._session_factory() as session:

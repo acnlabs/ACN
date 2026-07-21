@@ -22,6 +22,28 @@ class SubnetNotFoundException(ACNException):
     pass
 
 
+class OrgSubnetBindingConflictError(ACNException):
+    """The subnet is already bound to another (non-dissolved) Org.
+
+    Raised by ``IOrgRepository.save_org`` implementations when the
+    one-Org-per-subnet fence invariant (ADR-0014) would be violated:
+
+    - Postgres: mapped from the ``uq_orgs_subnet_id`` unique-constraint
+      violation.
+    - Redis: raised when the ``acn:orgs:by_subnet:{slug}`` index claim
+      (``SET NX``) loses to a concurrent create whose Org is still
+      active. The pre-check in ``OrgService.create_org`` cannot close
+      this window on its own — Redis has no unique constraint.
+    """
+
+    def __init__(self, subnet_id: str, bound_org_id: str) -> None:
+        self.subnet_id = subnet_id
+        self.bound_org_id = bound_org_id
+        super().__init__(
+            f"subnet '{subnet_id}' is already bound to org {bound_org_id}"
+        )
+
+
 class PolicyRejected(ACNException):
     """Inbound message was rejected by the recipient's communication_policy.
 

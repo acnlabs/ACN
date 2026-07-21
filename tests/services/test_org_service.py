@@ -9,7 +9,10 @@ import pytest
 from acn.core.entities.agent import Agent
 from acn.core.entities.org import Org, OrgMembership, OrgOwner, OrgPrincipal
 from acn.core.entities.subnet import Subnet
-from acn.core.exceptions import SubnetNotFoundException
+from acn.core.exceptions import (
+    OrgSubnetBindingConflictError,
+    SubnetNotFoundException,
+)
 from acn.core.interfaces.org_repository import IOrgRepository
 from acn.protocols.ap2 import WebhookEventType
 from acn.services.org_service import (
@@ -477,6 +480,194 @@ class TestUpdateAndMembersView:
             harness_secret="s3cret",
         )
         mock_subnet_service.update_harness.assert_awaited_once()
+
+
+class TestPrivateOrgReadACL:
+    """Private-fence Orgs are redacted / gated for unentitled readers."""
+
+    def _private_subnet(self, org, members=None):
+        return Subnet(
+            slug=org.subnet_id,
+            name="P",
+            owner="agt_steward",
+            is_private=True,
+            join_policy="approval",
+            member_agent_ids=set(members or {"agt_steward"}),
+        )
+
+    async def test_anonymous_gets_redacted_view(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org(charter={"mission": "secret"})
+        mock_org_repo.find_org.return_value = org
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=self._private_subnet(org)
+        )
+
+        view = await org_service.get_org_view(org.org_id)
+        assert view["private"] is True
+        assert view["org_id"] == org.org_id
+        # Sensitive fields withheld
+        for field in ("charter", "created_by", "steward_agent_id", "plugins"):
+            assert field not in view
+        assert view["owner"] == {"kind": "none"}
+        assert "subnet_id" not in view["fencing"]
+
+    async def test_member_agent_gets_full_view(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org(charter={"mission": "secret"})
+        mock_org_repo.find_org.return_value = org
+        mock_org_repo.find_membership.return_value = OrgMembership(
+            org_id=org.org_id, agent_id="agt_worker", status="active"
+        )
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=self._private_subnet(org, {"agt_steward", "agt_worker"})
+        )
+
+        view = await org_service.get_org_view(
+            org.org_id, caller_type="agent", caller_sub="agt_worker"
+        )
+        assert view["charter"] == {"mission": "secret"}
+        assert view["steward_agent_id"] == "agt_steward"
+
+    async def test_steward_owner_human_gets_full_view(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        """Ownership-chain bridge: human owning the steward agent may read."""
+        org = _stored_org(created_by=OrgPrincipal(kind="human", subject="auth0|u"))
+        mock_org_repo.find_org.return_value = org
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=self._private_subnet(org)
+        )
+
+        # mock_agent_service maps agt_steward → owner "auth0|u"
+        view = await org_service.get_org_view(
+            org.org_id, caller_type="human", caller_sub="auth0|u"
+        )
+        assert view["steward_agent_id"] == "agt_steward"
+
+    async def test_unrelated_human_gets_redacted_view(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        mock_org_repo.find_membership.return_value = None
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=self._private_subnet(org)
+        )
+
+        view = await org_service.get_org_view(
+            org.org_id, caller_type="human", caller_sub="auth0|stranger"
+        )
+        assert view.get("private") is True
+        assert "charter" not in view
+
+    async def test_public_org_stays_fully_visible_to_anonymous(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org(charter={"mission": "open"})
+        mock_org_repo.find_org.return_value = org
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=Subnet(
+                slug=org.subnet_id,
+                name="Pub",
+                owner="agt_steward",
+                member_agent_ids={"agt_steward"},
+            )
+        )
+
+        view = await org_service.get_org_view(org.org_id)
+        assert view["charter"] == {"mission": "open"}
+        assert view["fencing"]["is_private"] is False
+
+    async def test_fence_missing_is_treated_as_private(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org(charter={"mission": "secret"})
+        mock_org_repo.find_org.return_value = org
+        mock_org_repo.find_membership.return_value = None
+        mock_subnet_service.get_subnet = AsyncMock(
+            side_effect=SubnetNotFoundException("gone")
+        )
+
+        anon = await org_service.get_org_view(org.org_id)
+        assert anon.get("private") is True
+        assert anon["fencing"]["missing"] is True
+        assert "charter" not in anon
+
+        # created_by (agent) still sees the degraded-but-full view
+        entitled = await org_service.get_org_view(
+            org.org_id, caller_type="agent", caller_sub="agt_steward"
+        )
+        assert entitled["charter"] == {"mission": "secret"}
+        assert entitled["fencing"]["missing"] is True
+
+    async def test_members_listing_gated_for_strangers(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        mock_org_repo.find_membership.return_value = None
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=self._private_subnet(org)
+        )
+
+        with pytest.raises(OrgPermissionError) as ei:
+            await org_service.ensure_private_readable(
+                org.org_id, caller_type="agent", caller_sub="agt_stranger"
+            )
+        assert ei.value.reason == "private_org"
+
+        with pytest.raises(OrgPermissionError):
+            await org_service.ensure_private_readable(org.org_id)  # anonymous
+
+        # Steward passes; admin bypasses without identity.
+        await org_service.ensure_private_readable(
+            org.org_id, caller_type="agent", caller_sub="agt_steward"
+        )
+        await org_service.ensure_private_readable(org.org_id, admin=True)
+
+    async def test_public_org_members_listing_open(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=Subnet(
+                slug=org.subnet_id, name="Pub", owner="agt_steward"
+            )
+        )
+        await org_service.ensure_private_readable(org.org_id)  # no raise
+
+
+class TestSubnetBindingConflict:
+    async def test_create_maps_repo_binding_conflict_to_409_reason(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        """A save-time fence conflict (lost race) surfaces as
+        ``subnet_already_bound`` — same contract as the pre-check path."""
+        subnet = Subnet(slug="org-race", name="R", owner="agt_steward")
+        mock_subnet_service.get_subnet = AsyncMock(
+            side_effect=SubnetNotFoundException("x")
+        )
+        mock_subnet_service.create_subnet = AsyncMock(return_value=subnet)
+        mock_org_repo.save_org.side_effect = OrgSubnetBindingConflictError(
+            "org-race", "org_winner"
+        )
+
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.create_org(
+                display_name="Race",
+                caller_type="agent",
+                caller_sub="agt_steward",
+                subnet_id="org-race",
+            )
+        assert ei.value.reason == "subnet_already_bound"
+        # Newly created subnet is still rolled back on this path.
+        mock_subnet_service.delete_subnet.assert_awaited_once_with(
+            "org-race", "agt_steward"
+        )
 
 
 class TestGovernanceGate:
