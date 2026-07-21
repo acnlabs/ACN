@@ -6,7 +6,15 @@ import secrets
 from typing import Annotated, Any, Literal
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, Path, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Path,
+    Request,
+)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -610,12 +618,14 @@ async def add_member(
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
         if e.reason == "membership_sync_failed":
-            # 503 is outside ACNHTTPError's 4xx contract; keep prior shape.
-            raise ACNHTTPError(
-                ErrorCode.RESOURCE_CONFLICT,
-                409,
-                message=str(e) if str(e) else None,
-                details={"reason": e.reason},
+            # ADR-0014 D4: compensate failed → 503 (retryable operator alert).
+            # ACNHTTPError forbids 5xx; use HTTPException like registry/deps.
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Org membership write failed and subnet leave compensation "
+                    "failed; retry later"
+                ),
                 headers={"Retry-After": "5"},
             ) from e
         raise _map_conflict(e) from e
