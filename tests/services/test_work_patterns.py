@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from acn.services.org_service import OrgConflictError
+from acn.core.exceptions import OrgConflictError
 from acn.services.work_patterns import (
     DEFAULT_ORG_PLUGINS,
     normalize_org_plugins,

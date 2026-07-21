@@ -24,12 +24,12 @@ from .settlement_outbox_repository import (
     ISettlementOutboxRepository,
     SettlementEvent,
 )
-from .work_pattern import IWorkPattern
 from .subnet_allowlist_repository import ISubnetAllowlistRepository
 from .subnet_join_request_repository import ISubnetJoinRequestRepository
 from .subnet_repository import ISubnetRepository
 from .task_repository import ITaskRepository
 from .unit_of_work import IUnitOfWork
+from .work_pattern import IWorkPattern
 
 # IActivityRepository and IBillingRepository are imported directly from their
 # modules to avoid circular imports (they reference service-layer types).

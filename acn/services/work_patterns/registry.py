@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from ...core.exceptions import OrgConflictError
 from ...core.interfaces.org_repository import IOrgRepository
 from ...core.interfaces.work_pattern import IWorkPattern
 from .builtin import BuiltinWorkPattern
-
-if TYPE_CHECKING:
-    pass
 
 # Canonical defaults (phase2-work-port-v0).
 DEFAULT_ORG_PLUGINS: dict[str, str] = {
@@ -61,9 +57,6 @@ def normalize_org_plugins(plugins: dict[str, str] | None) -> dict[str, str]:
 
 def validate_org_plugins(plugins: dict[str, str]) -> None:
     """Raise ``OrgConflictError`` for unknown / unavailable plugin ids."""
-    # Imported here to keep registry free of service-module cycles at import time.
-    from ..org_service import OrgConflictError
-
     work = canonicalize_work_plugin(plugins.get("work", "builtin_work"))
     if work in _WORK_IMPLEMENTED:
         pass
@@ -98,8 +91,6 @@ def resolve_work_pattern(
     repository: IOrgRepository,
 ) -> IWorkPattern:
     """Return an ``IWorkPattern`` for ``plugin_id`` (after alias canonicalize)."""
-    from ..org_service import OrgConflictError
-
     canonical = canonicalize_work_plugin(plugin_id)
     if canonical == "builtin_work":
         return BuiltinWorkPattern(repository)

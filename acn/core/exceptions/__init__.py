@@ -44,6 +44,18 @@ class OrgSubnetBindingConflictError(ACNException):
         )
 
 
+class OrgConflictError(ACNException):
+    """Org-domain conflict (ownership, membership, plugin resolve, …).
+
+    ``reason`` is a stable machine code for HTTP ``RESOURCE_CONFLICT``
+    details (e.g. ``plugin_unavailable``, ``already_member``).
+    """
+
+    def __init__(self, reason: str, message: str = "") -> None:
+        self.reason = reason
+        super().__init__(message or reason)
+
+
 class PolicyRejected(ACNException):
     """Inbound message was rejected by the recipient's communication_policy.
 

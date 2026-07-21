@@ -433,7 +433,7 @@ async def update_org(
         raise ACNHTTPError(
             ErrorCode.RESOURCE_CONFLICT,
             409,
-            details={"org_id": org_id, "reason": e.reason},
+            details={"reason": e.reason},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
@@ -675,6 +675,13 @@ async def create_work(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        # Legacy Phase 1 Orgs may store unavailable work plugins.
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e
 
 
 @router.get("/{org_id}/work")
@@ -705,6 +712,12 @@ async def list_work(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e
 
 
 @router.patch("/{org_id}/work/{work_id}")
@@ -740,6 +753,12 @@ async def update_work(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e
 
 
 @router.post("/{org_id}/loop/tick")
@@ -762,3 +781,9 @@ async def tick_loop(
         ) from e
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            details={"reason": e.reason},
+        ) from e

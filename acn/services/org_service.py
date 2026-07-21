@@ -21,6 +21,7 @@ from ..core.entities.org import (
 from ..core.entities.subnet import Subnet
 from ..core.exceptions import (
     AgentNotFoundException,
+    OrgConflictError,
     OrgSubnetBindingConflictError,
     SubnetNotFoundException,
 )
@@ -47,12 +48,6 @@ class OrgNotFoundError(Exception):
 
 
 class OrgPermissionError(Exception):
-    def __init__(self, reason: str, message: str = "") -> None:
-        self.reason = reason
-        super().__init__(message or reason)
-
-
-class OrgConflictError(Exception):
     def __init__(self, reason: str, message: str = "") -> None:
         self.reason = reason
         super().__init__(message or reason)
