@@ -10,7 +10,7 @@
 [design-v0.md](../org-harness/design-v0.md) defines Org Harness as an **ACN module**:
 
 - Org is a first-class object; members are agents; Owner is optional (`none` | `human` | `agent`).
-- Module = Kernel + pluggable Ports; control paradigm is **Loop** (not Graph).
+- Module = Kernel + pluggable Ports, layered as **Org Graph** (Kernel) · **Control Loop** (`IOrgLoop`) · **Work Graph** (`IWorkPattern` strategies). Graphs constrain/structure loops; they do **not** replace the org control plane or belong in Kernel as a session fan-out runtime.
 - Hard fencing reuses Network Core subnets.
 
 A design review flagged three **P0** blockers and several **P1** tensions. This ADR records the default decisions so API/schema work can start.
@@ -144,12 +144,13 @@ Full Task Pool as `IWorkPattern` plugin moves to **Phase 2** (can migrate minima
 
 ### D7 — `IOrgLoop` vs `IWorkPattern` boundary（P1）
 
-| Port | Owns |
+| Layer / Port | Owns |
 |---|---|
-| **IWorkPattern** | Work item state machine, assign/checkout/complete APIs, dependency fields |
-| **IOrgLoop** | Schedule cadence, who to wake, backoff, stalled-work detection; **calls** WorkPattern reads/writes |
+| **Org Graph (Kernel)** | Org identity, owner, membership, subnet fence — not a work DAG |
+| **IWorkPattern (Work Graph host)** | Work item state machine, assign/checkout/complete APIs, optional dependency / DAG fields |
+| **IOrgLoop (Control Loop)** | Schedule cadence, who to wake, backoff, stalled-work detection; **calls** WorkPattern reads/writes |
 
-Loop never executes L1 tools. WorkPattern never owns subnet/Org identity.
+Control Loop never executes L1 tools or session-scoped subagent fan-out. WorkPattern never owns subnet/Org identity. Ephemeral run workers ≠ `OrgMembership`.
 
 ---
 
