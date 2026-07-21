@@ -380,6 +380,12 @@ class OrgService:
         - any agent holding an **active** OrgMembership (covers degraded
           members not yet propagated into the fence)
         - a human who owns the steward agent (ownership-chain bridge)
+
+        Deliberately narrow, matching subnet ACL V6 § 2: a human who owns
+        a mere *member* (worker) agent is NOT entitled — membership is a
+        collaboration edge and does not extend read trust upward to the
+        member agent's holder. Such humans read via their agent's own
+        API key.
         """
         if admin:
             return True

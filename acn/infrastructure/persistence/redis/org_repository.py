@@ -15,21 +15,32 @@ last writer silently won.
 
 Rules:
 
-- New binding (new org, or ``subnet_id`` changed): ``SET NX``. On
-  failure the current holder is inspected — a **dangling** pointer
-  (org payload deleted) or a **dissolved** holder is released and the
-  claim retried once; an active holder raises
+- **Fresh create** (no payload row yet): the org payload is written
+  BEFORE the ``SET NX`` claim, and a lost claim deletes the just-written
+  payload (loser leaves no row). Ordering is load-bearing: the dangling
+  eviction below treats "pointer without payload" as a dead binding, so
+  a claim-before-write order would let a concurrent create misread a
+  freshly claimed pointer as dangling, evict it, and double-bind the
+  subnet (review finding on #177).
+- **Rebind** (existing org, ``subnet_id`` changed): claim first — the
+  org's payload already exists, so no concurrent claimer can misread
+  the pointer as dangling; the payload write follows the claim.
+- On claim failure the current holder is inspected — a **dangling**
+  pointer (org payload deleted) or a **dissolved** holder is released
+  and the claim retried once; an active holder raises
   :class:`OrgSubnetBindingConflictError`.
 - ``status="dissolved"`` saves release the pointer (only when it still
   points at this org), so a dissolved Org's subnet is immediately
-  rebindable — mirroring the Postgres partial-unique-index semantics.
+  rebindable — mirroring the Postgres unique-constraint semantics.
 - :meth:`delete_org` only deletes the pointer when it points at the
   org being deleted (a stale-takeover may have re-pointed it).
 
 The release-then-retry window on stale/dissolved takeover is not
-atomic (no Lua — fakeredis in CI has no interpreter), but it can only
-race another *takeover of an already-dead binding*; the fresh-create
-vs fresh-create race that mattered is closed by ``SET NX``.
+atomic (no Lua — fakeredis in CI has no interpreter), but with the
+write-before-claim ordering a "pointer without payload" state can only
+arise from a genuinely dead binding (e.g. crash inside ``delete_org``
+between payload delete and pointer release) — never from an in-flight
+create. See BACKLOG ``DEF-ORG-LUA``.
 """
 
 from __future__ import annotations
@@ -104,15 +115,7 @@ class RedisOrgRepository(IOrgRepository):
         if holder_id and holder_id != org.org_id:
             raise OrgSubnetBindingConflictError(org.subnet_id, holder_id)
 
-    async def save_org(self, org: Org) -> None:
-        old = await self.find_org(org.org_id)
-
-        # Claim the fence pointer BEFORE persisting the org payload so a
-        # lost race leaves no orphan org row behind.
-        binding_is_new = old is None or old.subnet_id != org.subnet_id
-        if binding_is_new and org.status != "dissolved":
-            await self._claim_subnet_binding(org)
-
+    async def _write_payload(self, org: Org, old: Org | None) -> None:
         payload = json.dumps(org.to_dict())
         await self.redis.set(_org_key(org.org_id), payload)
         if old and old.steward_agent_id != org.steward_agent_id:
@@ -120,6 +123,35 @@ class RedisOrgRepository(IOrgRepository):
                 _org_steward_idx(old.steward_agent_id), org.org_id
             )
         await self.redis.sadd(_org_steward_idx(org.steward_agent_id), org.org_id)
+
+    async def save_org(self, org: Org) -> None:
+        old = await self.find_org(org.org_id)
+        binding_is_new = old is None or old.subnet_id != org.subnet_id
+        claim_needed = binding_is_new and org.status != "dissolved"
+
+        if claim_needed and old is None:
+            # Fresh create: payload BEFORE claim (see module docstring —
+            # claim-first would let a concurrent create misread our
+            # freshly claimed pointer as dangling and double-bind).
+            await self._write_payload(org, old=None)
+            try:
+                await self._claim_subnet_binding(org)
+            except OrgSubnetBindingConflictError:
+                # Loser leaves no row behind.
+                await self.redis.delete(_org_key(org.org_id))
+                await self.redis.srem(
+                    _org_steward_idx(org.steward_agent_id), org.org_id
+                )
+                raise
+            return
+
+        if claim_needed:
+            # Rebind of an existing org: its payload is already visible,
+            # so concurrent claimers cannot misread the pointer as
+            # dangling; claim first, then persist the new binding.
+            await self._claim_subnet_binding(org)
+
+        await self._write_payload(org, old)
         if old and old.subnet_id != org.subnet_id:
             await self._release_subnet_binding(old.subnet_id, org.org_id)
         if org.status == "dissolved":

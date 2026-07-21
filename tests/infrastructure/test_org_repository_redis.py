@@ -73,9 +73,63 @@ async def test_second_org_on_same_subnet_conflicts(repo):
         await repo.save_org(_org("org_b", "fence-1"))
     assert ei.value.subnet_id == "fence-1"
     assert ei.value.bound_org_id == "org_a"
-    # Loser must leave no payload row behind when raised before SET —
-    # the claim happens before the payload write.
+    # Loser leaves no row behind: payload is written before the claim,
+    # and deleted again when the claim is lost.
     assert await repo.find_org("org_b") is None
+    stewarded = await repo.list_orgs_by_steward("agt_steward")
+    assert [o.org_id for o in stewarded] == ["org_a"]
+
+
+async def test_fresh_create_writes_payload_before_claim(repo, fake_redis):
+    """Ordering contract (#177 review): payload BEFORE pointer claim.
+
+    The dangling eviction treats "pointer without payload" as a dead
+    binding. If a fresh create claimed the pointer first, a concurrent
+    create could observe exactly that state, evict the pointer, and
+    double-bind the subnet. Pinning the write order closes the race.
+    """
+    order: list[str] = []
+    real_set = fake_redis.set
+
+    async def spy_set(key, *args, **kwargs):
+        order.append(key)
+        return await real_set(key, *args, **kwargs)
+
+    fake_redis.set = spy_set
+    try:
+        await repo.save_org(_org("org_a", "fence-1"))
+    finally:
+        fake_redis.set = real_set
+
+    assert order.index(_org_key("org_a")) < order.index(
+        _org_subnet_idx("fence-1")
+    )
+
+
+async def test_interleaved_fresh_creates_keep_single_binding(repo, fake_redis):
+    """Regression for the claim-before-write × dangling-eviction race.
+
+    Simulates T1 suspended mid-create (payload written, pointer not yet
+    claimed) while T2 completes a full create for the same subnet. When
+    T1 resumes its claim it must lose with a conflict — T2's binding
+    must NOT be evicted as dangling, and the pointer must keep exactly
+    one holder.
+    """
+    import json
+
+    t1 = _org("org_t1", "fence-1")
+    # T1 mid-flight: payload persisted, claim not yet attempted.
+    await fake_redis.set(_org_key("org_t1"), json.dumps(t1.to_dict()))
+
+    # T2 runs to completion and wins the fence.
+    await repo.save_org(_org("org_t2", "fence-1"))
+    assert (await repo.find_org_by_subnet("fence-1")).org_id == "org_t2"
+
+    # T1 resumes: its claim must observe an ACTIVE holder and back off.
+    with pytest.raises(OrgSubnetBindingConflictError) as ei:
+        await repo._claim_subnet_binding(t1)
+    assert ei.value.bound_org_id == "org_t2"
+    assert (await repo.find_org_by_subnet("fence-1")).org_id == "org_t2"
 
 
 async def test_resave_same_org_is_idempotent(repo):
