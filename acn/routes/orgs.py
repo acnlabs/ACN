@@ -6,7 +6,15 @@ import secrets
 from typing import Annotated, Any, Literal
 
 import structlog  # type: ignore[import-untyped]
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, Path, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Path,
+    Request,
+)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -318,6 +326,21 @@ def _map_permission(exc: OrgPermissionError, org_id: str) -> ACNHTTPError:
     )
 
 
+def _map_conflict(exc: OrgConflictError) -> ACNHTTPError:
+    """Map OrgConflictError → 409; keep ``details={reason}`` shape stable.
+
+    ``message`` carries the service prose (e.g. bound ``org_…`` id) so
+    adapters can recover without widening the details schema.
+    """
+    prose = str(exc).strip()
+    return ACNHTTPError(
+        ErrorCode.RESOURCE_CONFLICT,
+        409,
+        message=prose if prose and prose != exc.reason else None,
+        details={"reason": exc.reason},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -359,11 +382,7 @@ async def create_org(
             details={"reason": str(e)},
         ) from e
     except OrgConflictError as e:
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT,
-            409,
-            details={"reason": e.reason},
-        ) from e
+        raise _map_conflict(e) from e
 
 
 @router.get("/{org_id}")
@@ -430,11 +449,7 @@ async def update_org(
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT,
-            409,
-            details={"reason": e.reason},
-        ) from e
+        raise _map_conflict(e) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
@@ -467,9 +482,7 @@ async def claim_org(
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT, 409, details={"reason": e.reason}
-        ) from e
+        raise _map_conflict(e) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
@@ -528,9 +541,7 @@ async def release_org(
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT, 409, details={"reason": e.reason}
-        ) from e
+        raise _map_conflict(e) from e
 
 
 @router.post("/{org_id}/dissolve")
@@ -606,12 +617,18 @@ async def add_member(
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
-        status = 503 if e.reason == "membership_sync_failed" else 409
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT,
-            status,
-            details={"reason": e.reason},
-        ) from e
+        if e.reason == "membership_sync_failed":
+            # ADR-0014 D4: compensate failed → 503 (retryable operator alert).
+            # ACNHTTPError forbids 5xx; use HTTPException like registry/deps.
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Org membership write failed and subnet leave compensation "
+                    "failed; retry later"
+                ),
+                headers={"Retry-After": "5"},
+            ) from e
+        raise _map_conflict(e) from e
     except ValueError as e:
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
@@ -677,11 +694,7 @@ async def create_work(
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
         # Legacy Phase 1 Orgs may store unavailable work plugins.
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT,
-            409,
-            details={"reason": e.reason},
-        ) from e
+        raise _map_conflict(e) from e
 
 
 @router.get("/{org_id}/work")
@@ -713,11 +726,7 @@ async def list_work(
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT,
-            409,
-            details={"reason": e.reason},
-        ) from e
+        raise _map_conflict(e) from e
 
 
 @router.patch("/{org_id}/work/{work_id}")
@@ -754,11 +763,7 @@ async def update_work(
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT,
-            409,
-            details={"reason": e.reason},
-        ) from e
+        raise _map_conflict(e) from e
 
 
 @router.post("/{org_id}/loop/tick")
@@ -782,8 +787,4 @@ async def tick_loop(
     except OrgPermissionError as e:
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
-        raise ACNHTTPError(
-            ErrorCode.RESOURCE_CONFLICT,
-            409,
-            details={"reason": e.reason},
-        ) from e
+        raise _map_conflict(e) from e
