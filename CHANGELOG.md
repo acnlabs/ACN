@@ -44,10 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order, subnet steward agent, Phase 1 = Kernel + minimal work + thin Loop.
   Supporting: API tiers, org model, adapter spec,
   `scripts/smoke_org_harness_four_links.sh`.
-- **Adapter Spec + Phase 2 status** — `org-pattern-adapter-spec-v0.md` bootstrap
-  is `POST /orgs` + Org work APIs; Link 3 acceptance forbids Task Pool on the
-  new path; `task.*` marked legacy. Index/design/BACKLOG updated for P2a/P2c
-  done and P2b optional.
+- **Phase 2 status sync (after #180)** — index / design / BACKLOG mark P2a/P2c
+  done and P2b optional; clarify default Work Port is `builtin_work` (Task Pool
+  optional). Adapter-spec body landed in #180.
 - **Agent skill 0.17.2** — documents Org Harness (`acn org …`, Work Port),
   preferred `org.*` harness events, and Task Pool as optional/legacy for
   Pattern adapters; `references/API.md` gains `/orgs*` table.

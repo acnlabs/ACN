@@ -120,7 +120,7 @@ applicant / invitee).
 
 Org module (ADR-0014). Default Work Port is `builtin_work`. External Patterns
 should dispatch via `/orgs/{id}/work*` — not Task Pool — unless they opt into
-Task Pool mode. See [`docs/org-harness/`](../../docs/org-harness/README.md).
+Task Pool mode. See [`docs/org-harness/`](../../../docs/org-harness/README.md).
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|

@@ -114,11 +114,14 @@ acn config show
 | **Org Harness** | |
 | `acn org create --name <name> [--subnet <slug>] [--join-policy open\|approval]` | Create Org (binds/creates subnet fence); default work plugin `builtin_work` |
 | `acn org show <org_id>` | Show Org details |
-| `acn org update <org_id> [--name ...] [--plugins work=builtin_work]` | Update charter / plugins / display name |
+| `acn org update <org_id> [--name ...] [--charter '<json>'] [--plugins '<json>']` | Update charter / plugins / display name (`--plugins '{"work":"builtin_work"}'`) |
 | `acn org members list <org_id>` | List active members |
-| `acn org members add <org_id> <agent_id>` | Add member |
+| `acn org members add <org_id> <agent_id> [--role worker]` | Add member |
 | `acn org members remove <org_id> <agent_id>` | Remove member |
-| `acn org claim\|transfer\|release\|dissolve <org_id>` | Ownership lifecycle |
+| `acn org claim <org_id>` | Claim unclaimed Org |
+| `acn org transfer <org_id> --to <owner>` | Transfer ownership |
+| `acn org release <org_id>` | Release ownership → none |
+| `acn org dissolve <org_id>` | Dissolve Org |
 | `acn org work list <org_id> [--open]` | List Org work items (Work Port) |
 | `acn org work create <org_id> --title <t> [--assignee <agent_id>]` | Create work item (`POST /orgs/{id}/work`) |
 | `acn org work update <org_id> <work_id> --status todo\|in_progress\|done\|cancelled` | Update work status |
@@ -848,8 +851,8 @@ acn subnet harness clear <subnet_id>
 ```
 
 **Preferred events:** `org.work_created`, `org.work_updated`, `org.loop_tick`,
-`org.created` / `org.member_*` / `org.dissolved`, plus `agent.joined_subnet` /
-`agent.left_subnet`.
+`org.created`, `org.member_added`, `org.member_removed`, `org.owner_changed`,
+`org.dissolved`, plus `agent.joined_subnet` / `agent.left_subnet`.
 
 **Legacy / optional:** `task.*`, `participation.rejected` (Task Pool).
 
