@@ -1,6 +1,7 @@
 # Phase 2 — Work Port（短方案）
 
-**Status:** Agreed for implementation sequencing（2026-07-21）  
+**Status:** P2a + P2c done；P2b optional（2026-07-22）  
+
 **Depends on:** [design-v0.md](./design-v0.md) §5 / §10, [ADR-0014](../adr/0014-org-harness-module.md) D5–D7  
 **Audience:** 实施与审阅；先定边界，再写代码
 

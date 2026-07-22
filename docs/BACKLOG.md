@@ -887,14 +887,20 @@ H-erc8004 把 `chain` 改成 client-optional + 服务端派生 + 收到值必须
 **Phase 1 Kernel shipped** (ADR-0014): `/api/v1/orgs*`, CLI `acn org …`,
 minimal work + thin Loop. Design: [`docs/org-harness/`](org-harness/README.md).
 
-Still deferred (Phase 2+):
+**Phase 2a / P2c shipped:** Work Port + default `builtin_work`; Paperclip
+adapter on Org work + `org.*` (see
+[`org-pattern-adapter-spec-v0.md`](org-harness/org-pattern-adapter-spec-v0.md)).
 
-- **DEF-WORK-PLUGIN** — Phase 2 Work Port：见 [`org-harness/phase2-work-port-v0.md`](org-harness/phase2-work-port-v0.md)（P2a 默认 `builtin_work`；Task Pool 为可选 Builtin）
+Still deferred (Phase 2b / 3+):
+
+- **DEF-WORK-PLUGIN** — ~~P2a `builtin_work`~~ / ~~P2c Paperclip Org path~~ done；
+  remaining **P2b** `plugins.work=task_pool` in-process（按需）— 见
+  [`org-harness/phase2-work-port-v0.md`](org-harness/phase2-work-port-v0.md)
 - **DEF-MEM** — Org Memory / SOPs (Pattern-local; Mem0/Zep/PG+vector)
 - **DEF-ORGREP** — Cross-org reputation (beyond per-agent ERC-8004 reads)
 - **DEF-DISPUTE** — Dispute / jury after escrow window (ADR-0010 Future)
 - **DEF-FED** — Federation across ACN instances ([federation.md](federation.md))
-- **DEF-ORGC** — Portable `/orgs/*` Core API (only if multi-Pattern discovery needs it)
+- **DEF-ORGC** — Further multi-Pattern Org discovery（`/api/v1/orgs*` Kernel API 已存在）
 - **DEF-SAGA** — Settlement saga v1 (Gated v0 atomicity)
 - **DEF-RAILS** — Agentic payment rails (ADR-0009 P2)
 - **DEF-ORG-ACL** — Org read ACL v1 ships a **redacted view** for private-fence

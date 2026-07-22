@@ -31,14 +31,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `OrgSubnetBindingConflictError` → 409 `subnet_already_bound`. New
   repository-layer tests (fakeredis + mock-session).
 
+- **Org Harness Phase 2a Work Port** — `IWorkPattern` resolve with default
+  `builtin_work` wrapping minimal Org work; `org.plugins.work` selectable;
+  Loop tick lists open work via the Port. See
+  `docs/org-harness/phase2-work-port-v0.md`.
+
 ### Docs
 
 - **Org Harness design v0 + ADR-0014** — `docs/org-harness/design-v0.md`: ACN
   module (optional Owner none/human/agent, agent members), Kernel + Ports,
   Loop-first. **ADR-0014 Accepted**: none-owner steward rules, Membership↔subnet
   order, subnet steward agent, Phase 1 = Kernel + minimal work + thin Loop.
-  Supporting: API tiers, org model, adapter spec (Task-mirror transitional),
+  Supporting: API tiers, org model, adapter spec,
   `scripts/smoke_org_harness_four_links.sh`.
+- **Adapter Spec + Phase 2 status** — `org-pattern-adapter-spec-v0.md` bootstrap
+  is `POST /orgs` + Org work APIs; Link 3 acceptance forbids Task Pool on the
+  new path; `task.*` marked legacy. Index/design/BACKLOG updated for P2a/P2c
+  done and P2b optional.
 
 ## [0.15.1] - 2026-07-19
 
