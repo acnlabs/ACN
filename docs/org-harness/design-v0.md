@@ -205,7 +205,7 @@ Org C → Work=paperclip     Loop=paperclip_wake Memory=vector
 | OpenAI Swarm → Agents SDK | Handoff 协调 | 可作为 **`IWorkPattern` 策略插件** |
 | CrewAI / LangGraph / MAF | 角色队 / 图编排 | 同上，挂 Port |
 | Paperclip | 公司式控制面 + UI | **外部 Pattern**；[`paperclip-acn-plugin`](https://github.com/acnlabs/paperclip-acn-plugin) 是适配器，**不是** Org Harness 本体 |
-| ACN Task Pool | Builtin 轻量 WorkPattern | Org Harness 的默认插件之一，可被替换 |
+| ACN Task Pool | Builtin 轻量 WorkPattern | **可选**插件（`plugins.work=task_pool`）；**默认**是 `builtin_work`，不是 Task Pool |
 
 ```text
 Org Harness
@@ -286,7 +286,7 @@ Org Harness **消费** Core，不重新实现：
 |---|---|
 | subnet + admission | Org 的硬围栏（Kernel 绑定） |
 | `PATCH …/harness` webhook | `IEventSink` 默认出口；外挂 Pattern 接收端 |
-| Task Pool | Builtin `IWorkPattern` 默认实现之一 |
+| Task Pool | Builtin `IWorkPattern` **可选**实现（默认是 `builtin_work`） |
 | `paperclip-acn-plugin` | Paperclip ↔ ACN 适配器；演进目标对齐本设计的 Port，而非替代模块 |
 | Mode B `acn listen` | L1 成员入网/接活方式之一 |
 
@@ -316,9 +316,9 @@ Org Harness **消费** Core，不重新实现：
 
 > **短方案（实施准绳）：** [phase2-work-port-v0.md](./phase2-work-port-v0.md)
 
-1. **P2a（必做）** 最小 Port 插座 + 默认 `builtin_work`（现有 `OrgWorkItem`）；`smoke_org_kernel.sh` 行为不变  
+1. ~~**P2a（必做）** 最小 Port 插座 + 默认 `builtin_work`（现有 `OrgWorkItem`）；`smoke_org_kernel.sh` 行为不变~~  
 2. **P2b（按需）** `plugins.work=task_pool` 进程内可选适配（非默认；外部 Pattern 仍禁绑 `/tasks/*`）  
-3. **P2c（可并行）** `paperclip-acn-plugin`：Issues ↔ Org work + `org.*`，弱化 Task 镜像  
+3. ~~**P2c（可并行）** `paperclip-acn-plugin`：Issues ↔ Org work + `org.*`，弱化 Task 镜像~~（C0–C3 + adapter spec）  
 
 ### Phase 3 — 增强 Port
 
@@ -357,7 +357,7 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 | [../adr/0014-org-harness-module.md](../adr/0014-org-harness-module.md) | **P0/P1 决策 ADR（Accepted）** |
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core / Pattern 消费契约 |
 | [org-model-v0.md](./org-model-v0.md) | 数据模型（随本文修订 ownership） |
-| [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（过渡期 Task 镜像）；以本文 + ADR-0014 为准 |
+| [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（`POST /orgs` + Org work；`task.*` legacy）；以本文 + ADR-0014 为准 |
 | [`../_drafts/pasture-engineering.md`](../_drafts/pasture-engineering.md) | 学科隐喻与升维理论（Draft） |
 | [`../_drafts/pasture-protocol.md`](../_drafts/pasture-protocol.md) | 协议理论 Draft；命名以本文为准 |
 
