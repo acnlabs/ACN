@@ -44,9 +44,9 @@ Phase 2 给「怎么派活」装**可换插座**——先把**现在这套小工
 
 ### P2c — Paperclip WorkPort（可并行）
 
-9. Adapter 读写 Org work + 消费 `org.work_*` / `org.loop_tick`。  
-10. Issue ↔ `OrgWorkItem` 映射；**新链路不写 Task 镜像**。  
-11. 更新 [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md)：bootstrap 以 `POST /orgs` 为准；验收「issue → agent run」不经 Task Pool。
+9. ~~Adapter 读写 Org work + 消费 `org.work_*` / `org.loop_tick`。~~（`paperclip-acn-plugin` C2）  
+10. ~~Issue ↔ `OrgWorkItem` 映射；**新链路不写 Task 镜像**。~~（C0/C1 + C3 status PATCH）  
+11. ~~更新 [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md)：bootstrap 以 `POST /orgs` 为准；验收「issue → agent run」不经 Task Pool。~~  
 
 ---
 
