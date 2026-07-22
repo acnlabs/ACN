@@ -423,11 +423,22 @@ class AgentService:
         ``a2a_endpoint`` so the two stay in sync (the entity's
         ``__post_init__`` only back-fills one from the other when exactly
         one is set; assigning both explicitly avoids relying on that).
-        Passing ``None`` clears both, reverting the agent to pull-only.
+        Passing ``None`` clears both URL fields. Combined with the agent's
+        current reception policy that means:
+
+        - push mode (``open`` / ``allowlist``) + cleared URL → Mode B
+          **relay** (ADR-0012; prefer :meth:`switch_to_relay`);
+        - ``manifest`` / ``closed`` + cleared URL → pull-only / reject
+          (no real-time push transport).
 
         URL validation (scheme, ACN-gateway-host rejection, SSRF) and any
         reachability probe live at the route layer — by the time we get
         here the value is either ``None`` or a vetted URL string.
+
+        The bare ``PATCH /endpoint`` route still rejects clear-in-push so
+        operators cannot accidentally leave an open agent with nowhere to
+        deliver; intentional Mode A → Mode B goes through
+        ``PATCH /agents/{id}/delivery`` → :meth:`switch_to_relay`.
 
         Args:
             agent_id: Agent identifier.
@@ -441,6 +452,42 @@ class AgentService:
         agent.a2a_endpoint = endpoint or None
         await self.repository.save(agent)
         return agent
+
+    async def switch_to_relay(self, agent_id: str) -> Agent:
+        """Clear the direct delivery URL so inbound push uses Mode B relay.
+
+        ADR-0012: a push-mode agent (``open`` / ``allowlist``) with no
+        direct endpoint is reached over its outbound WebSocket
+        (``acn listen``). This is the intentional A→B migration path;
+        policy mode is left unchanged. Reception-policy / push-mode
+        checks live at the route layer
+        (``PATCH /agents/{id}/delivery``).
+
+        Args:
+            agent_id: Agent identifier.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+        """
+        return await self.update_endpoint(agent_id, None)
+
+    async def set_direct_delivery(self, agent_id: str, endpoint: str) -> Agent:
+        """Set a direct A2A URL so inbound push uses Mode A HTTP dial.
+
+        Counterpart to :meth:`switch_to_relay` (B→A). Reachability /
+        handshake probes run at the route layer before this is called.
+
+        Args:
+            agent_id: Agent identifier.
+            endpoint: Non-empty direct A2A delivery URL.
+
+        Raises:
+            AgentNotFoundException: If the agent does not exist.
+            ValueError: If ``endpoint`` is empty.
+        """
+        if not endpoint:
+            raise ValueError("endpoint is required for direct delivery")
+        return await self.update_endpoint(agent_id, endpoint)
 
     async def search_agents(
         self,

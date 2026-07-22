@@ -2670,6 +2670,262 @@ async def update_agent_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# ADR-0012: GET/PATCH /api/v1/agents/{id}/delivery — Mode A ↔ Mode B
+# ---------------------------------------------------------------------------
+#
+# Reception policy (``communication_policy.mode``) and delivery transport
+# (direct HTTP vs WebSocket relay) are orthogonal. Runtime routing keys
+# off endpoint presence; ``delivery`` is a *derived* view, not a DB column.
+# This surface lets an already-registered agent migrate A↔B without
+# re-joining (which would mint a new ``agent_id``).
+
+
+def _derive_delivery(*, mode: str, endpoint: str | None) -> str:
+    """Derive transport label from policy mode + endpoint presence.
+
+    - push (``open``/``allowlist``) + URL → ``direct`` (Mode A)
+    - push + no URL → ``relay`` (Mode B)
+    - ``manifest``/``closed`` → ``none`` (pull / reject; no real-time push)
+    """
+    if mode in _PUSH_MODES:
+        return "direct" if endpoint else "relay"
+    return "none"
+
+
+def _gateway_websocket_url(base_url: str, agent_id: str) -> str:
+    """Derive the Mode B control-channel URL from the REST gateway origin.
+
+    Mirrors CLI ``toWebsocketUrl``: ``https://`` → ``wss://``, ``http://`` →
+    ``ws://``, path ``/ws/{agent_id}``.
+    """
+    parsed = urlparse(base_url.rstrip("/"))
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    netloc = parsed.netloc or parsed.path  # tolerate bare-host inputs
+    return f"{scheme}://{netloc}/ws/{agent_id}"
+
+
+def _delivery_next_step_hint(
+    *,
+    delivery: str,
+    a2a_handshake_ok: bool | None,
+    agent_id: str,
+    base_url: str,
+) -> str | None:
+    """Actionable follow-up after a delivery transport change."""
+    if delivery == "relay":
+        ws_url = _gateway_websocket_url(base_url, agent_id)
+        return (
+            "Delivery is now Mode B (relay). Hold an outbound WebSocket with "
+            f"`acn listen` (or connect to {ws_url} with your agent API key) so "
+            "inbound pushes can be relayed in real time. While disconnected, "
+            "messages park in the offline inbox."
+        )
+    if delivery == "direct" and a2a_handshake_ok is False:
+        return (
+            "Endpoint is reachable but did NOT respond as an A2A JSON-RPC "
+            "server. Re-point with PATCH "
+            f"{base_url}/api/v1/agents/{agent_id}/delivery "
+            '{"delivery":"direct","endpoint":"<full-a2a-url>"} '
+            "(e.g. https://host/a2a, not the bare origin)."
+        )
+    return None
+
+
+class DeliveryPatchRequest(BaseModel):
+    """PATCH body for ``/agents/{id}/delivery``.
+
+    Switches inbound transport between Mode A (``direct``) and Mode B
+    (``relay``) without re-registration. ``communication_policy.mode``
+    must already be a push mode (``open`` / ``allowlist``).
+    """
+
+    delivery: str = Field(
+        ...,
+        description=(
+            "Target transport: 'relay' (Mode B — clear endpoint, use "
+            "`acn listen`) or 'direct' (Mode A — requires endpoint URL)."
+        ),
+    )
+    endpoint: str | None = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "Required when delivery='direct': the agent's public A2A "
+            "JSON-RPC URL. Must be omitted (or null) when delivery='relay'."
+        ),
+    )
+
+    @field_validator("delivery")
+    @classmethod
+    def _validate_delivery(cls, v: str) -> str:
+        normalized = (v or "").strip().lower()
+        if normalized not in ("direct", "relay"):
+            raise ValueError("delivery must be 'direct' or 'relay'")
+        return normalized
+
+    @field_validator("endpoint")
+    @classmethod
+    def _validate_endpoint(cls, v: str | None) -> str | None:
+        return _validate_agent_endpoint_url(v)
+
+    @model_validator(mode="after")
+    def _mutual_exclusion(self):
+        if self.delivery == "relay" and self.endpoint:
+            raise ValueError(
+                "delivery='relay' is mutually exclusive with a delivery URL: "
+                "omit endpoint (relay agents are reached over their outbound "
+                "WebSocket)."
+            )
+        if self.delivery == "direct" and not self.endpoint:
+            raise ValueError(
+                "delivery='direct' requires an endpoint URL "
+                "(the public A2A JSON-RPC path ACN will dial)."
+            )
+        return self
+
+
+@router.get("/{agent_id}/delivery")
+@limiter.limit("60/minute")
+async def get_agent_delivery(
+    request: Request,
+    agent_id: AgentIdPath,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Return the derived inbound delivery transport (direct / relay / none).
+
+    Auth matches ``GET /{id}/endpoint`` (owner API key or internal token).
+    ``delivery`` is derived — not a stored column — from
+    ``communication_policy.mode`` + whether a direct endpoint is set.
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    mode = (agent.communication_policy or {}).get("mode", "open")
+    endpoint = agent.a2a_endpoint or agent.endpoint
+    delivery = _derive_delivery(mode=mode, endpoint=endpoint)
+
+    logger.info(
+        "agent_delivery_disclosed",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+        caller_agent_id=caller.get("agent_id"),
+        delivery=delivery,
+    )
+    # Same secret as GET /endpoint: when a real backend URL is returned,
+    # emit the established disclosure audit so monitors keyed on
+    # ``agent_endpoint_disclosed`` still catch this read path.
+    if endpoint:
+        logger.info(
+            "agent_endpoint_disclosed",
+            agent_id=agent_id,
+            caller_kind=caller.get("caller_kind"),
+            caller_agent_id=caller.get("agent_id"),
+            via="delivery",
+        )
+    return {
+        "agent_id": agent_id,
+        "delivery": delivery,
+        "endpoint": endpoint,
+        "communication_mode": mode,
+    }
+
+
+@router.patch("/{agent_id}/delivery")
+@limiter.limit("30/minute")
+async def update_agent_delivery(
+    request: Request,
+    agent_id: AgentIdPath,
+    body: DeliveryPatchRequest,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Switch inbound transport between Mode A (direct) and Mode B (relay).
+
+    Keeps ``agent_id`` and ``communication_policy`` intact. Bare
+    ``PATCH /endpoint`` with ``null`` while in a push mode remains
+    rejected — use this route (with ``delivery=relay``) for the
+    intentional A→B migration.
+
+    Auth: ``OwnerOrInternalDep``.
+    """
+    try:
+        agent = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    current_mode = (agent.communication_policy or {}).get("mode", "open")
+    if current_mode not in _PUSH_MODES:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            message=(
+                f"Cannot set delivery={body.delivery!r} while "
+                f"communication_policy.mode={current_mode!r}: Mode A/B "
+                "apply only to push modes (open / allowlist). "
+                "PATCH /agents/{id}/policy to mode 'open' first, then "
+                "retry this call."
+            ),
+            details={
+                "reason": "delivery_requires_push_mode",
+                "mode": current_mode,
+                "delivery": body.delivery,
+            },
+        )
+
+    base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
+    a2a_handshake_ok: bool | None = None
+
+    if body.delivery == "relay":
+        updated = await agent_service.switch_to_relay(agent_id)
+        delivery = "relay"
+        endpoint_out = None
+    else:
+        # direct — probe then persist (same gates as PATCH /endpoint set)
+        await _check_endpoint_reachability(body.endpoint)  # type: ignore[arg-type]
+        a2a_handshake_ok = await _probe_a2a_handshake(body.endpoint)  # type: ignore[arg-type]
+        updated = await agent_service.set_direct_delivery(
+            agent_id, body.endpoint  # type: ignore[arg-type]
+        )
+        delivery = "direct"
+        endpoint_out = updated.endpoint
+
+    logger.info(
+        "agent_delivery_updated",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+        caller_agent_id=caller.get("agent_id"),
+        delivery=delivery,
+        endpoint_set=endpoint_out is not None,
+        a2a_handshake_ok=a2a_handshake_ok,
+    )
+
+    return {
+        "agent_id": agent_id,
+        "delivery": delivery,
+        "endpoint": endpoint_out,
+        "communication_mode": current_mode,
+        "a2a_handshake_ok": a2a_handshake_ok,
+        "next_step_hint": _delivery_next_step_hint(
+            delivery=delivery,
+            a2a_handshake_ok=a2a_handshake_ok,
+            agent_id=agent_id,
+            base_url=base_url,
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 L410-B: PATCH /api/v1/agents/{id}/policy
 # ---------------------------------------------------------------------------
 #

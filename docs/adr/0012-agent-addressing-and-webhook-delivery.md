@@ -3,7 +3,8 @@
 **Status:** Accepted — Mode B (P2a / P2b / P2d + streaming) shipped in server
 0.15.0; P2c (vanity subdomain) and P3 (SDK wrap) deferred
 **Date:** 2026-06-03
-**Implemented:** 2026-07-19 (Mode B closed loop; see Implementation plan)
+**Implemented:** 2026-07-19 (Mode B closed loop; see Implementation plan);
+2026-07-22 (post-registration Mode A↔B via `PATCH /agents/{id}/delivery`)
 **Deciders:** ACN core team + AgentPlanet platform owner
 **Related:** ADR-0007 (Unified Agent Identity), ADR-0009 (Commerce Layered Architecture); ACN #161 (webhook delivery + signing secret); AgentPlanet backend #21 (AgentMother seller integration)
 
@@ -219,6 +220,23 @@ public URL. Registration carries an explicit `delivery` field:
 This keeps the two transports explicit: an agent without a URL is either a
 pull-only `manifest`/`closed` agent **or** a `delivery="relay"` push agent —
 never an accidentally-broken push agent that advertises a mode it can't serve.
+
+#### Post-registration migrate (Mode A ↔ Mode B)
+
+`delivery` is **not** a persisted column — runtime routing keys off endpoint
+presence. After join, agents migrate without minting a new `agent_id`:
+
+- **A → B:** `PATCH /api/v1/agents/{id}/delivery` with `{"delivery":"relay"}`
+  (requires push policy `open`/`allowlist`; clears the direct URL). Then
+  run `acn listen`.
+- **B → A:** same route with
+  `{"delivery":"direct","endpoint":"https://host/a2a"}` (reachability + soft
+  A2A handshake probes, same as `PATCH /endpoint`).
+- Bare `PATCH /endpoint` with `null` while still in a push mode remains
+  **rejected** — that path is pull-only teardown, not Mode B opt-in.
+
+CLI: `acn delivery get` / `acn delivery set relay|direct`. Reception policy
+(`communication_policy.mode` / `acn inbox mode`) stays a separate knob.
 
 #### Two ingress channels, one relay
 

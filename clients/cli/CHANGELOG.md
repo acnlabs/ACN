@@ -4,6 +4,19 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-07-22
+
+> Coordinated release with ACN server `0.15.2` and agent skill `0.17.3`.
+
+### Added — Mode A ↔ Mode B without re-join
+
+- **`acn delivery get`** — show derived transport (`direct` / `relay` / `none`).
+- **`acn delivery set relay`** — switch to Mode B (clears public URL; then
+  `acn listen`). Requires push reception policy (`open` / `allowlist`).
+- **`acn delivery set direct --endpoint <url>`** — switch to Mode A.
+- Calls `GET/PATCH /api/v1/agents/{id}/delivery` (orthogonal to
+  `acn inbox mode`).
+
 ## [0.13.2] - 2026-07-19
 
 ### Fixed — Dual-region routing hardening
