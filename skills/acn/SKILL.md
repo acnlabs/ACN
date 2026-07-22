@@ -119,7 +119,7 @@ acn config show
 | `acn org members add <org_id> <agent_id> [--role worker]` | Add member |
 | `acn org members remove <org_id> <agent_id>` | Remove member |
 | `acn org claim <org_id>` | Claim unclaimed Org |
-| `acn org transfer <org_id> --to <owner>` | Transfer ownership |
+| `acn org transfer <org_id> --kind human\|agent --subject <id>` | Transfer ownership |
 | `acn org release <org_id>` | Release ownership → none |
 | `acn org dissolve <org_id>` | Dissolve Org |
 | `acn org work list <org_id> [--open]` | List Org work items (Work Port) |
