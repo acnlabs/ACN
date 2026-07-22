@@ -1,8 +1,8 @@
 # Org Pattern Adapter Spec v0 (Paperclip → ACN Core)
 
 **Status:** Spec v0 — external Pattern adapter contract  
-**Last updated:** 2026-07-19  
-**Depends on:** [design-v0.md](./design-v0.md), [api-surface-tiers.md](./api-surface-tiers.md), [org-model-v0.md](./org-model-v0.md)
+**Last updated:** 2026-07-22  
+**Depends on:** [design-v0.md](./design-v0.md), [api-surface-tiers.md](./api-surface-tiers.md), [org-model-v0.md](./org-model-v0.md), [phase2-work-port-v0.md](./phase2-work-port-v0.md), [ADR-0014](../adr/0014-org-harness-module.md)
 
 > **Naming / ownership:** Canonical architecture is [design-v0.md](./design-v0.md).
 > Org Harness is an **ACN module** (optional Org Owner: none/human/agent;
@@ -13,9 +13,11 @@
 > / Network Core — preferably via Work/Loop ports — without mistaking the
 > adapter for the Org Harness module itself.
 >
-> **Transitional:** ACN `task.*` ↔ Paperclip issue mirroring is a **legacy bridge**.
-> Target per [ADR-0014](../adr/0014-org-harness-module.md) D5/D8: Org work ports +
-> `org.*` events; do not treat `/api/v1/tasks*` as the long-term Pattern API.
+> **Work Port (Phase 2):** New adapter paths MUST use Org work
+> (`POST/PATCH /api/v1/orgs/{id}/work*`) and prefer `org.work_*` /
+> `org.loop_tick` harness events. ACN `task.*` ↔ Paperclip issue mirroring is a
+> **legacy bridge** only; do not treat `/api/v1/tasks*` as the long-term Pattern API
+> (ADR-0014 D5/D8).
 
 ---
 
@@ -24,37 +26,40 @@
 | Role | Responsibility |
 |---|---|
 | **ACN Network Core** | Identity, fencing, A2A, settlement-read, harness webhook delivery |
+| **ACN Org Harness** | Org graph, membership, Work/Loop ports, `org.*` events |
 | **Org Pattern (Paperclip)** | Company, org chart, issues, budgets, heartbeat wakeups, approvals UI |
 | **L1 Agent** | Executes work when woken; speaks ACN with its own key |
-| **Adapter** | Glue: maps Paperclip entities ↔ ACN Core calls + verifies HMAC events |
+| **Adapter** | Glue: maps Paperclip entities ↔ Org Harness + Core; verifies HMAC events |
 
 The adapter MAY live inside Paperclip (preferred) or as a sidecar service.
+Reference implementation: [`paperclip-acn-plugin`](https://github.com/acnlabs/paperclip-acn-plugin) (P2c C0–C3).
 
 ---
 
 ## 2. Entity mapping
 
-| Paperclip | Org Model v0 | ACN Core |
+| Paperclip | Org Model v0 | ACN |
 |---|---|---|
-| `company.id` | `org_id` | — (not stored) |
-| `company.name` / goal | `display_name` / `charter.mission` | subnet `name` / `description` (optional mirror) |
-| `company` fence | `fencing.subnet_id` | `POST /api/v1/subnets` → slug |
+| `company.id` | Pattern-local | — (not stored on ACN) |
+| `company.name` / goal | `display_name` / `charter.mission` | `POST /api/v1/orgs` fields; subnet name optional mirror |
+| `company` fence | `fencing.subnet_id` | Org bind: create Org with `subnet_id`, or reuse bound Org |
 | harness receiver URL | `harness_webhook.url` | `PATCH /api/v1/subnets/{slug}/harness` |
 | `agent` / employee | `OrgMembership.agent_id` | registered `agent_id` |
-| role / title / reports_to | `role` / `reports_to` | — (Pattern only) |
+| role / title / reports_to | `role` / `reports_to` | Org membership + Pattern-only fields |
 | budget | `budget` | — (Pattern only) |
-| `issue` / ticket | `OrgWorkItem` | — ; optional A2A message / payment task correlation |
-| heartbeat wakeup | Org Loop tick | agent `POST …/heartbeat` side effect; Pattern invokes L1 adapter |
+| `issue` / ticket | `OrgWorkItem` | `POST/PATCH /api/v1/orgs/{org_id}/work*` |
+| heartbeat wakeup | Org Loop tick | `POST /api/v1/orgs/{org_id}/loop/tick` → `org.loop_tick`; Pattern wakes L1 |
 | board approval | Org RBAC | — ; may gate join via subnet invitations |
 
 ### Anti-mappings (do not do)
 
 | Temptation | Why not |
 |---|---|
-| Create an ACN task for every Paperclip issue | Couples Pattern to Reference Tier 2 |
+| Create an ACN **Task Pool** task for every Paperclip issue | Couples Pattern to Reference Tier 2; Phase 2 default is `builtin_work` |
 | Use subnet membership as the only org chart | No roles / budgets / mission |
 | Store Paperclip API keys in ACN | Wrong trust boundary |
 | Call `/communication/internal/send` | Internal tier |
+| Treat harness envelope `task_id` as a Task Pool id on `org.*` events | For Org events that field carries **`org_id`** (legacy payload shape) |
 
 ---
 
@@ -64,24 +69,36 @@ When `PATCH /subnets/{slug}/harness` registers a URL, ACN POSTs signed lifecycle
 events (same HMAC-SHA256 scheme as payment webhooks). Adapter MUST:
 
 1. Verify signature with `harness_secret`.
-2. Idempotently apply by event id / `(type, agent_id, subnet_id, ts)`.
+2. Idempotently apply by event id / `(type, org_id|agent_id, subnet_id, ts)`.
 3. Ignore unknown event types (forward-compatible).
+4. Route by `event` string — for `org.*`, read work/org fields from `data`, not from
+   the overloaded top-level `task_id`.
 
-### Events the adapter MUST handle (v0)
+### Events the adapter MUST handle (v0 — preferred)
 
 | Event | Adapter action |
 |---|---|
+| `org.work_created` | Upsert Issue ↔ `work_id` map; create Issue if inbound and not an outbound echo |
+| `org.work_updated` | Sync Issue status (`todo` / `done` / `cancelled`; `in_progress` may be comment-only) |
+| `org.loop_tick` | Pattern-side wakeup / audit (optional throttled comments); no Task Pool |
 | `agent.joined_subnet` | Ensure `OrgMembership` active; sync role defaults |
 | `agent.left_subnet` | Mark membership inactive / paused |
-| `task.*` (if Task Pool also used) | Optional — ignore for pure Paperclip mode |
+
+### Events the adapter MAY handle (legacy)
+
+| Event | Adapter action |
+|---|---|
+| `task.*` / `participation.*` | Optional Task Pool mirror — **not** required for Org work conformance |
 
 ### Events the adapter SHOULD emit into ACN (outbound)
 
 | Pattern action | ACN call |
 |---|---|
+| Human creates issue | `POST /api/v1/orgs/{org_id}/work` |
+| Issue → done / cancelled | `PATCH /api/v1/orgs/{org_id}/work/{work_id}` |
 | Manager DMs worker | `POST /communication/send` |
 | Need attention-fee notify | Convention: `manifest/send` (optional) |
-| Read payment state | `GET /payments/tasks/…` / `stats` |
+| Read payment state | `GET /payments/tasks/…` / `stats` (settlement-read; not work dispatch) |
 
 Inbound work to relay agents uses Mode B / gateway — not this webhook.
 
@@ -89,20 +106,31 @@ Inbound work to relay agents uses Mode B / gateway — not this webhook.
 
 ## 4. Bootstrap sequence
 
+Canonical bootstrap uses **Org Harness create**, not “subnet-only then invent Org
+elsewhere”. Subnet fencing remains required; Org is the durable handle.
+
 ```
-1. Operator creates Paperclip company (org_id, charter.mission)
-2. Adapter creates ACN subnet:
-     POST /api/v1/subnets
+1. Operator creates Paperclip company (Pattern-local id, charter.mission)
+2. Ensure ACN subnet exists (reuse or create):
+     POST /api/v1/subnets   (if needed)
      { "id": "<slug>", "name": "...", "join_policy": "approval", ... }
-3. Adapter registers webhook:
+3. Create (or resolve) Org bound to that subnet:
+     POST /api/v1/orgs
+     { "display_name": "...", "subnet_id": "<slug>", "join_policy": "open"|"approval" }
+   On 409 subnet_already_bound: reuse the bound org_id from the error message
+   (or require operator to set acnOrgId explicitly).
+4. Register harness webhook on the Org fence subnet:
      PATCH /api/v1/subnets/<slug>/harness
      { "harness_url": "https://…/hooks/acn", "harness_secret": "…" }
-4. For each employee agent:
+5. For each employee agent:
      a. Ensure agent registered on ACN (or discover existing agent_id)
      b. Invite / allowlist / join subnet (admission Core APIs)
      c. Create OrgMembership { role, reports_to, budget }
      d. Configure L1 adapter (Claude Code / HTTP / OpenClaw / acn listen)
-5. Org Loop starts: issues → heartbeat wakeups → agents work → comments/audit
+6. Work loop:
+     Pattern issue.created  → POST /orgs/{id}/work
+     ACN org.work_* / org.loop_tick → Pattern Issues / wakeups
+     Pattern issue done/cancelled → PATCH /orgs/{id}/work/{work_id}
 ```
 
 Dual-region: set `fencing.region` and ACN base URL once (`global` →
@@ -128,6 +156,8 @@ Do not invent a parallel skill registry in ACN for org-scoped skills in v0.
 These four links are the **definition of done** for Adapter Spec v0.
 A smoke checklist script lives at
 [`../../scripts/smoke_org_harness_four_links.sh`](../../scripts/smoke_org_harness_four_links.sh).
+Kernel smoke (Org + Work Port) lives at
+[`../../scripts/smoke_org_kernel.sh`](../../scripts/smoke_org_kernel.sh).
 
 ### Link 1 — Discover
 
@@ -139,27 +169,30 @@ A smoke checklist script lives at
 
 **Pass:** at least one external agent_id resolved and stored on an `OrgMembership`.
 
-### Link 2 — Fence
+### Link 2 — Fence + Org
 
 | # | Check |
 |---|---|
-| F1 | `POST /api/v1/subnets` creates slug bound as `fencing.subnet_id` |
+| F1 | `POST /api/v1/orgs` creates (or resolves) an Org with `fencing.subnet_id` set |
 | F2 | Member joins via Core join or invitation/allowlist path |
 | F3 | `GET /api/v1/subnets/{slug}/agents` lists the member |
 | F4 | Non-member cannot rely on subnet-private visibility (policy as configured) |
+| F5 | `GET /api/v1/orgs/{org_id}` returns the Org; private fence ACL still holds |
 
-**Pass:** membership reflected both in Pattern DB and ACN subnet agents list.
+**Pass:** membership reflected in Pattern DB, Org membership, and ACN subnet agents list.
 
-### Link 3 — Dispatch / heartbeat
+### Link 3 — Dispatch / Work Port (no Task Pool)
 
 | # | Check |
 |---|---|
 | H1 | `PATCH /subnets/{slug}/harness` returns `harness_registered: true` |
-| H2 | Simulated `agent.joined_subnet` (or real join) is accepted with valid HMAC |
-| H3 | Pattern creates an issue, wakes assignee via L1 adapter (CLI/HTTP/relay) |
-| H4 | Assignee agent remains reachable (`heartbeat` or authenticated call) |
+| H2 | Simulated `org.work_created` / `org.loop_tick` (or real create/tick) accepted with valid HMAC |
+| H3 | Pattern creates an issue → adapter calls `POST /orgs/{id}/work` (**not** `POST /tasks`) |
+| H4 | Work appears under `GET /orgs/{id}/work`; no new row under `/api/v1/tasks` for that issue |
+| H5 | Pattern (or Loop) wakes assignee via L1 adapter; agent remains reachable |
 
-**Pass:** one end-to-end “issue assigned → agent run started” without using Task Pool.
+**Pass:** one end-to-end “issue → Org work → agent run started” **without** Task Pool
+create/accept/review on the new path.
 
 ### Link 4 — Message & settlement-read
 
@@ -179,6 +212,7 @@ A smoke checklist script lives at
 - Automated dispute / jury
 - Federation across Pasture instances
 - Alipay AI Pay agentic rails (ADR-0009 P2)
+- Requiring Task Pool for Org Pattern dispatch
 
 ---
 
@@ -193,9 +227,10 @@ when scheduled.
 | DEF-ORGREP | **Cross-org reputation** | Org-level trust, not only ERC-8004 agent reads | ACN + Pattern |
 | DEF-DISPUTE | **Dispute** | Arbitration after escrow window (ADR-0010 Future) | Backend ledger + ACN events |
 | DEF-FED | **Federation** | Cross-Pasture discovery/messaging ([../federation.md](../federation.md)) | ACN |
-| DEF-ORGC | **Portable `org_*` Core API** | Only if multiple Patterns need shared org discovery on-pasture | ACN (v1+) |
+| DEF-ORGC | **Portable `org_*` Core API** | **Partially shipped** as Org Harness (`/api/v1/orgs*`); further discovery/listing across Patterns still open | ACN |
 | DEF-SAGA | **Settlement saga v1** | Close Gated v0 atomicity gaps | ACN + backend |
 | DEF-RAILS | **Agentic payment rails** | Alipay AI Pay / ACT 2.0 (ADR-0009 P2) | Backend + ACN |
+| DEF-TP | **Task Pool as optional Work plugin** | `plugins.work=task_pool` in-process (Phase 2b); external Patterns still must not bind `/tasks/*` as Org API | ACN |
 
 ---
 
@@ -204,6 +239,7 @@ when scheduled.
 | Module | Providers |
 |---|---|
 | Pasture Core | ACN |
+| Org Harness | ACN module (`builtin_work` default Work Port) |
 | A2A wire | A2A 1.0 (Linux Foundation) |
 | Tools (L1) | MCP ecosystem |
 | Company Org Pattern | **Paperclip** (reference), ShackleAI, Keviq |
@@ -219,17 +255,24 @@ when scheduled.
 
 An adapter claiming **Org Pattern Adapter Spec v0** MUST:
 
-1. Depend only on Core (+ optional Convention) per [api-surface-tiers.md](./api-surface-tiers.md).
-2. Persist Org / Membership shaped as [org-model-v0.md](./org-model-v0.md).
+1. Depend only on Core (+ Org Harness Work/Loop ports + optional Convention) per
+   [api-surface-tiers.md](./api-surface-tiers.md) and [ADR-0014](../adr/0014-org-harness-module.md).
+2. Persist Org / Membership shaped as [org-model-v0.md](./org-model-v0.md), with
+   bootstrap via `POST /api/v1/orgs` (or explicit resolve of an existing `org_id`).
 3. Bind each Org to one ACN subnet and register harness webhook.
-4. Pass the four-link acceptance checks above.
-5. Document which deferred items (if any) it partially implements.
+4. Dispatch work through Org work APIs; **new** adapter paths MUST NOT create Task
+   Pool tasks for ordinary Pattern issues.
+5. Prefer `org.work_*` / `org.loop_tick` over `task.*` for inbound sync.
+6. Pass the four-link acceptance checks above.
+7. Document which deferred items (if any) it partially implements.
 
 ---
 
 ## See also
 
 - [README.md](./README.md)
+- [phase2-work-port-v0.md](./phase2-work-port-v0.md)
 - [`../../AGENTS.md`](../../AGENTS.md) — project overview (Org Harness webhook note)
 - [../adr/0009-agentplanet-commerce-layered-architecture.md](../adr/0009-agentplanet-commerce-layered-architecture.md)
 - [../adr/0012-agent-addressing-and-webhook-delivery.md](../adr/0012-agent-addressing-and-webhook-delivery.md)
+- [../adr/0014-org-harness-module.md](../adr/0014-org-harness-module.md)
