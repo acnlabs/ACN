@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is `POST /orgs` + Org work APIs; Link 3 acceptance forbids Task Pool on the
   new path; `task.*` marked legacy. Index/design/BACKLOG updated for P2a/P2c
   done and P2b optional.
+- **Agent skill 0.17.2** — documents Org Harness (`acn org …`, Work Port),
+  preferred `org.*` harness events, and Task Pool as optional/legacy for
+  Pattern adapters; `references/API.md` gains `/orgs*` table.
 
 ## [0.15.1] - 2026-07-19
 

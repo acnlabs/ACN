@@ -116,7 +116,37 @@ applicant / invitee).
 
 ---
 
-## Tasks
+## Org Harness
+
+Org module (ADR-0014). Default Work Port is `builtin_work`. External Patterns
+should dispatch via `/orgs/{id}/work*` — not Task Pool — unless they opt into
+Task Pool mode. See [`docs/org-harness/`](../../docs/org-harness/README.md).
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| POST | `/orgs` | API Key / JWT (`acn:write`) | Create Org (optional `subnet_id`, `join_policy`, `harness_url`) |
+| GET | `/orgs/{id}` | None / API Key | Show Org (private-fence redaction for unentitled readers) |
+| PATCH | `/orgs/{id}` | API Key / JWT | Update display_name / charter / plugins |
+| POST | `/orgs/{id}/claim` | API Key / JWT | Claim unclaimed Org |
+| POST | `/orgs/{id}/transfer` | API Key / JWT | Transfer ownership |
+| POST | `/orgs/{id}/release` | API Key / JWT | Release ownership → none |
+| POST | `/orgs/{id}/dissolve` | API Key / JWT | Dissolve Org |
+| GET | `/orgs/{id}/members` | API Key (entitled) | List members |
+| POST | `/orgs/{id}/members` | API Key / JWT | Add member |
+| DELETE | `/orgs/{id}/members/{agent_id}` | API Key / JWT | Remove member |
+| GET | `/orgs/{id}/work` | None / API Key | List work items (`?open_only=`) |
+| POST | `/orgs/{id}/work` | API Key / JWT | Create work item |
+| PATCH | `/orgs/{id}/work/{work_id}` | API Key / JWT | Update work status / assignee |
+| POST | `/orgs/{id}/loop/tick` | API Key / JWT | Thin Loop tick → `org.loop_tick` webhook |
+
+Harness webhook registration remains `PATCH /subnets/{id}/harness` (event sink).
+On `org.*` deliveries, envelope field `task_id` carries **`org_id`**.
+
+---
+
+## Tasks (Task Pool)
+
+Optional network task facility. **Not** the default Org Work Port.
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
