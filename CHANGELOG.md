@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+
+- **Org Harness quickstart** — `docs/org-harness/quickstart-org-paperclip.md`
+  (Org work ↔ Paperclip inward loop; hosted + local e2e). Linked from
+  org-harness README and skill **0.17.7**.
+
 ### Fixed
 
 - **Org permission 403 prose:** `_map_permission` now surfaces

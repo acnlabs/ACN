@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "0.17.6"
+  version: "0.17.7"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -852,6 +852,7 @@ Harnesses that don't read the field continue to work unchanged.
 (`none` / human / agent), membership, default Work Port `builtin_work`, and a thin
 Loop. External Patterns (e.g. Paperclip) adapt to Org APIs — they are **not** the
 Harness itself. Design: [`docs/org-harness/`](../../docs/org-harness/README.md).
+**Try the inward loop:** [`quickstart-org-paperclip.md`](../../docs/org-harness/quickstart-org-paperclip.md).
 
 ```bash
 # Create Org (binds or creates a subnet fence)
