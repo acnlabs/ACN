@@ -136,12 +136,18 @@ Task Pool mode. See [`docs/org-harness/`](../../../docs/org-harness/README.md).
 | POST | `/orgs/{id}/release` | API Key / JWT | Release ownership → none |
 | POST | `/orgs/{id}/dissolve` | API Key / JWT | Dissolve Org |
 | GET | `/orgs/{id}/members` | API Key (entitled) | List members |
-| POST | `/orgs/{id}/members` | API Key / JWT | Add member |
-| DELETE | `/orgs/{id}/members/{agent_id}` | API Key / JWT | Remove member |
+| POST | `/orgs/{id}/members` | API Key / JWT | Add member (**governance** only) |
+| DELETE | `/orgs/{id}/members/{agent_id}` | API Key / JWT | Remove member (**governance** only) |
 | GET | `/orgs/{id}/work` | None / API Key | List work items (`?open_only=`) |
-| POST | `/orgs/{id}/work` | API Key / JWT | Create work item |
-| PATCH | `/orgs/{id}/work/{work_id}` | API Key / JWT | Update work status / assignee |
+| POST | `/orgs/{id}/work` | API Key / JWT | Create work (**governance** only — not “any member”) |
+| PATCH | `/orgs/{id}/work/{work_id}` | API Key / JWT | Update work (**governance** only) |
 | POST | `/orgs/{id}/loop/tick` | API Key / JWT | Thin Loop tick → `org.loop_tick` webhook |
+
+**Governance** = unclaimed Org (`owner.kind=none`) → only `created_by`; claimed
+Org → only `owner`. Org **membership** (worker/manager) does **not** grant
+create/update work. Non-governance callers get **403**
+`error_code=ownership_mismatch` with `details.reason` of `created_by_only` or
+`ownership_mismatch` (and a prose `message`).
 
 Harness webhook registration remains `PATCH /subnets/{id}/harness` (event sink).
 On `org.*` deliveries, envelope field `task_id` carries **`org_id`**.
