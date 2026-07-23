@@ -749,25 +749,29 @@ async def import_work_from_task(
         raise _map_conflict(e) from e
     except OrgTaskImportError as e:
         if e.reason == "task_not_found":
+            # details shape must stay {task_id} (see test_error_code_details_consistency).
             raise ACNHTTPError(
                 ErrorCode.TASK_NOT_FOUND,
                 404,
                 message=str(e),
-                details={"task_id": body.task_id, "reason": e.reason},
+                details={"task_id": body.task_id},
             ) from e
         if e.reason == "not_subnet_member":
             raise ACNHTTPError(
                 ErrorCode.NOT_SUBNET_MEMBER,
                 403,
                 message=str(e),
-                details={"task_id": body.task_id, "reason": e.reason},
+                details={
+                    "task_id": body.task_id,
+                    "reason": e.reason,
+                },
             ) from e
         status = 503 if e.reason == "task_repository_unavailable" else 400
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST if status == 400 else ErrorCode.INTERNAL_SERVER_ERROR,
             status,
             message=str(e),
-            details={"task_id": body.task_id, "reason": e.reason},
+            details={"reason": e.reason, "task_id": body.task_id},
         ) from e
 
 
