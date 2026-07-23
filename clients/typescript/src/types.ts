@@ -1110,6 +1110,82 @@ export const KNOWN_INBOX_MESSAGE_STATUSES = [
 ] as const;
 export type InboxMessageStatus = string; // wide for forward-compat
 
+// ============================================
+// Org Harness (builtin_work Work Port)
+// ============================================
+
+/** Work item status for Org builtin_work (not Task Pool). */
+export type OrgWorkStatus = 'todo' | 'in_progress' | 'done' | 'cancelled';
+
+export interface OrgFencing {
+  subnet_id?: string;
+}
+
+/** Org record from GET/POST /api/v1/orgs. */
+export interface Org {
+  org_id: string;
+  display_name: string;
+  /** Canonical fence id (also mirrored under fencing.subnet_id). */
+  subnet_id?: string;
+  fencing?: OrgFencing;
+  plugins?: Record<string, string>;
+  roles?: string[];
+  status?: string;
+  steward_agent_id?: string;
+  charter?: Record<string, unknown>;
+  owner?: Record<string, unknown>;
+  created_by?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface OrgCreateRequest {
+  display_name: string;
+  subnet_id?: string;
+  join_policy?: 'open' | 'approval';
+  is_private?: boolean;
+  steward_agent_id?: string;
+  charter?: Record<string, unknown>;
+  plugins?: Record<string, string>;
+  harness_url?: string;
+  harness_secret?: string;
+}
+
+export interface OrgWorkItem {
+  work_id: string;
+  org_id: string;
+  title: string;
+  status: OrgWorkStatus | string;
+  assignee_agent_id?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface OrgWorkCreateRequest {
+  title: string;
+  assignee_agent_id?: string | null;
+}
+
+export interface OrgWorkUpdateRequest {
+  status: OrgWorkStatus;
+  assignee_agent_id?: string | null;
+}
+
+export interface OrgWorkListResponse {
+  work: OrgWorkItem[];
+}
+
+export interface OrgLoopTickResponse {
+  open_count?: number;
+  work_ids?: string[];
+  [key: string]: unknown;
+}
+
+/** Prefer fencing.subnet_id, fall back to top-level subnet_id. */
+export function orgSubnetId(org: Org): string | undefined {
+  return org.fencing?.subnet_id || org.subnet_id || undefined;
+}
+
 
 
 

@@ -68,6 +68,13 @@ import type {
   SubnetJoinRequestListResponse,
   SubnetJoinRequestRow,
   SystemHealth,
+  Org,
+  OrgCreateRequest,
+  OrgLoopTickResponse,
+  OrgWorkCreateRequest,
+  OrgWorkItem,
+  OrgWorkListResponse,
+  OrgWorkUpdateRequest,
 } from './types';
 import { normalizeBaseUrl, resolveHostedBaseUrl } from './regions';
 
@@ -190,7 +197,11 @@ export class ACNClient {
             ? body.request_id
             : (response.headers.get('X-Request-ID') ?? undefined);
 
-        throw new ACNError(response.status, message, { errorCode, requestId });
+        throw new ACNError(response.status, message, {
+          errorCode,
+          requestId,
+          body,
+        });
       }
 
       if (response.status === 204) {
@@ -1591,6 +1602,69 @@ export class ACNClient {
       },
     });
   }
+
+  // ============================================
+  // Org Harness (Work Port / builtin_work)
+  // ============================================
+
+  /** GET /api/v1/orgs/{orgId} */
+  async getOrg(orgId: string): Promise<Org> {
+    return this.get(`/api/v1/orgs/${encodeURIComponent(orgId)}`);
+  }
+
+  /** POST /api/v1/orgs */
+  async createOrg(request: OrgCreateRequest): Promise<Org> {
+    return this.post('/api/v1/orgs', request);
+  }
+
+  /** POST /api/v1/orgs/{orgId}/work */
+  async createWork(
+    orgId: string,
+    request: OrgWorkCreateRequest,
+  ): Promise<OrgWorkItem> {
+    const body: Record<string, unknown> = { title: request.title };
+    if (request.assignee_agent_id != null && request.assignee_agent_id !== '') {
+      body.assignee_agent_id = request.assignee_agent_id;
+    }
+    return this.post(
+      `/api/v1/orgs/${encodeURIComponent(orgId)}/work`,
+      body,
+    );
+  }
+
+  /** PATCH /api/v1/orgs/{orgId}/work/{workId} */
+  async updateWork(
+    orgId: string,
+    workId: string,
+    request: OrgWorkUpdateRequest,
+  ): Promise<OrgWorkItem> {
+    const body: Record<string, unknown> = { status: request.status };
+    if (request.assignee_agent_id != null && request.assignee_agent_id !== '') {
+      body.assignee_agent_id = request.assignee_agent_id;
+    }
+    return this.patch(
+      `/api/v1/orgs/${encodeURIComponent(orgId)}/work/${encodeURIComponent(workId)}`,
+      body,
+    );
+  }
+
+  /** GET /api/v1/orgs/{orgId}/work */
+  async listWork(
+    orgId: string,
+    options?: { openOnly?: boolean },
+  ): Promise<OrgWorkListResponse> {
+    return this.get(`/api/v1/orgs/${encodeURIComponent(orgId)}/work`, {
+      open_only: options?.openOnly,
+    });
+  }
+
+  /** POST /api/v1/orgs/{orgId}/loop/tick */
+  async tickOrgLoop(orgId: string): Promise<OrgLoopTickResponse> {
+    return this.post(
+      `/api/v1/orgs/${encodeURIComponent(orgId)}/loop/tick`,
+      {},
+    );
+  }
 }
 
 /**
@@ -1610,16 +1684,51 @@ export class ACNError extends Error {
   errorCode?: string;
   /** Request ID minted by ACN for 5xx responses (useful for support) */
   requestId?: string;
+  /** Parsed JSON body when the server returned an object. */
+  body?: Record<string, unknown>;
 
   constructor(
     public status: number,
     message: string,
-    options?: { errorCode?: string; requestId?: string }
+    options?: {
+      errorCode?: string;
+      requestId?: string;
+      body?: Record<string, unknown>;
+    }
   ) {
     super(message);
     this.name = 'ACNError';
     this.errorCode = options?.errorCode;
     this.requestId = options?.requestId;
+    this.body = options?.body;
+  }
+
+  /** `details.reason` from flat ACN error bodies (e.g. OrgConflictError). */
+  get reason(): string | undefined {
+    const details = this.body?.details;
+    if (details && typeof details === 'object' && !Array.isArray(details)) {
+      const r = (details as Record<string, unknown>).reason;
+      return typeof r === 'string' ? r : undefined;
+    }
+    return undefined;
+  }
+
+  /**
+   * Best-effort extract `org_…` from conflict bodies/messages
+   * (subnet already bound to an Org).
+   */
+  get boundOrgIdHint(): string | undefined {
+    const details = this.body?.details;
+    if (details && typeof details === 'object' && !Array.isArray(details)) {
+      const id = (details as Record<string, unknown>).bound_org_id;
+      if (typeof id === 'string' && id.startsWith('org_')) return id;
+    }
+    const msg =
+      (typeof this.body?.message === 'string' ? this.body.message : '') +
+      ' ' +
+      this.message;
+    const m = msg.match(/\borg_[0-9a-fA-F]+\b/);
+    return m?.[0];
   }
 }
 
