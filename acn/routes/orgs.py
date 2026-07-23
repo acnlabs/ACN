@@ -303,6 +303,12 @@ def _org_response(org) -> dict[str, Any]:
 
 
 def _map_permission(exc: OrgPermissionError, org_id: str) -> ACNHTTPError:
+    """Map OrgPermissionError → 403/400.
+
+    Keep ``error_code`` / ``details.reason`` stable for clients; surface the
+    service prose in ``message`` so adapters can tell *membership* failures
+    apart from *governance* (created_by / owner) without reading ADR text.
+    """
     ownership_reasons = {
         "ownership_mismatch",
         "created_by_only",
@@ -319,9 +325,11 @@ def _map_permission(exc: OrgPermissionError, org_id: str) -> ACNHTTPError:
         if exc.reason in ownership_reasons
         else ErrorCode.INVALID_REQUEST
     )
+    prose = str(exc).strip()
     return ACNHTTPError(
         code,
         403 if code == ErrorCode.OWNERSHIP_MISMATCH else 400,
+        message=prose if prose and prose != exc.reason else None,
         details={"org_id": org_id, "reason": exc.reason},
     )
 

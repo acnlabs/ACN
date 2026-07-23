@@ -9,7 +9,24 @@ from fastapi import BackgroundTasks, Request
 from starlette.datastructures import Headers
 
 from acn.core.errors import ACNHTTPError, ErrorCode
-from acn.routes.orgs import require_org_auth, resolve_org_reader
+from acn.routes.orgs import _map_permission, require_org_auth, resolve_org_reader
+from acn.services.org_service import OrgPermissionError
+
+
+def test_map_permission_surfaces_governance_prose():
+    """403 keeps ownership_mismatch + reason, but message is actionable."""
+    err = _map_permission(
+        OrgPermissionError(
+            "created_by_only",
+            "Only created_by may govern an unclaimed Org",
+        ),
+        org_id="org_abc",
+    )
+    assert err.status_code == 403
+    assert err.code == ErrorCode.OWNERSHIP_MISMATCH
+    assert err.details == {"org_id": "org_abc", "reason": "created_by_only"}
+    assert "created_by" in err.message
+    assert err.message != "The authenticated caller does not own the requested resource."
 
 
 @pytest.mark.asyncio

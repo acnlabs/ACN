@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Org permission 403 prose:** `_map_permission` now surfaces
+  `OrgPermissionError` message text (e.g. “Only created_by may govern an
+  unclaimed Org”) while keeping `error_code=ownership_mismatch` and
+  `details.reason`. Clarifies that `POST …/work` is **governance-only**,
+  not Org membership. Skill **0.17.6** / API.md updated.
+
 ### Added
 
 - **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
