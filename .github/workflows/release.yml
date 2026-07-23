@@ -220,8 +220,10 @@ jobs:
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
           body: |
             ## Publish status
-            - PyPI (`acn-client`): ${{ needs.publish-python.result }}
-            - npm (`acn-client`): ${{ needs.publish-npm.result }}
-            - CLI: ${{ needs.publish-cli.result }}
-            - Docker: ${{ needs.docker.result }}
+            - PyPI (`acn-client`): `${{ needs.publish-python.result }}`
+            - npm (`acn-client`): `${{ needs.publish-npm.result }}`
+            - CLI: `${{ needs.publish-cli.result }}`
+            - Docker: `${{ needs.docker.result }}`
+
+            ---
 
