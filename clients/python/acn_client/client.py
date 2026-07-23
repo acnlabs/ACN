@@ -5,6 +5,7 @@ Official Python client for ACN REST API.
 """
 
 import os
+import re
 from typing import Any
 
 import httpx
@@ -20,6 +21,13 @@ from .models import (
     ManifestContentResponse,
     ManifestEntry,
     ManifestSendRequest,
+    Org,
+    OrgCreateRequest,
+    OrgLoopTickResponse,
+    OrgWorkCreateRequest,
+    OrgWorkItem,
+    OrgWorkListResponse,
+    OrgWorkUpdateRequest,
     ParticipationInfo,
     PaymentCapability,
     PaymentStats,
@@ -48,10 +56,12 @@ class ACNError(Exception):
       header so operators can grep it out of structured logs. The exception
       ``str()`` includes it so it shows up in stack traces and chat error
       messages without callers needing to remember to print it themselves.
+    * Inspect ``body`` / ``reason`` / ``bound_org_id_hint`` for Org Harness
+      conflicts (e.g. subnet already bound → recover the existing ``org_…``).
 
     Backward compatibility: the ``ACNError(status_code, message)`` two-arg
-    form continues to work; ``error_code`` and ``request_id`` are kw-only
-    and default to ``None`` so older call sites never break.
+    form continues to work; keyword fields default to ``None`` so older
+    call sites never break.
     """
 
     def __init__(
@@ -61,17 +71,41 @@ class ACNError(Exception):
         *,
         error_code: str | None = None,
         request_id: str | None = None,
+        body: dict[str, Any] | None = None,
     ):
         self.status_code = status_code
         self.message = message
         self.error_code = error_code
         self.request_id = request_id
+        self.body = body
         # Bake request_id into the str so it travels through any layer that
         # only logs the exception message (and not the attributes). The
         # whole point of H4's request_id contract is to give the user a
         # short token they can paste into a support ticket.
         suffix = f" [request_id={request_id}]" if request_id else ""
         super().__init__(f"ACN Error {status_code}: {message}{suffix}")
+
+    @property
+    def reason(self) -> str | None:
+        """``details.reason`` from flat ACN error bodies (e.g. OrgConflictError)."""
+        details = (self.body or {}).get("details")
+        if isinstance(details, dict):
+            r = details.get("reason")
+            return r if isinstance(r, str) else None
+        return None
+
+    @property
+    def bound_org_id_hint(self) -> str | None:
+        """Best-effort extract ``org_…`` from conflict bodies/messages."""
+        details = (self.body or {}).get("details")
+        if isinstance(details, dict):
+            oid = details.get("bound_org_id")
+            if isinstance(oid, str) and oid.startswith("org_"):
+                return oid
+        body_msg = (self.body or {}).get("message")
+        msg = f"{body_msg if isinstance(body_msg, str) else ''} {self.message}"
+        m = re.search(r"\borg_[0-9a-fA-F]+\b", msg)
+        return m.group(0) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +240,7 @@ def _build_acn_error(response: httpx.Response) -> ACNError:
         message,
         error_code=error_code,
         request_id=request_id,
+        body=body or None,
     )
 
 
@@ -560,6 +595,83 @@ class ACNClient:
             f"/api/v1/subnets/{slug}/harness",
             json={"harness_url": harness_url, "harness_secret": harness_secret},
         )
+
+    # ============================================
+    # Org Harness (Work Port / builtin_work)
+    # ============================================
+
+    async def get_org(self, org_id: str) -> Org:
+        """GET /api/v1/orgs/{org_id}."""
+        data = await self._request("GET", f"/api/v1/orgs/{org_id}")
+        return Org.model_validate(data)
+
+    async def create_org(self, request: OrgCreateRequest) -> Org:
+        """POST /api/v1/orgs — create an Org (default Work Port: builtin_work)."""
+        data = await self._request(
+            "POST",
+            "/api/v1/orgs",
+            json=request.model_dump(exclude_none=True),
+        )
+        return Org.model_validate(data)
+
+    async def create_work(
+        self,
+        org_id: str,
+        request: OrgWorkCreateRequest,
+    ) -> OrgWorkItem:
+        """POST /api/v1/orgs/{org_id}/work."""
+        body: dict[str, Any] = {"title": request.title}
+        if request.assignee_agent_id:
+            body["assignee_agent_id"] = request.assignee_agent_id
+        data = await self._request(
+            "POST",
+            f"/api/v1/orgs/{org_id}/work",
+            json=body,
+        )
+        return OrgWorkItem.model_validate(data)
+
+    async def update_work(
+        self,
+        org_id: str,
+        work_id: str,
+        request: OrgWorkUpdateRequest,
+    ) -> OrgWorkItem:
+        """PATCH /api/v1/orgs/{org_id}/work/{work_id}."""
+        body: dict[str, Any] = {"status": request.status}
+        if request.assignee_agent_id:
+            body["assignee_agent_id"] = request.assignee_agent_id
+        data = await self._request(
+            "PATCH",
+            f"/api/v1/orgs/{org_id}/work/{work_id}",
+            json=body,
+        )
+        return OrgWorkItem.model_validate(data)
+
+    async def list_work(
+        self,
+        org_id: str,
+        *,
+        open_only: bool | None = None,
+    ) -> OrgWorkListResponse:
+        """GET /api/v1/orgs/{org_id}/work."""
+        params: dict[str, Any] = {}
+        if open_only is not None:
+            params["open_only"] = open_only
+        data = await self._request(
+            "GET",
+            f"/api/v1/orgs/{org_id}/work",
+            params=params or None,
+        )
+        return OrgWorkListResponse.model_validate(data)
+
+    async def tick_org_loop(self, org_id: str) -> OrgLoopTickResponse:
+        """POST /api/v1/orgs/{org_id}/loop/tick — thin Loop tick."""
+        data = await self._request(
+            "POST",
+            f"/api/v1/orgs/{org_id}/loop/tick",
+            json={},
+        )
+        return OrgLoopTickResponse.model_validate(data)
 
     async def get_agent_subnets(self, agent_id: str) -> list[str]:
         """Get agent's subnets"""
