@@ -28,7 +28,7 @@ echo "    org_id=$ORG_ID subnet=$SUBNET"
 
 echo "==> Publish Task (network — no subnet_slug)"
 TASK=$(curl -fsS -X POST -H "$AUTH" -H "Content-Type: application/json" \
-  -d "{\"title\":\"Org publish smoke\",\"description\":\"Smoke test for org-task-bridge-v0 publish path.\",\"required_tags\":[\"smoke\"],\"deadline_hours\":48,\"metadata\":{\"org_id\":\"${ORG_ID}\",\"org_publish\":true}}" \
+  -d "{\"title\":\"Org publish smoke\",\"description\":\"Smoke test for org-task-bridge-v0 publish path.\",\"required_tags\":[\"smoke\"],\"deadline_hours\":48,\"reward\":\"0\",\"reward_currency\":\"ap_points\",\"task_type\":\"general\",\"metadata\":{\"org_id\":\"${ORG_ID}\",\"org_publish\":true}}" \
   "${BASE}/api/v1/tasks/agent/create")
 TASK_ID=$(echo "$TASK" | python3 -c "import sys,json; print(json.load(sys.stdin)['task_id'])")
 echo "    task_id=$TASK_ID"
