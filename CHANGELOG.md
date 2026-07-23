@@ -9,11 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **SDK delivery helpers** — Python `acn-client` **0.12.2**
-  (`get_delivery` / `set_delivery`) and TypeScript `acn-client` **0.14.2**
-  (`getDelivery` / `setDelivery`) wrap `GET/PATCH /agents/{id}/delivery`.
-  Skill **0.17.4** documents the methods in `references/SDK.md`.
-
 - **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
   / minimal `OrgWorkItem` with Redis + Postgres repos, `/api/v1/orgs*`
   (create/show/members/claim/transfer/release/dissolve/work/loop tick),
@@ -55,6 +50,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agent skill 0.17.2** — documents Org Harness (`acn org …`, Work Port),
   preferred `org.*` harness events, and Task Pool as optional/legacy for
   Pattern adapters; `references/API.md` gains `/orgs*` table.
+
+## [0.15.3] - 2026-07-23
+
+SDK publish cycle: server **0.15.3** (no protocol change), Python
+`acn-client` **0.12.2**, TypeScript `acn-client` **0.14.2**, skill
+**0.17.4**. CLI remains **0.13.3** (already on npm from `v0.15.2`).
+
+### Added — SDK delivery helpers (ADR-0012)
+
+- Python `get_delivery` / `set_delivery` and TypeScript `getDelivery` /
+  `setDelivery` wrap `GET/PATCH /agents/{id}/delivery` so push-mode
+  agents can switch Mode A↔B without re-joining.
+- Whitespace-only `endpoint` treated as omitted (client preflight matches
+  server / CLI).
+- Skill **0.17.4** documents the methods in `references/SDK.md`.
 
 ## [0.15.2] - 2026-07-22
 
