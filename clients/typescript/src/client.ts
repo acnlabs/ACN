@@ -1431,18 +1431,21 @@ export class ACNClient {
     delivery: DeliveryTransportSet,
     endpoint?: string
   ): Promise<DeliveryResponse> {
-    if (delivery === 'relay' && endpoint) {
+    // Blank / whitespace-only URLs count as omitted (matches server + CLI).
+    const endpointClean =
+      typeof endpoint === 'string' ? endpoint.trim() || undefined : endpoint;
+    if (delivery === 'relay' && endpointClean) {
       throw new Error(
         "delivery='relay' is mutually exclusive with endpoint; omit endpoint and run acn listen"
       );
     }
-    if (delivery === 'direct' && !endpoint) {
+    if (delivery === 'direct' && !endpointClean) {
       throw new Error(
         "delivery='direct' requires endpoint (full A2A URL, e.g. https://host/a2a)"
       );
     }
     const body: Record<string, unknown> = { delivery };
-    if (endpoint !== undefined) body.endpoint = endpoint;
+    if (endpointClean !== undefined) body.endpoint = endpointClean;
     return this.request('PATCH', `/api/v1/agents/${agentId}/delivery`, { body });
   }
 

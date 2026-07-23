@@ -2115,21 +2115,26 @@ class ACNClient:
             a2a_handshake_ok?, next_step_hint? }``
         """
         normalized = (delivery or "").strip().lower()
+        # Blank / whitespace-only URLs are treated as omitted (matches server
+        # ``_validate_agent_endpoint_url`` and CLI preflight).
+        endpoint_clean = endpoint.strip() if isinstance(endpoint, str) else endpoint
+        if endpoint_clean == "":
+            endpoint_clean = None
         if normalized not in ("direct", "relay"):
             raise ValueError("delivery must be 'direct' or 'relay'")
-        if normalized == "relay" and endpoint:
+        if normalized == "relay" and endpoint_clean:
             raise ValueError(
                 "delivery='relay' is mutually exclusive with endpoint; "
                 "omit endpoint and run acn listen / hold a WebSocket"
             )
-        if normalized == "direct" and not endpoint:
+        if normalized == "direct" and not endpoint_clean:
             raise ValueError(
                 "delivery='direct' requires endpoint "
                 "(full A2A URL, e.g. https://host/a2a)"
             )
         body: dict[str, Any] = {"delivery": normalized}
-        if endpoint is not None:
-            body["endpoint"] = endpoint
+        if endpoint_clean is not None:
+            body["endpoint"] = endpoint_clean
         return await self._request(
             "PATCH",
             f"/api/v1/agents/{agent_id}/delivery",

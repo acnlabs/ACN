@@ -103,6 +103,14 @@ describe('setDelivery', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('rejects whitespace-only endpoint for direct before calling the API', async () => {
+    const { client, calls } = setupFetchStub(200, {});
+    await expect(client.setDelivery('agent-1', 'direct', '   ')).rejects.toThrow(
+      /requires endpoint/,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   it('rejects relay with endpoint before calling the API', async () => {
     const { client, calls } = setupFetchStub(200, {});
     await expect(

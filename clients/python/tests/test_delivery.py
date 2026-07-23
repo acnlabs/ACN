@@ -92,6 +92,13 @@ async def test_set_delivery_direct_requires_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_set_delivery_direct_rejects_whitespace_endpoint():
+    client = _make_client_with_stub(AsyncMock())
+    with pytest.raises(ValueError, match="requires endpoint"):
+        await client.set_delivery("agent-1", "direct", endpoint="   ")
+
+
+@pytest.mark.asyncio
 async def test_set_delivery_relay_rejects_endpoint():
     client = _make_client_with_stub(AsyncMock())
     with pytest.raises(ValueError, match="mutually exclusive"):
