@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **CLI `acn org publish-task`** (+ `acn tasks create --org-id`) — attribute a
   Task Pool task to an Org; default unscoped network publish; optional
-  `--fence` / `--subnet`. CLI **0.14.1**.
+  `--fence` / `--subnet` (ships with next CLI release bump).
 - **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
   / minimal `OrgWorkItem` with Redis + Postgres repos, `/api/v1/orgs*`
   (create/show/members/claim/transfer/release/dissolve/work/loop tick),
