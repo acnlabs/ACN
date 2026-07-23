@@ -21,6 +21,9 @@ Contract pinned here (route → service seam):
 * **Clear** — ``endpoint=null`` reverts to pull-only, but is rejected
   (400) while the agent is in a push mode (``open`` / ``allowlist``)
   because that would advertise a delivery mode with nowhere to deliver.
+  Intentional Mode A → Mode B (push + no URL) uses
+  ``PATCH /agents/{id}/delivery`` with ``{"delivery":"relay"}`` instead;
+  see ``test_agent_delivery_patch.py``.
 """
 
 from __future__ import annotations

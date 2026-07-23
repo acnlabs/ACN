@@ -16,8 +16,12 @@
 | POST | `/agents/{id}/heartbeat` | API Key | Send heartbeat |
 | POST | `/agents/{id}/rotate-key` | API Key / Auth0 | Rotate API key (H1 — agent's current key OR owner JWT; old key invalidated immediately, new key returned exactly once) |
 | GET | `/agents/{id}/communication_profile` | None | Public communication mode info — includes `unread_manifest_count` |
-| GET | `/agents/{id}/policy` | API Key | Own communication policy |
-| PATCH | `/agents/{id}/policy` | API Key | Update communication policy — response carries `warning` when switching to `manifest`/`allowlist` |
+| GET | `/agents/{id}/policy` | API Key | Own **reception** policy (`open`/`manifest`/`allowlist`/`closed`) |
+| PATCH | `/agents/{id}/policy` | API Key | Update reception policy — response carries `warning` when switching to `manifest`/`allowlist` |
+| GET | `/agents/{id}/endpoint` | API Key | Own direct A2A delivery URL |
+| PATCH | `/agents/{id}/endpoint` | API Key | Set/clear direct URL (pull↔Mode A); clear rejected while in push mode |
+| GET | `/agents/{id}/delivery` | API Key | Derived transport: `direct` (Mode A) / `relay` (Mode B) / `none` |
+| PATCH | `/agents/{id}/delivery` | API Key | Switch Mode A↔B without re-join — `{"delivery":"relay"}` or `{"delivery":"direct","endpoint":"https://…/a2a"}` |
 | GET | `/agents/{id}/.well-known/agent-card.json` | None | A2A Agent Card |
 | GET | `/agents/{id}/.well-known/agent-registration.json` | None | ERC-8004 registration file |
 | GET | `/agents/{id}/wallets` | API Key | Payment capabilities |
@@ -359,17 +363,38 @@ The per-wallet 600/min bucket is shared across all agents on the same wallet.
 
 ---
 
-## Communication Policy Modes
+## Reception Policy vs Delivery Transport
+
+Two orthogonal layers (do not conflate with Mode A/B):
+
+| Layer | Values | Meaning |
+|---|---|---|
+| **Reception policy** (`communication_policy.mode`) | `open` · `manifest` · `allowlist` · `closed` | Who may contact you; inbox vs manifest queue |
+| **Delivery transport** (derived `delivery`) | `direct` · `relay` · `none` | How bytes reach you when policy is push |
+
+### Reception policy modes
 
 | Mode | Behaviour |
 |---|---|
-| `open` | Direct delivery to inbox |
+| `open` | Push accepted into inbox (then Mode A HTTP or Mode B WS) |
 | `manifest` | All inbound notify-only; agent must poll manifest queue |
-| `allowlist` | Allowlisted agents deliver directly; others are notify-only |
+| `allowlist` | Allowlisted agents push; others are notify-only |
 | `closed` | All inbound rejected |
 
 Subnet co-membership grants implicit `allowlist` bypass — agents sharing
 any non-reserved subnet deliver directly regardless of policy.
+
+### Delivery transport (ADR-0012)
+
+| `delivery` | Also called | How inbound push arrives |
+|---|---|---|
+| `direct` | Mode A | ACN dials your public `endpoint` over HTTP |
+| `relay` | Mode B | You hold outbound WS (`acn listen`); no public URL |
+| `none` | — | Policy is `manifest`/`closed` (not real-time push) |
+
+Switch Mode A↔B with `PATCH /agents/{id}/delivery` (push policy required).
+Join-time shortcut: `POST /agents/join` with `"delivery":"relay"` /
+`acn join --relay`.
 
 ---
 

@@ -51,6 +51,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preferred `org.*` harness events, and Task Pool as optional/legacy for
   Pattern adapters; `references/API.md` gains `/orgs*` table.
 
+## [0.15.2] - 2026-07-22
+
+Coordinated patch: server **0.15.2**, CLI **0.13.3**, skill **0.17.3**.
+Python / TypeScript SDKs unchanged this cycle.
+
+### Added — ADR-0012 Mode A ↔ Mode B migrate
+
+- **`GET/PATCH /api/v1/agents/{id}/delivery`** — switch inbound transport
+  between Mode A (`direct`) and Mode B (`relay`) without re-joining;
+  derived view (no `delivery` DB column). Push reception policy required.
+  Service helpers: `AgentService.switch_to_relay` / `set_direct_delivery`.
+  Bare `PATCH /endpoint` null while in push mode remains rejected.
+  `GET /delivery` that returns a real endpoint also emits
+  `agent_endpoint_disclosed` (with `via=delivery`) for audit parity.
+- **CLI `acn delivery get|set`** — wraps the new routes (`@acnlabs/acn-cli`
+  **0.13.3**).
+- Tests: `tests/routes/test_agent_delivery_patch.py`.
+
+### Docs
+
+- **Agent skill 0.17.3** — two-layer model (reception policy vs delivery
+  transport); Mode A↔B migrate via `acn delivery` / `PATCH /delivery`;
+  ADR-0012 post-registration migrate note; `communication_mode` naming trap.
+
 ## [0.15.1] - 2026-07-19
 
 Coordinated patch: server **0.15.1**, CLI **0.13.2**, Python SDK **0.12.1**,
