@@ -143,10 +143,25 @@ export type {
   AllowlistActionResponse,
   AllowlistEntry,
   AllowlistListResponse,
+
+  // Org Harness Types
+  Org,
+  OrgCreateRequest,
+  OrgFencing,
+  OrgLoopTickResponse,
+  OrgWorkCreateRequest,
+  OrgWorkItem,
+  OrgWorkListResponse,
+  OrgWorkStatus,
+  OrgWorkUpdateRequest,
 } from './types';
 
 // Value exports (constants)
-export { KNOWN_PAYMENT_TASK_STATUSES, KNOWN_INBOX_MESSAGE_STATUSES } from './types';
+export {
+  KNOWN_PAYMENT_TASK_STATUSES,
+  KNOWN_INBOX_MESSAGE_STATUSES,
+  orgSubnetId,
+} from './types';
 
 // Task pool types
 export type {

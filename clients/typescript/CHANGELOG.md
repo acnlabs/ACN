@@ -4,6 +4,18 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-23
+
+### Added — Org Harness Work Port (builtin_work)
+
+- `getOrg` / `createOrg`
+- `createWork` / `updateWork` / `listWork`
+- `tickOrgLoop`
+- Types: `Org`, `OrgWorkItem`, `OrgWorkStatus`, …
+- Helper: `orgSubnetId(org)`
+- `ACNError.body` / `.reason` / `.boundOrgIdHint` for Org conflict recovery
+  (e.g. subnet already bound → reuse `org_…`)
+
 ## [0.14.2] - 2026-07-23
 
 ### Added — Delivery transport (ADR-0012 Mode A ↔ Mode B)
