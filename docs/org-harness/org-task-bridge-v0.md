@@ -135,8 +135,9 @@ Smoke: [`scripts/smoke_org_publish_task.sh`](../../scripts/smoke_org_publish_tas
 ## Paperclip / Patterns
 
 - Inward Issue ↔ Org work: [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)
-- Import may surface as a new Issue via `org.work_created` — not a dedicated
-  “Import task” plugin action (deferred).
+- Plugin ≥ **0.3.1** issue **ACN** tab: **Import ACN task** / **Publish to ACN
+  network** (explicit actions; default Issue sync stays Org work only).
+  Repo: [`paperclip-acn-plugin`](https://github.com/acnlabs/paperclip-acn-plugin).
 
 ---
 
