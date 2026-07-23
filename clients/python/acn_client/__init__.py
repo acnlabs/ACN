@@ -12,6 +12,7 @@ Example:
 from .client import ACNClient, ACNError
 from .models import (
     KNOWN_INBOX_MESSAGE_STATUSES,
+    KNOWN_ORG_WORK_STATUSES,
     KNOWN_PAYMENT_TASK_STATUSES,
     AgentInfo,
     AgentJoinRequest,
@@ -27,6 +28,14 @@ from .models import (
     ManifestEntry,
     ManifestSendRequest,
     MessageType,
+    Org,
+    OrgCreateRequest,
+    OrgFencing,
+    OrgLoopTickResponse,
+    OrgWorkCreateRequest,
+    OrgWorkItem,
+    OrgWorkListResponse,
+    OrgWorkUpdateRequest,
     ParticipationInfo,
     PaymentCapability,
     PaymentMethod,
@@ -42,6 +51,7 @@ from .models import (
     TaskInfo,
     TaskReviewRequest,
     TaskSubmitRequest,
+    org_subnet_id,
 )
 from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState
 from .regions import (
@@ -118,4 +128,15 @@ __all__ = [
     "TaskSubmitRequest",
     "TaskReviewRequest",
     "ParticipationInfo",
+    # Org Harness (builtin_work)
+    "KNOWN_ORG_WORK_STATUSES",
+    "Org",
+    "OrgCreateRequest",
+    "OrgFencing",
+    "OrgLoopTickResponse",
+    "OrgWorkCreateRequest",
+    "OrgWorkItem",
+    "OrgWorkListResponse",
+    "OrgWorkUpdateRequest",
+    "org_subnet_id",
 ]

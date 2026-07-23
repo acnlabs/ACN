@@ -766,6 +766,120 @@ class ParticipationInfo(BaseModel):
 
 
 # ============================================
+# Org Harness (builtin_work Work Port)
+# ============================================
+
+KNOWN_ORG_WORK_STATUSES: tuple[str, ...] = (
+    "todo",
+    "in_progress",
+    "done",
+    "cancelled",
+)
+
+
+class OrgFencing(BaseModel):
+    """Org fence — typically the bound subnet id."""
+
+    model_config = ConfigDict(extra="allow")
+
+    subnet_id: str | None = None
+
+
+class Org(BaseModel):
+    """Org record from GET/POST /api/v1/orgs."""
+
+    model_config = ConfigDict(extra="allow")
+
+    org_id: str
+    display_name: str
+    subnet_id: str | None = None
+    fencing: OrgFencing | None = None
+    plugins: dict[str, str] | None = None
+    roles: list[str] | None = None
+    status: str | None = None
+    steward_agent_id: str | None = None
+    charter: dict[str, Any] | None = None
+    owner: dict[str, Any] | None = None
+    created_by: dict[str, Any] | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class OrgCreateRequest(BaseModel):
+    """POST /api/v1/orgs body."""
+
+    display_name: str
+    subnet_id: str | None = None
+    join_policy: str | None = None
+    is_private: bool | None = None
+    steward_agent_id: str | None = None
+    charter: dict[str, Any] | None = None
+    plugins: dict[str, str] | None = None
+    harness_url: str | None = None
+    harness_secret: str | None = None
+
+
+class OrgWorkItem(BaseModel):
+    """Org builtin_work item (not Task Pool)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    work_id: str
+    org_id: str
+    title: str
+    status: str
+    assignee_agent_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class OrgWorkCreateRequest(BaseModel):
+    """POST /api/v1/orgs/{org_id}/work body."""
+
+    title: str
+    assignee_agent_id: str | None = None
+
+
+class OrgWorkUpdateRequest(BaseModel):
+    """PATCH /api/v1/orgs/{org_id}/work/{work_id} body."""
+
+    status: str
+    assignee_agent_id: str | None = None
+
+
+class OrgWorkListResponse(BaseModel):
+    """GET /api/v1/orgs/{org_id}/work response."""
+
+    model_config = ConfigDict(extra="allow")
+
+    work: list[OrgWorkItem] = Field(default_factory=list)
+
+
+class OrgLoopTickResponse(BaseModel):
+    """POST /api/v1/orgs/{org_id}/loop/tick response."""
+
+    model_config = ConfigDict(extra="allow")
+
+    open_count: int | None = None
+    work_ids: list[str] | None = None
+
+
+def org_subnet_id(org: Org | dict[str, Any]) -> str | None:
+    """Prefer ``fencing.subnet_id``, fall back to top-level ``subnet_id``."""
+    if isinstance(org, Org):
+        if org.fencing and org.fencing.subnet_id:
+            return org.fencing.subnet_id
+        return org.subnet_id
+    fencing = org.get("fencing")
+    if isinstance(fencing, dict):
+        fence = fencing.get("subnet_id")
+        if isinstance(fence, str) and fence:
+            return fence
+    top = org.get("subnet_id")
+    return top if isinstance(top, str) and top else None
+
+
+# ============================================
 # Monitoring Models
 # ============================================
 

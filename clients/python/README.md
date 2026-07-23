@@ -112,6 +112,18 @@ ACNClient(
 | `list_children(parent_subnet_id)` | List immediate child subnets |
 | `promote_subnet(subnet_id)` | Promote `task_scoped` child to `persistent` (idempotent) |
 
+#### Org Harness Methods (builtin_work)
+
+| Method | Description |
+|--------|-------------|
+| `get_org(org_id)` | Get Org by id |
+| `create_org(request)` | Create Org (default Work Port `builtin_work`) |
+| `create_work(org_id, request)` | Create Org work item |
+| `update_work(org_id, work_id, request)` | Patch work status / assignee |
+| `list_work(org_id, *, open_only?)` | List Org work |
+| `tick_org_loop(org_id)` | Thin Loop tick → emits `org.loop_tick` |
+| `org_subnet_id(org)` | Helper: prefer `fencing.subnet_id` |
+
 #### Subnet Admission Methods
 
 Only active on `join_policy=approval` subnets.

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Python `acn-client` 0.13.0** — Org Harness Work Port client parity with
+  TypeScript 0.15 (`get_org` / `create_org` / `create_work` / `update_work` /
+  `list_work` / `tick_org_loop`, `org_subnet_id()`, `ACNError.bound_org_id_hint`).
+
 - **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
   / minimal `OrgWorkItem` with Redis + Postgres repos, `/api/v1/orgs*`
   (create/show/members/claim/transfer/release/dissolve/work/loop tick),
