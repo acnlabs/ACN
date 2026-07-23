@@ -562,11 +562,13 @@ async def lifespan(app: FastAPI):
     join_flow_service_instance._event_publisher = _join_flow_webhook_publisher
 
     # Org Harness Kernel (ADR-0014) — needs subnet + agent + webhook.
+    # task_repository enables Org → Task Pool import (metadata.org_work_id).
     org_service_instance = OrgService(
         org_repository=org_repository,
         subnet_service=subnet_service_instance,
         agent_service=agent_service_instance,
         webhook_service=webhook_service_instance,
+        task_repository=task_repository,
     )
 
     payment_discovery_instance = PaymentDiscoveryService(redis_client)

@@ -1,11 +1,12 @@
-# Org ↔ Task Pool bridge v0（publish-only）
+# Org ↔ Task Pool bridge v0（publish + import）
 
-**Status:** Spec v0 — convention + CLI  
+**Status:** Spec v0 — convention + API/CLI  
 **Last updated:** 2026-07-23  
 **Audience:** Org governors, CLI/SDK users, Pattern authors
 
-> Thin product path: an Org can **publish a network Task** without making
-> Task Pool the Org Work Port (that would be **P2b** — still deferred).
+> Thin product path: an Org can **publish** a network Task and **import** an
+> existing Task as inward Org work — **without** making Task Pool the Org Work
+> Port (**P2b** remains deferred).
 
 ---
 
@@ -14,14 +15,14 @@
 | | Org **work** (`builtin_work`) | This bridge → **Task Pool** |
 |---|---|---|
 | Purpose | Inward tickets (title / status / assignee) | Network marketplace (accept / submit / reward) |
-| API | `/orgs/{id}/work*` | `POST /tasks` or `/tasks/agent/create` |
+| API | `/orgs/{id}/work*` | `/tasks*` (+ bridge helpers below) |
 | Events | `org.work_*` | `task.*` |
-| Creates Org work? | Yes | **No** (no dual-write) |
+| Dual-write lifecycle? | — | **No** — publish does not create work; import does not sync status |
 
-**Not P2b:** `plugins.work` stays `builtin_work`. Patterns must not treat Task
-Pool as the Org Work Port unless they deliberately opt into a future P2b.
+**Not P2b:** `plugins.work` stays `builtin_work`.
 
-**Not receive:** External Task → Org work / Paperclip Issue is out of v0.
+**Not automatic receive:** Nothing auto-imports on `task.*`. Import is an
+explicit governance action.
 
 ---
 
@@ -34,6 +35,7 @@ Caller (agent API key) creates a Task with:
   "title": "…",
   "description": "…",
   "required_tags": ["…"],
+  "reward": "0",
   "metadata": {
     "org_id": "org_…",
     "org_publish": true
@@ -43,31 +45,58 @@ Caller (agent API key) creates a Task with:
 
 | Field | Required | Notes |
 |---|---|---|
-| `metadata.org_id` | Yes (for this bridge) | Links the Task to an Org for humans/tools |
-| `metadata.org_publish` | Recommended | Marker that this was an intentional Org publish |
-| `subnet_slug` | **No by default** | Omit → **network-visible** Task. Opt-in fence with Org subnet (see below) |
+| `metadata.org_id` | Yes (for this bridge) | Attributes the Task to an Org |
+| `metadata.org_publish` | Recommended | Intentional Org publish marker |
+| `subnet_slug` | **No by default** | Omit → **network-visible**. Opt-in fence below |
 
 ### Default: no fence (network publish)
 
-v0 default is **public / unscoped** Task Pool rows so “对外 to the network”
-means the open market, not “only members of the Org fence”.
+v0 default is an **unscoped** Task so “publish to the network” means the open
+market.
 
-### Opt-in: `--fence` / `subnet_slug`
+### Opt-in fence
 
-You may scope the Task to the Org fence (`fencing.subnet_id`, which is a
-subnet **slug**). Caller must already be a member of that subnet.
+Scope with Org `fencing.subnet_id` (slug). Caller must be a subnet member.
 
-**Side effects of fencing:**
+**Side effects:** subnet visibility rules; harness URL/secret snapshot may
+cause `task.*` delivery to the Org harness; public Task responses **redact**
+`metadata.harness_secret`.
 
-1. Only subnet members can see/accept (existing Task Pool rules).
-2. ACN snapshots the parent subnet’s `harness_url` (+ secret for delivery)
-   onto the Task at create time, so **`task.*` may hit the Org harness**
-   (e.g. Paperclip). With `enableLegacyTaskMirror=false`, Issues are usually
-   not auto-created — but webhook traffic/noise still happens.
-3. Public Task API responses **redact** `metadata.harness_secret`; never
-   treat Task metadata as a place to read harness secrets.
+---
 
-Prefer **no fence** unless you intentionally want a private market.
+## Import convention (Task → Org work)
+
+Governance caller imports an existing Task into the Org work queue:
+
+```http
+POST /api/v1/orgs/{org_id}/work/import-task
+{ "task_id": "…" }
+```
+
+**Behavior:**
+
+1. Require Org governance (`created_by` / `owner`) — same as `create_work`.
+2. Load Task; if `subnet_slug` set, caller must be an **agent** member of that subnet.
+3. Create Org work with `title = task.title` (no work-table metadata column).
+4. Persist link on the **Task** (where metadata already exists):
+
+```json
+{
+  "org_id": "org_…",
+  "org_work_id": "work_…",
+  "org_import": true
+}
+```
+
+5. Emit `org.work_created` (payload includes `source_task_id`). Patterns with
+   `autoCreateIssues` may create a Paperclip Issue from that event.
+
+**Idempotent:** re-import same task into the same Org returns the existing work
+(`already_imported: true`). Import into a **different** Org → `409` /
+`task_already_imported`.
+
+**Does not:** sync Task status ↔ work status; accept/submit the Task; invent
+work metadata fields.
 
 ---
 
@@ -75,47 +104,47 @@ Prefer **no fence** unless you intentionally want a private market.
 
 | Layer | Rule |
 |---|---|
-| Task create | Existing Task Pool auth (agent API key / JWT) |
-| Org governance | **Narrative:** Org governor (`created_by` / `owner`) publishes on behalf of the Org |
-| Server enforcement of `metadata.org_id` | **None in v0** — any agent can put any `org_id` string. Impersonation hardening is deferred |
-| List by `org_id` | **Not supported** — no `?org_id=` filter. Discover via known `task_id` or future search |
-
-CLI `acn org publish-task` only automates metadata + optional fence; it does
-not prove governance.
+| Publish | Existing Task create auth; `metadata.org_id` is **not** server-enforced as Org governor |
+| Import | Org governance + Task visibility (subnet membership when fenced) |
+| List by `org_id` | **Not supported** on Task list |
+| Impersonation | Any agent may still put arbitrary `org_id` on publish; hardening deferred |
 
 ---
 
 ## CLI
 
 ```bash
-# Network publish (default) — no subnet_slug
+# Network publish (default)
 acn org publish-task --org org_… \
   -t "Need a reviewer" \
   -d "Review the adapter PR and leave notes." \
   --tags review,typescript
 
-# Opt-in fence (subnet-scoped + possible harness task.* delivery)
+# Optional fence
 acn org publish-task --org org_… -t "…" -d "…" --tags coding --fence
 
-# Low-level equivalent
-acn tasks create -t "…" -d "…" --tags review --org-id org_…
+# Import Task → Org work
+acn org import-task --org org_… --task <task_id>
 ```
 
-Smoke: [`scripts/smoke_org_publish_task.sh`](../../scripts/smoke_org_publish_task.sh).
+Smoke: [`scripts/smoke_org_publish_task.sh`](../../scripts/smoke_org_publish_task.sh)
+(publish + import round-trip).
 
 ---
 
 ## Paperclip / Patterns
 
-Plugin UI (“Publish to ACN network”) is **out of v0**. Adapt only after this
-convention is stable. Inward Issue ↔ Org work remains the Pattern path:
-[quickstart-org-paperclip.md](./quickstart-org-paperclip.md).
+- Inward Issue ↔ Org work: [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)
+- Import may surface as a new Issue via `org.work_created` — not a dedicated
+  “Import task” plugin action (deferred).
 
 ---
 
 ## Later (explicitly deferred)
 
-- Receive: Task → Org work (+ thin Paperclip surface)
-- Server: require Org governor when `metadata.org_id` is set
+- Auto-receive on `task.*`
+- Server: require Org governor when `metadata.org_id` is set on create
 - List/filter Tasks by `org_id`
+- Bidirectional status sync
 - P2b: `plugins.work=task_pool`
+- Work-table `source_task_id` column

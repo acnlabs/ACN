@@ -435,5 +435,50 @@ export function orgCommand(): Command {
       },
     );
 
+  cmd
+    .command('import-task')
+    .description(
+      'Import a Task Pool task as Org work (governance only; links via task.metadata)',
+    )
+    .requiredOption('--org <org_id>', 'Org id')
+    .requiredOption('--task <task_id>', 'Task id to import')
+    .option('--assignee <agent_id>', 'Optional assignee for the work item')
+    .action(
+      async (opts: { org: string; task: string; assignee?: string }) => {
+        const config = loadConfig();
+        if (!config.api_key) {
+          console.error(
+            'No API key found. Run `acn join` first or `acn config set api-key <key>`.',
+          );
+          process.exit(1);
+        }
+        try {
+          const body: Record<string, unknown> = { task_id: opts.task };
+          if (opts.assignee) body.assignee_agent_id = opts.assignee;
+          const res = await acnPost<{
+            work_id: string;
+            org_id: string;
+            title: string;
+            status: string;
+            source_task_id?: string;
+            already_imported?: boolean;
+          }>(`/orgs/${opts.org}/work/import-task`, body);
+          const lines = [
+            res.already_imported
+              ? 'Task already imported (idempotent)'
+              : 'Task imported as Org work',
+            `  Work ID  : ${res.work_id}`,
+            `  Org      : ${res.org_id}`,
+            `  Task ID  : ${res.source_task_id ?? opts.task}`,
+            `  Status   : ${res.status}`,
+            `  Title    : ${res.title}`,
+          ];
+          output(res, lines.join('\n'));
+        } catch (err) {
+          handleError(err);
+        }
+      },
+    );
+
   return cmd;
 }
