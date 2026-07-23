@@ -163,8 +163,8 @@ node scripts/e2e-org-inbound.mjs        # ACN → Issue（含治理 403 演示�
 | 要做的事 | 用什么 |
 |----------|--------|
 | 组织内排活 ↔ Paperclip | **Org work**（本 quickstart） |
-| 面向网络招人 / 接单 / 赏金 | **Task Pool** `POST /api/v1/tasks`（旁路；**不是**当前 Work Port） |
-| `plugins.work=task_pool` | **未提供**（P2b 按需） |
+| 面向网络招人 / 接单 / 赏金 | **Task Pool** 旁路；见 [org-task-bridge-v0.md](./org-task-bridge-v0.md)（`acn org publish-task`；**不是**当前 Work Port） |
+| `plugins.work=task_pool` | **未提供**（P2b 按需；与 publish bridge **不同**） |
 | 任意成员建 work | **不行**（仅治理方） |
 | 旧 Task→Issue 镜像 | 默认关；需 `enableLegacyTaskMirror=true` |
 
@@ -188,5 +188,5 @@ Paperclip **可以换成**其他 Pattern：只要会调 `/orgs/*/work*` 并收 s
 ## 下一步（产品）
 
 - 对内试用反馈 → 迭代权限 / UX  
-- 若要「组织对外发任务」→ 单独做 Task Pool 旁路约定（**不是**本页范围）  
+- **组织对外发任务（publish-only）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)  
 - 设计深度阅读：[design-v0.md](./design-v0.md) · [phase2-work-port-v0.md](./phase2-work-port-v0.md)

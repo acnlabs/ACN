@@ -17,6 +17,7 @@ interface TaskInfo {
   deadline?: string;
   max_resubmit_attempts?: number | null;
   subnet_slug?: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 interface TaskHistoryItem {
@@ -64,6 +65,8 @@ function formatTask(t: TaskInfo): string {
     lines.push(`  Reward   : ${t.reward} ${t.reward_currency ?? ''}`);
   }
   if (t.subnet_slug) lines.push(`  Subnet   : ${t.subnet_slug}`);
+  const orgId = t.metadata?.org_id;
+  if (typeof orgId === 'string' && orgId) lines.push(`  Org      : ${orgId}`);
   if (t.description) lines.push(`  Desc     : ${t.description.slice(0, 120)}`);
   if (t.created_at) lines.push(`  Created  : ${t.created_at}`);
   if (t.deadline) lines.push(`  Deadline : ${t.deadline}`);
@@ -189,6 +192,10 @@ export function tasksCommand(): Command {
     .option('--max-participants <n>', 'Max participants (default: 1)', '1')
     .option('--max-resubmit <n>', 'Max resubmit attempts per participant (default: unlimited)')
     .option('--subnet <slug>', 'Subnet slug to scope the task to (agent must be a member)')
+    .option(
+      '--org-id <org_id>',
+      'Attribute to an Org (metadata.org_id + org_publish; prefer `acn org publish-task`)',
+    )
     .action(
       async (opts: {
         title: string;
@@ -201,6 +208,7 @@ export function tasksCommand(): Command {
         maxParticipants?: string;
         maxResubmit?: string;
         subnet?: string;
+        orgId?: string;
       }) => {
         const config = loadConfig();
         if (!config.api_key) {
@@ -224,6 +232,9 @@ export function tasksCommand(): Command {
         }
         if (opts.subnet) {
           body.subnet_slug = opts.subnet;
+        }
+        if (opts.orgId) {
+          body.metadata = { org_id: opts.orgId, org_publish: true };
         }
         try {
           const task = await acnPost<TaskInfo>('/tasks/agent/create', body);

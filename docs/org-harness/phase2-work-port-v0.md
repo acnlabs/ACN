@@ -43,6 +43,10 @@ Phase 2 给「怎么派活」装**可换插座**——先把**现在这套小工
 7. 文档写清：选用 Task Pool ≠ 外部 Pattern 可以绑 `/tasks/*`。  
 8. 若需双写/迁移，另开附录，不阻塞 P2a。
 
+> **旁路约定（不是 P2b）：** Org 治理方可用 Task Pool **发布**网络任务  
+> （`metadata.org_id` + 默认不挂篱笆）——见 [org-task-bridge-v0.md](./org-task-bridge-v0.md)。  
+> 那是产品薄桥，**不会**把 `plugins.work` 切成 `task_pool`。
+
 ### P2c — Paperclip WorkPort（可并行）
 
 9. ~~Adapter 读写 Org work + 消费 `org.work_*` / `org.loop_tick`。~~（`paperclip-acn-plugin` C2）  

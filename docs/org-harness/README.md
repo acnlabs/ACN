@@ -13,6 +13,7 @@
 | 文档 | 说明 |
 |---|---|
 | **[quickstart-org-paperclip.md](./quickstart-org-paperclip.md)** | **对内闭环：Org work ↔ Paperclip（hosted / 本地 e2e）** |
+| **[org-task-bridge-v0.md](./org-task-bridge-v0.md)** | **对外发布：Org → Task Pool（publish-only；≠ P2b）** |
 
 ## 主文档
 
@@ -24,6 +25,7 @@
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core 消费契约（外部 Pattern 用） |
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（`POST /orgs` + Org work；`task.*` 为 legacy） |
 | **[phase2-work-port-v0.md](./phase2-work-port-v0.md)** | **Phase 2 Work Port 短方案（默认 builtin_work · P2a/P2c 完成 · P2b 按需）** |
+| [org-task-bridge-v0.md](./org-task-bridge-v0.md) | Org → Task Pool 发布约定（约定桥，不是 Work Port） |
 
 理论草稿（隐喻 / 协议史）：
 
@@ -48,5 +50,6 @@ L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Ke
 
 - **已完成：** Phase 1 Kernel；Phase 2a（Work Port + `builtin_work`）；P2c（Paperclip Org work 路径 + adapter spec 对齐）。  
 - **试用入口：** [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)。  
-- **按需：** P2b（`plugins.work=task_pool` 进程内适配）；组织→网络发 Task 的产品化桥接。  
+- **对外发布（v0）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)（CLI `acn org publish-task`；**不是** P2b）。  
+- **按需：** P2b（`plugins.work=task_pool`）；Task → Org work receive；按 `org_id` 列表。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主。

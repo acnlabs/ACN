@@ -9,12 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 
+- **Org → Task Pool publish bridge v0** —
+  `docs/org-harness/org-task-bridge-v0.md` (convention: `metadata.org_id` /
+  `org_publish`; default network / no fence; ≠ P2b). Linked from org-harness
+  README, Paperclip quickstart, phase2, skill **0.17.8**. Smoke:
+  `scripts/smoke_org_publish_task.sh`.
 - **Org Harness quickstart** — `docs/org-harness/quickstart-org-paperclip.md`
   (Org work ↔ Paperclip inward loop; hosted + local e2e). Linked from
   org-harness README and skill **0.17.7**.
 
 ### Fixed
 
+- **TaskResponse metadata redaction:** strip `harness_secret` from public
+  task responses (subnet harness snapshot remains on the entity for delivery).
 - **Org permission 403 prose:** `_map_permission` now surfaces
   `OrgPermissionError` message text (e.g. “Only created_by may govern an
   unclaimed Org”) while keeping `error_code=ownership_mismatch` and
@@ -23,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CLI `acn org publish-task`** (+ `acn tasks create --org-id`) — attribute a
+  Task Pool task to an Org; default unscoped network publish; optional
+  `--fence` / `--subnet`. CLI **0.14.1**.
 - **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
   / minimal `OrgWorkItem` with Redis + Postgres repos, `/api/v1/orgs*`
   (create/show/members/claim/transfer/release/dissolve/work/loop tick),
