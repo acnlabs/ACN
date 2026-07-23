@@ -53,17 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.15.3] - 2026-07-23
 
-### Added
-
-- **TypeScript `acn-client` 0.15.0** — Org Harness Work Port APIs
-  (`getOrg` / `createOrg` / `createWork` / `updateWork` / `listWork` /
-  `tickOrgLoop`), `orgSubnetId()`, and richer `ACNError` conflict hints.
-
-## [0.15.3] - 2026-07-23
-
-SDK publish cycle: server **0.15.3** (no protocol change), Python
-`acn-client` **0.12.2**, TypeScript `acn-client` **0.14.2**, skill
-**0.17.4**. CLI remains **0.13.3** (already on npm from `v0.15.2`).
+SDK publish cycle: server **0.15.3** (no protocol change), TypeScript
+`acn-client` **0.15.0** (on npm), Python `acn-client` **0.12.2** (PyPI
+blocked pending verified email on publisher account), skill **0.17.4**.
+CLI remains **0.13.3** (already on npm from `v0.15.2`).
 
 ### Added — SDK delivery helpers (ADR-0012)
 
@@ -73,6 +66,12 @@ SDK publish cycle: server **0.15.3** (no protocol change), Python
 - Whitespace-only `endpoint` treated as omitted (client preflight matches
   server / CLI).
 - Skill **0.17.4** documents the methods in `references/SDK.md`.
+
+### Added — TypeScript Org Harness Work Port
+
+- TypeScript `acn-client` **0.15.0** — `getOrg` / `createOrg` /
+  `createWork` / `updateWork` / `listWork` / `tickOrgLoop`,
+  `orgSubnetId()`, and richer `ACNError` conflict hints.
 
 ## [0.15.2] - 2026-07-22
 
