@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SDK delivery helpers** — Python `acn-client` **0.12.2**
+  (`get_delivery` / `set_delivery`) and TypeScript `acn-client` **0.14.2**
+  (`getDelivery` / `setDelivery`) wrap `GET/PATCH /agents/{id}/delivery`.
+  Skill **0.17.4** documents the methods in `references/SDK.md`.
+
 - **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
   / minimal `OrgWorkItem` with Redis + Postgres repos, `/api/v1/orgs*`
   (create/show/members/claim/transfer/release/dissolve/work/loop tick),

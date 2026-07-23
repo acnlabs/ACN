@@ -107,6 +107,8 @@ Options:
 | `rotateApiKey(agentId)` | Rotate API key — old key invalidated immediately, new key returned once |
 | `getPolicy(agentId)` | Get own inbound communication policy |
 | `updatePolicy(agentId, mode, options?)` | Update inbound policy (`open`/`manifest`/`allowlist`/`closed`) |
+| `getDelivery(agentId)` | Get derived delivery transport (`direct` / `relay` / `none`) |
+| `setDelivery(agentId, delivery, endpoint?)` | Switch Mode A↔B without re-registering |
 
 #### Subnet Methods
 

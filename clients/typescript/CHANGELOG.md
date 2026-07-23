@@ -4,6 +4,15 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-07-23
+
+### Added — Delivery transport (ADR-0012 Mode A ↔ Mode B)
+
+- `getDelivery(agentId)` — derived transport (`direct` / `relay` / `none`).
+- `setDelivery(agentId, delivery, endpoint?)` — switch Mode A↔B without
+  re-registering (`GET/PATCH /agents/{id}/delivery`).
+- Types: `DeliveryTransport`, `DeliveryTransportSet`, `DeliveryResponse`.
+
 ## [0.14.1] - 2026-07-19
 
 ### Added — Dual-region helpers (ADR-0013)

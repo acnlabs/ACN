@@ -1041,6 +1041,33 @@ export interface CommunicationPolicyResponse {
 }
 
 // ============================================
+// Delivery transport (ADR-0012 Mode A / Mode B)
+// ============================================
+
+/**
+ * Derived inbound delivery transport. Orthogonal to
+ * {@link CommunicationPolicyMode} (reception).
+ *
+ * - `direct` — Mode A: ACN dials the public A2A endpoint over HTTP
+ * - `relay` — Mode B: hold an outbound WebSocket (`acn listen`)
+ * - `none` — pull/reject only (policy is `manifest` / `closed`)
+ */
+export type DeliveryTransport = 'direct' | 'relay' | 'none';
+
+/** Target transport for `setDelivery` (push modes only). */
+export type DeliveryTransportSet = 'direct' | 'relay';
+
+export interface DeliveryResponse {
+  agent_id: string;
+  delivery: DeliveryTransport;
+  endpoint?: string | null;
+  /** Reception policy mode — not the same as `delivery`. */
+  communication_mode?: string;
+  a2a_handshake_ok?: boolean | null;
+  next_step_hint?: string | null;
+}
+
+// ============================================
 // Allowlist Types
 // ============================================
 
