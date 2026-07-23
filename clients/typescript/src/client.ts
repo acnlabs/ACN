@@ -32,6 +32,8 @@ import type {
   CommunicationPolicyMode,
   CommunicationPolicyResponse,
   CommunicationProfile,
+  DeliveryResponse,
+  DeliveryTransportSet,
   DashboardData,
   FollowActionResponse,
   FollowCheckResponse,
@@ -1402,6 +1404,46 @@ export class ACNClient {
     return this.request('PATCH', `/api/v1/agents/${agentId}/policy`, {
       body: { communication_policy: policy },
     });
+  }
+
+  // ============================================
+  // Delivery transport (ADR-0012 Mode A / Mode B)
+  // ============================================
+
+  /**
+   * Get the derived inbound delivery transport (`direct` | `relay` | `none`).
+   * Orthogonal to {@link getPolicy} (reception).
+   */
+  async getDelivery(agentId: string): Promise<DeliveryResponse> {
+    return this.get(`/api/v1/agents/${agentId}/delivery`);
+  }
+
+  /**
+   * Switch Mode A (direct) ↔ Mode B (relay) without re-registering.
+   * Requires a push reception policy (`open` / `allowlist`).
+   *
+   * @param agentId   Must match the authenticated agent.
+   * @param delivery  `relay` or `direct`.
+   * @param endpoint  Required for `direct` — full public A2A JSON-RPC URL.
+   */
+  async setDelivery(
+    agentId: string,
+    delivery: DeliveryTransportSet,
+    endpoint?: string
+  ): Promise<DeliveryResponse> {
+    if (delivery === 'relay' && endpoint) {
+      throw new Error(
+        "delivery='relay' is mutually exclusive with endpoint; omit endpoint and run acn listen"
+      );
+    }
+    if (delivery === 'direct' && !endpoint) {
+      throw new Error(
+        "delivery='direct' requires endpoint (full A2A URL, e.g. https://host/a2a)"
+      );
+    }
+    const body: Record<string, unknown> = { delivery };
+    if (endpoint !== undefined) body.endpoint = endpoint;
+    return this.request('PATCH', `/api/v1/agents/${agentId}/delivery`, { body });
   }
 
   // ============================================

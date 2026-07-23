@@ -95,6 +95,8 @@ ACNClient(
 | `rotate_api_key(agent_id)` | Rotate API key — old key invalidated immediately, new key returned once |
 | `get_policy(agent_id)` | Get own inbound communication policy |
 | `update_policy(agent_id, mode, *, reject_reason?)` | Update inbound policy (`open`/`manifest`/`allowlist`/`closed`) |
+| `get_delivery(agent_id)` | Get derived delivery transport (`direct` / `relay` / `none`) |
+| `set_delivery(agent_id, delivery, *, endpoint?)` | Switch Mode A↔B without re-registering |
 
 #### Subnet Methods
 

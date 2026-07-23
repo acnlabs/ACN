@@ -4,6 +4,14 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-07-23
+
+### Added — Delivery transport (ADR-0012 Mode A ↔ Mode B)
+
+- `get_delivery(agent_id)` — derived transport (`direct` / `relay` / `none`).
+- `set_delivery(agent_id, delivery, *, endpoint=None)` — switch Mode A↔B
+  without re-registering (`GET/PATCH /agents/{id}/delivery`).
+
 ## [0.12.1] - 2026-07-19
 
 ### Added — Dual-region helpers (ADR-0013)

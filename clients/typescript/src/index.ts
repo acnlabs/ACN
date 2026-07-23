@@ -134,6 +134,11 @@ export type {
   CommunicationPolicyMode,
   CommunicationPolicyResponse,
 
+  // Delivery transport Types
+  DeliveryTransport,
+  DeliveryTransportSet,
+  DeliveryResponse,
+
   // Allowlist Types
   AllowlistActionResponse,
   AllowlistEntry,

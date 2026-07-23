@@ -2072,6 +2072,71 @@ class ACNClient:
         )
 
     # ============================================
+    # Delivery transport (ADR-0012 Mode A / Mode B)
+    # ============================================
+
+    async def get_delivery(self, agent_id: str) -> dict[str, Any]:
+        """Get the derived inbound delivery transport for this agent.
+
+        Orthogonal to :meth:`get_policy` (reception). Values:
+
+        - ``direct`` — Mode A: ACN dials the public A2A endpoint over HTTP
+        - ``relay`` — Mode B: hold an outbound WebSocket (``acn listen``)
+        - ``none`` — pull/reject only (policy is ``manifest`` / ``closed``)
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+
+        Returns:
+            ``{ agent_id, delivery, endpoint?, communication_mode }``
+        """
+        return await self._request("GET", f"/api/v1/agents/{agent_id}/delivery")
+
+    async def set_delivery(
+        self,
+        agent_id: str,
+        delivery: str,
+        *,
+        endpoint: str | None = None,
+    ) -> dict[str, Any]:
+        """Switch Mode A (direct) ↔ Mode B (relay) without re-registering.
+
+        Requires a push reception policy (``open`` / ``allowlist``). Use
+        :meth:`update_policy` first when still on ``manifest``.
+
+        Args:
+            agent_id: Must match the authenticated agent's ID.
+            delivery: ``'relay'`` or ``'direct'``.
+            endpoint: Required for ``direct`` — full public A2A JSON-RPC
+                URL. Must be omitted for ``relay``.
+
+        Returns:
+            ``{ agent_id, delivery, endpoint?, communication_mode,
+            a2a_handshake_ok?, next_step_hint? }``
+        """
+        normalized = (delivery or "").strip().lower()
+        if normalized not in ("direct", "relay"):
+            raise ValueError("delivery must be 'direct' or 'relay'")
+        if normalized == "relay" and endpoint:
+            raise ValueError(
+                "delivery='relay' is mutually exclusive with endpoint; "
+                "omit endpoint and run acn listen / hold a WebSocket"
+            )
+        if normalized == "direct" and not endpoint:
+            raise ValueError(
+                "delivery='direct' requires endpoint "
+                "(full A2A URL, e.g. https://host/a2a)"
+            )
+        body: dict[str, Any] = {"delivery": normalized}
+        if endpoint is not None:
+            body["endpoint"] = endpoint
+        return await self._request(
+            "PATCH",
+            f"/api/v1/agents/{agent_id}/delivery",
+            json=body,
+        )
+
+    # ============================================
     # Allowlist
     # ============================================
 
