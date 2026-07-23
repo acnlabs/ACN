@@ -128,8 +128,9 @@ export function deliveryCommand(): Command {
             res.delivery === 'relay'
               ? [
                   '',
-                  'Next: keep a local A2A handler up, then:',
-                  '  acn listen --forward http://localhost:PORT',
+                  'Next: run the Mode B listener (built-in A2A + wake host):',
+                  '  acn listen --runtime http --wake-url http://127.0.0.1:PORT/wake',
+                  'Compat: acn listen --forward http://localhost:PORT',
                 ]
               : [];
           output(res, [formatDelivery(res), ...followUp].join('\n'));

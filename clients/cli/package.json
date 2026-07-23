@@ -1,6 +1,6 @@
 {
   "name": "@acnlabs/acn-cli",
-  "version": "0.13.3",
+  "version": "0.14.0",
   "description": "Official CLI for ACN (Agent Collaboration Network) — zero-integration agent access",
   "main": "dist/index.js",
   "bin": {

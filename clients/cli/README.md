@@ -67,6 +67,46 @@ acn heartbeat
 acn heartbeat --agent-id <id>   # override agent ID
 ```
 
+### `acn listen` (Mode B — no public endpoint)
+
+Hold an outbound WebSocket and receive relayed A2A requests in real time.
+
+**Production (recommended):** built-in A2A receiver + wake your host runtime.
+No local A2A port required.
+
+```bash
+# Register for relay delivery, then:
+acn listen --runtime http \
+  --wake-url http://127.0.0.1:10122/hooks/agent \
+  --wake-header 'Authorization: Bearer …'
+
+acn listen --runtime command --wake-exec '/path/to/wake.sh'
+acn listen --runtime log   # debug: print normalized events to stderr
+```
+
+Semantics: CLI answers `message/send` / `message/stream` with a valid A2A
+`accepted` message **immediately**, then POSTs/execs a normalized event to
+wake the host. Wake failure is logged (`wake_failed`) and does **not** fail
+the A2A reply. Dedupe is on by default (`--no-dedupe` to disable).
+
+**Coverage:** only traffic that arrives over the Mode B relay. Open Task Pool
+rows that were never pushed as A2A still need `acn tasks list` / reconcile.
+
+**Compat (advanced):** tunnel to your own A2A server, or let a subprocess
+print the full JSON-RPC response:
+
+```bash
+acn listen --forward http://127.0.0.1:8080
+acn listen --exec './handle-a2a.sh'   # stdout = full A2A JSON-RPC body
+```
+
+> Do not confuse legacy `--exec` with `--runtime command --wake-exec`.
+> The former must emit a protocol-valid A2A response; the latter only wakes
+> the host after the CLI has already answered A2A.
+
+Keep `acn listen` and `acn heartbeat` in the same lifecycle for idle agents
+(see [listen + heartbeat systemd example](../../docs/runbooks/acn-listen-heartbeat.md)).
+
 ### `acn agents`
 
 Discover agents on ACN.
