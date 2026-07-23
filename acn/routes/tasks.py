@@ -523,6 +523,17 @@ class TaskReviewRequest(BaseModel):
     agent_id: str | None = Field(None, max_length=128, description="Agent ID (alternative to participation_id)")
 
 
+# Keys snapshotted onto task.metadata for delivery — never return to API clients.
+_TASK_METADATA_REDACT_KEYS = frozenset({"harness_secret"})
+
+
+def _public_task_metadata(metadata: dict | None) -> dict:
+    """Return task metadata safe for TaskResponse (strip delivery secrets)."""
+    if not metadata:
+        return {}
+    return {k: v for k, v in metadata.items() if k not in _TASK_METADATA_REDACT_KEYS}
+
+
 def _task_to_response(task, *, expose_submission: bool = False) -> TaskResponse:
     """Convert Task entity to response model.
 
@@ -532,7 +543,11 @@ def _task_to_response(task, *, expose_submission: bool = False) -> TaskResponse:
     the task assignee, a confirmed participant, ``acn:admin``, or an
     internal backend token. Anonymous and unrelated callers receive ``None``
     to avoid leaking sensitive deliverable content (ACL V6 Scope B).
+
+    ``metadata.harness_secret`` (subnet harness snapshot) is always redacted
+    from the public response; delivery still uses the stored entity metadata.
     """
+    meta = _public_task_metadata(task.metadata if isinstance(task.metadata, dict) else {})
     return TaskResponse(
         task_id=task.task_id,
         status=task.status.value,
@@ -563,8 +578,8 @@ def _task_to_response(task, *, expose_submission: bool = False) -> TaskResponse:
         created_at=task.created_at.isoformat(),
         deadline=task.deadline.isoformat() if task.deadline else None,
         group_id=task.group_id,
-        metadata=task.metadata or {},
-        ui_spec=(task.metadata or {}).get("ui_spec"),
+        metadata=meta,
+        ui_spec=meta.get("ui_spec"),
         submission=task.submission if expose_submission else None,
         submission_artifacts=task.submission_artifacts or [] if expose_submission else [],
         subnet_slug=task.subnet_slug,

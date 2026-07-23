@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { acnDelete, acnGet, acnPatch, acnPost } from '../api.js';
+import { loadConfig } from '../config.js';
 import { handleError, output } from '../output.js';
 
 interface OrgInfo {
@@ -35,6 +36,14 @@ interface WorkInfo {
   title: string;
   status: string;
   assignee_agent_id?: string | null;
+}
+
+interface PublishedTaskInfo {
+  task_id: string;
+  title: string;
+  status: string;
+  subnet_slug?: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 function formatOrg(o: OrgInfo): string {
@@ -329,6 +338,102 @@ export function orgCommand(): Command {
         handleError(err);
       }
     });
+
+  cmd
+    .command('publish-task')
+    .description(
+      'Publish a Task Pool task attributed to an Org (network by default; not Org work)',
+    )
+    .requiredOption('--org <org_id>', 'Org id (stored as metadata.org_id)')
+    .requiredOption('-t, --title <title>', 'Task title (min 3 chars)')
+    .requiredOption('-d, --description <text>', 'Task description (min 10 chars)')
+    .requiredOption('--tags <tags>', 'Required skill tags, comma-separated')
+    .option('--deadline <hours>', 'Deadline in hours (default: 48)', '48')
+    .option('--reward <amount>', 'Reward amount (default: 0)', '0')
+    .option('--currency <currency>', 'Reward currency', 'ap_points')
+    .option('--type <type>', 'Task type', 'general')
+    .option('--max-participants <n>', 'Max participants', '1')
+    .option(
+      '--fence',
+      'Scope task to the Org subnet fence (may deliver task.* to Org harness)',
+      false,
+    )
+    .option('--subnet <slug>', 'Override subnet slug (implies fence; default: Org fence)')
+    .action(
+      async (opts: {
+        org: string;
+        title: string;
+        description: string;
+        tags: string;
+        deadline?: string;
+        reward?: string;
+        currency?: string;
+        type?: string;
+        maxParticipants?: string;
+        fence?: boolean;
+        subnet?: string;
+      }) => {
+        const config = loadConfig();
+        if (!config.api_key) {
+          console.error(
+            'No API key found. Run `acn join` first or `acn config set api-key <key>`.',
+          );
+          process.exit(1);
+        }
+        try {
+          const org = await acnGet<OrgInfo>(`/orgs/${opts.org}`);
+          const fenceSlug =
+            opts.subnet ?? org.fencing?.subnet_id ?? org.subnet_id ?? undefined;
+          const useFence = Boolean(opts.fence || opts.subnet);
+          if (useFence && !fenceSlug) {
+            console.error(
+              `Org ${opts.org} has no fencing.subnet_id; cannot --fence / --subnet.`,
+            );
+            process.exit(1);
+          }
+
+          const body: Record<string, unknown> = {
+            title: opts.title,
+            description: opts.description,
+            deadline_hours: parseInt(opts.deadline ?? '48', 10),
+            required_tags: opts.tags
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean),
+            reward: opts.reward ?? '0',
+            reward_currency: opts.currency ?? 'ap_points',
+            task_type: opts.type ?? 'general',
+            max_participants: parseInt(opts.maxParticipants ?? '1', 10),
+            metadata: {
+              org_id: opts.org,
+              org_publish: true,
+            },
+          };
+          if (useFence && fenceSlug) {
+            body.subnet_slug = fenceSlug;
+          }
+
+          const task = await acnPost<PublishedTaskInfo>('/tasks/agent/create', body);
+          const lines = [
+            'Task published for Org (Task Pool — not Org work)',
+            `  Task ID  : ${task.task_id}`,
+            `  Org      : ${opts.org}`,
+            `  Status   : ${task.status}`,
+            `  Title    : ${task.title}`,
+            `  Subnet   : ${task.subnet_slug ?? '(network / unscoped)'}`,
+            `  metadata : org_id=${String(task.metadata?.org_id ?? opts.org)} org_publish=${String(task.metadata?.org_publish ?? true)}`,
+          ];
+          if (useFence) {
+            lines.push(
+              '  Note     : fenced — task.* may hit the Org harness webhook',
+            );
+          }
+          output(task, lines.join('\n'));
+        } catch (err) {
+          handleError(err);
+        }
+      },
+    );
 
   return cmd;
 }
