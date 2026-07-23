@@ -9,10 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Python `acn-client` 0.13.0** — Org Harness Work Port client parity with
-  TypeScript 0.15 (`get_org` / `create_org` / `create_work` / `update_work` /
-  `list_work` / `tick_org_loop`, `org_subnet_id()`, `ACNError.bound_org_id_hint`).
-
 - **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
   / minimal `OrgWorkItem` with Redis + Postgres repos, `/api/v1/orgs*`
   (create/show/members/claim/transfer/release/dissolve/work/loop tick),
@@ -54,6 +50,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agent skill 0.17.2** — documents Org Harness (`acn org …`, Work Port),
   preferred `org.*` harness events, and Task Pool as optional/legacy for
   Pattern adapters; `references/API.md` gains `/orgs*` table.
+
+## [0.15.4] - 2026-07-23
+
+SDK publish cycle: server **0.15.4** (version bump for release workflow),
+Python `acn-client` **0.13.0** (Org Work Port parity with TypeScript 0.15),
+skill **0.17.5**. TypeScript `acn-client` **0.15.0** and CLI **0.13.3**
+already on npm (skipped).
+
+### Added — Python Org Harness Work Port
+
+- Python `acn-client` **0.13.0** — `get_org` / `create_org` / `create_work` /
+  `update_work` / `list_work` / `tick_org_loop`, `org_subnet_id()`,
+  `ACNError.reason` / `bound_org_id_hint`.
+
+### Fixed — Release workflow
+
+- GitHub Release no longer blocked when PyPI publish fails (e.g. unverified
+  publisher email). Publish status is summarized in the release body.
+
+### Docs
+
+- Agent skill **0.17.5** — `references/SDK.md` documents Org Harness methods
+  for Python and TypeScript.
 
 ## [0.15.3] - 2026-07-23
 
