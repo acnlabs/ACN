@@ -3,6 +3,14 @@ import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import WebSocket from 'ws';
 import { loadConfig } from '../config.js';
+import { DedupeStore } from './normalize-event.js';
+import { dispatchLocalReceiver } from './local-receiver.js';
+import {
+  DEFAULT_WAKE_TIMEOUT_MS,
+  parseWakeHeaders,
+  validateRuntimeOptions,
+  type RuntimeId,
+} from './runtime-adapter.js';
 
 /**
  * ADR-0012 Mode B — agent-side listener.
@@ -24,13 +32,10 @@ import { loadConfig } from '../config.js';
  *   agent -> ACN  : {type:"a2a_stream_end",   id, status?, error?}
  * Non-SSE responses keep using a single a2a_response — purely additive.
  *
- * Two handler modes:
- *   --forward <url>  tunnel each request to a local HTTP server (the agent's
- *                    existing A2A server, e.g. http://localhost:8080).
- *                    SSE responses are streamed (P2d).
- *   --exec <command> run a shell command per request; the request body is fed
- *                    on stdin and the command's stdout becomes the response.
- *                    Always buffered (exec streaming is deferred, see #171).
+ * Handler modes:
+ *   --runtime http|command|log  built-in A2A receiver + wake host (production default)
+ *   --forward <url>             tunnel to a local A2A server (compat; SSE streamed)
+ *   --exec <command>            stdout = full A2A JSON-RPC response (compat; buffered)
  */
 
 export interface A2aRequestFrame {
@@ -74,14 +79,28 @@ export type OutboundFrame = A2aResponseFrame | A2aStreamChunkFrame | A2aStreamEn
 /** Emit one reply frame to ACN over the control channel. */
 export type SendFrame = (frame: OutboundFrame) => void;
 
+export interface RuntimeHandlerOptions {
+  runtime: RuntimeId;
+  wakeUrl?: string;
+  wakeHeaders?: Record<string, string>;
+  wakeExec?: string;
+  wakeTimeoutMs?: number;
+  dedupe: boolean;
+  dedupeTtlSec: number;
+}
+
 export interface HandlerOptions {
   forward?: string;
   exec?: string;
+  runtime?: RuntimeHandlerOptions;
 }
 
 interface HandlerDeps {
   fetchFn?: typeof fetch;
   spawnFn?: typeof spawn;
+  logFn?: (line: string) => void;
+  /** Shared across requests when using --runtime (set by runListener). */
+  dedupeStore?: DedupeStore;
 }
 
 // Headers that must not be replayed to the downstream handler: they describe
@@ -126,6 +145,8 @@ function errorResponse(id: string, status: number, detail: string): A2aResponseF
  * live socket: a ``--forward`` SSE response is streamed as chunk frames, every
  * other case emits a single ``a2a_response``. Pure except for the injected
  * ``fetch`` / ``spawn`` deps, so it is unit testable without a live socket.
+ *
+ * For ``--runtime``, the A2A response is emitted before wake completes.
  */
 export async function dispatchA2aRequest(
   frame: A2aRequestFrame,
@@ -135,6 +156,23 @@ export async function dispatchA2aRequest(
 ): Promise<void> {
   const bodyBuf = decodeBody(frame);
   try {
+    if (opts.runtime) {
+      const store =
+        deps.dedupeStore ?? new DedupeStore(opts.runtime.dedupeTtlSec);
+      dispatchLocalReceiver(
+        frame.id,
+        bodyBuf.toString('utf-8'),
+        opts.runtime,
+        store,
+        send,
+        {
+          fetchFn: deps.fetchFn,
+          spawnFn: deps.spawnFn,
+          logFn: deps.logFn,
+        }
+      );
+      return;
+    }
     if (opts.forward) {
       await forwardToHttp(frame, bodyBuf, opts.forward, deps.fetchFn ?? fetch, send);
       return;
@@ -323,6 +361,9 @@ function runListener(cfg: ListenerConfig): void {
   const wsUrl = toWebsocketUrl(cfg.baseUrl, cfg.agentId);
   let backoff = INITIAL_BACKOFF_MS;
   let stopped = false;
+  const dedupeStore = cfg.runtime
+    ? new DedupeStore(cfg.runtime.dedupeTtlSec)
+    : undefined;
 
   const connect = (): void => {
     const ws = new WebSocket(wsUrl, {
@@ -332,7 +373,12 @@ function runListener(cfg: ListenerConfig): void {
 
     ws.on('open', () => {
       // Status to stderr so stdout stays clean for pipe consumers.
-      console.error(`[acn listen] connected as ${cfg.agentId} → ${wsUrl}`);
+      const mode = cfg.runtime
+        ? `runtime=${cfg.runtime.runtime}`
+        : cfg.forward
+          ? `forward=${cfg.forward}`
+          : `exec`;
+      console.error(`[acn listen] connected as ${cfg.agentId} → ${wsUrl} (${mode})`);
       backoff = INITIAL_BACKOFF_MS;
       keepalive = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -358,7 +404,7 @@ function runListener(cfg: ListenerConfig): void {
             ws.send(JSON.stringify(out));
           }
         };
-        void dispatchA2aRequest(f as A2aRequestFrame, cfg, send);
+        void dispatchA2aRequest(f as A2aRequestFrame, cfg, send, { dedupeStore });
       }
       // {type:"pong"} keepalive ack and the {type:"system"} welcome frame
       // need no action.
@@ -398,55 +444,159 @@ function runListener(cfg: ListenerConfig): void {
   connect();
 }
 
+function collectWakeHeader(value: string, previous: string[]): string[] {
+  previous.push(value);
+  return previous;
+}
+
+/** Validate mutually exclusive handler flags. Returns an error message or null. */
+export function validateListenHandlerFlags(opts: {
+  runtime?: string;
+  forward?: string;
+  exec?: string;
+  wakeUrl?: string;
+  wakeExec?: string;
+}): string | null {
+  const modes = [opts.runtime, opts.forward, opts.exec].filter(Boolean);
+  if (modes.length === 0) {
+    return (
+      'Provide a handler: --runtime http|command|log (recommended), ' +
+      'or legacy --forward <url> / --exec <command>.'
+    );
+  }
+  if (modes.length > 1) {
+    return 'Use only one handler: --runtime, --forward, or --exec — not combined.';
+  }
+  return validateRuntimeOptions({
+    runtime: opts.runtime,
+    wakeUrl: opts.wakeUrl,
+    wakeExec: opts.wakeExec,
+  });
+}
+
 export function listenCommand(): Command {
   const cmd = new Command('listen')
     .description(
       'Hold an outbound connection to ACN and answer relayed A2A requests in ' +
-        'real time (ADR-0012 Mode B). For agents with no public endpoint.'
+        'real time (ADR-0012 Mode B). Prefer --runtime for production; ' +
+        '--forward/--exec remain as compatibility tunnels.'
     )
     .option(
+      '--runtime <id>',
+      'Built-in A2A receiver + wake host: http | command | log (no local A2A port)'
+    )
+    .option('--wake-url <url>', 'POST target for --runtime http')
+    .option(
+      '--wake-header <k:v>',
+      'Extra header for --runtime http (repeatable)',
+      collectWakeHeader,
+      [] as string[]
+    )
+    .option(
+      '--wake-exec <cmd>',
+      'Shell command for --runtime command (event JSON on stdin). ' +
+        'Not the same as legacy --exec (which must print a full A2A response).'
+    )
+    .option(
+      '--wake-timeout <ms>',
+      'Wake timeout in ms (default 5000)',
+      String(DEFAULT_WAKE_TIMEOUT_MS)
+    )
+    .option('--no-dedupe', 'Disable in-process task/message id dedupe (default: on)')
+    .option('--dedupe-ttl <sec>', 'Dedupe window seconds (default 3600)', '3600')
+    .option(
       '--forward <url>',
-      'Tunnel each relayed request to a local HTTP server (e.g. http://localhost:8080)'
+      'Compat: tunnel each request to a local A2A HTTP server'
     )
     .option(
       '--exec <command>',
-      'Run a shell command per request: body on stdin, stdout becomes the response'
+      'Compat: shell per request; stdout must be a full A2A JSON-RPC response'
     )
     .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
-    .action((opts: { forward?: string; exec?: string; agentId?: string }) => {
-      const config = loadConfig();
-      const apiKey = config.api_key;
-      const agentId = opts.agentId ?? config.agent_id;
+    .action(
+      (opts: {
+        runtime?: string;
+        wakeUrl?: string;
+        wakeHeader?: string[];
+        wakeExec?: string;
+        wakeTimeout?: string;
+        dedupe?: boolean;
+        dedupeTtl?: string;
+        forward?: string;
+        exec?: string;
+        agentId?: string;
+      }) => {
+        const config = loadConfig();
+        const apiKey = config.api_key;
+        const agentId = opts.agentId ?? config.agent_id;
 
-      if (!apiKey) {
-        console.error(
-          'No API key found. Run `acn join` first or `acn config set api-key <key>`.'
-        );
-        process.exit(1);
-      }
-      if (!agentId) {
-        console.error(
-          'No agent ID found. Run `acn join` first or `acn config set agent-id <id>`.'
-        );
-        process.exit(1);
-      }
-      if (!opts.forward && !opts.exec) {
-        console.error('Provide a handler: --forward <url> or --exec <command>.');
-        process.exit(1);
-      }
-      if (opts.forward && opts.exec) {
-        console.error('Use only one handler: --forward or --exec, not both.');
-        process.exit(1);
-      }
+        if (!apiKey) {
+          console.error(
+            'No API key found. Run `acn join` first or `acn config set api-key <key>`.'
+          );
+          process.exit(1);
+        }
+        if (!agentId) {
+          console.error(
+            'No agent ID found. Run `acn join` first or `acn config set agent-id <id>`.'
+          );
+          process.exit(1);
+        }
 
-      runListener({
-        agentId,
-        apiKey: apiKey!,
-        baseUrl: config.base_url,
-        forward: opts.forward,
-        exec: opts.exec,
-      });
-    });
+        const flagErr = validateListenHandlerFlags({
+          runtime: opts.runtime,
+          forward: opts.forward,
+          exec: opts.exec,
+          wakeUrl: opts.wakeUrl,
+          wakeExec: opts.wakeExec,
+        });
+        if (flagErr) {
+          console.error(flagErr);
+          process.exit(1);
+        }
+
+        let wakeHeaders: Record<string, string> | undefined;
+        if (opts.runtime === 'http') {
+          try {
+            wakeHeaders = parseWakeHeaders(opts.wakeHeader);
+          } catch (err) {
+            console.error(err instanceof Error ? err.message : String(err));
+            process.exit(1);
+          }
+        }
+
+        const wakeTimeoutMs = Number.parseInt(opts.wakeTimeout ?? '', 10);
+        const dedupeTtlSec = Number.parseInt(opts.dedupeTtl ?? '', 10);
+        if (opts.runtime && (!Number.isFinite(wakeTimeoutMs) || wakeTimeoutMs <= 0)) {
+          console.error('--wake-timeout must be a positive integer (ms).');
+          process.exit(1);
+        }
+        if (opts.runtime && (!Number.isFinite(dedupeTtlSec) || dedupeTtlSec <= 0)) {
+          console.error('--dedupe-ttl must be a positive integer (seconds).');
+          process.exit(1);
+        }
+
+        runListener({
+          agentId,
+          apiKey: apiKey!,
+          baseUrl: config.base_url,
+          forward: opts.forward,
+          exec: opts.exec,
+          runtime: opts.runtime
+            ? {
+                runtime: opts.runtime as RuntimeId,
+                wakeUrl: opts.wakeUrl,
+                wakeHeaders,
+                wakeExec: opts.wakeExec,
+                wakeTimeoutMs,
+                // commander: --no-dedupe sets dedupe=false; default true
+                dedupe: opts.dedupe !== false,
+                dedupeTtlSec,
+              }
+            : undefined,
+        });
+      }
+    );
 
   return cmd;
 }

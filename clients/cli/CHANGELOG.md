@@ -4,6 +4,28 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-23
+
+### Added — Local receiver + runtime wake (Mode B production path)
+
+- **`acn listen --runtime http|command|log`** — built-in A2A JSON-RPC
+  receiver (no local port) plus host wake adapter. Answers
+  `message/send` / `message/stream` with a valid `kind: message` result
+  **before** waking the host (wake failure does not fail A2A).
+- **`--wake-url` / `--wake-header` / `--wake-exec` / `--wake-timeout`** —
+  wake knobs for `http` and `command` runtimes.
+- **In-process dedupe** (default on; `--no-dedupe`, `--dedupe-ttl`) by
+  `task_id ?? message_id`. Restart clears the window. Wake failure
+  releases the slot so at-least-once retries can wake again.
+- Design: [`docs/features/acn-local-receiver-mvp.md`](../../docs/features/acn-local-receiver-mvp.md).
+
+### Changed
+
+- **`--forward` / `--exec`** remain supported as compatibility tunnels;
+  production docs recommend `--runtime`. Legacy `--exec` still means
+  “stdout = full A2A response” — do not confuse with
+  `--runtime command --wake-exec`.
+
 ## [0.13.3] - 2026-07-22
 
 > Coordinated release with ACN server `0.15.2` and agent skill `0.17.3`.
