@@ -26,6 +26,7 @@ from ..core.exceptions import (
     SubnetNotFoundException,
 )
 from ..core.interfaces.org_repository import IOrgRepository
+from ..core.interfaces.task_repository import ITaskRepository
 from ..protocols.ap2 import WebhookEventType
 from ..protocols.ap2.webhook import WebhookService
 from .agent_service import AgentService
@@ -67,6 +68,14 @@ class OrgWorkNotFoundError(Exception):
         super().__init__(f"Work item not found: {org_id}/{work_id}")
 
 
+class OrgTaskImportError(Exception):
+    """Task → Org work import failed (not found / not visible / unavailable)."""
+
+    def __init__(self, reason: str, message: str = "") -> None:
+        self.reason = reason
+        super().__init__(message or reason)
+
+
 class OrgService:
     def __init__(
         self,
@@ -74,11 +83,13 @@ class OrgService:
         subnet_service: SubnetService,
         agent_service: AgentService,
         webhook_service: WebhookService | None = None,
+        task_repository: ITaskRepository | None = None,
     ) -> None:
         self.repository = org_repository
         self.subnet_service = subnet_service
         self.agent_service = agent_service
         self.webhook_service = webhook_service
+        self.task_repository = task_repository
 
     def _work_pattern_for(self, org: Org):
         """Resolve ``IWorkPattern`` from ``org.plugins.work`` (aliases allowed)."""
@@ -987,6 +998,99 @@ class OrgService:
             work.to_dict(),
         )
         return work
+
+    async def _agent_in_subnet(self, slug: str, agent_id: str) -> bool:
+        try:
+            subnet = await self.subnet_service.get_subnet(slug)
+        except SubnetNotFoundException:
+            return False
+        members = getattr(subnet, "member_agent_ids", None) or set()
+        return agent_id in members
+
+    async def import_work_from_task(
+        self,
+        org_id: str,
+        *,
+        task_id: str,
+        caller_type: CallerType,
+        caller_sub: str,
+        assignee_agent_id: str | None = None,
+    ) -> tuple[OrgWorkItem, bool]:
+        """Import a Task Pool task as Org work; link via task.metadata.
+
+        Returns ``(work, already_imported)``. Link fields on the Task:
+        ``org_id``, ``org_work_id``, ``org_import=true``. Does not dual-write
+        Task lifecycle into work status.
+        """
+        if not self.task_repository:
+            raise OrgTaskImportError(
+                "task_repository_unavailable",
+                "Task repository is not configured; cannot import tasks",
+            )
+
+        org = await self.get_org(org_id)
+        self._require_governance(org, caller_type, caller_sub)
+
+        task = await self.task_repository.find_by_id(task_id)
+        if not task:
+            raise OrgTaskImportError(
+                "task_not_found", f"Task not found: {task_id}"
+            )
+
+        if task.subnet_slug:
+            if caller_type != "agent":
+                raise OrgTaskImportError(
+                    "fenced_task_requires_agent",
+                    "Importing a subnet-scoped task requires an agent API key "
+                    "that is a member of the task subnet",
+                )
+            if not await self._agent_in_subnet(task.subnet_slug, caller_sub):
+                raise OrgTaskImportError(
+                    "not_subnet_member",
+                    f"Caller is not a member of task subnet {task.subnet_slug}",
+                )
+
+        meta = dict(task.metadata) if isinstance(task.metadata, dict) else {}
+        existing_work_id = meta.get("org_work_id")
+        existing_org_id = meta.get("org_id")
+        if isinstance(existing_work_id, str) and existing_work_id:
+            if existing_org_id and existing_org_id != org_id:
+                raise OrgConflictError(
+                    "task_already_imported",
+                    f"Task already imported into org {existing_org_id}",
+                )
+            existing = await self.repository.find_work(org_id, existing_work_id)
+            if existing:
+                return existing, True
+            # Stale link — fall through and recreate.
+
+        title = (task.title or "").strip() or f"Imported task {task_id}"
+        if len(title) > 500:
+            title = title[:500]
+
+        work = await self._work_pattern_for(org).create_work(
+            org_id,
+            title=title,
+            assignee_agent_id=assignee_agent_id,
+        )
+
+        meta["org_id"] = org_id
+        meta["org_work_id"] = work.work_id
+        meta["org_import"] = True
+        # Never overwrite delivery secrets via import merge.
+        task.metadata = meta
+        await self.task_repository.save(task)
+
+        await self._emit(
+            org,
+            WebhookEventType.ORG_WORK_CREATED,
+            {
+                **work.to_dict(),
+                "source_task_id": task_id,
+                "org_import": True,
+            },
+        )
+        return work, False
 
     async def update_work_status(
         self,

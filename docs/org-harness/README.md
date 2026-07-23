@@ -13,7 +13,7 @@
 | 文档 | 说明 |
 |---|---|
 | **[quickstart-org-paperclip.md](./quickstart-org-paperclip.md)** | **对内闭环：Org work ↔ Paperclip（hosted / 本地 e2e）** |
-| **[org-task-bridge-v0.md](./org-task-bridge-v0.md)** | **对外发布：Org → Task Pool（publish-only；≠ P2b）** |
+| **[org-task-bridge-v0.md](./org-task-bridge-v0.md)** | **对外发布 + 导入：Org ↔ Task Pool（≠ P2b）** |
 
 ## 主文档
 
@@ -50,6 +50,6 @@ L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Ke
 
 - **已完成：** Phase 1 Kernel；Phase 2a（Work Port + `builtin_work`）；P2c（Paperclip Org work 路径 + adapter spec 对齐）。  
 - **试用入口：** [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)。  
-- **对外发布（v0）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)（CLI `acn org publish-task`；**不是** P2b）。  
-- **按需：** P2b（`plugins.work=task_pool`）；Task → Org work receive；按 `org_id` 列表。  
+- **对外发布 / 导入（v0）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)（`publish-task` / `import-task`；**不是** P2b）。  
+- **按需：** P2b（`plugins.work=task_pool`）；自动 receive；按 `org_id` 列表。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主。

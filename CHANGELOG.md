@@ -9,11 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 
-- **Org → Task Pool publish bridge v0** —
-  `docs/org-harness/org-task-bridge-v0.md` (convention: `metadata.org_id` /
-  `org_publish`; default network / no fence; ≠ P2b). Linked from org-harness
-  README, Paperclip quickstart, phase2, skill **0.17.8**. Smoke:
-  `scripts/smoke_org_publish_task.sh`.
+- **Org ↔ Task Pool bridge v0** —
+  `docs/org-harness/org-task-bridge-v0.md` (publish + import; link on
+  `task.metadata`; ≠ P2b). Skill **0.17.9**. Smoke:
+  `scripts/smoke_org_publish_task.sh` (publish + import + idempotent re-import).
 - **Org Harness quickstart** — `docs/org-harness/quickstart-org-paperclip.md`
   (Org work ↔ Paperclip inward loop; hosted + local e2e). Linked from
   org-harness README and skill **0.17.7**.
@@ -27,12 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unclaimed Org”) while keeping `error_code=ownership_mismatch` and
   `details.reason`. Clarifies that `POST …/work` is **governance-only**,
   not Org membership. Skill **0.17.6** / API.md updated.
+- **Org publish smoke:** send required `reward` on `POST /tasks/agent/create`.
 
 ### Added
 
 - **CLI `acn org publish-task`** (+ `acn tasks create --org-id`) — attribute a
   Task Pool task to an Org; default unscoped network publish; optional
   `--fence` / `--subnet` (ships with next CLI release bump).
+- **Org Task import** — `POST /orgs/{id}/work/import-task` + CLI
+  `acn org import-task`: governance imports a Task as Org work; persists
+  `metadata.org_work_id` / `org_import` on the Task (idempotent).
 - **Org Harness Kernel (ADR-0014 Phase 1)** — first-class `Org` / `OrgMembership`
   / minimal `OrgWorkItem` with Redis + Postgres repos, `/api/v1/orgs*`
   (create/show/members/claim/transfer/release/dissolve/work/loop tick),

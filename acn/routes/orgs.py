@@ -34,6 +34,7 @@ from ..services.org_service import (
     OrgNotFoundError,
     OrgPermissionError,
     OrgService,
+    OrgTaskImportError,
     OrgWorkNotFoundError,
 )
 
@@ -290,6 +291,11 @@ class OrgMemberAddRequest(BaseModel):
 
 class OrgWorkCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
+    assignee_agent_id: str | None = None
+
+
+class OrgWorkImportTaskRequest(BaseModel):
+    task_id: str = Field(..., min_length=1, max_length=128)
     assignee_agent_id: str | None = None
 
 
@@ -703,6 +709,66 @@ async def create_work(
     except OrgConflictError as e:
         # Legacy Phase 1 Orgs may store unavailable work plugins.
         raise _map_conflict(e) from e
+
+
+@router.post("/{org_id}/work/import-task")
+@limiter.limit("60/minute")
+async def import_work_from_task(
+    request: Request,
+    body: OrgWorkImportTaskRequest,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    """Import a Task Pool task as Org work (governance only).
+
+    Links via ``task.metadata.org_work_id`` / ``org_id`` / ``org_import``.
+    Idempotent when the same Org re-imports the same task.
+    """
+    caller_type, caller_sub = _caller(payload)
+    try:
+        work, already = await org_service.import_work_from_task(
+            org_id,
+            task_id=body.task_id,
+            caller_type=caller_type,
+            caller_sub=caller_sub,
+            assignee_agent_id=body.assignee_agent_id,
+        )
+        return {
+            **work.to_dict(),
+            "source_task_id": body.task_id,
+            "already_imported": already,
+        }
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+    except OrgConflictError as e:
+        raise _map_conflict(e) from e
+    except OrgTaskImportError as e:
+        if e.reason == "task_not_found":
+            raise ACNHTTPError(
+                ErrorCode.TASK_NOT_FOUND,
+                404,
+                message=str(e),
+                details={"task_id": body.task_id, "reason": e.reason},
+            ) from e
+        if e.reason == "not_subnet_member":
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                message=str(e),
+                details={"task_id": body.task_id, "reason": e.reason},
+            ) from e
+        status = 503 if e.reason == "task_repository_unavailable" else 400
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST if status == 400 else ErrorCode.INTERNAL_SERVER_ERROR,
+            status,
+            message=str(e),
+            details={"task_id": body.task_id, "reason": e.reason},
+        ) from e
 
 
 @router.get("/{org_id}/work")
