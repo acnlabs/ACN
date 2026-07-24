@@ -181,10 +181,9 @@ Paperclip **可以换成**其他 Pattern：只要会调 `/orgs/*/work*` 并收 s
 | 现象 | 检查 |
 |------|------|
 | 无 `registered harness` | 本地预期如此（用 poll）；要实时 push 再填公网 `paperclipBaseUrl` / `PAPERCLIP_PUBLIC_URL` |
-| work 不建 Issue | 等 ≤2 min 或 Issue ACN 页 **Sync now**；`enableOrgWorkPoll`；`autoCreateIssues` |
+| work 不建 Issue | 等 ≤2 min 或 **Sync now**；`enableOrgWorkPoll`；有公网时再查 harness/HMAC |
 | `signed: false` | 未配 harness secret（生产务必配） |
 | Issue 不建 work | 是否人类创建（非插件 echo）；`acnOrgId` 是否已解析；看 worker 日志 |
-| work 不建 Issue | harness 是否指向本实例；HMAC 是否一致；`autoCreateIssues` |
 | 403 建 work | 是否在用非 `created_by` / 非 owner 的 key |
 | done 不回写 | `autoApproveOnDone`；Issue 是否在 `issue-work-map` |
 
