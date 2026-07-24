@@ -1,6 +1,6 @@
 # Org Wallet v0
 
-**Status:** Spec v0 — **decisions accepted**; S1–S3 implemented (2026-07-24)  
+**Status:** Spec v0 — **decisions accepted**; S0–S5 done (2026-07-24)  
 **Last updated:** 2026-07-24  
 **Audience:** Org governors, Backend wallet owners, ACN Task/escrow
 
@@ -209,12 +209,15 @@ Emit via existing outbox / webhook style used for agent wallet where possible.
 | **S3** | CLI `--pay-from org` | S2 | done |
 | **S4** | Paperclip Issue ACN tab **Pay from Org wallet** (thin; fund via Backend) | S3 | done — `@acnlabs/paperclip-plugin-acn@0.3.2` |
 | **S4b** | Paperclip inbound without public URL (poll fallback) | S4 | done — `@acnlabs/paperclip-plugin-acn@0.3.3` |
-| **S5** | Ownership sync (`owner_id` on claim/transfer/release) + dissolve freeze | S1 | next |
+| **S5** | Ownership sync (`owner_id` on claim/transfer/release) + dissolve freeze | S1 | done — CN soft-val 2026-07-24 |
+| **S6** | Paperclip balance/topup UX + optional `GET /orgs/{id}/wallet` proxy | S5 | next |
 
 Soft-validate on a Paperclip instance:
 [quickstart-org-paperclip.md § Org-paid](./quickstart-org-paperclip.md#org-paid-soft-validate)
 (plugin ≥ **0.3.3**; local inbound via poll).
-Live API smoke (no UI): [`scripts/smoke_org_wallet.sh`](../../scripts/smoke_org_wallet.sh).
+Live API smoke (no UI):
+[`scripts/smoke_org_wallet.sh`](../../scripts/smoke_org_wallet.sh) (Org-paid publish/refund);
+[`scripts/smoke_org_wallet_s5.sh`](../../scripts/smoke_org_wallet_s5.sh) (claim/transfer/release/dissolve → Backend wallet).
 
 **v0 non-goals (later):** on-chain Org address, member payroll splits, budget
 policies soft-warn/hard-stop (Pasture draft), multi-currency; one-click tunnel.
