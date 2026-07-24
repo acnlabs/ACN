@@ -30,7 +30,7 @@ from .reputation_service import ReputationService
 from .session_service import SessionEntry, SessionService
 from .subnet_service import SubnetService
 from .task_service import TaskNotFoundException, TaskService
-from .wallet_client import WalletClient
+from .wallet_client import OrgWalletSummary, WalletClient
 
 __all__ = [
     "AgentService",
@@ -59,5 +59,6 @@ __all__ = [
     "SubnetService",
     "TaskService",
     "TaskNotFoundException",
+    "OrgWalletSummary",
     "WalletClient",
 ]

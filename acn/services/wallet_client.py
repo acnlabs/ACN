@@ -31,6 +31,18 @@ class EarningsResult(BaseModel):
     error: str | None = None
 
 
+class OrgWalletSummary(BaseModel):
+    """Backend Org wallet summary (org-wallet-v0 S6 proxy)."""
+
+    org_id: str
+    exists: bool
+    wallet_id: str | None = None
+    balance: int = 0
+    owner_id: str | None = None
+    spend_autonomy: str | None = None
+    status: str | None = None
+
+
 class WalletClient:
     """
     Client for Backend's Agent Wallet API
@@ -657,3 +669,56 @@ class WalletClient:
 
         except httpx.RequestError:
             return False, 0
+
+    async def get_org_wallet(self, org_id: str) -> OrgWalletSummary:
+        """Fetch Org wallet from Backend (lazy — 404 → exists=false).
+
+        Used by ``GET /api/v1/orgs/{org_id}/wallet``. Auth is caller's
+        responsibility (ACN treasury / governance); this client only
+        carries ``X-Internal-Token``.
+        """
+        if not self.backend_url:
+            return OrgWalletSummary(
+                org_id=org_id,
+                exists=False,
+                balance=0,
+                status="unavailable",
+            )
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
+                response = await client.get(
+                    f"{self.backend_url}/api/org-wallets/{org_id}",
+                    headers=self._get_headers(),
+                )
+            if response.status_code == 404:
+                return OrgWalletSummary(org_id=org_id, exists=False, balance=0)
+            if response.status_code != 200:
+                logger.warning(
+                    "org_wallet_get_failed",
+                    org_id=org_id,
+                    status=response.status_code,
+                )
+                return OrgWalletSummary(
+                    org_id=org_id,
+                    exists=False,
+                    balance=0,
+                    status="unavailable",
+                )
+            data = self._parse_json(response)
+            return OrgWalletSummary(
+                org_id=org_id,
+                exists=True,
+                wallet_id=data.get("wallet_id"),
+                balance=int(data.get("balance") or 0),
+                owner_id=data.get("owner_id"),
+                spend_autonomy=data.get("spend_autonomy"),
+                status=data.get("status") or "active",
+            )
+        except httpx.RequestError as e:
+            logger.error("org_wallet_get_error", org_id=org_id, error=str(e))
+            return OrgWalletSummary(
+                org_id=org_id,
+                exists=False,
+                balance=0,
+                status="unavailable",
+            )
