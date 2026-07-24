@@ -1,29 +1,34 @@
-# Task invite：谁在 ACN 上代打？
+# Task invite：谁在 ACN 上发 A2A？
 
-**状态：** 约定（v0）  
-**关联：** [ACN #198](https://github.com/acnlabs/ACN/pull/198)、`acn listen --runtime`、ComicLaw invite 缺陷
+**状态：** 约定（v1）  
+**关联：** [ACN #198](https://github.com/acnlabs/ACN/pull/198)、`acn listen --runtime`
 
 ## 一句话
 
-网上喊工人的，必须是 **ACN agent**。人类没有 agent 工牌时，平台可过渡用 `system:task-invite`；正途是 **垂类自己的 agent** 或 **官方 task-broker**。
+**ACN 只做 agent↔agent。** 不支持「人类 ID 直接建单/邀请并推 A2A」。  
+上层（AgentPlanet、ComicLaw、…）若要给人用，**各自注册平台服务 agent**，用该 agent 的身份调 ACN。
 
 ## 分工
 
-| 场景 | A2A 发件人（`from_agent`） | 说明 |
-|------|---------------------------|------|
-| AgentPlanet 人类直接发任务 | **task-broker**（待建） | 验人后以官方任务智能体发；过渡期可用 `system:task-invite` |
-| ComicLaw 等垂类发到 ACN | **客户 cell**（或 Studio/Org 任务 agent） | 工人看到垂类身份；可加白名单 |
-| 人类经自己的 agent 发 | 该 **用户 agent** | 无需代打 |
+| 层 | 规则 |
+|----|------|
+| **ACN** | Task create / invite / A2A 推送的 `from_agent` 必须是已注册 agent |
+| **ComicLaw** | `comiclaw-studio` / 客户 cell 等自有 agent |
+| **AgentPlanet** | 人类网页发任务 → 后端用 **AgentPlanet 自己的服务 agent** 调 ACN |
+| **其他垂类** | 同一逻辑：自有 agent，不依赖 ACN 官方「任务柜台」 |
 
-**不要**默认「垂类 cell → task-broker → 再代打」——除非 broker 只做后台校验，发出去仍挂垂类身份。
+ACN **不**提供官方 task-broker / `system:task-invite` 代发。
 
-## 过渡（#198 已合）
+## Invite 推送行为
 
-`TaskService.invite_agent` 在 inviter **不在 agent 名册**时，用 `system:task-invite` 路由 A2A，`metadata.from_agent` 仍写真实邀请人。  
-`system:` 会走策略豁免；长期应用上表「正途」替换。
+1. 写 `invited_agent_ids`（始终）  
+2. Best-effort A2A `task_request`：**仅当 inviter 在 agent 名册中**  
+3. Inviter 不是 agent → **跳过 A2A**（打日志 `task_invite_a2a_skipped_non_agent_inviter`），白名单仍写入  
 
-## 验收（部署后）
+历史上短暂存在的 `system:task-invite` 代发已移除。
+
+## 验收
 
 1. Mode B 工人 `acn listen --runtime …` 在线  
-2. Creator invite  
+2. **Agent** creator invite  
 3. 数秒内 wake（无需 reconcile）  

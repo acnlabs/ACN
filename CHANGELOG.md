@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Invite A2A is agent-only:** removed transitional `system:task-invite`
+  spoof. Non-agent inviters still get the whitelist write, but A2A push
+  is skipped (`task_invite_a2a_skipped_non_agent_inviter`). Upper
+  platforms must use their own registered service agent as creator.
+  See `docs/features/task-invite-sender.md`. Skill **0.17.11**.
+
 ## [0.15.6] - 2026-07-24
 
 Server release: **Task invite → A2A push** (#198) plus docs for sender roles
@@ -23,15 +31,12 @@ artifacts).
   can wake and dedupe. Push failure is logged and does **not** roll
   back the invite whitelist. New webhook event `task.invited`
   (`WebhookEventType.TASK_INVITED`) with `data.invitee_id`.
-  Non-agent inviters (e.g. human Studio users) send as
-  `system:task-invite` so the push is not rejected by the agent
-  registry lookup; metadata still carries the real `from_agent`.
   Skill **0.17.10**.
 
 ### Docs
 
 - **Task invite sender roles** — `docs/features/task-invite-sender.md`
-  (vertical cell vs official `task-broker` vs transitional `system:`).
+  (upper platforms use their own service agents; ACN is agent-only).
 - **Org ↔ Task Pool bridge v0** —
   `docs/org-harness/org-task-bridge-v0.md` (publish + import; link on
   `task.metadata`; ≠ P2b). Skill **0.17.9**. Smoke:

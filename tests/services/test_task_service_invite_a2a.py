@@ -132,10 +132,10 @@ class TestInviteAgentA2APush:
         mock_repo.save.assert_awaited_once()
         assert service.message_service is None
 
-    async def test_human_inviter_sends_as_system_task_invite(
+    async def test_non_agent_inviter_skips_a2a_keeps_whitelist(
         self, mock_repo, mock_message_service
     ):
-        """Human creators are not in the agent table — use system: sender."""
+        """ACN is agent-only: non-agent inviters get whitelist, no A2A spoof."""
         task = _make_task(creator_type="human", creator_id="human-user-1")
         mock_repo.find_by_id = AsyncMock(return_value=task)
         mock_repo.save = AsyncMock()
@@ -156,7 +156,6 @@ class TestInviteAgentA2APush:
         )
 
         assert "worker-001" in result.invited_agent_ids
-        call = mock_message_service.send_message.await_args
-        assert call.kwargs["from_agent_id"] == "system:task-invite"
-        assert call.kwargs["message"].metadata["from_agent"] == "human-user-1"
+        mock_repo.save.assert_awaited_once()
+        mock_message_service.send_message.assert_not_awaited()
         agent_repo.find_by_id.assert_awaited_once_with("human-user-1")

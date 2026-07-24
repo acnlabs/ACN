@@ -34,12 +34,6 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-# Reserved sender when the task creator is not a registered agent
-# (e.g. human Studio user). ``MessageService.send_message`` skips the
-# agent-table lookup for ``system:<slug>``; the real inviter stays in
-# message metadata ``from_agent``.
-_TASK_INVITE_SYSTEM_SENDER = "system:task-invite"
-
 # Namespace for ``event_id = uuid5(NS, f"{task_id}:{trigger}")``. Using a
 # fixed URL-based namespace means the same (task_id, trigger) pair always
 # resolves to the same event_id across processes/replicas — the outbox
@@ -522,9 +516,10 @@ class TaskService:
         Invited solvers can join even when require_join_approval is True.
 
         After the whitelist write, best-effort pushes an A2A
-        ``task_request`` to the invitee via ``MessageService`` (Mode A
-        direct / Mode B relay / offline inbox). Push failure is logged
-        and does **not** roll back the invite. Also emits
+        ``task_request`` to the invitee via ``MessageService`` when the
+        inviter is a registered agent (Mode A / Mode B / offline inbox).
+        Non-agent inviters skip the push. Push failure is logged and
+        does **not** roll back the invite. Also emits
         ``WebhookEventType.TASK_INVITED`` when a webhook service is wired.
         """
         task = await self.get_task(task_id)
@@ -570,20 +565,6 @@ class TaskService:
         )
         return task
 
-    async def _resolve_invite_sender(self, inviter_id: str) -> str:
-        """Return ``from_agent_id`` for the invite A2A push.
-
-        Registered agents send as themselves. Humans (or any inviter not
-        in the agent registry) send as ``system:task-invite`` so
-        ``MessageService`` does not reject the push with AgentNotFound.
-        """
-        if self.agent_repository is None:
-            return inviter_id
-        sender = await self.agent_repository.find_by_id(inviter_id)
-        if sender:
-            return inviter_id
-        return _TASK_INVITE_SYSTEM_SENDER
-
     async def _push_invite_a2a(
         self,
         task: Task,
@@ -591,11 +572,32 @@ class TaskService:
         inviter_id: str,
         invitee_id: str,
     ) -> None:
-        """Best-effort A2A task_request to the invitee (does not raise)."""
+        """Best-effort A2A task_request to the invitee (does not raise).
+
+        ACN task messaging is agent-to-agent only. Upper platforms that
+        expose human UX (AgentPlanet, ComicLaw, …) must create/invite
+        using their own registered agent identity. Non-agent inviters
+        keep the whitelist write but skip the A2A push (no ``system:``
+        spoofing).
+        """
         if not self.message_service:
             return
 
-        from_agent_id = await self._resolve_invite_sender(inviter_id)
+        if self.agent_repository is not None:
+            sender = await self.agent_repository.find_by_id(inviter_id)
+            if not sender:
+                logger.warning(
+                    "task_invite_a2a_skipped_non_agent_inviter",
+                    task_id=task.task_id,
+                    inviter_id=inviter_id,
+                    invitee_id=invitee_id,
+                    hint=(
+                        "ACN does not push invite A2A for human/non-agent "
+                        "creators; use a platform service agent as creator"
+                    ),
+                )
+                return
+
         payload = {
             "task_id": task.task_id,
             "title": task.title,
@@ -614,7 +616,6 @@ class TaskService:
                 "type": "task_request",
                 "message_type": "task_request",
                 "title": task.title,
-                # Real inviter (may be a human id); routing sender may be system.
                 "from_agent": inviter_id,
             },
             task_id=task.task_id,
@@ -622,7 +623,7 @@ class TaskService:
 
         try:
             await self.message_service.send_message(
-                from_agent_id=from_agent_id,
+                from_agent_id=inviter_id,
                 to_agent_id=invitee_id,
                 message=message,
                 message_type="task_request",
@@ -632,7 +633,6 @@ class TaskService:
                 "task_invite_a2a_push_failed",
                 task_id=task.task_id,
                 inviter_id=inviter_id,
-                from_agent_id=from_agent_id,
                 invitee_id=invitee_id,
                 error=str(e),
             )
