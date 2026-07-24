@@ -317,6 +317,46 @@ class TestOwnership:
         assert result.owner.subject == "agt_new"
         mock_subnet_service.transfer_owner.assert_awaited_once()
 
+    async def test_claim_emits_platform_owner_changed(
+        self, org_service, mock_org_repo, mock_subnet_service, mock_webhook
+    ):
+        """Backend wallet sync (S5) listens on send_event, not harness send_to."""
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=Subnet(
+                slug=org.subnet_id,
+                name="T",
+                owner="agt_steward",
+                harness_url="https://harness.example/hook",
+            )
+        )
+        await org_service.claim(
+            org.org_id,
+            caller_type="agent",
+            caller_sub="agt_steward",
+        )
+        mock_webhook.send_event.assert_awaited()
+        kwargs = mock_webhook.send_event.await_args.kwargs
+        assert kwargs["event"] == WebhookEventType.ORG_OWNER_CHANGED
+        assert kwargs["outbox"] is True
+        assert kwargs["data"]["action"] == "claim"
+        assert kwargs["data"]["treasury_subject"]["subject"] == "agt_steward"
+        assert kwargs["data"]["org_id"] == org.org_id
+
+    async def test_dissolve_emits_platform_dissolved(
+        self, org_service, mock_org_repo, mock_webhook
+    ):
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        await org_service.dissolve(
+            org.org_id,
+            caller_type="agent",
+            caller_sub="agt_steward",
+        )
+        events = [c.kwargs["event"] for c in mock_webhook.send_event.await_args_list]
+        assert WebhookEventType.ORG_DISSOLVED in events
+
     async def test_claim_cannot_designate_unowned_agent(
         self, org_service, mock_org_repo
     ):
