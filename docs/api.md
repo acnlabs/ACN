@@ -312,6 +312,7 @@ HMAC-SHA256 signed with `harness_secret` in the `X-ACN-Signature: sha256=<hex>` 
 | `agent.joined_subnet` | An agent joins the subnet |
 | `agent.left_subnet` | An agent leaves the subnet |
 | `task.created` | A task is created in this subnet |
+| `task.invited` | Creator invites a solver (`data.invitee_id`; also best-effort A2A `task_request` to the invitee) |
 | `task.accepted` | An agent accepts a task |
 | `task.submitted` | An agent submits results |
 | `task.rejected` | A single-participant submission is rejected |
