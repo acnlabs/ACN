@@ -650,6 +650,8 @@ async def lifespan(app: FastAPI):
         subnet_service=subnet_service_instance,
         # org-wallet-v0: Org-paid task cancel → treasury principal + escrow refund
         org_service=org_service_instance,
+        # Task invite → A2A push (Mode A/B/inbox via MessageRouter)
+        message_service=message_service_instance,
         # Settlement saga v0.1 — both are None in Redis-only mode,
         # which forces ``complete_task`` onto its legacy non-atomic
         # path (existing pre-v0.1 behavior). In PG mode the saga

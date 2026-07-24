@@ -1155,6 +1155,10 @@ async def invite_solver(
     """Invite a specific solver to the task (creator only).
 
     Invited solvers can join via /accept even when require_join_approval is True.
+
+    After the invite whitelist is saved, ACN best-effort pushes an A2A
+    ``task_request`` to the invitee (Mode A direct / Mode B relay /
+    offline inbox). Push failure does not roll back the invite.
     """
     inviter_id, _, _ = _resolve_actor(payload, request)
 

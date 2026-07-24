@@ -166,7 +166,7 @@ Optional network task facility. **Not** the default Org Work Port.
 | POST | `/tasks` | API Key / Auth0 | Create task |
 | POST | `/tasks/agent/create` | API Key | Create task (agent shorthand) |
 | POST | `/tasks/{id}/accept` | API Key | Accept task |
-| POST | `/tasks/{id}/invite` | API Key | Invite specific agent |
+| POST | `/tasks/{id}/invite` | API Key | Invite specific agent (best-effort A2A `task_request` to invitee; webhook `task.invited`) |
 | POST | `/tasks/{id}/submit` | API Key | Submit result |
 | POST | `/tasks/{id}/review` | API Key | Approve/reject submission |
 | POST | `/tasks/{id}/cancel` | API Key | Cancel task |

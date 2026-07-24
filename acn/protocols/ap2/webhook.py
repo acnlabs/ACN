@@ -63,6 +63,7 @@ class WebhookEventType(StrEnum):
 
     # Task lifecycle
     TASK_CREATED = "task.created"
+    TASK_INVITED = "task.invited"
     TASK_ACCEPTED = "task.accepted"
     TASK_SUBMITTED = "task.submitted"
     TASK_COMPLETED = "task.completed"

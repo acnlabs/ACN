@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Task invite → A2A push:** `POST /tasks/{id}/invite` (and
+  `TaskService.invite_agent`) now best-effort routes an A2A
+  `task_request` to the invitee via `MessageService` /
+  `MessageRouter` (Mode A direct / Mode B relay / offline inbox).
+  Metadata includes `task_id` / `acn_task_id` so `acn listen --runtime`
+  can wake and dedupe. Push failure is logged and does **not** roll
+  back the invite whitelist. New webhook event `task.invited`
+  (`WebhookEventType.TASK_INVITED`) with `data.invitee_id`.
+  Skill **0.17.10**.
+
 ### Docs
 
 - **Org ↔ Task Pool bridge v0** —

@@ -3,11 +3,14 @@
 Business logic for task management, including AP2 payment integration.
 """
 
+from __future__ import annotations
+
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import structlog
+from a2a.compat.v0_3.types import DataPart, Message, TextPart  # type: ignore[import-untyped]
 
 from ..core.entities import Participation, ParticipationStatus, Task, TaskStatus
 from ..core.exceptions import SubnetNotFoundException
@@ -25,6 +28,9 @@ from ..protocols.ap2 import PaymentTaskManager, WebhookEventType, WebhookService
 from ..protocols.ap2.core import PLATFORM_CURRENCIES
 from .activity_service import ActivityService
 from .subnet_service import SubnetService
+
+if TYPE_CHECKING:
+    from .message_service import MessageService
 
 logger = structlog.get_logger()
 
@@ -81,6 +87,7 @@ class TaskService:
         subnet_repository: ISubnetRepository | None = None,
         subnet_service: SubnetService | None = None,
         org_service: Any | None = None,
+        message_service: MessageService | None = None,
         # Settlement saga v0.1 — keyword-only, all three OPTIONAL so
         # Redis-only / in-memory deployments and legacy test fixtures
         # constructed without saga wiring keep working unchanged. The
@@ -114,6 +121,9 @@ class TaskService:
                 ``api.py`` always supplies one.
             org_service: OrgService for Org-paid task cancel authorization
                 (org-wallet-v0). Optional in tests; production wires it.
+            message_service: MessageService for best-effort A2A invite
+                push (optional). When None, ``invite_agent`` only
+                updates the whitelist — matches pre-push behavior.
             settlement_outbox: Outbox repository for the settlement saga
                 (v0.1). When None, ``complete_task`` uses its legacy
                 non-atomic path — see docstring there.
@@ -135,6 +145,7 @@ class TaskService:
         self.subnet_repository = subnet_repository
         self.subnet_service = subnet_service
         self.org_service = org_service
+        self.message_service = message_service
         # Saga wiring — see attribute docstrings on each, and the
         # decision matrix on ``_saga_enabled`` below.
         self.settlement_outbox = settlement_outbox
@@ -503,6 +514,12 @@ class TaskService:
         """Creator invites a specific solver to the task.
 
         Invited solvers can join even when require_join_approval is True.
+
+        After the whitelist write, best-effort pushes an A2A
+        ``task_request`` to the invitee via ``MessageService`` (Mode A
+        direct / Mode B relay / offline inbox). Push failure is logged
+        and does **not** roll back the invite. Also emits
+        ``WebhookEventType.TASK_INVITED`` when a webhook service is wired.
         """
         task = await self.get_task(task_id)
 
@@ -532,6 +549,13 @@ class TaskService:
                 metadata={"invitee_id": invitee_id},
             )
 
+        await self._push_invite_a2a(task, inviter_id=inviter_id, invitee_id=invitee_id)
+        await self._notify_webhook(
+            WebhookEventType.TASK_INVITED,
+            task,
+            extra={"invitee_id": invitee_id},
+        )
+
         logger.info(
             "task_solver_invited",
             task_id=task_id,
@@ -539,6 +563,56 @@ class TaskService:
             invitee_id=invitee_id,
         )
         return task
+
+    async def _push_invite_a2a(
+        self,
+        task: Task,
+        *,
+        inviter_id: str,
+        invitee_id: str,
+    ) -> None:
+        """Best-effort A2A task_request to the invitee (does not raise)."""
+        if not self.message_service:
+            return
+
+        payload = {
+            "task_id": task.task_id,
+            "title": task.title,
+            "subnet_id": task.subnet_slug,
+        }
+        message = Message(
+            role="user",
+            parts=[
+                TextPart(text=f"You have been invited to task: {task.title}"),
+                DataPart(data=payload),
+            ],
+            message_id=f"msg-{uuid4().hex[:12]}",
+            metadata={
+                "task_id": task.task_id,
+                "acn_task_id": task.task_id,
+                "type": "task_request",
+                "message_type": "task_request",
+                "title": task.title,
+                "from_agent": inviter_id,
+            },
+            task_id=task.task_id,
+        )
+
+        try:
+            await self.message_service.send_message(
+                from_agent_id=inviter_id,
+                to_agent_id=invitee_id,
+                message=message,
+                message_type="task_request",
+            )
+        except Exception as e:  # noqa: BLE001 — invite must stay durable
+            logger.warning(
+                "task_invite_a2a_push_failed",
+                task_id=task.task_id,
+                inviter_id=inviter_id,
+                invitee_id=invitee_id,
+                error=str(e),
+            )
 
     async def _join_task(
         self,
@@ -2055,7 +2129,13 @@ class TaskService:
                     error=str(exc),
                 )
 
-    async def _notify_webhook(self, event: WebhookEventType, task: Task) -> None:
+    async def _notify_webhook(
+        self,
+        event: WebhookEventType,
+        task: Task,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         """Send webhook notification.
 
         Two delivery targets:
@@ -2068,6 +2148,9 @@ class TaskService:
            ``harness_secret``. This is what makes Org Harnesses pluggable:
            Paperclip / OpenHarness / etc. only need to register a URL on the
            subnet and they will receive the full task lifecycle.
+
+        ``extra`` is merged into the top-level payload (e.g. ``invitee_id``
+        on ``task.invited``). Failures are logged and never raised.
         """
         if not self.webhook:
             return
@@ -2092,6 +2175,8 @@ class TaskService:
                 if (task.metadata or {}).get(k) is not None
             },
         }
+        if extra:
+            payload.update(extra)
 
         try:
             await self.webhook.send_event(
@@ -2219,7 +2304,7 @@ class TaskService:
 
     async def _distribute_reward(
         self,
-        task: "Task",
+        task: Task,
         amount: float,
         description: str,
         participant_id: str | None = None,
