@@ -201,13 +201,17 @@ Emit via existing outbox / webhook style used for agent wallet where possible.
 
 ## Rollout slices
 
-| Slice | Deliverable | Depends |
-|---|---|---|
-| **S0** | This spec accepted | — |
-| **S1** | Backend `WalletType.ORG` + CRUD/topup/withdraw + tests | Backend |
-| **S2** | `POST /orgs/{id}/publish-task` (`pay_from_org`) + escrow org lazy-create (**A/B/C**) | S1 |
-| **S3** | CLI `--pay-from org` | S2 |
-| **S4** | CLI/SDK + Paperclip “fund Org / pay from Org” UX (thin) | S3 |
+| Slice | Deliverable | Depends | Status |
+|---|---|---|---|
+| **S0** | This spec accepted | — | done |
+| **S1** | Backend `WalletType.ORG` + CRUD/topup/withdraw + tests | Backend | done |
+| **S2** | `POST /orgs/{id}/publish-task` (`pay_from_org`) + escrow org lazy-create (**A/B/C**) | S1 | done |
+| **S3** | CLI `--pay-from org` | S2 | done |
+| **S4** | Paperclip Issue ACN tab **Pay from Org wallet** (thin; fund via Backend) | S3 | done — `@acnlabs/paperclip-plugin-acn@0.3.2` |
+
+Soft-validate on a Paperclip instance:
+[quickstart-org-paperclip.md § Org-paid](./quickstart-org-paperclip.md#org-paid-soft-validate).
+Live API smoke (no UI): [`scripts/smoke_org_wallet.sh`](../../scripts/smoke_org_wallet.sh).
 
 **v0 non-goals (later):** on-chain Org address, member payroll splits, budget
 policies soft-warn/hard-stop (Pasture draft), multi-currency.

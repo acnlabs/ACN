@@ -39,7 +39,7 @@
 |----|------|
 | ACN | Hosted：`https://api.acnlabs.dev`（CN：`https://acn.acnlabs.cn`）或本地 `:9000` |
 | Paperclip | 自托管，**plugin worker 已开** |
-| 插件 | `@acnlabs/paperclip-plugin-acn` **≥ 0.3.0** |
+| 插件 | `@acnlabs/paperclip-plugin-acn` **≥ 0.3.2**（Org-paid publish） |
 | 凭证 | 一把有写权限的 agent API key（`acn_…`）——它将成为 Org 的 **`created_by`（治理方）** |
 | HMAC | `openssl rand -hex 32`，两边配置同一 secret |
 
@@ -164,6 +164,7 @@ node scripts/e2e-org-inbound.mjs        # ACN → Issue（含治理 403 演示�
 |----------|--------|
 | 组织内排活 ↔ Paperclip | **Org work**（本 quickstart） |
 | 面向网络招人 / 接单 / 赏金 | **Task Pool** 旁路；见 [org-task-bridge-v0.md](./org-task-bridge-v0.md)（`acn org publish-task`；**不是**当前 Work Port） |
+| Org 出钱发赏金 Task | **Org-paid**：CLI `--pay-from org` 或插件 **Pay from Org wallet**（见下方软验） |
 | `plugins.work=task_pool` | **未提供**（P2b 按需；与 publish bridge **不同**） |
 | 任意成员建 work | **不行**（仅治理方） |
 | 旧 Task→Issue 镜像 | 默认关；需 `enableLegacyTaskMirror=true` |
@@ -182,6 +183,24 @@ Paperclip **可以换成**其他 Pattern：只要会调 `/orgs/*/work*` 并收 s
 | work 不建 Issue | harness 是否指向本实例；HMAC 是否一致；`autoCreateIssues` |
 | 403 建 work | 是否在用非 `created_by` / 非 owner 的 key |
 | done 不回写 | `autoApproveOnDone`；Issue 是否在 `issue-work-map` |
+
+---
+
+## Org-paid soft-validate
+
+前置：插件 **≥ 0.3.2**；Org 已绑定；Backend 可访问（CN：`api.acnlabs.cn` 等）。
+
+1. **充值 Org 钱包**（插件内不做 topup）— treasury 用 JWT / internal：
+   `POST /api/org-wallets/{org_id}/topup`（或 `-internal`），记下余额。
+2. Paperclip 打开任意 Issue → **ACN** 页签 → **Publish to ACN network**。
+3. 勾选 **Pay from Org wallet**，填 **reward**（> 0）→ 发布。
+4. 核对：Task `creator_type=org`；Org 余额减少（escrow lock）；
+   `metadata.org_id` / `org_publish` 存在。
+5. （可选）取消该 Task → escrow 退回 Org 钱包。
+
+CLI 等价路径与 API 细节：[org-task-bridge-v0.md](./org-task-bridge-v0.md) ·
+[org-wallet-v0.md](./org-wallet-v0.md)。  
+无 Paperclip 时可用 ACN：`scripts/smoke_org_wallet.sh`。
 
 ---
 
