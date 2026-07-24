@@ -27,19 +27,19 @@ def _org(org_id: str = "org_pay_1") -> Org:
 
 
 def _task(**kwargs) -> Task:
-    base = dict(
-        task_id="task_pub_1",
-        creator_type="agent",
-        creator_id="agt_creator",
-        creator_name="agt_creator",
-        title="Need a reviewer please",
-        description="Review the adapter PR and leave notes.",
-        status=TaskStatus.OPEN,
-        reward="0",
-        reward_currency="ap_points",
-        use_escrow=False,
-        metadata={"org_id": "org_pay_1", "org_publish": True},
-    )
+    base = {
+        "task_id": "task_pub_1",
+        "creator_type": "agent",
+        "creator_id": "agt_creator",
+        "creator_name": "agt_creator",
+        "title": "Need a reviewer please",
+        "description": "Review the adapter PR and leave notes.",
+        "status": TaskStatus.OPEN,
+        "reward": "0",
+        "reward_currency": "ap_points",
+        "use_escrow": False,
+        "metadata": {"org_id": "org_pay_1", "org_publish": True},
+    }
     base.update(kwargs)
     return Task(**base)
 

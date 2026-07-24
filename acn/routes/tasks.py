@@ -1298,13 +1298,23 @@ async def cancel_task(
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
-    """Cancel a task (only creator can cancel)"""
-    canceller_id, _, _ = _resolve_actor(payload, request)
+    """Cancel a task (creator; or Org treasury for creator_type=org)."""
+    canceller_id, _, actor_type = _resolve_actor(payload, request)
+    auth_type = payload.get("type", "jwt")
+    if auth_type == "agent":
+        canceller_type: str | None = "agent"
+    elif auth_type in ("jwt", "user", "human"):
+        canceller_type = "human"
+    elif actor_type in ("human", "agent"):
+        canceller_type = actor_type
+    else:
+        canceller_type = None
 
     try:
         task = await task_service.cancel_task(
             task_id=task_id,
             canceller_id=canceller_id,
+            canceller_type=canceller_type,  # type: ignore[arg-type]
         )
         expose = _caller_can_see_submission(task, canceller_id, payload)
         return _task_to_response(task, expose_submission=expose)
