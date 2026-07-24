@@ -27,6 +27,7 @@ from ..routes.dependencies import (
     get_org_service,
     limiter,
 )
+from ..routes.tasks import TaskServiceDep, _task_to_response
 from ..services.agent_service import AgentService
 from ..services.org_service import (
     OrgConflictError,
@@ -297,6 +298,34 @@ class OrgWorkCreateRequest(BaseModel):
 class OrgWorkImportTaskRequest(BaseModel):
     task_id: str = Field(..., min_length=1, max_length=128)
     assignee_agent_id: str | None = None
+
+
+class OrgPublishTaskRequest(BaseModel):
+    """Publish a Task Pool task attributed to an Org (org-wallet-v0 / bridge)."""
+
+    title: str = Field(..., min_length=3, max_length=200)
+    description: str = Field(..., min_length=10, max_length=10_000)
+    required_tags: list[str] = Field(default_factory=list, max_length=20)
+    deadline_hours: int = Field(default=48, ge=1, le=2160)
+    reward: str = Field(default="0", max_length=64)
+    task_type: str = Field(default="general", max_length=64)
+    max_participants: int | None = Field(default=1)
+    pay_from_org: bool = Field(
+        default=False,
+        description=(
+            "If true: creator_type=org, force credits, escrow when reward>0 "
+            "(treasury governance required). If false: agent-paid attribution only."
+        ),
+    )
+    fence: bool = Field(
+        default=False,
+        description="Scope task to Org subnet fence",
+    )
+    subnet_slug: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Override fence subnet (implies fence)",
+    )
 
 
 class OrgWorkUpdateRequest(BaseModel):
@@ -709,6 +738,122 @@ async def create_work(
     except OrgConflictError as e:
         # Legacy Phase 1 Orgs may store unavailable work plugins.
         raise _map_conflict(e) from e
+
+
+@router.post("/{org_id}/publish-task")
+@limiter.limit("20/minute")
+async def publish_org_task(
+    request: Request,
+    body: OrgPublishTaskRequest,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+    task_service: TaskServiceDep = None,
+):
+    """Publish a Task Pool task for an Org (not Org work; not P2b).
+
+    * ``pay_from_org=false`` (default): attribution only — caller is creator
+      (legacy bridge; no treasury check).
+    * ``pay_from_org=true``: ``creator_type=org``, credits + escrow when
+      reward>0; requires treasury governance (org-wallet-v0 B/C).
+    """
+    caller_type, caller_sub = _caller(payload)
+    try:
+        org = await org_service.get_org(org_id)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+
+    if body.pay_from_org:
+        try:
+            org_service.assert_treasury_principal(org, caller_type, caller_sub)
+        except OrgPermissionError as e:
+            raise _map_permission(e, org_id) from e
+
+    fence_slug = body.subnet_slug or org.subnet_id or None
+    use_fence = bool(body.fence or body.subnet_slug)
+    if use_fence and not fence_slug:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            message="Org has no fencing.subnet_id; cannot fence publish",
+            details={"org_id": org_id, "reason": "missing_fence"},
+        )
+
+    if use_fence and fence_slug and caller_type == "agent":
+        if not await org_service._agent_in_subnet(fence_slug, caller_sub):
+            raise ACNHTTPError(
+                ErrorCode.NOT_SUBNET_MEMBER,
+                403,
+                message="Caller must be a member of the Org subnet to fence-publish",
+                details={"slug": fence_slug, "reason": "creator_not_subnet_member"},
+            )
+
+    try:
+        reward_f = float(body.reward or "0")
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            message="reward must be a numeric string",
+            details={"reason": "invalid_reward"},
+        ) from e
+
+    metadata: dict[str, Any] = {
+        "org_id": org_id,
+        "org_publish": True,
+    }
+    if body.pay_from_org:
+        metadata["org_pay"] = True
+
+    if body.pay_from_org:
+        creator_type = "org"
+        creator_id = org_id
+        creator_name = org.display_name
+        reward_currency = "credits"
+        use_escrow = reward_f > 0
+    else:
+        # Legacy attribution: caller pays (if anything); currency matches old CLI default.
+        creator_type = caller_type
+        creator_id = caller_sub
+        creator_name = caller_sub
+        reward_currency = "ap_points"
+        use_escrow = False
+
+    try:
+        task = await task_service.create_task(
+            creator_type=creator_type,
+            creator_id=creator_id,
+            creator_name=creator_name,
+            title=body.title,
+            description=body.description,
+            task_type=body.task_type,
+            required_tags=body.required_tags,
+            reward=body.reward,
+            reward_currency=reward_currency,
+            max_participants=body.max_participants,
+            use_escrow=use_escrow,
+            deadline_hours=body.deadline_hours,
+            metadata=metadata,
+            subnet_slug=fence_slug if use_fence else None,
+        )
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            message=str(e),
+            details={"org_id": org_id, "reason": "task_create_failed"},
+        ) from e
+
+    logger.info(
+        "org_task_published",
+        org_id=org_id,
+        task_id=task.task_id,
+        pay_from_org=body.pay_from_org,
+        creator_type=creator_type,
+    )
+    return _task_to_response(task, expose_submission=True)
 
 
 @router.post("/{org_id}/work/import-task")

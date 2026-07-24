@@ -130,7 +130,7 @@ acn config show
 | `acn org work create <org_id> --title <t> [--assignee <agent_id>]` | Create work (`POST /orgs/{id}/work`) — **governance only** (unclaimed: `created_by`; claimed: `owner`). Membership alone is not enough |
 | `acn org work update <org_id> <work_id> --status todo\|in_progress\|done\|cancelled` | Update work status (**governance only**) |
 | `acn org tick <org_id>` | Thin Loop tick (emits `org.loop_tick`) |
-| `acn org publish-task --org <org_id> -t <t> -d <d> --tags <tags> [--fence]` | Publish a **network** Task Pool task attributed to the Org (`metadata.org_id`; default **no** subnet — not Org work; not P2b). `--fence` scopes to Org subnet (may deliver `task.*` to harness) |
+| `acn org publish-task --org <org_id> -t <t> -d <d> --tags <tags> [--fence] [--pay-from agent\|org]` | Publish a **network** Task Pool task attributed to the Org (`metadata.org_id`; default **no** subnet — not Org work; not P2b). `--pay-from org` = Org wallet pays (credits + escrow when reward>0; treasury only). `--fence` scopes to Org subnet |
 | `acn org import-task --org <org_id> --task <task_id>` | Import a Task as Org work (**governance only**); links via `task.metadata.org_work_id` (idempotent) |
 | **Tasks (Task Pool — optional / marketplace; not default Org Work Port)** | |
 | `acn tasks list [--status open]` | Browse tasks |
@@ -894,6 +894,8 @@ acn org publish-task --org org_… \
   -d "Review the adapter and leave notes." \
   --tags review,typescript
 # Optional: --fence scopes to Org subnet (may send task.* to harness)
+# Org-paid (Org wallet / credits escrow when reward > 0; treasury only):
+#   --pay-from org --reward 100
 
 # Task → Org work import (governance; link stored on task.metadata)
 acn org import-task --org org_… --task <task_id>
