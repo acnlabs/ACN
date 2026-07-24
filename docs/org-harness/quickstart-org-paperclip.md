@@ -26,9 +26,9 @@
 
 | 步骤 | 期望 |
 |------|------|
-| 插件 setup | 日志出现 `registered harness` + `org_id` |
+| 插件 setup | 日志 `setup complete` + `org_id`；`inbound.mode` 为 `poll` 或 `push` |
 | Paperclip 新建 Issue（人类） | ACN 出现对应 `work_…`（`issue-work-map`） |
-| 或：治理 key `POST /orgs/{id}/work` | Paperclip 出现对应 Issue |
+| 或：治理 key `POST /orgs/{id}/work` | Paperclip 出现对应 Issue（**≤2 min** poll，或 push 即时） |
 | Issue → `done`（建议开 `autoApproveOnDone`） | work 状态 → `done` |
 
 ---
@@ -39,7 +39,7 @@
 |----|------|
 | ACN | Hosted：`https://api.acnlabs.dev`（CN：`https://acn.acnlabs.cn`）或本地 `:9000` |
 | Paperclip | 自托管，**plugin worker 已开** |
-| 插件 | `@acnlabs/paperclip-plugin-acn` **≥ 0.3.2**（Org-paid publish） |
+| 插件 | `@acnlabs/paperclip-plugin-acn` **≥ 0.3.3**（Org-paid + 本地 poll 入站） |
 | 凭证 | 一把有写权限的 agent API key（`acn_…`）——它将成为 Org 的 **`created_by`（治理方）** |
 | HMAC | `openssl rand -hex 32`，两边配置同一 secret |
 
@@ -86,9 +86,10 @@ paperclipai secrets set acn_harness_secret "$HARNESS_SECRET"
 | `acnHarnessSecretRef` | 指向 `$HARNESS_SECRET` |
 | `acnSubnetId` | `$SUBNET_ID`（若尚无 Org） |
 | `acnOrgId` | 已有则填 `org_…`；空则 setup 时创建 |
-| `paperclipBaseUrl` | **ACN 能访问到的** Paperclip 公网 URL |
+| `paperclipBaseUrl` | **可选**——公网 URL 仅用于实时 push；本地可空（或设 `PAPERCLIP_PUBLIC_URL`） |
 | `acnBaseUrl` | 默认全球；CN 填 `https://acn.acnlabs.cn` |
 | `autoCreateIssues` | `true`（默认） |
+| `enableOrgWorkPoll` | `true`（默认）——本地 + hosted ACN 靠周期同步入站 |
 | `autoApproveOnDone` | 试用建议 `true` |
 | `enableLegacyTaskMirror` | **保持 `false`** |
 
@@ -96,9 +97,11 @@ paperclipai secrets set acn_harness_secret "$HARNESS_SECRET"
 
 ```text
 acn-plugin: created ACN Org for company { org_id: "org_…", … }
-# 或 reusing / configured org
-acn-plugin: registered harness { subnet_id: "…", org_id: "…", signed: true }
-acn-plugin: setup complete { … }
+# 本地 Paperclip + hosted ACN（无公网 URL）— 正常：
+acn-plugin: realtime push not configured — periodic sync will cover inbound
+acn-plugin: setup complete { …, inbound: { mode: "poll", … } }
+# 若有公网 URL：
+# acn-plugin: registered harness (realtime push) { …, signed: true }
 ```
 
 把日志里的 `org_id` 写回 `acnOrgId`，避免反复建 Org。
@@ -177,10 +180,10 @@ Paperclip **可以换成**其他 Pattern：只要会调 `/orgs/*/work*` 并收 s
 
 | 现象 | 检查 |
 |------|------|
-| 无 `registered harness` | `paperclipBaseUrl` 是否公网可达；`acnSubnetId` / Org 是否解析成功 |
+| 无 `registered harness` | 本地预期如此（用 poll）；要实时 push 再填公网 `paperclipBaseUrl` / `PAPERCLIP_PUBLIC_URL` |
+| work 不建 Issue | 等 ≤2 min 或 **Sync now**；`enableOrgWorkPoll`；有公网时再查 harness/HMAC |
 | `signed: false` | 未配 harness secret（生产务必配） |
 | Issue 不建 work | 是否人类创建（非插件 echo）；`acnOrgId` 是否已解析；看 worker 日志 |
-| work 不建 Issue | harness 是否指向本实例；HMAC 是否一致；`autoCreateIssues` |
 | 403 建 work | 是否在用非 `created_by` / 非 owner 的 key |
 | done 不回写 | `autoApproveOnDone`；Issue 是否在 `issue-work-map` |
 
@@ -188,7 +191,7 @@ Paperclip **可以换成**其他 Pattern：只要会调 `/orgs/*/work*` 并收 s
 
 ## Org-paid soft-validate
 
-前置：插件 **≥ 0.3.2**；Org 已绑定；Backend 可访问（CN：`api.acnlabs.cn` 等）。
+前置：插件 **≥ 0.3.3**；Org 已绑定；Backend 可访问（CN：`api.acnlabs.cn` 等）。
 
 1. **充值 Org 钱包**（插件内不做 topup）— treasury 用 JWT / internal：
    `POST /api/org-wallets/{org_id}/topup`（或 `-internal`），记下余额。

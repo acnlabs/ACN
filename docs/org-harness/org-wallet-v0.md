@@ -208,13 +208,16 @@ Emit via existing outbox / webhook style used for agent wallet where possible.
 | **S2** | `POST /orgs/{id}/publish-task` (`pay_from_org`) + escrow org lazy-create (**A/B/C**) | S1 | done |
 | **S3** | CLI `--pay-from org` | S2 | done |
 | **S4** | Paperclip Issue ACN tab **Pay from Org wallet** (thin; fund via Backend) | S3 | done — `@acnlabs/paperclip-plugin-acn@0.3.2` |
+| **S4b** | Paperclip inbound without public URL (poll fallback) | S4 | done — `@acnlabs/paperclip-plugin-acn@0.3.3` |
+| **S5** | Ownership sync (`owner_id` on claim/transfer/release) + dissolve freeze | S1 | next |
 
 Soft-validate on a Paperclip instance:
-[quickstart-org-paperclip.md § Org-paid](./quickstart-org-paperclip.md#org-paid-soft-validate).
+[quickstart-org-paperclip.md § Org-paid](./quickstart-org-paperclip.md#org-paid-soft-validate)
+(plugin ≥ **0.3.3**; local inbound via poll).
 Live API smoke (no UI): [`scripts/smoke_org_wallet.sh`](../../scripts/smoke_org_wallet.sh).
 
 **v0 non-goals (later):** on-chain Org address, member payroll splits, budget
-policies soft-warn/hard-stop (Pasture draft), multi-currency.
+policies soft-warn/hard-stop (Pasture draft), multi-currency; one-click tunnel.
 
 ---
 
