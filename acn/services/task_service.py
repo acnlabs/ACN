@@ -4,6 +4,7 @@ Business logic for task management, including AP2 payment integration.
 """
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import structlog
@@ -79,6 +80,7 @@ class TaskService:
         agent_repository: IAgentRepository | None = None,
         subnet_repository: ISubnetRepository | None = None,
         subnet_service: SubnetService | None = None,
+        org_service: Any | None = None,
         # Settlement saga v0.1 — keyword-only, all three OPTIONAL so
         # Redis-only / in-memory deployments and legacy test fixtures
         # constructed without saga wiring keep working unchanged. The
@@ -110,6 +112,8 @@ class TaskService:
                 ``None`` the cascade is silently skipped so legacy
                 test fixtures keep working. Production wiring in
                 ``api.py`` always supplies one.
+            org_service: OrgService for Org-paid task cancel authorization
+                (org-wallet-v0). Optional in tests; production wires it.
             settlement_outbox: Outbox repository for the settlement saga
                 (v0.1). When None, ``complete_task`` uses its legacy
                 non-atomic path — see docstring there.
@@ -130,6 +134,7 @@ class TaskService:
         self.agent_repository = agent_repository
         self.subnet_repository = subnet_repository
         self.subnet_service = subnet_service
+        self.org_service = org_service
         # Saga wiring — see attribute docstrings on each, and the
         # decision matrix on ``_saga_enabled`` below.
         self.settlement_outbox = settlement_outbox
@@ -1650,11 +1655,48 @@ class TaskService:
 
         return task
 
-    async def cancel_task(self, task_id: str, canceller_id: str) -> Task:
+    async def _assert_org_treasury_may_cancel(
+        self,
+        task: Task,
+        canceller_id: str,
+        canceller_type: Literal["human", "agent"] | None,
+    ) -> None:
+        """Org-paid tasks: only current treasury principal may cancel (refund)."""
+        if self.org_service is None:
+            raise PermissionError(
+                "Org-paid task cancel requires Org service; only the Org "
+                "treasury principal may cancel"
+            )
+        if canceller_type not in ("human", "agent"):
+            raise PermissionError(
+                "Org-paid task cancel requires a human or agent principal"
+            )
+        from .org_service import OrgNotFoundError, OrgPermissionError
+
+        try:
+            org = await self.org_service.get_org(task.creator_id)
+            self.org_service.assert_treasury_principal(
+                org, canceller_type, canceller_id
+            )
+        except OrgNotFoundError as e:
+            raise PermissionError(f"Org not found for task creator: {task.creator_id}") from e
+        except OrgPermissionError as e:
+            raise PermissionError(str(e) or "Not Org treasury principal") from e
+
+    async def cancel_task(
+        self,
+        task_id: str,
+        canceller_id: str,
+        *,
+        canceller_type: Literal["human", "agent"] | None = None,
+    ) -> Task:
         """
         Cancel a task.
 
         For multi-participant tasks, also batch-cancels all active participations.
+
+        Org-paid tasks (``creator_type=org``): the Org treasury principal
+        (owner / created_by) may cancel so escrow can refund to the Org wallet.
 
         Concurrency (security audit H3): cancel can be issued from many task
         states (OPEN / IN_PROGRESS / SUBMITTED / REJECTED). We capture the
@@ -1663,7 +1705,11 @@ class TaskService:
         """
         task = await self.get_task(task_id)
 
-        if task.creator_id != canceller_id:
+        if task.creator_type == "org":
+            await self._assert_org_treasury_may_cancel(
+                task, canceller_id, canceller_type
+            )
+        elif task.creator_id != canceller_id:
             raise PermissionError("Only the creator can cancel a task")
 
         # Already cancelled? Return early (idempotent).
@@ -1712,7 +1758,7 @@ class TaskService:
             except Exception as e:
                 logger.error("failed_to_cancel_payment", error=str(e))
 
-        # 统一 escrow 退款：human 和 agent 创建者都走 escrow refund
+        # 统一 escrow 退款：human / agent / org 创建者都走 escrow refund
         if self.escrow and task.reward_currency.lower() in PLATFORM_CURRENCIES:
             remaining = task.remaining_budget()
             if remaining > 0:

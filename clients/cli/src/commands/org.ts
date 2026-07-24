@@ -42,6 +42,10 @@ interface PublishedTaskInfo {
   task_id: string;
   title: string;
   status: string;
+  creator_type?: string;
+  creator_id?: string;
+  reward_currency?: string;
+  use_escrow?: boolean;
   subnet_slug?: string | null;
   metadata?: Record<string, unknown>;
 }
@@ -350,7 +354,11 @@ export function orgCommand(): Command {
     .requiredOption('--tags <tags>', 'Required skill tags, comma-separated')
     .option('--deadline <hours>', 'Deadline in hours (default: 48)', '48')
     .option('--reward <amount>', 'Reward amount (default: 0)', '0')
-    .option('--currency <currency>', 'Reward currency', 'ap_points')
+    .option(
+      '--pay-from <source>',
+      'Who pays: agent (default, attribution only) | org (Org wallet + credits escrow)',
+      'agent',
+    )
     .option('--type <type>', 'Task type', 'general')
     .option('--max-participants <n>', 'Max participants', '1')
     .option(
@@ -367,7 +375,7 @@ export function orgCommand(): Command {
         tags: string;
         deadline?: string;
         reward?: string;
-        currency?: string;
+        payFrom?: string;
         type?: string;
         maxParticipants?: string;
         fence?: boolean;
@@ -380,18 +388,12 @@ export function orgCommand(): Command {
           );
           process.exit(1);
         }
+        const payFrom = (opts.payFrom ?? 'agent').toLowerCase();
+        if (payFrom !== 'agent' && payFrom !== 'org') {
+          console.error('--pay-from must be "agent" or "org"');
+          process.exit(1);
+        }
         try {
-          const org = await acnGet<OrgInfo>(`/orgs/${opts.org}`);
-          const fenceSlug =
-            opts.subnet ?? org.fencing?.subnet_id ?? org.subnet_id ?? undefined;
-          const useFence = Boolean(opts.fence || opts.subnet);
-          if (useFence && !fenceSlug) {
-            console.error(
-              `Org ${opts.org} has no fencing.subnet_id; cannot --fence / --subnet.`,
-            );
-            process.exit(1);
-          }
-
           const body: Record<string, unknown> = {
             title: opts.title,
             description: opts.description,
@@ -401,29 +403,35 @@ export function orgCommand(): Command {
               .map((s) => s.trim())
               .filter(Boolean),
             reward: opts.reward ?? '0',
-            reward_currency: opts.currency ?? 'ap_points',
             task_type: opts.type ?? 'general',
             max_participants: parseInt(opts.maxParticipants ?? '1', 10),
-            metadata: {
-              org_id: opts.org,
-              org_publish: true,
-            },
+            pay_from_org: payFrom === 'org',
+            fence: Boolean(opts.fence || opts.subnet),
           };
-          if (useFence && fenceSlug) {
-            body.subnet_slug = fenceSlug;
+          if (opts.subnet) {
+            body.subnet_slug = opts.subnet;
           }
 
-          const task = await acnPost<PublishedTaskInfo>('/tasks/agent/create', body);
+          const task = await acnPost<PublishedTaskInfo>(
+            `/orgs/${opts.org}/publish-task`,
+            body,
+          );
           const lines = [
-            'Task published for Org (Task Pool — not Org work)',
+            payFrom === 'org'
+              ? 'Task published — Org-paid (credits escrow when reward > 0)'
+              : 'Task published for Org (Task Pool — not Org work)',
             `  Task ID  : ${task.task_id}`,
             `  Org      : ${opts.org}`,
+            `  Pay from : ${payFrom}`,
+            `  Creator  : ${task.creator_type}/${task.creator_id}`,
             `  Status   : ${task.status}`,
             `  Title    : ${task.title}`,
+            `  Currency : ${task.reward_currency}`,
+            `  Escrow   : ${String(task.use_escrow ?? false)}`,
             `  Subnet   : ${task.subnet_slug ?? '(network / unscoped)'}`,
             `  metadata : org_id=${String(task.metadata?.org_id ?? opts.org)} org_publish=${String(task.metadata?.org_publish ?? true)}`,
           ];
-          if (useFence) {
+          if (body.fence) {
             lines.push(
               '  Note     : fenced — task.* may hit the Org harness webhook',
             );

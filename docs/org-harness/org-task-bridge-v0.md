@@ -141,10 +141,26 @@ Smoke: [`scripts/smoke_org_publish_task.sh`](../../scripts/smoke_org_publish_tas
 
 ---
 
+## Org-paid publish (org-wallet-v0)
+
+```bash
+acn org publish-task --org org_… -t "…" -d "…" --tags review \
+  --pay-from org --reward 100
+```
+
+- API: `POST /orgs/{org_id}/publish-task` with `pay_from_org=true`
+- Forces `creator_type=org`, `credits`, and escrow when reward > 0
+- Requires Org treasury governance (owner / created_by)
+- Default `--pay-from agent` stays attribution-only (unchanged money path)
+
+See [org-wallet-v0.md](./org-wallet-v0.md).
+
+---
+
 ## Later (explicitly deferred)
 
 - Auto-receive on `task.*`
-- Server: require Org governor when `metadata.org_id` is set on create
+- Server: require Org governor when `metadata.org_id` is set on attribution-only create
 - List/filter Tasks by `org_id`
 - Bidirectional status sync
 - P2b: `plugins.work=task_pool`

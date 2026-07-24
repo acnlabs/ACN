@@ -959,6 +959,18 @@ async def create_task(
         # Internal/dev: allow X-Creator-Id override
         token_owner = creator_id_header
 
+    # Guard B (org-wallet-v0): Org-paid tasks only via POST /orgs/{id}/publish-task.
+    if creator_type_header == "org":
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            message=(
+                "creator_type=org is not allowed on generic task create; "
+                "use POST /orgs/{org_id}/publish-task with pay_from_org=true"
+            ),
+            details={"reason": "org_paid_requires_org_publish"},
+        )
+
     # ACL V6 Scope B — subnet membership gate on creation.
     # If the caller specifies a subnet_id, they must be a member of that subnet.
     # internal / admin callers are exempt (they act on behalf of others).
@@ -1286,13 +1298,23 @@ async def cancel_task(
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
-    """Cancel a task (only creator can cancel)"""
-    canceller_id, _, _ = _resolve_actor(payload, request)
+    """Cancel a task (creator; or Org treasury for creator_type=org)."""
+    canceller_id, _, actor_type = _resolve_actor(payload, request)
+    auth_type = payload.get("type", "jwt")
+    if auth_type == "agent":
+        canceller_type: str | None = "agent"
+    elif auth_type in ("jwt", "user", "human"):
+        canceller_type = "human"
+    elif actor_type in ("human", "agent"):
+        canceller_type = actor_type
+    else:
+        canceller_type = None
 
     try:
         task = await task_service.cancel_task(
             task_id=task_id,
             canceller_id=canceller_id,
+            canceller_type=canceller_type,  # type: ignore[arg-type]
         )
         expose = _caller_can_see_submission(task, canceller_id, payload)
         return _task_to_response(task, expose_submission=expose)

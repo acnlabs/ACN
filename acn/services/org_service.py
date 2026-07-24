@@ -115,6 +115,22 @@ class OrgService:
             return org.owner.subject == caller_sub
         return False
 
+    @staticmethod
+    def treasury_subject(org: Org) -> tuple[str, str]:
+        """Return ``(kind, subject)`` for Org wallet withdraw/topup (org-wallet-v0 D5)."""
+        if org.owner.kind != "none" and org.owner.subject:
+            return org.owner.kind, org.owner.subject
+        return org.created_by.kind, org.created_by.subject
+
+    def assert_treasury_principal(
+        self,
+        org: Org,
+        caller_type: CallerType,
+        caller_sub: str,
+    ) -> None:
+        """v0: only owner / created_by may authorize Org-paid debits."""
+        self._require_governance(org, caller_type, caller_sub)
+
     def _require_governance(
         self,
         org: Org,

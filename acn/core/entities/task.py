@@ -215,7 +215,7 @@ class Task:
     task_id: str
 
     # Creator info
-    creator_type: str  # "human" or "agent"
+    creator_type: str  # "human" | "agent" | "org"
     creator_id: str
     creator_name: str
 

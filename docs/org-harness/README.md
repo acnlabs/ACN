@@ -14,6 +14,7 @@
 |---|---|
 | **[quickstart-org-paperclip.md](./quickstart-org-paperclip.md)** | **对内闭环：Org work ↔ Paperclip（hosted / 本地 e2e）** |
 | **[org-task-bridge-v0.md](./org-task-bridge-v0.md)** | **对外发布 + 导入：Org ↔ Task Pool（≠ P2b）** |
+| **[org-wallet-v0.md](./org-wallet-v0.md)** | **Org 钱包（decisions accepted）：`WalletType.ORG` + Org-paid publish** |
 
 ## 主文档
 
@@ -52,4 +53,5 @@ L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Ke
 - **试用入口：** [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)。  
 - **对外发布 / 导入（v0）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)（`publish-task` / `import-task`；**不是** P2b）。  
 - **按需：** P2b（`plugins.work=task_pool`）；自动 receive；按 `org_id` 列表。  
+- **经济主体（draft）：** [org-wallet-v0.md](./org-wallet-v0.md) — 确认决策清单后再实现。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主。
