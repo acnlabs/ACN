@@ -229,7 +229,7 @@ class OrgService:
             logger.warning(
                 "org_platform_webhook_failed",
                 org_id=org.org_id,
-                event=event.value,
+                webhook_event=event.value,
                 error=str(e),
             )
 
