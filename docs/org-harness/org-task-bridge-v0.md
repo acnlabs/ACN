@@ -135,8 +135,9 @@ Smoke: [`scripts/smoke_org_publish_task.sh`](../../scripts/smoke_org_publish_tas
 ## Paperclip / Patterns
 
 - Inward Issue ↔ Org work: [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)
-- Plugin ≥ **0.3.1** issue **ACN** tab: **Import ACN task** / **Publish to ACN
-  network** (explicit actions; default Issue sync stays Org work only).
+- Plugin ≥ **0.3.2** issue **ACN** tab: **Import ACN task** / **Publish to ACN
+  network** (explicit actions; default Issue sync stays Org work only), plus
+  **Pay from Org wallet** (+ reward) for Org-paid publish.
   Repo: [`paperclip-acn-plugin`](https://github.com/acnlabs/paperclip-acn-plugin).
 
 ---
@@ -152,8 +153,11 @@ acn org publish-task --org org_… -t "…" -d "…" --tags review \
 - Forces `creator_type=org`, `credits`, and escrow when reward > 0
 - Requires Org treasury governance (owner / created_by)
 - Default `--pay-from agent` stays attribution-only (unchanged money path)
+- Paperclip ≥ **0.3.2**: Issue ACN tab checkbox **Pay from Org wallet**
+  (fund via Backend `/api/org-wallets/*`; plugin does not topup)
 
-See [org-wallet-v0.md](./org-wallet-v0.md).
+See [org-wallet-v0.md](./org-wallet-v0.md). Soft-validate checklist:
+[quickstart-org-paperclip.md § Org-paid](./quickstart-org-paperclip.md#org-paid-soft-validate).
 
 ---
 
