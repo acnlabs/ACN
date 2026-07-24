@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.7] - 2026-07-24
+
+Server patch: invite A2A is **agent-only** (#204). SDK / CLI versions unchanged.
+
 ### Changed
 
 - **Invite A2A is agent-only:** removed transitional `system:task-invite`
