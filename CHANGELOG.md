@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.6] - 2026-07-24
+
+Server release: **Task invite → A2A push** (#198) plus docs for sender roles
+(#199). SDK / CLI package versions unchanged (publish job skips already-published
+artifacts).
+
 ### Added
 
 - **Task invite → A2A push:** `POST /tasks/{id}/invite` (and
@@ -24,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 
+- **Task invite sender roles** — `docs/features/task-invite-sender.md`
+  (vertical cell vs official `task-broker` vs transitional `system:`).
 - **Org ↔ Task Pool bridge v0** —
   `docs/org-harness/org-task-bridge-v0.md` (publish + import; link on
   `task.metadata`; ≠ P2b). Skill **0.17.9**. Smoke:
@@ -43,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not Org membership. Skill **0.17.6** / API.md updated.
 - **Org publish smoke:** send required `reward` on `POST /tasks/agent/create`.
 
-### Added
+### Added (Org Harness — already on main)
 
 - **CLI `acn org publish-task`** (+ `acn tasks create --org-id`) — attribute a
   Task Pool task to an Org; default unscoped network publish; optional
@@ -78,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Loop tick lists open work via the Port. See
   `docs/org-harness/phase2-work-port-v0.md`.
 
-### Docs
+### Docs (Org Harness — already on main)
 
 - **Org Harness design v0 + ADR-0014** — `docs/org-harness/design-v0.md`: ACN
   module (optional Owner none/human/agent, agent members), Kernel + Ports,
