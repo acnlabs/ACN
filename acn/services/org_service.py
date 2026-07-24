@@ -173,7 +173,7 @@ class OrgService:
                 "org_webhook_skip_no_subnet",
                 org_id=org.org_id,
                 subnet_id=org.subnet_id,
-                event=event.value,
+                webhook_event=event.value,
             )
             return
         if not subnet.harness_url:
@@ -191,8 +191,46 @@ class OrgService:
             logger.warning(
                 "org_webhook_delivery_failed",
                 org_id=org.org_id,
-                event=event.value,
+                webhook_event=event.value,
                 exc_info=True,
+            )
+
+    async def _emit_platform(
+        self,
+        org: Org,
+        event: WebhookEventType,
+        data: dict[str, Any],
+    ) -> None:
+        """Notify AgentPlanet Backend (org-wallet-v0 S5).
+
+        Best-effort via durable outbox — never rolls back Org mutations.
+        Harness delivery stays on ``_emit`` (subnet URL); this targets the
+        configured platform ``WEBHOOK_URL``.
+        """
+        if not self.webhook_service:
+            return
+        kind, subject = self.treasury_subject(org)
+        payload = {
+            "org_id": org.org_id,
+            "owner": org.owner.to_dict(),
+            "created_by": org.created_by.to_dict(),
+            "treasury_subject": {"kind": kind, "subject": subject},
+            "owner_changed_at": org.updated_at.isoformat() if org.updated_at else None,
+            **data,
+        }
+        try:
+            await self.webhook_service.send_event(
+                event=event,
+                task_id=org.org_id,
+                data=payload,
+                outbox=True,
+            )
+        except Exception as e:  # noqa: BLE001 — must not break Org ops
+            logger.warning(
+                "org_platform_webhook_failed",
+                org_id=org.org_id,
+                webhook_event=event.value,
+                error=str(e),
             )
 
     # ------------------------------------------------------------------
@@ -884,6 +922,11 @@ class OrgService:
             WebhookEventType.ORG_OWNER_CHANGED,
             {"owner": org.owner.to_dict(), "action": "claim"},
         )
+        await self._emit_platform(
+            org,
+            WebhookEventType.ORG_OWNER_CHANGED,
+            {"action": "claim"},
+        )
         return org
 
     async def transfer(
@@ -939,6 +982,11 @@ class OrgService:
             WebhookEventType.ORG_OWNER_CHANGED,
             {"owner": org.owner.to_dict(), "action": "transfer"},
         )
+        await self._emit_platform(
+            org,
+            WebhookEventType.ORG_OWNER_CHANGED,
+            {"action": "transfer"},
+        )
         return org
 
     async def release(
@@ -961,6 +1009,11 @@ class OrgService:
             org,
             WebhookEventType.ORG_OWNER_CHANGED,
             {"owner": {"kind": "none"}, "action": "release"},
+        )
+        await self._emit_platform(
+            org,
+            WebhookEventType.ORG_OWNER_CHANGED,
+            {"action": "release"},
         )
         return org
 
@@ -986,6 +1039,7 @@ class OrgService:
         org.updated_at = datetime.now(UTC)
         await self.repository.save_org(org)
         await self._emit(org, WebhookEventType.ORG_DISSOLVED, {})
+        await self._emit_platform(org, WebhookEventType.ORG_DISSOLVED, {})
         return org
 
     # ------------------------------------------------------------------
