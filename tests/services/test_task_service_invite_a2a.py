@@ -131,3 +131,32 @@ class TestInviteAgentA2APush:
         assert "worker-001" in result.invited_agent_ids
         mock_repo.save.assert_awaited_once()
         assert service.message_service is None
+
+    async def test_human_inviter_sends_as_system_task_invite(
+        self, mock_repo, mock_message_service
+    ):
+        """Human creators are not in the agent table — use system: sender."""
+        task = _make_task(creator_type="human", creator_id="human-user-1")
+        mock_repo.find_by_id = AsyncMock(return_value=task)
+        mock_repo.save = AsyncMock()
+
+        agent_repo = AsyncMock()
+        agent_repo.find_by_id = AsyncMock(return_value=None)
+
+        service = TaskService(
+            repository=mock_repo,
+            message_service=mock_message_service,
+            agent_repository=agent_repo,
+        )
+
+        result = await service.invite_agent(
+            task_id=task.task_id,
+            inviter_id="human-user-1",
+            invitee_id="worker-001",
+        )
+
+        assert "worker-001" in result.invited_agent_ids
+        call = mock_message_service.send_message.await_args
+        assert call.kwargs["from_agent_id"] == "system:task-invite"
+        assert call.kwargs["message"].metadata["from_agent"] == "human-user-1"
+        agent_repo.find_by_id.assert_awaited_once_with("human-user-1")

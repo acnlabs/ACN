@@ -34,6 +34,12 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
+# Reserved sender when the task creator is not a registered agent
+# (e.g. human Studio user). ``MessageService.send_message`` skips the
+# agent-table lookup for ``system:<slug>``; the real inviter stays in
+# message metadata ``from_agent``.
+_TASK_INVITE_SYSTEM_SENDER = "system:task-invite"
+
 # Namespace for ``event_id = uuid5(NS, f"{task_id}:{trigger}")``. Using a
 # fixed URL-based namespace means the same (task_id, trigger) pair always
 # resolves to the same event_id across processes/replicas — the outbox
@@ -564,6 +570,20 @@ class TaskService:
         )
         return task
 
+    async def _resolve_invite_sender(self, inviter_id: str) -> str:
+        """Return ``from_agent_id`` for the invite A2A push.
+
+        Registered agents send as themselves. Humans (or any inviter not
+        in the agent registry) send as ``system:task-invite`` so
+        ``MessageService`` does not reject the push with AgentNotFound.
+        """
+        if self.agent_repository is None:
+            return inviter_id
+        sender = await self.agent_repository.find_by_id(inviter_id)
+        if sender:
+            return inviter_id
+        return _TASK_INVITE_SYSTEM_SENDER
+
     async def _push_invite_a2a(
         self,
         task: Task,
@@ -575,6 +595,7 @@ class TaskService:
         if not self.message_service:
             return
 
+        from_agent_id = await self._resolve_invite_sender(inviter_id)
         payload = {
             "task_id": task.task_id,
             "title": task.title,
@@ -593,6 +614,7 @@ class TaskService:
                 "type": "task_request",
                 "message_type": "task_request",
                 "title": task.title,
+                # Real inviter (may be a human id); routing sender may be system.
                 "from_agent": inviter_id,
             },
             task_id=task.task_id,
@@ -600,7 +622,7 @@ class TaskService:
 
         try:
             await self.message_service.send_message(
-                from_agent_id=inviter_id,
+                from_agent_id=from_agent_id,
                 to_agent_id=invitee_id,
                 message=message,
                 message_type="task_request",
@@ -610,6 +632,7 @@ class TaskService:
                 "task_invite_a2a_push_failed",
                 task_id=task.task_id,
                 inviter_id=inviter_id,
+                from_agent_id=from_agent_id,
                 invitee_id=invitee_id,
                 error=str(e),
             )
