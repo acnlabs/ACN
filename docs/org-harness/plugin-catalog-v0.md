@@ -39,6 +39,25 @@
 
 ---
 
+## 自定义规则（硬约定）
+
+> **自定义优先走外部适配；`plugins.*` 仅官方 / 进程内实现。**
+
+| 路径 | 谁用 | v0 事实 |
+|---|---|---|
+| **`org.plugins.*`（进程内 registry）** | ACN 内置 Builtin | 白名单 id only（今日：`builtin_work` / `heartbeat` / `noop`）。任意第三方字符串 → 拒绝。完整第三方进程内插件 → **Phase 3**（宿主 + 信任模型）之后才谈。 |
+| **外部 Pattern / 侧车** | 用户与社区的主自定义路径 | 消费 Org / work / harness 事件（见 [adapter spec](./org-pattern-adapter-spec-v0.md)），或按 `org_id` 挂 Memory/MCP 侧车。**不**要求改 `plugins.work=…`。Paperclip 即此路。 |
+
+因此：
+
+- 「我想换一套组织编排」→ 写/装 **外部 Pattern**，Kernel 仍用默认 `builtin_work`。  
+- 「我想接 Mem0」→ **侧车** + 文档契约；等标成 `adapter-planned` 落地前，不必也不该伪造 `plugins.memory=mem0`（今日会失败）。  
+- 「我想把自研代码热加载进 ACN」→ **非目标**（见文末）；请走外部进程。
+
+Port 划分（Work / Loop / Memory / …）是**问题轴**，充分用于架构对话；**不是**「每个轴今天都有可选货架」。v0 必要落地仍是 Kernel + Work + 薄 Loop + Events；其余槽位先占位、再官方筛选适配。
+
+---
+
 ## 状态图例
 
 | 状态 | 含义 |
@@ -131,9 +150,10 @@
 ## 非目标
 
 - npm/pypi「插件市场」UI  
-- 热加载任意第三方代码进 ACN 进程  
+- 热加载任意第三方代码进 ACN 进程（自定义走外部 Pattern / 侧车）  
 - 把 Paperclip / Mem0 重新实现一遍  
-- 在 `plugins.work` 里塞「对外赏金」（那是 Task bridge）
+- 在 `plugins.work` 里塞「对外赏金」（那是 Task bridge）  
+- 开放任意 `plugins.*` 字符串当作「已安装插件」
 
 ---
 
@@ -142,3 +162,4 @@
 | 日期 | 变更 |
 |---|---|
 | 2026-07-25 | 初稿：冷启动短名单 + 创建 Org 选择表 |
+| 2026-07-25 | 硬约定：自定义优先外部适配；`plugins.*` 仅官方/进程内 |
