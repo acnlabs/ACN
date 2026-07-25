@@ -152,9 +152,10 @@ create/update work. Non-governance callers get **403**
 `error_code=ownership_mismatch` with `details.reason` of `created_by_only` or
 `ownership_mismatch` (and a prose `message`).
 
-`GET /orgs/{id}/wallet` uses the same treasury principal as Org-paid publish.
-Requires ACN `BACKEND_URL` + `INTERNAL_API_TOKEN`. Plugin catalog / custom
-rule: [`plugin-catalog-v0.md`](../../../docs/org-harness/plugin-catalog-v0.md).
+`GET /orgs/{id}/wallet` uses the same **caller** treasury principal as Org-paid
+publish (API Key / JWT). ACN server-side proxy to Backend also needs
+`BACKEND_URL` + `INTERNAL_API_TOKEN` (not client credentials). Plugin catalog /
+custom rule: [`plugin-catalog-v0.md`](../../../docs/org-harness/plugin-catalog-v0.md).
 
 Harness webhook registration remains `PATCH /subnets/{id}/harness` (event sink).
 On `org.*` deliveries, envelope field `task_id` carries **`org_id`**.

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Agent skill 0.17.13** — Clarify Org-paid Backend topup auth (human JWT vs
+  `topup-internal` + `X-Internal-Token`); note `INTERNAL_API_TOKEN` is
+  ACN server-side for `GET /orgs/{id}/wallet`, not caller credentials.
 - **Agent skill 0.17.12** — Org Harness closeout: wallet `GET /orgs/{id}/wallet`,
   Org-paid fund path, plugin-catalog + hard rule (custom = external
   Pattern/sidecar; `plugins.*` allowlist only). API.md org table synced.
