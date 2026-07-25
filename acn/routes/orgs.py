@@ -856,6 +856,50 @@ async def publish_org_task(
     return _task_to_response(task, expose_submission=True)
 
 
+@router.get("/{org_id}/wallet")
+@limiter.limit("60/minute")
+async def get_org_wallet(
+    request: Request,
+    org_id: OrgIdPath,
+    payload: dict = OrgAuthDep,
+    org_service: OrgService = Depends(get_org_service),
+):
+    """Read Org wallet summary via Backend (org-wallet-v0 S6).
+
+    Treasury / governance only (same principal as Org-paid publish).
+    Lazy wallets that do not exist yet return ``exists=false`` and
+    ``balance=0`` (not 404). Requires ``BACKEND_URL`` + ``INTERNAL_API_TOKEN``.
+    """
+    caller_type, caller_sub = _caller(payload)
+    try:
+        org = await org_service.get_org(org_id)
+        org_service.assert_treasury_principal(org, caller_type, caller_sub)
+    except OrgNotFoundError as e:
+        raise ACNHTTPError(
+            ErrorCode.ORG_NOT_FOUND, 404, details={"org_id": org_id}
+        ) from e
+    except OrgPermissionError as e:
+        raise _map_permission(e, org_id) from e
+
+    settings = get_settings()
+    if not settings.backend_url:
+        raise ACNHTTPError(
+            ErrorCode.INTERNAL_SERVER_ERROR,
+            503,
+            message="BACKEND_URL is not configured",
+            details={"org_id": org_id, "reason": "backend_unconfigured"},
+        )
+
+    from ..services.wallet_client import WalletClient
+
+    client = WalletClient(
+        backend_url=settings.backend_url,
+        internal_token=settings.internal_api_token,
+    )
+    summary = await client.get_org_wallet(org_id)
+    return summary.model_dump()
+
+
 @router.post("/{org_id}/work/import-task")
 @limiter.limit("60/minute")
 async def import_work_from_task(

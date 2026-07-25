@@ -178,11 +178,14 @@ Escrow lock/release/refund: existing Labs escrow v2 with `creator_type=org`
 
 ### Org Harness Kernel
 
-No balance column on `orgs`. Optional read-only:
+No balance column on `orgs`. Read-only proxy (**S6**):
 
 ```http
-GET /api/v1/orgs/{org_id}/wallet   # proxy or link to Backend wallet summary
+GET /api/v1/orgs/{org_id}/wallet   # treasury-gated; Backend summary (exists/balance/status)
 ```
+
+Requires ACN `BACKEND_URL` + `INTERNAL_API_TOKEN`. Missing wallet →
+`exists=false`, `balance=0` (not 404).
 
 ---
 
@@ -210,7 +213,8 @@ Emit via existing outbox / webhook style used for agent wallet where possible.
 | **S4** | Paperclip Issue ACN tab **Pay from Org wallet** (thin; fund via Backend) | S3 | done — `@acnlabs/paperclip-plugin-acn@0.3.2` |
 | **S4b** | Paperclip inbound without public URL (poll fallback) | S4 | done — `@acnlabs/paperclip-plugin-acn@0.3.3` |
 | **S5** | Ownership sync (`owner_id` on claim/transfer/release) + dissolve freeze | S1 | done — CN soft-val 2026-07-24 |
-| **S6** | Paperclip balance/topup UX + optional `GET /orgs/{id}/wallet` proxy | S5 | next |
+| **S6** | `GET /orgs/{id}/wallet` proxy + Paperclip balance display | S5 | in progress |
+| **S6b** | Paperclip / ACN topup UX (optional; external fund still OK) | S6 | next |
 
 Soft-validate on a Paperclip instance:
 [quickstart-org-paperclip.md § Org-paid](./quickstart-org-paperclip.md#org-paid-soft-validate)
