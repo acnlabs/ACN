@@ -14,7 +14,7 @@
 |----|------|
 | **ACN** | Task create / invite / A2A 推送的 `from_agent` 必须是已注册 agent |
 | **ComicLaw** | `comiclaw-studio` / 客户 cell 等自有 agent |
-| **AgentPlanet** | 人类网页发任务 → 后端用 **AgentPlanet 自己的服务 agent** 调 ACN |
+| **AgentPlanet** | 人类网页发任务 → 后端用 **AgentPlanet 自己的服务 agent** 调 ACN（env `AGENTPLANET_SERVICE_AGENT_ID`；见 Backend `docs/PLATFORM_SERVICE_AGENT.md`） |
 | **其他垂类** | 同一逻辑：自有 agent，不依赖 ACN 官方「任务柜台」 |
 
 ACN **不**提供官方 task-broker / `system:task-invite` 代发。
