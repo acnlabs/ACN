@@ -86,7 +86,7 @@ Port 划分（Work / Loop / Memory / …）是**问题轴**，充分用于架构
 |---|---|---|
 | **`heartbeat`** | **shipped** | 默认薄 tick（`POST …/loop/tick`）。别名 `thin` → `heartbeat`。 |
 | Paperclip / harness 唤醒 | **shipped**（外部） | Pattern 或 subnet harness 收 `org.*` 后驱动成员 L1；不必换 loop id。 |
-| ClawTeam / 自定义巡检 | **community-welcome** | 适合当 Loop 适配器；Org 身份仍在 ACN。 |
+| ClawTeam / 自定义巡检 | **adapter-planned**（选型） | 外部侧车，非 `plugins.loop=*`；见 [clawteam-loop-adapter-poc-v0.md](./clawteam-loop-adapter-poc-v0.md)。 |
 
 ### 3. Memory — `IOrgMemory`（`plugins.memory`）
 
