@@ -135,7 +135,7 @@ Smoke: [`scripts/smoke_org_publish_task.sh`](../../scripts/smoke_org_publish_tas
 ## Paperclip / Patterns
 
 - Inward Issue ↔ Org work: [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)
-- Plugin ≥ **0.3.3** issue **ACN** tab: **Import ACN task** / **Publish to ACN
+- Plugin ≥ **0.3.5** issue **ACN** tab: **Import ACN task** / **Publish to ACN
   network** (explicit actions; default Issue sync stays Org work only), plus
   **Pay from Org wallet** (+ reward) for Org-paid publish.
   Local Paperclip + hosted ACN: inbound uses **periodic poll** by default
@@ -155,7 +155,8 @@ acn org publish-task --org org_… -t "…" -d "…" --tags review \
 - Forces `creator_type=org`, `credits`, and escrow when reward > 0
 - Requires Org treasury governance (owner / created_by)
 - Default `--pay-from agent` stays attribution-only (unchanged money path)
-- Paperclip ≥ **0.3.3**: Issue ACN tab checkbox **Pay from Org wallet**
+- Paperclip ≥ **0.3.5**: Issue ACN tab checkbox **Pay from Org wallet**
+  (shows Org Credits; fund via Backend topup — see quickstart)
   (fund via Backend `/api/org-wallets/*`; plugin does not topup);
   inbound poll when no public webhook URL
 

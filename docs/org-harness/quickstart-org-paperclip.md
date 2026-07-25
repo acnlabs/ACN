@@ -39,7 +39,7 @@
 |----|------|
 | ACN | Hosted：`https://api.acnlabs.dev`（CN：`https://acn.acnlabs.cn`）或本地 `:9000` |
 | Paperclip | 自托管，**plugin worker 已开** |
-| 插件 | `@acnlabs/paperclip-plugin-acn` **≥ 0.3.4**（Org-paid + 余额显示 + 本地 poll 入站） |
+| 插件 | `@acnlabs/paperclip-plugin-acn` **≥ 0.3.5**（Org-paid + 余额 + 充值指引 + poll 入站） |
 | 凭证 | 一把有写权限的 agent API key（`acn_…`）——它将成为 Org 的 **`created_by`（治理方）** |
 | HMAC | `openssl rand -hex 32`，两边配置同一 secret |
 
@@ -191,7 +191,7 @@ Paperclip **可以换成**其他 Pattern：只要会调 `/orgs/*/work*` 并收 s
 
 ## Org-paid soft-validate
 
-前置：插件 **≥ 0.3.4**；Org 已绑定；Backend 可访问
+前置：插件 **≥ 0.3.5**；Org 已绑定；Backend 可访问
 （CN：`https://api.acnlabs.cn` · 全球：你的 Backend 基址）。
 
 **插件内不做 topup**（有意）：先充钱，再在 Issue ACN 页签勾选

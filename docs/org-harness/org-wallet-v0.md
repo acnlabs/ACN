@@ -214,11 +214,11 @@ Emit via existing outbox / webhook style used for agent wallet where possible.
 | **S4b** | Paperclip inbound without public URL (poll fallback) | S4 | done — `@acnlabs/paperclip-plugin-acn@0.3.3` |
 | **S5** | Ownership sync (`owner_id` on claim/transfer/release) + dissolve freeze | S1 | done — CN soft-val 2026-07-24 |
 | **S6** | `GET /orgs/{id}/wallet` proxy + Paperclip balance display | S5 | done — `@acnlabs/paperclip-plugin-acn@0.3.4` |
-| **S6b** | Paperclip / ACN topup UX (optional; external fund still OK) | S6 | next |
+| **S6b** | Paperclip / ACN topup UX | S6 | **deferred** — fund via Backend; plugin ≥ **0.3.5** shows path |
 
 Soft-validate on a Paperclip instance:
 [quickstart-org-paperclip.md § Org-paid](./quickstart-org-paperclip.md#org-paid-soft-validate)
-(plugin ≥ **0.3.3**; local inbound via poll).
+(plugin ≥ **0.3.5**; local inbound via poll).
 Live API smoke (no UI):
 [`scripts/smoke_org_wallet.sh`](../../scripts/smoke_org_wallet.sh) (Org-paid publish/refund);
 [`scripts/smoke_org_wallet_s5.sh`](../../scripts/smoke_org_wallet_s5.sh) (claim/transfer/release/dissolve → Backend wallet).
