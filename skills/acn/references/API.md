@@ -142,12 +142,19 @@ Task Pool mode. See [`docs/org-harness/`](../../../docs/org-harness/README.md).
 | POST | `/orgs/{id}/work` | API Key / JWT | Create work (**governance** only — not “any member”) |
 | PATCH | `/orgs/{id}/work/{work_id}` | API Key / JWT | Update work (**governance** only) |
 | POST | `/orgs/{id}/loop/tick` | API Key / JWT | Thin Loop tick → `org.loop_tick` webhook |
+| GET | `/orgs/{id}/wallet` | API Key / JWT | Org wallet summary via Backend (treasury/governance; missing → `exists=false`, `balance=0`) |
+| POST | `/orgs/{id}/publish-task` | API Key / JWT | Publish network Task (`pay_from_org` = Org-paid; ≠ Org work; ≠ P2b) |
+| POST | `/orgs/{id}/work/import-task` | API Key / JWT | Import Task Pool task as Org work (**governance**) |
 
 **Governance** = unclaimed Org (`owner.kind=none`) → only `created_by`; claimed
 Org → only `owner`. Org **membership** (worker/manager) does **not** grant
 create/update work. Non-governance callers get **403**
 `error_code=ownership_mismatch` with `details.reason` of `created_by_only` or
 `ownership_mismatch` (and a prose `message`).
+
+`GET /orgs/{id}/wallet` uses the same treasury principal as Org-paid publish.
+Requires ACN `BACKEND_URL` + `INTERNAL_API_TOKEN`. Plugin catalog / custom
+rule: [`plugin-catalog-v0.md`](../../../docs/org-harness/plugin-catalog-v0.md).
 
 Harness webhook registration remains `PATCH /subnets/{id}/harness` (event sink).
 On `org.*` deliveries, envelope field `task_id` carries **`org_id`**.

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent skill 0.17.12** — Org Harness closeout: wallet `GET /orgs/{id}/wallet`,
+  Org-paid fund path, plugin-catalog + hard rule (custom = external
+  Pattern/sidecar; `plugins.*` allowlist only). API.md org table synced.
+
 ## [0.15.7] - 2026-07-24
 
 Server patch: invite A2A is **agent-only** (#204). SDK / CLI versions unchanged.
