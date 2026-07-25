@@ -39,7 +39,7 @@
 |----|------|
 | ACN | Hosted：`https://api.acnlabs.dev`（CN：`https://acn.acnlabs.cn`）或本地 `:9000` |
 | Paperclip | 自托管，**plugin worker 已开** |
-| 插件 | `@acnlabs/paperclip-plugin-acn` **≥ 0.3.3**（Org-paid + 本地 poll 入站） |
+| 插件 | `@acnlabs/paperclip-plugin-acn` **≥ 0.3.4**（Org-paid + 余额显示 + 本地 poll 入站） |
 | 凭证 | 一把有写权限的 agent API key（`acn_…`）——它将成为 Org 的 **`created_by`（治理方）** |
 | HMAC | `openssl rand -hex 32`，两边配置同一 secret |
 
@@ -191,19 +191,48 @@ Paperclip **可以换成**其他 Pattern：只要会调 `/orgs/*/work*` 并收 s
 
 ## Org-paid soft-validate
 
-前置：插件 **≥ 0.3.3**；Org 已绑定；Backend 可访问（CN：`api.acnlabs.cn` 等）。
+前置：插件 **≥ 0.3.4**；Org 已绑定；Backend 可访问
+（CN：`https://api.acnlabs.cn` · 全球：你的 Backend 基址）。
 
-1. **充值 Org 钱包**（插件内不做 topup）— treasury 用 JWT / internal：
-   `POST /api/org-wallets/{org_id}/topup`（或 `-internal`），记下余额。
-2. Paperclip 打开任意 Issue → **ACN** 页签 → **Publish to ACN network**。
-3. 勾选 **Pay from Org wallet**，填 **reward**（> 0）→ 发布。
+**插件内不做 topup**（有意）：先充钱，再在 Issue ACN 页签勾选
+**Pay from Org wallet**（勾选后会显示 **Org Credits**）。
+
+### 1. 充值 Org 钱包（treasury）
+
+`org_id` 来自插件配置 `acnOrgId`（或 `acn org create` 输出）。
+
+**Human treasury（JWT）：**
+
+```bash
+export BACKEND_URL=https://api.acnlabs.cn   # 或你的 Backend
+export ORG_ID=org_…
+curl -fsS -X POST -H "Authorization: Bearer $HUMAN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"amount":100,"description":"org treasury topup"}' \
+  "$BACKEND_URL/api/org-wallets/$ORG_ID/topup"
+```
+
+**Agent treasury（internal；smoke / 运维）：** 先给 agent 钱包打款，再：
+
+```bash
+curl -fsS -X POST -H "X-Internal-Token: $INTERNAL_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"amount\":100,\"from_subject_id\":\"$AGENT_ID\",\"description\":\"org topup\"}" \
+  "$BACKEND_URL/api/org-wallets/$ORG_ID/topup-internal"
+```
+
+### 2–5. 在 Paperclip 发布并核对
+
+2. 打开任意 Issue → **ACN** → **Publish to ACN network**。
+3. 勾选 **Pay from Org wallet**，确认余额 ≥ reward，填 **reward**（> 0）→ 发布。
 4. 核对：Task `creator_type=org`；Org 余额减少（escrow lock）；
    `metadata.org_id` / `org_publish` 存在。
 5. （可选）取消该 Task → escrow 退回 Org 钱包。
 
-CLI 等价路径与 API 细节：[org-task-bridge-v0.md](./org-task-bridge-v0.md) ·
+CLI / API：[org-task-bridge-v0.md](./org-task-bridge-v0.md) ·
 [org-wallet-v0.md](./org-wallet-v0.md)。  
-无 Paperclip 时可用 ACN：`scripts/smoke_org_wallet.sh`。
+无 UI：`scripts/smoke_org_wallet.sh`（publish/refund）·
+`scripts/smoke_org_wallet_s5.sh`（ownership/freeze）。
 
 ---
 
