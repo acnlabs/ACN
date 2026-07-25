@@ -7,14 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [0.15.8] - 2026-07-25
 
-- **Agent skill 0.17.13** — Clarify Org-paid Backend topup auth (human JWT vs
-  `topup-internal` + `X-Internal-Token`); note `INTERNAL_API_TOKEN` is
-  ACN server-side for `GET /orgs/{id}/wallet`, not caller credentials.
-- **Agent skill 0.17.12** — Org Harness closeout: wallet `GET /orgs/{id}/wallet`,
-  Org-paid fund path, plugin-catalog + hard rule (custom = external
-  Pattern/sidecar; `plugins.*` allowlist only). API.md org table synced.
+Server patch: Org wallet **S6** soft-val proxy + Org Harness docs/skill closeout.
+SDK / CLI package versions unchanged (publish job skips already-published artifacts).
+
+### Added
+
+- **`GET /api/v1/orgs/{id}/wallet`** — treasury/governance proxy to Backend
+  org-wallet summary (lazy `exists=false`, `balance=0`). Requires ACN
+  `BACKEND_URL` + `INTERNAL_API_TOKEN` server-side. Tests:
+  `tests/routes/test_org_wallet.py`. Smoke: `scripts/smoke_org_wallet_s5.sh`
+  (ownership sync); Org-paid soft-val via existing wallet smokes.
+
+### Docs
+
+- **Plugin catalog v0** — `docs/org-harness/plugin-catalog-v0.md` (Port
+  shortlist; hard rule: custom = external Pattern/sidecar; `plugins.*`
+  allowlist only).
+- **Org wallet v0 closeout** — S0–S6 done; S6b in-plugin topup deferred;
+  quickstart Org-paid topup curls.
+- **Agent skill 0.17.12 / 0.17.13** — wallet GET, fund-path auth clarifications,
+  plugin hard rule; API.md org table synced.
 
 ## [0.15.7] - 2026-07-24
 
