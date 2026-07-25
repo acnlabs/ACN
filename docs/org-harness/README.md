@@ -52,6 +52,6 @@ L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Ke
 - **已完成：** Phase 1 Kernel；Phase 2a（Work Port + `builtin_work`）；P2c（Paperclip Org work）；Org wallet **S0–S5** + Paperclip **0.3.3** poll 入站。  
 - **试用入口：** [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)（本地可不填公网 URL；含 Org-paid 软验）。  
 - **对外发布 / 导入（v0）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)（`publish-task` / `import-task`；**不是** P2b）。  
-- **经济主体：** [org-wallet-v0.md](./org-wallet-v0.md)（S0–S5 done；**S6** balance/topup UX + wallet proxy next）。  
+- **经济主体：** [org-wallet-v0.md](./org-wallet-v0.md)（S0–S6 done；**S6b** optional in-plugin topup next）。  
 - **按需：** P2b；自动 receive；按 `org_id` 列表。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主。

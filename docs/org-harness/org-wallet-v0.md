@@ -1,6 +1,6 @@
 # Org Wallet v0
 
-**Status:** Spec v0 — **decisions accepted**; S0–S5 done (2026-07-24)  
+**Status:** Spec v0 — **decisions accepted**; S0–S6 done (2026-07-25)  
 **Last updated:** 2026-07-24  
 **Audience:** Org governors, Backend wallet owners, ACN Task/escrow
 
@@ -213,7 +213,7 @@ Emit via existing outbox / webhook style used for agent wallet where possible.
 | **S4** | Paperclip Issue ACN tab **Pay from Org wallet** (thin; fund via Backend) | S3 | done — `@acnlabs/paperclip-plugin-acn@0.3.2` |
 | **S4b** | Paperclip inbound without public URL (poll fallback) | S4 | done — `@acnlabs/paperclip-plugin-acn@0.3.3` |
 | **S5** | Ownership sync (`owner_id` on claim/transfer/release) + dissolve freeze | S1 | done — CN soft-val 2026-07-24 |
-| **S6** | `GET /orgs/{id}/wallet` proxy + Paperclip balance display | S5 | in progress |
+| **S6** | `GET /orgs/{id}/wallet` proxy + Paperclip balance display | S5 | done — `@acnlabs/paperclip-plugin-acn@0.3.4` |
 | **S6b** | Paperclip / ACN topup UX (optional; external fund still OK) | S6 | next |
 
 Soft-validate on a Paperclip instance:
