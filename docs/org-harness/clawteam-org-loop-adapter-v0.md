@@ -50,7 +50,7 @@ ACN 内：Kernel + builtin_work + heartbeat + events
 |---|---|---|
 | `OrgWorkItem`（open） | CT task / job | 创建时带 `work_id`；幂等 key = `org_id` + `work_id` |
 | `assignee` / 角色 | worker 选择 | 优先映射 Org 成员 agent；无映射则本机 ephemeral worker（≠ Membership） |
-| work `done` / `failed` | CT 完成/失败 | **仅治理 key** PATCH（v0 API 约束） |
+| work `done` / `cancelled` | CT 完成 / 失败或放弃 | **仅治理 key** PATCH；v0 状态仅 `todo`\|`in_progress`\|`done`\|`cancelled`（无 `failed`） |
 | Org charter / 标题描述 | CT 任务 prompt 前缀 | 只读注入，不在 CT 侧改章程 |
 
 **反模式：**
