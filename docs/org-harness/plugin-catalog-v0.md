@@ -98,7 +98,7 @@ Port 划分（Work / Loop / Knowledge / Memory / …）是**问题轴**，充分
 
 | id / 方向 | 状态 | 说明 |
 |---|---|---|
-| **`git` / 文件侧车**（按 `org_id`） | **examples-shipped（读）· write-planned** | **默认推荐**。agent 主贡献（K4）；今日可读 + wake `kb_refs`。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。 |
+| **`git` / 文件侧车**（按 `org_id`） | **examples-shipped**（读 K1/K2 · 写 K4） | **默认推荐**。`read_kb` + `contribute_kb`；wake `kb_refs`。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。 |
 | **`llm_wiki`**（Karpathy 编译层 + 可选 Obsidian） | **adapter-planned** | 可选第二档；agent 维护 wiki/；须治理，不替代 charter。 |
 | `noop`（进程内） | **plugin-planned**（未接线） | 不要组织知识库。 |
 | 外挂 KB / RAG | **community-welcome** | 成熟栈接入；ACN **不自研**引擎。 |

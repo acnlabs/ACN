@@ -29,8 +29,9 @@
   → 解析 type == acn.org.work_wake（见契约）
   → list work 找到 work_id，确认仍 open 且 **API assignee = 自己**（空 assignee 不干）
   → 同一 `idempotency_key` 只处理一次（`handle_wake.py` 写本地 idem 文件）
-  → 只读拉组织知识：`examples/org-knowledge/read_kb.py`（默认 charter；或信封 `kb_refs` → `--from-json -`）
+  → 拉组织知识：`examples/org-knowledge/read_kb.py`（默认 charter；或信封 `kb_refs`）
   → L1 执行 title/描述要求的活
+  → （可选）贡献可复用结论：`contribute_kb.py --path sop/…`（勿写 charter，除非 Owner）
   → 完成：通知治理方 PATCH done（或 Owner/编排器代关）
   → 放弃：治理 PATCH cancelled
 ```
@@ -97,4 +98,5 @@ v0 不要求编排器自动 `done`（避免未干完误关）。
 | [`run_orchestrator.py`](../../examples/org-orchestrator/run_orchestrator.py) | 编排器侧车 |
 | [`smoke_org_orchestrator.sh`](../../scripts/smoke_org_orchestrator.sh) | 狗粮 A（无成员 listen） |
 | [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) | 组织知识库 / `kb_refs`（可选） |
-| [`examples/org-knowledge/read_kb.py`](../../examples/org-knowledge/read_kb.py) | K1：接活前读 charter/SOP |
+| [`examples/org-knowledge/read_kb.py`](../../examples/org-knowledge/read_kb.py) | 接活前读 charter/SOP |
+| [`examples/org-knowledge/contribute_kb.py`](../../examples/org-knowledge/contribute_kb.py) | K4：干完后贡献 sop/skills/… |

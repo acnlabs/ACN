@@ -1,7 +1,7 @@
-# Org 知识库（外部侧车）— K1 / K2 读路径
+# Org 知识库（外部侧车）— 读（K1/K2）+ 贡献（K4）
 
-按 `org_id` 的**文件系统 / git** 知识树：章程、SOP、playbooks、skills。  
-本目录实现的是**读路径**（冷启动）。产品口径上知识库应由**成员 agent 主贡献**——写路径见 [org-knowledge-base-v0.md](../../docs/org-harness/org-knowledge-base-v0.md) K4，尚未进本 examples。  
+按 `org_id` 的**文件系统 / git** 知识树。  
+**成员 agent 主贡献**：`contribute_kb.py` 写入 `sop|skills|playbooks|wiki|sources`；`charter` 需 `--as-owner`；冲突进 `disputed/`。  
 **不是** ACN Kernel，**不是** `plugins.knowledge`（未接线），**不是** Memory。
 
 | 文档 | 链接 |
@@ -52,13 +52,29 @@ echo '{"kb_refs":[{"uri":"orgkb://org_demo/charter.md"},{"uri":"orgkb://org_demo
   | python3 read_kb.py --org org_demo --from-json -
 ```
 
+## 贡献（K4）
+
+```bash
+# 成员：自动落到 sop/
+python3 contribute_kb.py --org org_demo --from-agent agt_1 \
+  --path sop/learned.md --body '# What we learned\n\n…' --work-id work_…
+
+# charter 仅 Owner
+python3 contribute_kb.py --org org_demo --from-agent agt_owner --as-owner \
+  --path charter.md --body-file ./charter.md
+
+# 冲突（目标已有不同内容）→ disputed/… ；--force 可覆盖
+```
+
+信任：侧车**不**校验 ACN 成员身份；生产上由 runner/编排器保证 `--from-agent` / `--as-owner` 真实。
+
 本地 smoke（无 ACN）：
 
 ```bash
 ./scripts/smoke_org_knowledge.sh
 ```
 
-## 与编排器（K2）
+## 与编排器（K2 读 / K4 写）
 
 - 编排器信封可带可选 `kb_refs[]`（work 字段 / `ORG_KB_REFS_JSON` / `ORG_KB_ATTACH_DEFAULTS=1`）。  
 - `handle_wake.py` 在校验通过后加载 sidecar（`HANDLE_WAKE_SKIP_KB=1` 可关）。
