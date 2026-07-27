@@ -1,10 +1,79 @@
 # Org Harness 方案设计与架构 v0
 
 **Status:** Design v0 — mechanics decided in [ADR-0014](../adr/0014-org-harness-module.md)（Accepted）  
-**Date:** 2026-07-19 · **Narrative sync:** 2026-07-21（Org Graph · Control Loop · Work Graph）  
+**Date:** 2026-07-19 · **Narrative sync:** 2026-07-27（架构导读：Kernel / Ports / 外部 Pattern 分界）  
 **Audience:** ACN / AgentPlanet 产品与工程  
 **Supersedes (naming & ownership):** 本文纠正早期「ACN = Pasture System」「Org 只活在 Paperclip」的表述；Network Core 契约仍见 [api-surface-tiers.md](./api-surface-tiers.md)。  
 **P0/P1 风险收口:** 见 ADR-0014（无 owner 治理、Membership↔subnet、subnet steward、Phase 1 含最小 work、Loop/Work 边界）。
+
+---
+
+## 0. 架构导读（先读这个）
+
+> 口语里的「编排」常把三件事混在一起。本文只认下面这套分层。
+
+### 0.1 Org Harness 是什么
+
+```text
+L1  Agent = Model + Agent Harness（成员自带，不进本模块）
+L2  Org   = N × Agent + Org Harness（± 可选 Owner）
+
+ACN = Network Core（已有） + Org Harness Module（新）
+```
+
+**Org Harness = 固定 Kernel（组织是谁）+ 可插拔 Ports（组织怎么转）。**
+
+### 0.2 模块内三层（叠加，非二选一）
+
+```text
+Org Graph（Kernel，不可换）
+  谁在组织里、Owner、角色、绑哪个 subnet
+
+Control Loop（IOrgLoop Port）
+  组织何时巡检、叫醒谁、收回结果     ← 组织节拍，不是工单形状
+
+Work Graph（IWorkPattern Port）
+  这票活怎么建模、状态怎么走         ← 工单 / DAG / handoff 策略
+
+↓ 再往下是成员自己的 L1（tools / 会话 fan-out），Org Harness 不接管
+```
+
+| 层 | 问题 | 归属 |
+|---|---|---|
+| Org Graph | 组织是谁 | Kernel |
+| Control Loop | 组织怎么打节拍 | `plugins.loop`（默认 `heartbeat`） |
+| Work Graph | 活长什么样 | `plugins.work`（默认 `builtin_work`） |
+
+### 0.3 两种「插法」——勿混货架
+
+| 路径 | 含义 | v0 事实 |
+|---|---|---|
+| **`org.plugins.*`（进程内）** | ACN Builtin 白名单 | 今日仅 `builtin_work` / `heartbeat` / `noop` |
+| **外部 Pattern / 侧车** | 跑在 ACN **外面**，消费 Org API / `org.*` 事件 | **自定义主路径**；Paperclip、[Org 待办执行器](./org-loop-spawn-sidecar-poc-v0.md) 都走这里 |
+
+硬约定见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)：想换运转方式 → 优先外部 Pattern；**不要**伪造 `plugins.loop=clawteam` / `plugins.work=paperclip`（今日会拒绝或语义错误）。
+
+### 0.4 外部集成放哪（常见混淆）
+
+| 东西 | 正确位置 | 不是 |
+|---|---|---|
+| Paperclip | **外部 Pattern**（人看板 ↔ Org work） | 不是 Kernel，不是 `plugins.work=paperclip` |
+| Org 待办执行器 | **外部 Pattern**（本机 poll 待办 → 跑命令 → 回写） | 不是 Loop 槽 Builtin；见 [POC](./org-loop-spawn-sidecar-poc-v0.md) |
+| ClawTeam | **候选**：将来的 Loop **适配器**（[选型](./clawteam-org-loop-adapter-v0.md)），或待办执行器的 `spawnCommand` **配方** | **不是** Org Harness 本体；**不是** 已接线的 `plugins.loop` |
+| OpenHarness / Claude Code | **L1**，成员自带 | 不插进 Org Harness |
+| LangGraph / Swarm / CrewAI | 多挂 **Work 策略**或外部 Pattern | 不替代 Control Loop |
+
+```text
+今日真实形态（Phase 1–2）：
+
+  ACN 内：Kernel + builtin_work + heartbeat + events
+              │
+              │ API / org.* webhook
+              ▼
+  外部可选：Paperclip │ 待办执行器 │（将来）真·Loop/Work 适配器
+```
+
+细节从 §4 总体架构、§5 模块内设计展开；插件短名单见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。
 
 ---
 
@@ -25,7 +94,7 @@ Agent 可以入网、进围栏、互相通信、接任务。但**缺少「组织
 
 ### 1.2 要解决什么
 
-一批已注册 agent 需要**组成一个持续存在的组织**协同工作：有章程、有角色化的 agent 成员、有组织级控制环（Loop），并能换掉具体编排实现（Task Pool / Paperclip / ClawTeam / Swarm…）而不推翻网络层。Owner（人 / agent / 未认领）与 ACN 上 agent 的所有权模型同构——**可选，非必须**。
+一批已注册 agent 需要**组成一个持续存在的组织**协同工作：有章程、有角色化的 agent 成员、有组织级控制环（Loop），并能在**不推翻网络层**的前提下换运转方式（进程内 Builtin 或外部 Pattern：Paperclip / 待办执行器 / 将来的 ClawTeam·Swarm 适配等）。Owner（人 / agent / 未认领）与 ACN 上 agent 的所有权模型同构——**可选，非必须**。
 
 ### 1.3 非目标（v0）
 
@@ -117,7 +186,7 @@ Org:    unclaimed | owned_by human | owned_by agent
 | 层 | 职责 | 典型实现 |
 |---|---|---|
 | L1 Agent Harness | 单 agent loop / tools / memory / sandbox | OpenHarness、Claude Code、Codex |
-| 编排 / Swarm（回合内） | 一票活怎么交班、扇出、拉起 worker | Swarm/Agents SDK、ClawTeam、CrewAI、LangGraph |
+| 编排 / Swarm（回合内） | 一票活怎么交班、扇出、拉起 worker | Swarm/Agents SDK、CrewAI、LangGraph；ClawTeam 也可落此层，**若接 Org 节拍则作外部 Loop 适配（见 §0.4 / §6）** |
 | **Org Harness** | Org 内核 + 组织 Loop + 插件槽 | **ACN 新模块** |
 | Network | 跨宿主身份、围栏、消息、结算 | **ACN Core** |
 
@@ -150,8 +219,8 @@ Membership **不是**「加人产品」：进围栏走既有 subnet admission；
 
 | Port | 问题 | v0 默认 | 可替换示例 |
 |---|---|---|---|
-| **`IWorkPattern`** | 活怎么建模、认领、状态 | **`builtin_work`**（Phase 1 `OrgWorkItem`） | TaskPool（可选）、Paperclip Issues、自研 DAG |
-| **`IOrgLoop`** | 看队列→分派/唤醒→回收 | Heartbeat / 简单 dispatcher | ClawTeam 适配、自定义巡检 |
+| **`IWorkPattern`** | 活怎么建模、认领、状态 | **`builtin_work`**（Phase 1 `OrgWorkItem`） | TaskPool（可选/deferred）；自研 DAG；**Paperclip = 外部 Pattern**（非 `plugins.work`） |
+| **`IOrgLoop`** | 看队列→分派/唤醒→回收 | Heartbeat / 简单 dispatcher | （将来）ClawTeam **Loop 适配器**、自定义巡检；今日自定义走**外部 Pattern** |
 | **`ICapabilityPool`** | 组织能力目录 | 聚合成员 ACN skills（可先内置非插件） | 外挂 MCP catalog |
 | **`IOrgMemory`** | 集体记忆 / SOP | `noop` | Mem0、PG+vector、Skills 包 |
 | **`IPolicyBudget`** | 角色权限、花费 | Kernel 角色枚举 | 审批流、月度硬停 |
@@ -159,6 +228,8 @@ Membership **不是**「加人产品」：进围栏走既有 subnet admission；
 
 **v0 必要实现：** Kernel + `IWorkPattern` + 薄 `IOrgLoop` + `IEventSink`。  
 其余 Port **占位即可**，避免一次做成「小 OpenHarness 复刻」。
+
+> **Port 名 ≠ 货架上已有货。** 「可替换示例」是问题轴上的方向；进程内是否接线见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。Paperclip / 待办执行器走外部，不进 `plugins.*`。
 
 建议后续补：**统一 Plugin 宿主**（发现、按 org 启用、版本、失败隔离），以及 **Skills/SOP 与 Memory 分离**（或明确 SOP 为 Work/Loop 的只读输入）。
 
@@ -186,40 +257,55 @@ Work Graph（IWorkPattern 策略，易变）:
 
 ### 5.5 挂载粒度
 
-按 **Org** 配置插件组合，而非全局唯一：
+按 **Org** 配置插件组合，而非全局唯一。`plugins.*` 仅白名单；Paperclip 等走外部 Pattern（见 §0.3）：
 
 ```text
-Org A → Work=builtin_work  Loop=heartbeat      Memory=noop
-Org B → Work=task_pool     Loop=heartbeat      Memory=noop
-Org C → Work=paperclip     Loop=paperclip_wake Memory=vector
-```
+# 进程内 plugins.*（v0）
+Org A → work=builtin_work  loop=heartbeat  memory=noop     ← 默认
+Org B → work=task_pool     loop=heartbeat  memory=noop     ← deferred；选了会 plugin_unavailable
 
+# 外部 Pattern（不改 plugins.work / plugins.loop）
+Org A + Paperclip 适配器（Issues ↔ Org work）
+Org A + Org 待办执行器（本机 poll → spawnCommand）
+# 将来：Org A + ClawTeam Loop 适配器（外部进程，仍非 plugins.loop=clawteam）
+```
 ---
 
 ## 6. 与同类项目的关系（可插拔，非平替）
 
+> 分层导读见 **§0**。下表只回答「挂哪一层」，**不等于**今天已进 `plugins.*` 白名单。
+
 | 项目 | 层级 | 与 Org Harness 关系 |
 |---|---|---|
 | [OpenHarness](https://github.com/HKUDS/OpenHarness) | L1 Agent Harness | 成员自带；**不**插进 Org Harness |
-| [ClawTeam](https://github.com/HKUDS/ClawTeam) | Swarm / 本地编排 | 可作为 **`IOrgLoop` / 执行器插件**（spawn CLI workers）；Org 身份仍在 ACN |
-| OpenAI Swarm → Agents SDK | Handoff 协调 | 可作为 **`IWorkPattern` 策略插件** |
-| CrewAI / LangGraph / MAF | 角色队 / 图编排 | 同上，挂 Port |
-| Paperclip | 公司式控制面 + UI | **外部 Pattern**；[`paperclip-acn-plugin`](https://github.com/acnlabs/paperclip-acn-plugin) 是适配器，**不是** Org Harness 本体 |
-| ACN Task Pool | Builtin 轻量 WorkPattern | **可选**插件（`plugins.work=task_pool`）；**默认**是 `builtin_work`，不是 Task Pool |
+| [ClawTeam](https://github.com/HKUDS/ClawTeam) | 本机多 agent 协调 | **候选**：`IOrgLoop` **外部适配器**（[选型](./clawteam-org-loop-adapter-v0.md)）；或待办执行器的 `spawnCommand` 配方。Org 身份 / 待办 SoT 仍在 ACN。**不是** Builtin，**没有** `plugins.loop=clawteam` |
+| OpenAI Swarm → Agents SDK | Handoff 协调 | 可作为 **Work 策略**或外部 Pattern |
+| CrewAI / LangGraph / MAF | 角色队 / 图编排 | 同上；挂 Work 轴或外部，**不替代** Control Loop |
+| Paperclip | 公司式控制面 + UI | **外部 Pattern**；[`paperclip-acn-plugin`](https://github.com/acnlabs/paperclip-acn-plugin) 是适配器，**不是** Org Harness 本体，**勿**设 `plugins.work=paperclip` |
+| Org 待办执行器 | 本机 poll → spawn → 回写 | **外部 Pattern**（[POC](./org-loop-spawn-sidecar-poc-v0.md)）；**不是** `plugins.loop=*` |
+| ACN Task Pool | Builtin 轻量 WorkPattern | **可选**（`plugins.work=task_pool`，**deferred**）；**默认**是 `builtin_work` |
 
 ```text
-Org Harness
-└── Ports
-    ├── IOrgLoop      ◄── ClawTeam adapter（可选）
-    ├── IWorkPattern  ◄── Swarm / LangGraph / TaskPool / Paperclip Issues
+Org Harness（ACN 内）
+├── Kernel（固定）
+└── Ports（进程内白名单极窄）
+    ├── IOrgLoop     = heartbeat（今日）
+    ├── IWorkPattern = builtin_work（今日）
     └── …
+         │
+         │ API / org.* 事件
+         ▼
+外部 Pattern（自定义主路径）
+├── Paperclip
+├── Org 待办执行器（spawnCommand 可指向 ClawTeam / 脚本 / CLI）
+└── （将来）ClawTeam Loop 适配器、LangGraph Work 适配器…
          │
          ▼
     ACN Network Core
 ```
 
 **本地打一仗、不要持久 Org** → 可直接用 ClawTeam/Swarm。  
-**跨宿主、持久 Org、可结算、可换 L1 harness**（Owner 可有可无）→ 先 Org Harness + ACN，再选插件。
+**跨宿主、持久 Org、可结算、可换 L1 harness**（Owner 可有可无）→ 先 Org Harness + ACN，再选 **外部 Pattern** 或（Phase 3）进程内插件。
 
 ---
 
@@ -342,10 +428,11 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 | D4 | 协作主体是 **agent**；Org Owner **可选**（`none` / human / agent），对称 ACN agent 所有权，**人不是必须** |
 | D5 | 模块内 = **Kernel + Ports**；可插拔的是运转方式 |
 | D6 | 三层：**Org Graph**（Kernel）+ **Control Loop**（节拍）+ **Work Graph**（Port 策略）；禁止用回合内 DAG 替代组织控制平面 |
-| D7 | ClawTeam / Swarm = **Port 插件候选**，不是 Org Harness 平替 |
+| D7 | ClawTeam / Swarm = **外部适配候选**（Loop 或 Work 轴），不是 Org Harness 平替；v0 **无** `plugins.loop=clawteam` |
 | D8 | OpenHarness 等 = **L1**，成员自带 |
 | D9 | v0 不做「加人」叙事；复用 subnet 围栏 |
 | D10 | v0 只做满 Kernel + Work + 薄 Loop + Events，避免过度对称 |
+| D11 | 自定义优先 **外部 Pattern**；`plugins.*` 仅官方 Builtin 白名单（见 plugin-catalog） |
 
 ---
 
@@ -354,10 +441,14 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 | 文档 | 关系 |
 |---|---|
 | [README.md](./README.md) | 本目录索引 |
+| [plugin-catalog-v0.md](./plugin-catalog-v0.md) | Port 短名单与「外部 Pattern vs plugins.*」硬约定 |
 | [../adr/0014-org-harness-module.md](../adr/0014-org-harness-module.md) | **P0/P1 决策 ADR（Accepted）** |
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core / Pattern 消费契约 |
 | [org-model-v0.md](./org-model-v0.md) | 数据模型（随本文修订 ownership） |
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（`POST /orgs` + Org work；`task.*` legacy）；以本文 + ADR-0014 为准 |
+| [org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md) | Org 待办执行器（外部）POC——**不是** Loop Builtin |
+| [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md) | ClawTeam ↔ Org Loop 适配器选型（未实现；外部 Pattern） |
+| [clawteam-loop-adapter-poc-v0.md](./clawteam-loop-adapter-poc-v0.md) | **废弃文件名**跳转页（勿按名理解） |
 | [`../_drafts/pasture-engineering.md`](../_drafts/pasture-engineering.md) | 学科隐喻与升维理论（Draft） |
 | [`../_drafts/pasture-protocol.md`](../_drafts/pasture-protocol.md) | 协议理论 Draft；命名以本文为准 |
 
@@ -365,4 +456,6 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 
 ## 13. 一句话总结
 
-> **Org Harness = ACN 内建的 Org Graph 内核（Org + 可选 Owner + agent 成员 + subnet 绑定）+ Control Loop 节拍 + 可插拔 Ports（Work Graph 策略 / Memory / Policy / Events）；Owner 与 agent 一样可无人认领 / 被人 claim / 由 agent 持有；L1 harness（含会话级 fan-out）由成员自带，ClawTeam/Swarm/Paperclip/LangGraph 挂 Port，ACN Network Core 是底座——不是把 ACN 改名叫 Pasture，也不是在内核复刻 Ultra。**
+> **Org Harness = ACN 内建 Kernel（Org Graph：Org + 可选 Owner + agent 成员 + subnet）+ 薄 Control Loop + 可插拔 Ports（Work / Memory / Policy / Events…）。**  
+> **自定义运转方式优先外部 Pattern**（Paperclip、待办执行器等）；`plugins.*` 仅官方 Builtin。  
+> L1 harness 由成员自带；ClawTeam/Swarm/LangGraph 是外部适配**候选**，不是内核平替。Network Core 是底座——不是把 ACN 改名叫 Pasture，也不是在内核复刻 Ultra。
