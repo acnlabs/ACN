@@ -9,7 +9,7 @@
 > `shipped` / `adapter-planned` / `community-welcome` / `deferred`。  
 > 完整插件宿主（发现、版本、热加载）→ Phase 3；本文只解决冷启动。
 
-相关：[design-v0.md](./design-v0.md) §5.3 · [phase2-work-port-v0.md](./phase2-work-port-v0.md) ·
+相关：[design-v0.md](./design-v0.md) **§0 架构导读** · §5.3 · [phase2-work-port-v0.md](./phase2-work-port-v0.md) ·
 [ADR-0014](../adr/0014-org-harness-module.md)
 
 ---
@@ -87,6 +87,7 @@ Port 划分（Work / Loop / Memory / …）是**问题轴**，充分用于架构
 | **`heartbeat`** | **shipped** | 默认薄 tick（`POST …/loop/tick`）。别名 `thin` → `heartbeat`。 |
 | Paperclip / harness 唤醒 | **shipped**（外部） | Pattern 或 subnet harness 收 `org.*` 后驱动成员 L1；不必换 loop id。 |
 | **Org 待办执行器（外部）**（任意 `spawnCommand`；ClawTeam 等为配方） | **adapter-planned**（C1–C2 in examples） | 外部 Pattern，非 `plugins.loop=*`；见 [org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)。 |
+| **ClawTeam ↔ Org Loop 适配器** | **adapter-planned**（选型 only） | 外部 Pattern：Org work ↔ CT task；**不是** spawn 一行命令。见 [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md)。无 `plugins.loop=clawteam`。 |
 
 ### 3. Memory — `IOrgMemory`（`plugins.memory`）
 

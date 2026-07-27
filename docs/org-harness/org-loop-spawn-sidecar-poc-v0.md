@@ -7,8 +7,9 @@
 **Code:** [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（目录 slug 保留，指同一组件）
 
 > **它是什么：** **Org 待办执行器（外部）** — 跑在 ACN **外面**的小程序：看见 Org 待办 → 在本机跑你配置的命令 → 成功则回写 work。  
-> **不是什么：** **不是** Org Harness 新 Kernel 模块；**不是** `plugins.loop=*`；**不是** Paperclip。  
-> **ClawTeam：** 只是 `spawnCommand` 的**示例配方**，不是执行器本体。
+> **不是什么：** **不是** Org Harness 新 Kernel 模块；**不是** `plugins.loop=*`；**不是** Paperclip；**不是** [ClawTeam Loop 适配器](./clawteam-org-loop-adapter-v0.md)。  
+> **ClawTeam：** 只是 `spawnCommand` 的**示例配方**，不是执行器本体。  
+> **架构位置：** 见 [design-v0.md §0](./design-v0.md#0-架构导读先读这个)「外部 Pattern」一行。
 
 ---
 

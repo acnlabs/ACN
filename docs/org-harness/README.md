@@ -1,12 +1,13 @@
 # Org Harness
 
 **Status:** Design v0 + [ADR-0014](../adr/0014-org-harness-module.md) Accepted；**Phase 1 Kernel + Phase 2a/P2c 已落地**（`/api/v1/orgs*` · Work Port `builtin_work` · Paperclip Org path）  
-**Last updated:** 2026-07-24
+**Last updated:** 2026-07-27
 
 > **Org Harness** 是 ACN 的**新模块**：给「一群 agent 组成的 Org」提供组织层挽具。  
 > **ACN** 仍叫 ACN（智能体协作网络），不是 Pasture。  
 > **Pasture** 仅作白皮书隐喻。  
-> 协作主体是 **agent**。Org Owner **可选**（无人认领 / 人 / agent），与 ACN 上 agent 所有权同构——**人不是必须**。
+> 协作主体是 **agent**。Org Owner **可选**（无人认领 / 人 / agent），与 ACN 上 agent 所有权同构——**人不是必须**。  
+> **分层导读：** [design-v0.md §0](./design-v0.md#0-架构导读先读这个)（Kernel / Loop / Work / 外部 Pattern）。
 
 ## 先试用
 
@@ -20,7 +21,7 @@
 
 | 文档 | 说明 |
 |---|---|
-| **[design-v0.md](./design-v0.md)** | **方案设计与架构（综合定调，以此为准）** |
+| **[design-v0.md](./design-v0.md)** | **方案设计与架构（综合定调，以此为准；先读 §0）** |
 | **[../adr/0014-org-harness-module.md](../adr/0014-org-harness-module.md)** | **P0/P1 机制 ADR（已 Accepted）** |
 | [org-model-v0.md](./org-model-v0.md) | Org / Membership 数据模型 |
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core 消费契约（外部 Pattern 用） |
@@ -28,6 +29,7 @@
 | **[phase2-work-port-v0.md](./phase2-work-port-v0.md)** | **Phase 2 Work Port 短方案（默认 builtin_work · P2a/P2c 完成 · P2b 按需）** |
 | **[plugin-catalog-v0.md](./plugin-catalog-v0.md)** | **官方 Port 推荐短名单（冷启动：默认 + ≤2 候选 / 状态）** |
 | **[org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)** | **Org 待办执行器（外部）— agent 自动跑命令 POC（C1–C2）** |
+| [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md) | ClawTeam ↔ Org Loop 适配器选型（未实现；≠ 待办执行器） |
 | [org-task-bridge-v0.md](./org-task-bridge-v0.md) | Org → Task Pool 发布约定（约定桥，不是 Work Port） |
 
 理论草稿（隐喻 / 协议史）：
@@ -42,11 +44,14 @@ Org = N × Agent + Org Harness   (± optional Owner: none | human | agent)
 
 Org Harness Module = Kernel（固定） + Ports（可插拔）
   Org Graph（Kernel）: Org · 可选 Owner · agent 成员 · subnet 绑定
-  Control Loop（Port）: 组织心跳 — 观察队列 → 分派/唤醒 → 回收
-  Work Graph（Port 策略）: **builtin_work（默认）** / TaskPool（可选）/ Paperclip / Swarm / …
+  Control Loop（Port）: 今日 heartbeat — 观察队列 → 分派/唤醒 → 回收
+  Work Graph（Port）: 今日 builtin_work（默认）；TaskPool deferred
   其它 Ports: Memory · Capability · Policy · Events
 
-L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Kernel
+自定义主路径 = 外部 Pattern（非 plugins.*）
+  Paperclip · Org 待办执行器 ·（将来）ClawTeam Loop 适配器等
+
+L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 ```
 
 ## 下一步
@@ -58,4 +63,5 @@ L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Ke
 - **插件冷启动：** [plugin-catalog-v0.md](./plugin-catalog-v0.md)（官方短名单；Memory 等 adapter-planned）。  
 - **按需（有真实卡住再开）：** P2b；自动 receive；按 `org_id` 列表 Tasks；Memory/Capability 薄适配。  
 - **实验（C1–C2）：** [Org 待办执行器（外部）](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C3 webhook 按需）。  
+- **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（有真实多 worker 协调需求再开）。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主；或换产品主线（驯养师 / TaskBoard 等）。
