@@ -31,7 +31,8 @@
 | **[org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)** | **Org 待办执行器（外部）— agent 自动跑命令 POC（C1–C2）** |
 | **[org-orchestrator-v0.md](./org-orchestrator-v0.md)** | **ACN Org 编排器产品定义（P0 Accepted；未实现代码）** |
 | [org-orchestrator-wake-contract-v0.md](./org-orchestrator-wake-contract-v0.md) | Org 编排器唤醒契约 P1（`acn.org.work_wake`） |
-| [`examples/org-orchestrator/`](../../examples/org-orchestrator/) | Org 编排器 P2 最小侧车 + `smoke_org_orchestrator.sh` |
+| [org-orchestrator-member-playbook-v0.md](./org-orchestrator-member-playbook-v0.md) | 成员侧：收到 wake → 干活 → 治理关单 |
+| [`examples/org-orchestrator/`](../../examples/org-orchestrator/) | 编排器侧车 + `handle_wake.py` + smoke |
 | [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md) | ClawTeam ↔ Org Loop 适配器选型（编排器的可选实现；≠ 待办执行器） |
 | [org-task-bridge-v0.md](./org-task-bridge-v0.md) | Org → Task Pool 发布约定（约定桥，不是 Work Port） |
 

@@ -13,9 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wakes the new member); file store uses `flock` + `try_claim`/`confirm`/`release`
   (disk before memory). Example: `examples/org-orchestrator/`.
 
+### Added
+
+- **Org orchestrator member playbook** — `handle_wake.py` + dogfood steps
+  (`docs/org-harness/org-orchestrator-member-playbook-v0.md`).
+
 ### Docs
 
-- **Agent skill 0.17.14** — Org 编排器（外部）入口与 wake 契约链接。
+- **Agent skill 0.17.14 / 0.17.15** — Org 编排器入口、wake 契约、成员 playbook。
 
 ## [0.15.8] - 2026-07-25
 
