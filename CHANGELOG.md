@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Org orchestrator member playbook** — `handle_wake.py` + dogfood steps
   (`docs/org-harness/org-orchestrator-member-playbook-v0.md`).
+- **`scripts/smoke_org_orchestrator_member_e2e.sh`** — orchestrator → inbox →
+  `handle_wake` OK/dedupe → governance `done`.
 
 ### Docs
 
