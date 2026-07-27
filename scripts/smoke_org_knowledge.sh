@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke: Org knowledge sidecar (no ACN required)
+# Smoke: Org knowledge sidecar (no ACN required) — read (K1/K2) + contribute (K4)
 #
 # Usage:
 #   ./scripts/smoke_org_knowledge.sh
@@ -13,10 +13,16 @@ if [[ ! -x "$PY" ]]; then
   PY="python3"
 fi
 
-echo "==> Unit tests (org-knowledge)"
-"$PY" -m pytest "${ROOT}/tests/examples/test_org_knowledge_kb.py" -q --no-cov 2>/dev/null \
-  || "$PY" -m pytest "${ROOT}/tests/examples/test_org_knowledge_kb.py" -q -p no:cov 2>/dev/null \
-  || "$PY" -m pytest "${ROOT}/tests/examples/test_org_knowledge_kb.py" -q
+run_pytest() {
+  "$PY" -m pytest "$@" -q --no-cov 2>/dev/null \
+    || "$PY" -m pytest "$@" -q -p no:cov 2>/dev/null \
+    || "$PY" -m pytest "$@" -q
+}
+
+echo "==> Unit tests (org-knowledge read + contribute)"
+run_pytest \
+  "${ROOT}/tests/examples/test_org_knowledge_kb.py" \
+  "${ROOT}/tests/examples/test_org_knowledge_contribute.py"
 
 echo "==> read_kb.py --org org_demo"
 out="$("$PY" "${KB}/read_kb.py" --org org_demo)"
@@ -39,5 +45,18 @@ EOF
 out="$(echo "$wake" | "$PY" "${ORCH}/handle_wake.py")"
 echo "$out" | grep -q "knowledge bundle"
 echo "$out" | grep -qiE "Release|SOP"
+
+echo "==> contribute (K4) member sop + reject charter"
+TMP_ROOT="$(mktemp -d -t orgkb-smoke.XXXXXX)"
+trap 'rm -rf "$TMP_ROOT"' EXIT
+"$PY" "${KB}/contribute_kb.py" --root "$TMP_ROOT" --org org_smoke \
+  --from-agent agt_smoke --path sop/smoke.md --body '# smoke tip' --json-out \
+  | grep -q '"accepted"'
+set +e
+"$PY" "${KB}/contribute_kb.py" --root "$TMP_ROOT" --org org_smoke \
+  --from-agent agt_smoke --path charter.md --body '# no' --json-out >/dev/null
+rc=$?
+set -e
+[[ "$rc" -eq 1 ]]
 
 echo "==> OK smoke_org_knowledge"

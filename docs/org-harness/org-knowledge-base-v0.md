@@ -1,7 +1,7 @@
 # Org 知识库 — 产品与 Port 定义 v0
 
-**Status:** Design Accepted（**2026-07-27 修订：agent 主贡献**）· K1+K2 只读侧车已落地；写路径设计中  
-**Code（读路径）：** [`examples/org-knowledge/`](../../examples/org-knowledge/) · wake `kb_refs` + `handle_wake` 加载  
+**Status:** Design Accepted · **K1–K4 examples 已落地**（读 + agent contribute）  
+**Code：** [`examples/org-knowledge/`](../../examples/org-knowledge/)（`read_kb.py` · `contribute_kb.py` · wake 加载）  
 **Smoke：** [`scripts/smoke_org_knowledge.sh`](../../scripts/smoke_org_knowledge.sh)  
 
 **Date:** 2026-07-27  
@@ -69,8 +69,8 @@ agent 干活 → 读 KB → 产出
            → 写入侧车（git commit / vault 更新）
 ```
 
-**K1/K2 现状：** 只读侧车——视为冷启动，**不是**终局。  
-**终局：** 读 + **可治理的写** 都是一等能力。
+**K1/K2：** 读路径。**K4：** 侧车 `contribute`（成员区自动收；charter 需 Owner；冲突 → `disputed/`）。  
+进程内 `plugins.knowledge` 仍未接线。
 
 ### 与 Memory 的硬边界
 
@@ -126,26 +126,26 @@ orgs/<org_id>/
 
 ---
 
-## 4. 已交货 vs 设计中
+## 4. 已交货 vs 其后
 
-### 已交货（K0–K2，读路径）
+### 已交货（K0–K4）
 
-1. 问题轴 + catalog。  
-2. 外部只读侧车 + `kb_refs` + `handle_wake` 加载。  
-3. 与 Memory 拆表。
+1. 问题轴 + catalog（agent 主贡献）。  
+2. 读：侧车 + `kb_refs` + `handle_wake`。  
+3. **写：** [`contribute_kb.py`](../../examples/org-knowledge/contribute_kb.py) — 提议落盘 + 最小治理（见 §5.3）。  
+4. 与 Memory 拆表。
 
-### 设计中（写路径，下一刀）
+### 其后
 
 | 项 | 方向 |
 |---|---|
-| **contribute 契约** | 成员完成 work 后提交「写入提议」（path、内容或 patch、provenance: agent/work_id） |
-| **治理** | v0 可先：**同 Org 成员自动收**到 `sop/`/`skills/`；`charter.md` 仅 Owner；冲突 → 标 `disputed/` 或拒绝 |
-| **实现** | 侧车 `contribute_kb.py`（或 git commit）；**不**进 Kernel CRUD |
-| **用户可选** | 创建 Org / 文档货架：至少能选 `git`（可读可贡献）vs `noop` |
+| **用户可选** | 创建 Org 货架：`git` / `noop`（`plugins.knowledge` 接线） |
+| **llm_wiki** | sources→wiki 编译配方 |
+| **真·成员校验** | contribute 前打 ACN Membership（今日信任 runner 断言 `from_agent` / `--as-owner`） |
 
 ### 仍不做
 
-- 进程内多后端热插（待 `plugins.knowledge`）  
+- Kernel CRUD 文档 API  
 - 自研向量引擎 / 跨 org 联邦  
 
 ### `plugins.knowledge` 预留
@@ -162,11 +162,11 @@ orgs/<org_id>/
 | id（规划） | 状态 | 说明 |
 |---|---|---|
 | `noop` | **plugin-planned** | 无组织知识库 |
-| `git` | **examples-shipped（读）· write-planned** | 默认推荐；贡献 API/脚本待 K4 |
+| `git` | **examples-shipped**（读+写 K4） | 默认推荐 |
 | `llm_wiki` | **adapter-planned** | Karpathy 配方；可选第二档 |
 | 外挂 KB / RAG | **community-welcome** | |
 
-今日创建 Org **不要**伪造未接线的 `plugins.knowledge` id；读路径继续走侧车。
+今日创建 Org **不要**伪造未接线的 `plugins.knowledge` id；读写继续走侧车。
 
 ---
 
@@ -190,18 +190,26 @@ orgs/<org_id>/
 wake → 拉 kb_refs / 默认 charter → 干活 → 治理关单
 ```
 
-### 5.3 写循环（设计中 · K4）
+### 5.3 写循环（K4 · 已实现侧车）
 
 ```text
 work done（或阶段性复盘）
-  → agent 生成 contribute 提议
-      { org_id, path, body|patch, from_agent, work_id?, title? }
-  → 治理规则（自动收 / 审批 / 拒）
-  → 侧车落盘（git commit 消息含 agent/work）
-  → （可选）org 事件 knowledge.contributed
+  → agent 调用 contribute_kb.py / contribute()
+      { org_id, path, body, from_agent, work_id?, title?, as_owner? }
+  → 治理：
+      - sop|skills|playbooks|wiki|sources → 成员自动 accepted
+      - charter.md|charter/ → 需 as_owner，否则 rejected
+      - 其它路径 → 非 Owner rejected
+      - 目标已存在且内容不同（无 force）→ disputed/<path>
+  → 落盘并附 provenance 注释（agent / work / 时间）
 ```
 
-**禁止：** 把未治理的聊天原文直接当 charter；红线页与 agent 随意区要分开。
+```bash
+python3 contribute_kb.py --org org_x --from-agent agt_1 \
+  --path sop/learned.md --body-file ./note.md --work-id work_…
+```
+
+**禁止：** 未授权改 charter；信任边界见 §2（runner 须保证 `from_agent` / `--as-owner` 真实）。
 
 ---
 
@@ -224,9 +232,9 @@ work done（或阶段性复盘）
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | **K0** | 问题轴升格 | **done** |
-| **K1–K2** | 只读侧车 + wake `kb_refs` | **done**（冷启动读路径） |
-| **K3** | 用户可选：`git` / `noop`（文档+配置/插件位）；可选向量 | 按需 |
-| **K4** | **agent contribute** 契约 + 侧车写入 + 最小治理 | **下一步** |
+| **K1–K2** | 读侧车 + wake `kb_refs` | **done** |
+| **K4** | **agent contribute** + 最小治理（`contribute_kb.py`） | **done** |
+| **K3** | 用户可选：`git` / `noop`（`plugins.knowledge`）；可选向量 | 按需 |
 | **K5** | 可选 `llm_wiki` 配方（sources→wiki，Obsidian 前端） | 按需 |
 | **后置** | `plugins.knowledge` 多后端、审批 UI | Phase 3+ |
 
@@ -256,5 +264,5 @@ work done（或阶段性复盘）
 | [plugin-catalog-v0.md](./plugin-catalog-v0.md) | Knowledge 短名单 |
 | [org-orchestrator-member-playbook-v0.md](./org-orchestrator-member-playbook-v0.md) | 成员读 KB |
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | DEF-KB |
-| [`../../examples/org-knowledge/`](../../examples/org-knowledge/) | 读路径侧车 |
+| [`../../examples/org-knowledge/`](../../examples/org-knowledge/) | 读/写侧车（`read_kb` · `contribute_kb`） |
 | [Karpathy llm-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) | 可选编译层灵感（非官方依赖） |
