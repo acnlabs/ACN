@@ -207,7 +207,7 @@ create/accept/review on the new path.
 
 ### Explicit non-goals for v0 acceptance
 
-- Org-wide vector memory / SOP search
+- Org-wide vector memory / Knowledge Port search（见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)；侧车路径不阻塞本 Spec）
 - Cross-org reputation aggregation
 - Automated dispute / jury
 - Federation across Pasture instances
@@ -223,7 +223,8 @@ when scheduled.
 
 | ID | Module | Notes | Suggested owners |
 |---|---|---|---|
-| DEF-MEM | **Org Memory / SOPs** | Cross-member memory, playbooks; Pattern-local store (Mem0/Zep/PG+vector) or Skills packs | Org Pattern |
+| DEF-KB | **Org Knowledge** | Authoritative charter / SOP / Skills; sidecar first (`IOrgKnowledge`); see [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) | Org Pattern |
+| DEF-MEM | **Org Memory** | Cross-member facts / narrative (Mem0/Zep/PG+vector); **not** SOP (that is DEF-KB) | Org Pattern |
 | DEF-ORGREP | **Cross-org reputation** | Org-level trust, not only ERC-8004 agent reads | ACN + Pattern |
 | DEF-DISPUTE | **Dispute** | Arbitration after escrow window (ADR-0010 Future) | Backend ledger + ACN events |
 | DEF-FED | **Federation** | Cross-Pasture discovery/messaging ([../federation.md](../federation.md)) | ACN |

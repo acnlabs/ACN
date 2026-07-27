@@ -32,10 +32,41 @@ def wake_key(org_id: str, wid: str, assignee: str) -> str:
     return f"{org_id}:{wid}:wake:{WAKE_GENERATION}:{assignee}"
 
 
+def _kb_refs_for_item(org_id: str, item: dict) -> list[dict]:
+    """Optional kb_refs: work field → ORG_KB_REFS_JSON → ORG_KB_ATTACH_DEFAULTS."""
+    raw = item.get("kb_refs")
+    if isinstance(raw, list) and raw:
+        return [x for x in raw if isinstance(x, dict) and x.get("uri")]
+
+    env_json = os.environ.get("ORG_KB_REFS_JSON", "").strip()
+    if env_json:
+        try:
+            parsed = json.loads(env_json)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list) and parsed:
+            return [x for x in parsed if isinstance(x, dict) and x.get("uri")]
+        if isinstance(parsed, dict) and isinstance(parsed.get("kb_refs"), list):
+            return [
+                x
+                for x in parsed["kb_refs"]
+                if isinstance(x, dict) and x.get("uri")
+            ]
+
+    attach = os.environ.get("ORG_KB_ATTACH_DEFAULTS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if attach:
+        return [{"uri": f"orgkb://{org_id}/charter.md", "title": "charter.md"}]
+    return []
+
+
 def build_envelope(org_id: str, item: dict) -> dict:
     wid = work_id(item)
     assignee = assignee_id(item)
-    return {
+    envelope = {
         "type": WAKE_TYPE,
         "schema_version": 1,
         "idempotency_key": wake_key(org_id, wid, assignee),
@@ -48,6 +79,10 @@ def build_envelope(org_id: str, item: dict) -> dict:
             "Fetch work with acn org work show; complete then ask governance to mark done."
         ),
     }
+    kb_refs = _kb_refs_for_item(org_id, item)
+    if kb_refs:
+        envelope["kb_refs"] = kb_refs
+    return envelope
 
 
 def process_item(

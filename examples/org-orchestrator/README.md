@@ -18,6 +18,8 @@
 | `ACN_API_KEY` | 发送方 agent key（`from_agent` = `agents/me`）；若要标 `in_progress` 需**治理**权限 |
 | `POLL_INTERVAL_SEC` | 默认 `30` |
 | `ORCHESTRATOR_IDEM_PATH` | 幂等文件，默认 `./.org-orchestrator-idem.json` |
+| `ORG_KB_ATTACH_DEFAULTS` | `1` 时 wake 附带 `kb_refs` → `orgkb://{org}/charter.md` |
+| `ORG_KB_REFS_JSON` | 全局默认 `kb_refs` JSON（list 或 `{kb_refs:[…]}`） |
 
 ## 跑一轮
 
@@ -61,6 +63,9 @@ ACN_BASE_URL=… ACN_API_KEY=acn_… ./scripts/smoke_org_orchestrator_member_e2e
 # 仅解析（无网络）
 echo '{"type":"acn.org.work_wake","org_id":"org_x","work_id":"work_y","assignee":"agt_z"}' \
   | HANDLE_WAKE_SKIP_FETCH=1 python3 handle_wake.py
+
+# 知识库 sidecar（无 ACN）
+../scripts/smoke_org_knowledge.sh
 ```
 
 ## 成员侧 `handle_wake.py`
@@ -70,8 +75,10 @@ Mode B：
 ```bash
 export ACN_BASE_URL=… ACN_API_KEY=acn_member_…
 # optional: HANDLE_WAKE_IDEM_PATH=./.handle-wake-idem.json
+# optional: ORG_KB_ROOT=…  HANDLE_WAKE_SKIP_KB=1
 acn listen --runtime command --wake-exec "python3 $(pwd)/handle_wake.py"
 ```
 
 校验：work 必须 open 且 **API assignee = 自己**（空 assignee → 不 OK）；同一
-`idempotency_key` 只 OK 一次。
+`idempotency_key` 只 OK 一次。校验通过后按信封 `kb_refs`（或默认 charter）加载
+[`../org-knowledge/`](../org-knowledge/)（见知识库信任边界）。

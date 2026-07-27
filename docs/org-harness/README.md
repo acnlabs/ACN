@@ -32,6 +32,8 @@
 | **[org-orchestrator-v0.md](./org-orchestrator-v0.md)** | **ACN Org 编排器产品定义（P0 Accepted；未实现代码）** |
 | [org-orchestrator-wake-contract-v0.md](./org-orchestrator-wake-contract-v0.md) | Org 编排器唤醒契约 P1（`acn.org.work_wake`） |
 | [org-orchestrator-member-playbook-v0.md](./org-orchestrator-member-playbook-v0.md) | 成员侧：收到 wake → 干活 → 治理关单 |
+| **[org-knowledge-base-v0.md](./org-knowledge-base-v0.md)** | **Org 知识库 Port（`IOrgKnowledge`；与 Memory 分界；侧车路径）** |
+| [`examples/org-knowledge/`](../../examples/org-knowledge/) | 知识库 K1：`read_kb.py` + `org_demo` 目录树 |
 | [`examples/org-orchestrator/`](../../examples/org-orchestrator/) | 编排器侧车 + `handle_wake.py` + smoke |
 | [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md) | ClawTeam ↔ Org Loop 适配器选型（编排器的可选实现；≠ 待办执行器） |
 | [org-task-bridge-v0.md](./org-task-bridge-v0.md) | Org → Task Pool 发布约定（约定桥，不是 Work Port） |
@@ -50,10 +52,10 @@ Org Harness Module = Kernel（固定） + Ports（可插拔）
   Org Graph（Kernel）: Org · 可选 Owner · agent 成员 · subnet 绑定
   Control Loop（Port）: 今日 heartbeat — 观察队列 → 分派/唤醒 → 回收
   Work Graph（Port）: 今日 builtin_work（默认）；TaskPool deferred
-  其它 Ports: Memory · Capability · Policy · Events
+  其它 Ports: Knowledge · Memory · Capability · Policy · Events
 
 自定义主路径 = 外部 Pattern（非 plugins.*）
-  Paperclip · Org 待办执行器 ·（将来）ClawTeam Loop 适配器等
+  Paperclip · Org 待办执行器 · 知识库侧车 ·（将来）ClawTeam Loop 适配器等
 
 L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 ```
@@ -64,8 +66,9 @@ L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 - **试用入口：** [quickstart-org-paperclip.md](./quickstart-org-paperclip.md)（本地可不填公网 URL；含 Org-paid 软验与 topup curl）。  
 - **对外发布 / 导入（v0）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)（`publish-task` / `import-task`；**不是** P2b）。  
 - **经济主体：** [org-wallet-v0.md](./org-wallet-v0.md) — **v0 收线**（S6b 插件内 topup **deferred**；外置 Backend 充值即可）。  
-- **插件冷启动：** [plugin-catalog-v0.md](./plugin-catalog-v0.md)（官方短名单；Memory 等 adapter-planned）。  
-- **按需（有真实卡住再开）：** P2b；自动 receive；按 `org_id` 列表 Tasks；Memory/Capability 薄适配。  
+- **插件冷启动：** [plugin-catalog-v0.md](./plugin-catalog-v0.md)（官方短名单；Knowledge / Memory 等 adapter-planned）。  
+- **Org 知识库：** [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) + [K1/K2 侧车](../../examples/org-knowledge/) · [`smoke_org_knowledge.sh`](../../scripts/smoke_org_knowledge.sh)（K3 向量/`plugins.knowledge` 按需）。  
+- **按需（有真实卡住再开）：** P2b；自动 receive；按 `org_id` 列表 Tasks；Memory/Capability 薄适配；知识库 K3。  
 - **实验（C1–C2）：** [Org 待办执行器（外部）](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C3 webhook 按需）。  
 - **Org 编排器：** [产品定义](./org-orchestrator-v0.md) P0 + [唤醒契约](./org-orchestrator-wake-contract-v0.md) P1 + [P2 侧车](../../examples/org-orchestrator/)；P3 webhook/催办按需。  
 - **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（编排器可选后端，有需求再开）。  
