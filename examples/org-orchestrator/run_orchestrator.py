@@ -23,7 +23,6 @@ from acn_client_min import (
 )
 from idempotency import IdempotencyStore
 
-
 WAKE_TYPE = "acn.org.work_wake"
 WAKE_GENERATION = 1
 
