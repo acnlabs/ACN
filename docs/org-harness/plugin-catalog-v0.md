@@ -86,7 +86,7 @@ Port 划分（Work / Loop / Memory / …）是**问题轴**，充分用于架构
 |---|---|---|
 | **`heartbeat`** | **shipped** | 默认薄 tick（`POST …/loop/tick`）。别名 `thin` → `heartbeat`。 |
 | Paperclip / harness 唤醒 | **shipped**（外部） | Pattern 或 subnet harness 收 `org.*` 后驱动成员 L1；不必换 loop id。 |
-| **Org Loop spawn sidecar**（任意 `spawnCommand`；ClawTeam 等为配方） | **adapter-planned**（C1 shipped in examples） | 外部侧车，非 `plugins.loop=*`；见 [org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)。 |
+| **Org 待办执行器（外部）**（任意 `spawnCommand`；ClawTeam 等为配方） | **adapter-planned**（C1–C2 in examples） | 外部 Pattern，非 `plugins.loop=*`；见 [org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)。 |
 
 ### 3. Memory — `IOrgMemory`（`plugins.memory`）
 
