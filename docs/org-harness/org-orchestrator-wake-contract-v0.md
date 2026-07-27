@@ -57,7 +57,7 @@
 {
   "type": "acn.org.work_wake",
   "schema_version": 1,
-  "idempotency_key": "org_…:work_…:wake:1",
+  "idempotency_key": "org_…:work_…:wake:1:agt_…",
   "org_id": "org_…",
   "work_id": "work_…",
   "title": "…",
@@ -91,13 +91,14 @@
 
 | 项 | 规则 |
 |---|---|
-| **幂等键** | `{org_id}:{work_id}:wake:{wake_generation}` |
-| **wake_generation** | v0 固定从 `1` 起；同一 open work 在状态仍为 `todo`/`in_progress` 且未成功投递前，重试**复用**同一 generation |
-| **何时 +1** | 仅当产品允许「再次唤醒」（例如超时催办）时递增；v0 默认可不做催办 |
-| **编排器本地** | 成功 `send` 后记录 `(idempotency_key → sent_at)`；进程重启后对已记录键跳过，除非 generation 增加 |
+| **幂等键** | `{org_id}:{work_id}:wake:{wake_generation}:{assignee_agent_id}` |
+| **为何含 assignee** | 改派后新成员必须能收到新 wake；旧 assignee 的键仍保留，避免对其重复投递 |
+| **wake_generation** | v0 固定从 `1` 起；同一 `(work, assignee)` 未成功投递前重试复用同一 generation |
+| **何时 +1** | 仅当产品允许「再次唤醒同一 assignee」（例如超时催办）时递增；v0 默认可不做催办 |
+| **编排器本地** | `try_claim`（flock）→ `send` → `confirm`；`send` 失败则 `release` 以便重试；落盘失败不更新成功语义 |
 | **成员侧** | 同一 `idempotency_key` 只开工一次；重复消息忽略或仅打日志 |
 
-投递失败（网络/对方 `closed`）：可退避重试同一 key；**不要**因此 PATCH work。
+投递失败（网络/对方 `closed`）：释放 claim 后可重试同一 key；**不要**因此 PATCH work。
 
 ---
 

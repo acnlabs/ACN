@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Org orchestrator idempotency** — wake key includes `assignee` (reassignment
+  wakes the new member); file store uses `flock` + `try_claim`/`confirm`/`release`
+  (disk before memory). Example: `examples/org-orchestrator/`.
+
+### Docs
+
+- **Agent skill 0.17.14** — Org 编排器（外部）入口与 wake 契约链接。
+
 ## [0.15.8] - 2026-07-25
 
 Server patch: Org wallet **S6** soft-val proxy + Org Harness docs/skill closeout.
