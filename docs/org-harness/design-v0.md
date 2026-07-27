@@ -222,7 +222,7 @@ Membership **不是**「加人产品」：进围栏走既有 subnet admission；
 | **`IWorkPattern`** | 活怎么建模、认领、状态 | **`builtin_work`**（Phase 1 `OrgWorkItem`） | TaskPool（可选/deferred）；自研 DAG；**Paperclip = 外部 Pattern**（非 `plugins.work`） |
 | **`IOrgLoop`** | 看队列→分派/唤醒→回收 | Heartbeat / 简单 dispatcher | （将来）ClawTeam **Loop 适配器**、自定义巡检；今日自定义走**外部 Pattern** |
 | **`ICapabilityPool`** | 组织能力目录 | 聚合成员 ACN skills（可先内置非插件） | 外挂 MCP catalog |
-| **`IOrgKnowledge`** | 权威知识（章程 / SOP / Skills） | 外部侧车（见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)）；`plugins.knowledge` 预留 | git/文件、外挂 KB、RAG 侧车 |
+| **`IOrgKnowledge`** | 组织知识（**agent 主贡献**；章程红线 + SOP/Skills/wiki） | 外部侧车读路径已落地；写路径见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) | git（默认可选）、llm_wiki 配方、外挂 KB |
 | **`IOrgMemory`** | 集体记忆（事实 / 偏好 / 叙事） | `noop` | Mem0、Zep/Graphiti、PG+vector |
 | **`IPolicyBudget`** | 角色权限、花费 | Kernel 角色枚举 | 审批流、月度硬停 |
 | **`IEventSink`** | 生命周期外推 | subnet harness webhook | 多 webhook、OTel |
@@ -436,7 +436,7 @@ Org Memory 深度、知识库进程内多后端、跨 org 信誉、Dispute、Fed
 | D9 | v0 不做「加人」叙事；复用 subnet 围栏 |
 | D10 | v0 只做满 Kernel + Work + 薄 Loop + Events，避免过度对称 |
 | D11 | 自定义优先 **外部 Pattern**；`plugins.*` 仅官方 Builtin 白名单（见 plugin-catalog） |
-| D12 | **`IOrgKnowledge`** 与 Memory 并列；权威 SOP/Skills ≠ 可写记忆；不进 Kernel；v0 侧车交货（[org-knowledge-base-v0.md](./org-knowledge-base-v0.md)） |
+| D12 | **`IOrgKnowledge`** 与 Memory 并列；**成员 agent 主贡献**，Owner 管红线/仲裁；不进 Kernel；读侧车已交货、写路径设计中（[org-knowledge-base-v0.md](./org-knowledge-base-v0.md)） |
 
 ---
 

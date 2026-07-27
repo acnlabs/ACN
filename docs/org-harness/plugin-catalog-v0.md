@@ -32,7 +32,7 @@
 |---|---|
 | 组织内派活 + Paperclip Issues | **默认** `builtin_work` + 装 [`paperclip-acn-plugin`](https://github.com/acnlabs/paperclip-acn-plugin)（外部 Pattern，**不是** `plugins.work=paperclip`） |
 | 面向网络发赏金 | **旁路** [org-task-bridge](./org-task-bridge-v0.md) / Org wallet；**不要**改 `plugins.work` |
-| 组织知识库（章程 / SOP / Skills） | **外部侧车**（[`examples/org-knowledge/`](../../examples/org-knowledge/) · smoke）；见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。勿伪造 `plugins.knowledge=*` |
+| 组织知识库（**agent 主贡献**） | 读：[`examples/org-knowledge/`](../../examples/org-knowledge/)；写路径设计中。可选方向 `git` / `noop` /（将来）`llm_wiki`。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。勿伪造未接线 `plugins.knowledge=*` |
 | 组织共享记忆（事实 / 叙事） | 先 `memory=noop`；需要时按下方 Memory 短名单自建侧车 |
 | Task Pool 当组织工单后端 | **`deferred`**（`plugins.work=task_pool` 会 `plugin_unavailable`） |
 
@@ -98,11 +98,12 @@ Port 划分（Work / Loop / Knowledge / Memory / …）是**问题轴**，充分
 
 | id / 方向 | 状态 | 说明 |
 |---|---|---|
-| **git / 文件侧车**（按 `org_id`） | **examples-shipped**（K1+K2） | **推荐默认交货**。章程 / SOP / Skills；成员只读；wake `kb_refs`。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) · [`examples/org-knowledge/`](../../examples/org-knowledge/) · `smoke_org_knowledge.sh`。 |
-| `noop`（进程内） | **plugin-planned**（未接线） | 预留；接线前不要传 `plugins.knowledge`。 |
-| 外挂 KB / RAG（语雀、Notion、PG+vector…） | **community-welcome** | 成熟栈接入；ACN **不自研**引擎。 |
+| **`git` / 文件侧车**（按 `org_id`） | **examples-shipped（读）· write-planned** | **默认推荐**。agent 主贡献（K4）；今日可读 + wake `kb_refs`。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。 |
+| **`llm_wiki`**（Karpathy 编译层 + 可选 Obsidian） | **adapter-planned** | 可选第二档；agent 维护 wiki/；须治理，不替代 charter。 |
+| `noop`（进程内） | **plugin-planned**（未接线） | 不要组织知识库。 |
+| 外挂 KB / RAG | **community-welcome** | 成熟栈接入；ACN **不自研**引擎。 |
 
-组织刚需；与 Memory **分开选型**。
+组织刚需；**主贡献者是 agent**；与 Memory **分开选型**。
 
 ### 4. Memory — `IOrgMemory`（`plugins.memory`）
 
@@ -180,3 +181,4 @@ Port 划分（Work / Loop / Knowledge / Memory / …）是**问题轴**，充分
 | 2026-07-25 | 硬约定：自定义优先外部适配；`plugins.*` 仅官方/进程内 |
 | 2026-07-27 | 升格 **Knowledge** Port；SOP/Skills 从 Memory 拆出；链 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) |
 | 2026-07-27 | Knowledge：**examples-shipped**（K1+K2）；图例补 examples-shipped / plugin-planned |
+| 2026-07-27 | Knowledge：修订为 **agent 主贡献**；货架 `git` / `llm_wiki` / `noop` |

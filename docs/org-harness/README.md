@@ -67,7 +67,7 @@ L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 - **对外发布 / 导入（v0）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)（`publish-task` / `import-task`；**不是** P2b）。  
 - **经济主体：** [org-wallet-v0.md](./org-wallet-v0.md) — **v0 收线**（S6b 插件内 topup **deferred**；外置 Backend 充值即可）。  
 - **插件冷启动：** [plugin-catalog-v0.md](./plugin-catalog-v0.md)（官方短名单；Knowledge / Memory 等 adapter-planned）。  
-- **Org 知识库：** [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) + [K1/K2 侧车](../../examples/org-knowledge/) · [`smoke_org_knowledge.sh`](../../scripts/smoke_org_knowledge.sh)（K3 向量/`plugins.knowledge` 按需）。  
+- **Org 知识库：** [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)（**agent 主贡献**；读路径 K1/K2 已落地；**K4 contribute** 下一步）· [侧车](../../examples/org-knowledge/) · [`smoke_org_knowledge.sh`](../../scripts/smoke_org_knowledge.sh)。  
 - **按需（有真实卡住再开）：** P2b；自动 receive；按 `org_id` 列表 Tasks；Memory/Capability 薄适配；知识库 K3。  
 - **实验（C1–C2）：** [Org 待办执行器（外部）](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C3 webhook 按需）。  
 - **Org 编排器：** [产品定义](./org-orchestrator-v0.md) P0 + [唤醒契约](./org-orchestrator-wake-contract-v0.md) P1 + [P2 侧车](../../examples/org-orchestrator/)；P3 webhook/催办按需。  
