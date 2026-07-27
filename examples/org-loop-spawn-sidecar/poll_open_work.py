@@ -4,43 +4,21 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import time
 import urllib.error
-import urllib.request
-from typing import Any
+
+from acn_org import fetch_open_work, normalize_base, work_id
 
 
-def _normalize_base(url: str) -> str:
-    base = url.rstrip("/")
-    if not base.endswith("/api/v1"):
-        base = f"{base}/api/v1"
-    return base
-
-
-def fetch_open_work(base: str, org_id: str, api_key: str) -> dict[str, Any]:
-    url = f"{base}/orgs/{org_id}/work?open_only=true"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Accept": "application/json",
-        },
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
-
-
-def log_batch(payload: dict[str, Any]) -> None:
+def log_batch(payload: dict) -> None:
     org_id = payload.get("org_id", "?")
     items = payload.get("work") or []
     count = payload.get("count", len(items))
     print(f"[org-loop-spawn] org={org_id} open_count={count}", flush=True)
     for w in items:
-        wid = w.get("work_id") or w.get("id") or "?"
+        wid = work_id(w) or "?"
         title = w.get("title") or ""
         status = w.get("status") or "?"
         print(f"  - {wid}  status={status}  {title}", flush=True)
@@ -61,13 +39,10 @@ def main() -> int:
     interval = int(os.environ.get("POLL_INTERVAL_SEC", "30"))
 
     if not base_url or not org_id or not api_key:
-        print(
-            "Need ACN_BASE_URL, ACN_ORG_ID, ACN_API_KEY",
-            file=sys.stderr,
-        )
+        print("Need ACN_BASE_URL, ACN_ORG_ID, ACN_API_KEY", file=sys.stderr)
         return 2
 
-    base = _normalize_base(base_url)
+    base = normalize_base(base_url)
     while True:
         try:
             payload = fetch_open_work(base, org_id, api_key)
