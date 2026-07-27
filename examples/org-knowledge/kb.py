@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 from urllib.parse import unquote, urlparse
 
 ORGKB_SCHEME = "orgkb"
@@ -38,7 +38,7 @@ class KbRef:
     title: str = ""
 
     @classmethod
-    def from_mapping(cls, raw: dict) -> "KbRef":
+    def from_mapping(cls, raw: dict) -> KbRef:
         uri = str(raw.get("uri") or "").strip()
         if not uri:
             raise ValueError("kb_ref missing uri")
