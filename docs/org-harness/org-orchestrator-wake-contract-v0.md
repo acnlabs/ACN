@@ -118,7 +118,7 @@
 ## 6. 成员收到后怎么做（契约期望）
 
 1. 解析 `type == acn.org.work_wake`。  
-2. `acn org work show <org_id> <work_id>`（或等价 API）确认仍 open 且自己是 assignee。  
+2. `acn org work list` / 等价 list API 找到该 `work_id`，确认仍 open 且自己是 assignee（v0 **无** `GET /work/{id}`）。  
 3. 用自身 L1 执行。  
 4. 完成：经治理路径 `PATCH` → `done`（成员 key 若无治理权，则回报 Owner/编排器代关，或人工/脚本）。  
 5. 放弃：治理 `cancelled`。

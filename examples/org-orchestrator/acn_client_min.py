@@ -56,6 +56,28 @@ def fetch_members(base: str, org_id: str, api_key: str) -> dict[str, Any]:
     return _request("GET", f"{base}/orgs/{org_id}/members", api_key)
 
 
+class WorkNotFoundError(LookupError):
+    """Raised when list-work does not contain the requested work_id."""
+
+
+def get_work(
+    base: str,
+    org_id: str,
+    work_id: str,
+    api_key: str,
+) -> dict[str, Any]:
+    """Fetch one work item via list API (v0 has no GET /work/{id})."""
+    payload = _request(
+        "GET",
+        f"{base}/orgs/{org_id}/work?open_only=false",
+        api_key,
+    )
+    for item in payload.get("work") or []:
+        if str(item.get("work_id") or item.get("id") or "") == work_id:
+            return item
+    raise WorkNotFoundError(work_id)
+
+
 def patch_work_status(
     base: str,
     org_id: str,

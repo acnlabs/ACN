@@ -52,5 +52,26 @@ python3 run_orchestrator.py --once --no-mark-in-progress
 ## 狗粮
 
 ```bash
+# A — 编排器 alone（需治理 key）
 ACN_BASE_URL=… ACN_API_KEY=acn_… ./scripts/smoke_org_orchestrator.sh
+
+# B — 成员侧解析（无网络：跳过 fetch）
+echo '{"type":"acn.org.work_wake","org_id":"org_x","work_id":"work_y","assignee":"agt_z"}' \
+  | HANDLE_WAKE_SKIP_FETCH=1 python3 handle_wake.py
+
+# 端到端成员步骤见：
+# docs/org-harness/org-orchestrator-member-playbook-v0.md
 ```
+
+## 成员侧 `handle_wake.py`
+
+Mode B：
+
+```bash
+export ACN_BASE_URL=… ACN_API_KEY=acn_member_…
+# optional: HANDLE_WAKE_IDEM_PATH=./.handle-wake-idem.json
+acn listen --runtime command --wake-exec "python3 $(pwd)/handle_wake.py"
+```
+
+校验：work 必须 open 且 **API assignee = 自己**（空 assignee → 不 OK）；同一
+`idempotency_key` 只 OK 一次。

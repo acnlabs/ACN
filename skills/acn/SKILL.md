@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "0.17.14"
+  version: "0.17.15"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -881,6 +881,7 @@ Harness itself. Design: [`docs/org-harness/`](../../docs/org-harness/README.md).
 | [`plugin-catalog-v0.md`](../../docs/org-harness/plugin-catalog-v0.md) | Official Port shortlist + **custom = external Pattern/sidecar** |
 | [`org-orchestrator-v0.md`](../../docs/org-harness/org-orchestrator-v0.md) | **Org 编排器**（外部）：叫醒成员 agent；**不需要 Paperclip** |
 | [`org-orchestrator-wake-contract-v0.md`](../../docs/org-harness/org-orchestrator-wake-contract-v0.md) | Wake envelope `acn.org.work_wake` |
+| [`org-orchestrator-member-playbook-v0.md`](../../docs/org-harness/org-orchestrator-member-playbook-v0.md) | 成员收到 wake 后怎么干 / 关单 |
 
 **Plugins hard rule:** customize via **external Pattern / sidecar**;
 `org.plugins.*` is an **allowlist of builtins** only (`builtin_work` /
@@ -892,6 +893,9 @@ Harness itself. Design: [`docs/org-harness/`](../../docs/org-harness/README.md).
 → 成员用自己的 L1 干活；关单仍走 **governance** PATCH。示例：
 [`examples/org-orchestrator/`](../../examples/org-orchestrator/) ·
 `scripts/smoke_org_orchestrator.sh`。  
+成员侧：[`handle_wake.py`](../../examples/org-orchestrator/handle_wake.py) +
+[playbook](../../docs/org-harness/org-orchestrator-member-playbook-v0.md)
+（Mode B：`acn listen --runtime command --wake-exec 'python3 handle_wake.py'`）。  
 这不是 `plugins.loop=*`，也不是 [待办执行器](../../docs/org-harness/org-loop-spawn-sidecar-poc-v0.md)（本机跑命令）。
 
 ```bash

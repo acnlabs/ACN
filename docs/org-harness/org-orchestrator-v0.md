@@ -112,6 +112,7 @@ ACN 内：Kernel + builtin_work + heartbeat + events   ← SoT 仍在这里
 | P0 | 本文产品定义 | **Accepted** |
 | P1 | 唤醒契约（payload / 信道 / 幂等） | **Accepted** · [wake-contract](./org-orchestrator-wake-contract-v0.md) |
 | P2 | 最小侧车：poll → 校验 assignee → `communication/send` → 幂等日志 | **done** · [`examples/org-orchestrator/`](../../examples/org-orchestrator/) · `scripts/smoke_org_orchestrator.sh` |
+| P2.1 | 成员 playbook + `handle_wake.py` | **done** · [playbook](./org-orchestrator-member-playbook-v0.md) |
 | P3 | `org.*` / tick 驱动、催办、超时策略 | 按需 |
 | P4 | 可选：ClawTeam 等执行适配（[选型](./clawteam-org-loop-adapter-v0.md)） | 有需求再开 |
 
