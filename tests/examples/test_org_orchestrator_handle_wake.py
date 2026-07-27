@@ -9,7 +9,7 @@ from pathlib import Path
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "org-orchestrator"
 sys.path.insert(0, str(EXAMPLES))
 
-from handle_wake import parse_wake  # noqa: E402
+from handle_wake import assignee_matches_me, parse_wake, resolve_idempotency_key  # noqa: E402
 
 
 def test_parse_direct_wake_object() -> None:
@@ -57,3 +57,37 @@ def test_parse_mode_b_raw_envelope() -> None:
 
 def test_parse_ignores_unrelated() -> None:
     assert parse_wake({"hello": "world"}) is None
+
+
+def test_resolve_idempotency_key_prefers_envelope() -> None:
+    wake = {
+        "idempotency_key": "custom-key",
+        "org_id": "org_1",
+        "work_id": "work_1",
+        "assignee": "agt_a",
+    }
+    assert resolve_idempotency_key(wake) == "custom-key"
+
+
+def test_resolve_idempotency_key_derives() -> None:
+    wake = {"org_id": "org_1", "work_id": "work_1", "assignee": "agt_a"}
+    assert resolve_idempotency_key(wake) == "org_1:work_1:wake:1:agt_a"
+
+
+def test_assignee_matches_requires_api_assignee() -> None:
+    ok, reason = assignee_matches_me(
+        envelope_assignee="agt_a",
+        work_assignee=None,
+        my_id="agt_a",
+    )
+    assert ok is False
+    assert "no assignee" in reason
+
+
+def test_assignee_matches_me() -> None:
+    ok, _ = assignee_matches_me(
+        envelope_assignee="agt_a",
+        work_assignee="agt_a",
+        my_id="agt_a",
+    )
+    assert ok is True

@@ -30,8 +30,8 @@
 ```text
 收到消息/事件
   → 解析 type == acn.org.work_wake（见契约）
-  → list work 找到 work_id，确认仍 open 且 assignee = 自己（v0 无单条 GET）
-  → 同一 idempotency_key 只处理一次（成员本地也可记）
+  → list work 找到 work_id，确认仍 open 且 **API assignee = 自己**（空 assignee 不干）
+  → 同一 `idempotency_key` 只处理一次（`handle_wake.py` 写本地 idem 文件）
   → L1 执行 title/描述要求的活
   → 完成：通知治理方 PATCH done（或 Owner/编排器代关）
   → 放弃：治理 PATCH cancelled
@@ -55,8 +55,9 @@ acn listen --runtime command \
 ```
 
 `handle_wake.py` 从 stdin 读 Mode B 规范化事件 / 原始 JSON，抽出文本中的
-`acn.org.work_wake`，再 `GET /orgs/{id}/work/{work_id}`，把摘要打到 stdout/stderr。
-**不**自动关单；退出码 0 = 已识别并校验（或可忽略的非 wake）。
+`acn.org.work_wake`，再 **list** `GET /orgs/{id}/work?open_only=false` 定位该
+`work_id`（v0 无单条 GET），校验 assignee=自己，并用 `idempotency_key` 本地去重
+（`HANDLE_WAKE_IDEM_PATH`）。**不**自动关单；退出码 0 = 已处理 / 去重 / 可忽略。
 
 编排器侧（治理 key）：
 

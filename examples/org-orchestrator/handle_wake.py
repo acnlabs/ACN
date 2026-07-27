@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Member-side: parse acn.org.work_wake from stdin event/text, then GET work.
+"""Member-side: parse acn.org.work_wake from stdin, validate work, dedupe by key.
 
 For Mode B:
   acn listen --runtime command --wake-exec 'python3 handle_wake.py'
 
-Env: ACN_BASE_URL, ACN_API_KEY (member key; read work / membership).
-Exit 0: handled wake, non-wake ignored, or dry parse ok.
+Env:
+  ACN_BASE_URL, ACN_API_KEY — member key (list work / agents/me)
+  HANDLE_WAKE_IDEM_PATH — member-side seen keys (default ./.handle-wake-idem.json)
+  HANDLE_WAKE_SKIP_FETCH — if set, parse only (no API / no dedupe claim)
+
+Exit 0: handled, deduped, ignored non-wake, or skip-fetch parse ok.
 Exit 1: wake recognized but validation/API failed.
 Exit 2: misconfiguration.
 """
@@ -19,6 +23,7 @@ import urllib.error
 from typing import Any
 
 from acn_client_min import WorkNotFoundError, agents_me, get_work, normalize_base
+from idempotency import IdempotencyStore
 
 WAKE_TYPE = "acn.org.work_wake"
 
@@ -56,11 +61,9 @@ def _candidate_strings(payload: Any) -> list[str]:
         return [str(payload)]
 
     texts: list[str] = []
-    # Direct wake JSON object
     if payload.get("type") == WAKE_TYPE:
         texts.append(json.dumps(payload, ensure_ascii=False))
 
-    # Mode B normalized event: raw = JSON-RPC body
     raw = payload.get("raw")
     if isinstance(raw, dict):
         params = raw.get("params") if isinstance(raw.get("params"), dict) else {}
@@ -69,27 +72,23 @@ def _candidate_strings(payload: Any) -> list[str]:
             texts.extend(_texts_from_a2a_message(message))
         texts.append(json.dumps(raw, ensure_ascii=False))
 
-    # Convenience shapes
     if isinstance(payload.get("message"), dict):
         texts.extend(_texts_from_a2a_message(payload["message"]))
     if isinstance(payload.get("text"), str):
         texts.append(payload["text"])
 
-    # Whole payload as last resort string search
     texts.append(json.dumps(payload, ensure_ascii=False))
     return texts
 
 
 def parse_wake(payload: Any) -> dict[str, Any] | None:
     for text in _candidate_strings(payload):
-        # Exact JSON object
         try:
             obj = json.loads(text) if isinstance(text, str) else text
         except json.JSONDecodeError:
             obj = None
         if isinstance(obj, dict) and obj.get("type") == WAKE_TYPE:
             return obj
-        # Embedded JSON object in a larger string
         if not isinstance(text, str):
             continue
         start = text.find('{"type": "acn.org.work_wake"')
@@ -106,6 +105,39 @@ def parse_wake(payload: Any) -> dict[str, Any] | None:
     return None
 
 
+def resolve_idempotency_key(wake: dict[str, Any]) -> str:
+    """Prefer envelope key; else derive org:work:wake:1:assignee."""
+    key = str(wake.get("idempotency_key") or "").strip()
+    if key:
+        return key
+    org_id = str(wake.get("org_id") or "").strip()
+    work_id = str(wake.get("work_id") or "").strip()
+    assignee = str(wake.get("assignee") or "").strip()
+    if org_id and work_id and assignee:
+        return f"{org_id}:{work_id}:wake:1:{assignee}"
+    return ""
+
+
+def assignee_matches_me(
+    *,
+    envelope_assignee: str,
+    work_assignee: str | None,
+    my_id: str,
+) -> tuple[bool, str]:
+    """Require API assignee == me. Envelope assignee, if set, must also match."""
+    api = str(work_assignee or "").strip()
+    if not api:
+        return False, "work has no assignee"
+    if not my_id:
+        return False, "agents/me missing agent_id"
+    if api != my_id:
+        return False, f"API assignee {api} != me {my_id}"
+    env = str(envelope_assignee or "").strip()
+    if env and env != my_id:
+        return False, f"envelope assignee {env} != me {my_id}"
+    return True, ""
+
+
 def main() -> int:
     base_url = os.environ.get("ACN_BASE_URL", "").strip()
     api_key = os.environ.get("ACN_API_KEY", "").strip()
@@ -113,6 +145,10 @@ def main() -> int:
         "1",
         "true",
         "yes",
+    )
+    idem_path = os.environ.get(
+        "HANDLE_WAKE_IDEM_PATH",
+        os.path.join(os.getcwd(), ".handle-wake-idem.json"),
     )
 
     payload = _load_stdin()
@@ -127,7 +163,7 @@ def main() -> int:
 
     org_id = str(wake.get("org_id") or "")
     work_id = str(wake.get("work_id") or "")
-    idem = str(wake.get("idempotency_key") or "")
+    idem = resolve_idempotency_key(wake)
     assignee = str(wake.get("assignee") or "")
     print(
         f"[handle_wake] wake org={org_id} work={work_id} "
@@ -146,6 +182,13 @@ def main() -> int:
     if not org_id or not work_id:
         print("[handle_wake] wake missing org_id/work_id", file=sys.stderr)
         return 1
+    if not idem:
+        print(
+            "[handle_wake] wake missing idempotency_key "
+            "(and cannot derive from org/work/assignee)",
+            file=sys.stderr,
+        )
+        return 1
 
     base = normalize_base(base_url)
     try:
@@ -157,7 +200,7 @@ def main() -> int:
 
     if assignee and my_id and assignee != my_id:
         print(
-            f"[handle_wake] assignee {assignee} != me {my_id} — ignore",
+            f"[handle_wake] envelope assignee {assignee} != me {my_id} — ignore",
             flush=True,
         )
         return 0
@@ -168,7 +211,10 @@ def main() -> int:
         print(f"[handle_wake] work not found: {work_id}", file=sys.stderr)
         return 1
     except urllib.error.HTTPError as e:
-        print(f"[handle_wake] GET work failed HTTP {e.code}: {e.reason}", file=sys.stderr)
+        print(
+            f"[handle_wake] list work failed HTTP {e.code}: {e.reason}",
+            file=sys.stderr,
+        )
         return 1
 
     status = work.get("status")
@@ -181,11 +227,24 @@ def main() -> int:
     if status not in ("todo", "in_progress"):
         print(f"[handle_wake] work not open ({status}) — stop", flush=True)
         return 0
-    if work_assignee and my_id and str(work_assignee) != my_id:
-        print(
-            f"[handle_wake] API assignee {work_assignee} != me {my_id} — stop",
-            flush=True,
-        )
+
+    ok, reason = assignee_matches_me(
+        envelope_assignee=assignee,
+        work_assignee=str(work_assignee) if work_assignee is not None else None,
+        my_id=my_id,
+    )
+    if not ok:
+        print(f"[handle_wake] {reason} — stop", flush=True)
+        return 0
+
+    store = IdempotencyStore(idem_path)
+    try:
+        claimed = store.try_claim(idem, work_id=work_id, assignee=my_id)
+    except OSError as e:
+        print(f"[handle_wake] idempotency claim failed: {e}", file=sys.stderr)
+        return 1
+    if not claimed:
+        print(f"[handle_wake] deduped idem={idem} — already handled", flush=True)
         return 0
 
     print(
@@ -194,6 +253,10 @@ def main() -> int:
         flush=True,
     )
     print(json.dumps({"wake": wake, "work": work}, ensure_ascii=False, indent=2), flush=True)
+    try:
+        store.confirm(idem)
+    except OSError as e:
+        print(f"[handle_wake] idempotency confirm failed: {e}", file=sys.stderr)
     return 0
 
 

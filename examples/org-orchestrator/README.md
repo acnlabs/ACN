@@ -69,5 +69,9 @@ Mode B：
 
 ```bash
 export ACN_BASE_URL=… ACN_API_KEY=acn_member_…
+# optional: HANDLE_WAKE_IDEM_PATH=./.handle-wake-idem.json
 acn listen --runtime command --wake-exec "python3 $(pwd)/handle_wake.py"
 ```
+
+校验：work 必须 open 且 **API assignee = 自己**（空 assignee → 不 OK）；同一
+`idempotency_key` 只 OK 一次。
