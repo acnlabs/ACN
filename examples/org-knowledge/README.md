@@ -1,7 +1,8 @@
-# Org 知识库（外部侧车）— K1 / K2 消费端
+# Org 知识库（外部侧车）— K1 / K2 读路径
 
 按 `org_id` 的**文件系统 / git** 知识树：章程、SOP、playbooks、skills。  
-成员接活时**只读**拉取；**不是** ACN Kernel，**不是** `plugins.knowledge`（未接线），**不是** Memory。
+本目录实现的是**读路径**（冷启动）。产品口径上知识库应由**成员 agent 主贡献**——写路径见 [org-knowledge-base-v0.md](../../docs/org-harness/org-knowledge-base-v0.md) K4，尚未进本 examples。  
+**不是** ACN Kernel，**不是** `plugins.knowledge`（未接线），**不是** Memory。
 
 | 文档 | 链接 |
 |---|---|

@@ -1,7 +1,7 @@
 # Org 知识库 — 产品与 Port 定义 v0
 
-**Status:** Design Accepted · **K1+K2 examples 已落地**；进程内 `plugins.knowledge` 尚未接线  
-**Code：** [`examples/org-knowledge/`](../../examples/org-knowledge/) · wake `kb_refs` + `handle_wake` 加载  
+**Status:** Design Accepted（**2026-07-27 修订：agent 主贡献**）· K1+K2 只读侧车已落地；写路径设计中  
+**Code（读路径）：** [`examples/org-knowledge/`](../../examples/org-knowledge/) · wake `kb_refs` + `handle_wake` 加载  
 **Smoke：** [`scripts/smoke_org_knowledge.sh`](../../scripts/smoke_org_knowledge.sh)  
 
 **Date:** 2026-07-27  
@@ -9,32 +9,30 @@
 **Depends on:** [design-v0.md](./design-v0.md) §5.3 · [plugin-catalog-v0.md](./plugin-catalog-v0.md)  
 **Adjacent:** [org-orchestrator-wake-contract-v0.md](./org-orchestrator-wake-contract-v0.md) · [org-orchestrator-member-playbook-v0.md](./org-orchestrator-member-playbook-v0.md)
 
-> **一句话：** 组织知识库是 Org Harness 的**一等能力**（问题轴 `IOrgKnowledge`）——权威、可版本的章程 / SOP / Skills，供 Work·Loop·成员**只读**消费。  
-> **不是** Kernel，**不是** `IOrgMemory`（记忆是可写沉淀）。  
-> **不自研**检索引擎；用成熟栈做侧车 / 将来薄适配。
+> **一句话：** 组织知识库是 Org Harness 的**一等能力**（`IOrgKnowledge`）——**主要由成员 agent 贡献与维护**的共享知识资产（SOP、复盘、Skills、编译页），供后续 Work 消费。  
+> **不是** Kernel，**不是** `IOrgMemory`（记忆可脏可忘；知识库是组织可治理资产）。  
+> **人 / Owner** 管红线与冲突仲裁，**不是**默认主笔。  
+> **不自研**检索引擎；用成熟栈（git/markdown、可选 LLM Wiki / Obsidian 前端）做侧车。
 
 ### 为什么现在补
 
-Org = 人/agent 边界 + 活 + **知识**。前两块已有 Kernel / Work / Loop；知识库在 v0 叙事里被并进 Memory「集体记忆 / SOP」，属于**规划遗漏**。  
-补法与其它 Port 相同：**先占问题轴 + 默认推荐路径**，实现用现成技术，不要求「先跑稳再转正」。
+Org = 边界 + 活 + **知识**。协作主体是 **agent**，知识也应主要由 agent 在干活中沉淀，而不是假设「人写手册、agent 只读」。  
+早期 K1/K2 只做了**读路径**（冷启动）；本文修订把**贡献模型**订正为终局口径。
 
 ---
 
 ## 1. 要解决什么
 
-成员接到活时需要知道：
+成员接到活时需要知道：组织红线、同类活怎么做、可复用技能在哪。  
+更重要：干完活后要把**可复用结论**写回组织，而不是只留在单个 agent 的 L1 记忆里。
 
-- 组织章程与红线是什么；  
-- 这类活的标准作业程序（SOP）怎么走；  
-- 可复用的 Skills / playbook 片段在哪。
-
-没有组织知识库，每个 agent 只能靠各自 L1 记忆或口头约定——**Org 级真相缺失**。
+没有组织知识库 → Org 级真相缺失，也**无法跨成员复利**。
 
 **不做（本 Port）：**
 
-- 对话轨迹 / 长期事实沉淀 → **`IOrgMemory`**  
+- 对话轨迹 / 偏好抽取 → **`IOrgMemory`**  
 - 成员私有笔记 → L1 harness memory  
-- 把语雀/Notion 再实现一遍 → 选型接入
+- 自研语雀/Notion 级 CMS  
 
 ---
 
@@ -42,167 +40,182 @@ Org = 人/agent 边界 + 活 + **知识**。前两块已有 Kernel / Work / Loop
 
 ```text
 Org Graph（Kernel）          ← 不管文档内容
-Work / Loop                  ← 干活时读知识（指针或检索）
-IOrgKnowledge（本 Port）     ← 权威知识：章程 / SOP / Skills
-IOrgMemory                   ← 运行中沉淀：事实 / 偏好 / 叙事（可脏）
+Work / Loop                  ← 读知识干活；干完可提议写入
+IOrgKnowledge（本 Port）     ← 组织共享知识（agent 主贡献）
+IOrgMemory                   ← 运行沉淀：事实 / 偏好 / 叙事（可脏）
 ```
 
 | 项 | 决定 |
 |---|---|
 | 问题轴 | **`IOrgKnowledge`**（与 Memory 并列） |
-| Kernel | **不进**；不在 Org 表塞文档 blob |
-| SoT（内容） | 知识库后端（git / 对象存储 / 外挂 KB）；ACN 只认 `org_id` 边界与可选指针 |
-| 插法 v0 | **外部侧车**（与编排器同级节奏）；`plugins.knowledge` **预留**，接线前勿伪造 id |
-| 读写 | v0：**读多写少**；写入走人/Owner 流程（PR、外挂 KB 权限），agent 默认只读 |
-| 自研 | **否**——不造向量引擎 / CMS |
+| Kernel | **不进** |
+| SoT（内容） | 知识库后端（git / markdown vault 等）；ACN 认 `org_id` + 指针 / 将来写契约 |
+| 插法 | **外部侧车**；`plugins.knowledge` 预留，接线前勿伪造 |
+| **贡献者** | **成员 agent 为主**；Owner（人/agent）定红线与仲裁 |
+| 自研 | **否** |
+
+### 2.1 贡献模型（Accepted 修订）
+
+| 层 | 谁写 | 说明 |
+|---|---|---|
+| **charter / 红线** | Owner（人 or agent） | 少而稳；改动宜审 |
+| **知识主体**（sop / playbooks / skills / wiki） | **成员 agent** | 完成 work 后提议写入；组织共享 |
+| **记忆** | agent 自动抽 | 不进本 Port |
+
+```text
+agent 干活 → 读 KB → 产出
+           → 提议 contribute（新页 / 补丁）
+           → 治理：自动收 | manager 批 | 标争议
+           → 写入侧车（git commit / vault 更新）
+```
+
+**K1/K2 现状：** 只读侧车——视为冷启动，**不是**终局。  
+**终局：** 读 + **可治理的写** 都是一等能力。
 
 ### 与 Memory 的硬边界
 
 | | **知识库 `IOrgKnowledge`** | **记忆 `IOrgMemory`** |
 |---|---|---|
-| 性质 | 权威资产 | 运行沉淀 |
-| 变更 | 宜审、可回滚 | 可脏、可遗忘 |
-| 典型内容 | charter、SOP、Skills 包 | 事实、偏好、多会话实体 |
-| 消费 | Work / Loop / 成员执行前注入 | 检索增强、画像 |
-| 默认 | 见 §4（侧车推荐） | 今日 `plugins.memory=noop` |
-
-可以共用同一向量库做索引，但**产品与 Port 名必须分开**，避免 SOP 被当成聊天记忆乱写。
+| 性质 | 组织可治理资产（可版本、可争议） | 运行沉淀 |
+| 主作者 | **agent（贡献）** + Owner 红线 | agent 自动抽取 |
+| 变更 | 提议 → 治理 → 落库 | 可脏、可遗忘、冲突消解 |
+| 典型内容 | SOP、复盘、Skills、编译 wiki 页 | 事实、偏好、多会话实体 |
+| 消费 | Work / Loop / 成员执行前 | 检索增强、画像 |
 
 ### 信任边界（文件系统侧车）
 
-- Sidecar **不**做 ACN Membership / 角色鉴权。  
-- 能读 `ORG_KB_ROOT` 即可读其下任意 `orgs/<org_id>/`。  
-- 多租户须在**部署层**隔离（每 runner 一 org，或受控挂载）；勿把不可信进程挂到共享多 org root。  
-- 实现侧已做：path traversal / 出树 symlink 拒绝；单文件默认 ≤512KB；`--org` / `expected_org_id` 拒绝跨 org URI。
+- Sidecar **不**做 ACN Membership 鉴权（部署隔离多租户）。  
+- 写路径落地后：须校验「写作者是该 Org 成员」——优先在**治理/编排侧**做，或侧车校 ACN；勿裸写共享盘。  
+- 读路径已做：traversal / 出树 symlink 拒绝；单文件默认 ≤512KB；跨 org URI 拒绝。
 
-### 行业对照（2025–2026）
+### 行业对照（简）
 
-主流结论：**知识库（RAG）与 Agent Memory 不是竞品，是两套生命周期；生产系统几乎都「两个都要」。**  
-分水岭是有没有 **agent 写回路径**，不是用不用向量库。
+通用 SaaS 常假设「人对 KB 只读、Memory 可写」。  
+**ACN Org 不同：** 协作主体是 agent → **KB 也应以 agent 写为主**，再用治理区分「可进组织资产」与「仅记忆」。  
+Karpathy **LLM Wiki + Obsidian**：适合作为**编译/浏览层配方**（agent 维护互链 markdown；Obsidian 可选前端），与「权威 charter 少而稳」可叠用，**不**单独替代治理。
 
-| | **知识库 / RAG** | **Agent Memory** |
-|---|---|---|
-| 回答 | 「文档/制度说什么？」 | 「关于这个人/这段协作，我记得什么？」 |
-| 读写 | 对人/运营可写；对 agent **基本只读** | agent **持续写**：抽取、更新、遗忘 |
-| 作用域 | 人人（或按 org）一样 | 按 user / session / agent（需租户隔离） |
-| 失败模式 | 检索错、索引旧 | 记忆投毒、矛盾堆积 |
-
-代表口径（与本 Port 对齐）：
-
-- **Mem0：** RAG = 通用/领域知识；Memory = 用户专属上下文；推荐 hybrid（先记忆、再文档、再进 prompt）。  
-- **AWS Bedrock AgentCore：** LTM 管「谁是用户、以前发生过什么」；Knowledge Base/RAG 管「权威源现在怎么说」。  
-- **Zep / Graphiti：** 偏 Memory（时序图谱、对话与业务数据持续写入）；与静态文档 GraphRAG 刻意区分。  
-- 另有 **LLM Wiki** 一类：ingest 时编译领域笔记——仍属权威/领域层，不是会话记忆。
-
-典型请求循环：
+典型循环（修订后）：
 
 ```text
-Memory.search(user|org) → KB.retrieve(query) → LLM(两路 context) → Memory.add(本轮)
-                                                                    （不写回 KB）
+KB.read → 干活 → Memory.add（可选）
+                → KB.contribute（提议写入组织知识）
 ```
-
-冲突习惯：**人设/偏好听 Memory，事实/合规听 Knowledge。**  
-映射：行业 KB/RAG → **`IOrgKnowledge`**；行业 Agent Memory → **`IOrgMemory`**；会话窗口 → 成员 L1。
 
 ---
 
-## 3. 推荐栈（不自研）
+## 3. 推荐栈（用户可选方向）
 
-| 层级 | 推荐 | 说明 |
+| 选项 id（规划） | 适合 | 说明 |
 |---|---|---|
-| **P0 默认路径** | **git / 文件树** 按 `org_id` 隔离 | 人用 PR 审；agent 按 path 读。零新依赖。 |
-| **P1 检索** | 侧车 + PG+vector / 现成 RAG API | 仍按 `org_id` 过滤；ACN 不持有全文索引 |
-| **外挂 KB** | 语雀 / Notion / 飞书文档等 | community：用其 API 做只读适配；官方不绑定一家 |
+| **`git`**（默认推荐） | 组织手册 + agent 以 PR/commit 贡献 | 零新依赖；人可用 Obsidian 打开同一仓 |
+| **`llm_wiki`** | agent 编译 raw→wiki | Karpathy 模式配方；Obsidian 看图谱；须叠加治理防幻觉进红线 |
+| **`noop`** | 不要组织知识库 | 仅 L1 / Memory |
+| 外挂 RAG / 语雀等 | community | 按 `org_id` 隔离后欢迎适配 |
 
-目录约定（P0 侧车示例）：
+目录约定（`git` / 文件侧车）：
 
 ```text
 orgs/<org_id>/
-  charter.md          # 章程 / 红线
-  sop/                # 标准作业
-  playbooks/          # 场景剧本
-  skills/             # 可复用技能片段
+  charter.md          # 红线（Owner）
+  sop/                # agent 可贡献
+  playbooks/
+  skills/
+  sources/            # 可选：原料（llm_wiki）
+  wiki/               # 可选：编译层（llm_wiki）
 ```
 
 ---
 
-## 4. v0 范围
+## 4. 已交货 vs 设计中
 
-**做（设计 + 推荐路径）：**
+### 已交货（K0–K2，读路径）
 
-1. 问题轴与 catalog 正式立项（本文 + design / plugin-catalog 回链）。  
-2. **P0 交付形态：** 外部知识库侧车（文件/git）；成员 playbook：接活 → 按指针读条目 → 再执行。  
-3. **可选指针：** 编排器 / 发单方在 work 或 `acn.org.work_wake` 上带 `kb_refs[]`（path 或 URI），**不塞全文**进 ACN 消息。  
-4. 与 Memory 拆表：SOP/Skills **移出** Memory 短名单，归本 Port。
+1. 问题轴 + catalog。  
+2. 外部只读侧车 + `kb_refs` + `handle_wake` 加载。  
+3. 与 Memory 拆表。
 
-**不做（v0）：**
+### 设计中（写路径，下一刀）
 
-- 进程内 `plugins.knowledge=*` 白名单接线（与 Memory 薄适配同批，Phase 3 / 有需求时）  
-- Kernel CRUD 文档 API  
-- 自研 embedding / 图谱引擎  
-- 跨 org 知识联邦  
+| 项 | 方向 |
+|---|---|
+| **contribute 契约** | 成员完成 work 后提交「写入提议」（path、内容或 patch、provenance: agent/work_id） |
+| **治理** | v0 可先：**同 Org 成员自动收**到 `sop/`/`skills/`；`charter.md` 仅 Owner；冲突 → 标 `disputed/` 或拒绝 |
+| **实现** | 侧车 `contribute_kb.py`（或 git commit）；**不**进 Kernel CRUD |
+| **用户可选** | 创建 Org / 文档货架：至少能选 `git`（可读可贡献）vs `noop` |
+
+### 仍不做
+
+- 进程内多后端热插（待 `plugins.knowledge`）  
+- 自研向量引擎 / 跨 org 联邦  
 
 ### `plugins.knowledge` 预留
-
-与 `plugins.memory` 对称，设计上预留：
 
 ```json
 {
   "work": "builtin_work",
   "loop": "heartbeat",
   "memory": "noop",
-  "knowledge": "noop"
+  "knowledge": "git"
 }
 ```
 
 | id（规划） | 状态 | 说明 |
 |---|---|---|
-| `noop` | **plugin-planned**（未接线） | 无组织知识库；成员自行找文档 |
-| `fs` / git 侧车（官方示例） | **examples-shipped**（K1+K2） | 推荐默认交货；见 [`examples/org-knowledge/`](../../examples/org-knowledge/) |
-| 外挂 KB / RAG | **community-welcome** | 按 `org_id` 隔离即可 |
+| `noop` | **plugin-planned** | 无组织知识库 |
+| `git` | **examples-shipped（读）· write-planned** | 默认推荐；贡献 API/脚本待 K4 |
+| `llm_wiki` | **adapter-planned** | Karpathy 配方；可选第二档 |
+| 外挂 KB / RAG | **community-welcome** | |
 
-今日创建 Org **不要**传 `knowledge: …`（未知键应被忽略或拒绝——以实现为准）；开工请走**外部侧车**，与「勿伪造 `plugins.memory=mem0`」同一纪律。
+今日创建 Org **不要**伪造未接线的 `plugins.knowledge` id；读路径继续走侧车。
 
 ---
 
-## 5. 消费契约（最小）
+## 5. 消费与贡献契约（最小）
 
-### 5.1 `kb_refs`（可选，给 Work / wake）
+### 5.1 读：`kb_refs`（已有）
 
 ```json
 {
   "kb_refs": [
-    { "uri": "orgkb://<org_id>/sop/release.md", "title": "发版 SOP" },
-    { "uri": "orgkb://<org_id>/charter.md" }
+    { "uri": "orgkb://<org_id>/sop/release.md", "title": "发版 SOP" }
   ]
 }
 ```
 
-- `orgkb://` 为逻辑 scheme；侧车解析为本地 path 或外挂 URL。  
-- 唤醒消息只带 refs；全文由成员侧拉取。  
-- 无 `kb_refs` 时：成员按 playbook 默认读 `charter.md` + 与 work 类型相关的 sop（侧车约定）。
+消息只带 refs，不塞全文。
 
-### 5.2 成员侧最小循环
+### 5.2 读循环（K2）
 
 ```text
-收到 work / wake
-  → 解析 kb_refs（或默认路径）
-  → 只读拉取片段
-  → 执行并回写 work
-  → （可选）事实沉淀写入 Memory——不写回 Knowledge
+wake → 拉 kb_refs / 默认 charter → 干活 → 治理关单
 ```
+
+### 5.3 写循环（设计中 · K4）
+
+```text
+work done（或阶段性复盘）
+  → agent 生成 contribute 提议
+      { org_id, path, body|patch, from_agent, work_id?, title? }
+  → 治理规则（自动收 / 审批 / 拒）
+  → 侧车落盘（git commit 消息含 agent/work）
+  → （可选）org 事件 knowledge.contributed
+```
+
+**禁止：** 把未治理的聊天原文直接当 charter；红线页与 agent 随意区要分开。
 
 ---
 
-## 6. 权限与治理（v0 基线）
+## 6. 权限与治理（修订基线）
 
 | 动作 | 谁 |
 |---|---|
-| 读知识 | Org 成员 agent（及 Owner 工具链） |
-| 改章程 / SOP | **人 Owner 或外挂 KB 的人类权限**；v0 不强制 agent 写入 API |
-| 删 org | 随 Org 生命周期；侧车数据保留策略由运营定（ACN 不级联删外挂仓） |
+| 读知识 | Org **成员 agent** |
+| 贡献 sop/skills/playbooks/wiki | **成员 agent**（经 contribute + 治理） |
+| 改 charter / 红线 | **Owner**（人 or agent） |
+| 争议仲裁 | Owner / manager |
+| 删 org | 随 Org；侧车保留策略由运营定 |
 
-细粒度 ACL（按 path 的 manager-only）→ 后置，有真实需求再进 Policy Port。
+细粒度 path ACL → Policy Port 后置。
 
 ---
 
@@ -210,11 +223,12 @@ orgs/<org_id>/
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| **K0** | 本文 + design/catalog 升格问题轴 | **done** |
-| **K1** | `examples/org-knowledge/`：目录约定 + 读文件 helper + playbook 一段 | **done** |
-| **K2** | wake 可选 `kb_refs`；编排器可附带；`handle_wake` 加载 sidecar | **done** |
-| **K3** | 可选向量检索侧车；或 `plugins.knowledge` noop 接线 | 按需 |
-| **后置** | 真·进程内多后端、审批流改章程 | Phase 3+ |
+| **K0** | 问题轴升格 | **done** |
+| **K1–K2** | 只读侧车 + wake `kb_refs` | **done**（冷启动读路径） |
+| **K3** | 用户可选：`git` / `noop`（文档+配置/插件位）；可选向量 | 按需 |
+| **K4** | **agent contribute** 契约 + 侧车写入 + 最小治理 | **下一步** |
+| **K5** | 可选 `llm_wiki` 配方（sources→wiki，Obsidian 前端） | 按需 |
+| **后置** | `plugins.knowledge` 多后端、审批 UI | Phase 3+ |
 
 ---
 
@@ -222,12 +236,15 @@ orgs/<org_id>/
 
 | # | 决策 |
 |---|---|
-| K-D1 | 知识库是 **Org 一等能力**，规划遗漏现补；不与「等契约跑稳」挂钩 |
+| K-D1 | 知识库是 **Org 一等能力** |
 | K-D2 | Port 名 **`IOrgKnowledge`**；**不进 Kernel** |
-| K-D3 | **与 `IOrgMemory` 分离**；SOP/Skills 归知识库 |
+| K-D3 | **与 `IOrgMemory` 分离** |
 | K-D4 | **不自研**引擎；成熟栈侧车优先 |
-| K-D5 | v0 交货 = **外部侧车**；`plugins.knowledge` 预留，接线前不伪造 |
-| K-D6 | 消息只传 **`kb_refs`**，不传全文 |
+| K-D5 | 交货形态优先 **外部侧车**；`plugins.knowledge` 预留 |
+| K-D6 | 读消息只传 **`kb_refs`**，不传全文 |
+| **K-D7** | **主贡献者是成员 agent**；人/Owner 管红线与仲裁，不是默认主笔 |
+| **K-D8** | K1/K2 只读 = 冷启动；终局 = **可读 + 可治理写入** |
+| **K-D9** | 默认推荐技术 **`git`**；**`llm_wiki`** 为可选编译配方，不替代治理 |
 
 ---
 
@@ -237,6 +254,7 @@ orgs/<org_id>/
 |---|---|
 | [design-v0.md](./design-v0.md) | Port 表与决策 D12 |
 | [plugin-catalog-v0.md](./plugin-catalog-v0.md) | Knowledge 短名单 |
-| [org-orchestrator-member-playbook-v0.md](./org-orchestrator-member-playbook-v0.md) | 成员读 KB 的挂载点 |
-| [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | DEF-KB / DEF-MEM 拆分 |
-| [`../../examples/org-knowledge/`](../../examples/org-knowledge/) | K1 文件系统侧车（`read_kb.py` + `org_demo`） |
+| [org-orchestrator-member-playbook-v0.md](./org-orchestrator-member-playbook-v0.md) | 成员读 KB |
+| [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | DEF-KB |
+| [`../../examples/org-knowledge/`](../../examples/org-knowledge/) | 读路径侧车 |
+| [Karpathy llm-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) | 可选编译层灵感（非官方依赖） |
