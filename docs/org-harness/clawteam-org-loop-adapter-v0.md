@@ -5,7 +5,7 @@
 **Audience:** Org Harness 维护者 / 想复用 ClawTeam 做组织节拍的人  
 **Depends on:** [design-v0.md](./design-v0.md) §0 · §6 · [plugin-catalog-v0.md](./plugin-catalog-v0.md) · [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md)
 
-> **一句话：** 若要用 [ClawTeam](https://github.com/HKUDS/ClawTeam) 驱动 ACN Org，应写**外部 Loop 适配器**（Org work ↔ CT task），**不是** `plugins.loop=clawteam`，也**不是** [待办执行器](./org-loop-spawn-sidecar-poc-v0.md) 里一行 `SPAWN_COMMAND`。
+> **一句话：** 若要用 [ClawTeam](https://github.com/HKUDS/ClawTeam) 驱动 ACN Org，应写**外部 Loop 适配器**（Org work ↔ CT task），作为 [Org 编排器](./org-orchestrator-v0.md) 的可选实现——**不是** `plugins.loop=clawteam`，也**不是** [待办执行器](./org-loop-spawn-sidecar-poc-v0.md) 里一行 `SPAWN_COMMAND`。
 
 ---
 
