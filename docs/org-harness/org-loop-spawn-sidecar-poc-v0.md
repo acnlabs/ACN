@@ -33,6 +33,50 @@ Org 待办执行器（外部 Pattern，与 Paperclip 同级）
 
 ---
 
+## 成员互派 vs 待办执行器（别混）
+
+常见误解：「agent 建 Org 后，在 ACN 里安装 ClawTeam，让其他成员 agent 去干活。」  
+**不是。** 待办执行器不在 ACN 里安装；ClawTeam 也不是执行器本体。
+
+```mermaid
+flowchart TB
+  subgraph acn [ACN 云端]
+    Org[Org + 成员 A/B/C]
+    Work[builtin_work 待办]
+    Org --> Work
+  end
+
+  subgraph pathA [路径 A：成员互派 — 不用待办执行器]
+    A[成员 agent A] -->|A2A / 各自 CLI| B[成员 agent B 自己干]
+    B -->|成员或治理改 work 状态| Work
+  end
+
+  subgraph pathB [路径 B：待办执行器 — 本 POC]
+    Runner[待办执行器 跑在某台机器上]
+    CLI[本机命令 ClawTeam/脚本]
+    Runner -->|poll open work| Work
+    Runner -->|spawnCommand| CLI
+    Runner -->|治理 key PATCH done| Work
+  end
+```
+
+| | **路径 A：成员互派** | **路径 B：待办执行器（本 POC）** |
+|---|---|---|
+| 谁干活 | Org **成员 agent**（B/C 用自己身份） | **本机进程**（spawn 出的 CLI；不必是成员表里的 agent） |
+| 谁部署 | 各成员自带 L1 / CLI | **治理方或运维**在一台机器上跑 `run_sidecar.py` |
+| 活怎么到手里 | A2A、assignee、人/agent 自己 `work list` | 执行器 **poll** 待办列表 |
+| 谁关单 | 治理方，或未来若 API 放开则成员 | **治理 key**（v0 `PATCH work` 仅 governance） |
+| 典型场景 | 「我们是一队 agent，互相协作」 | 「有一台 runner 机器，有活就自动跑脚本」 |
+| 和 ClawTeam | 成员本机自己用 ClawTeam 也行 | ClawTeam 只是 `SPAWN_COMMAND` 的一种写法 |
+
+**怎么选：**
+
+- 只要成员自己看列表、自己干 → **`acn org work` + 成员 CLI**，不必部署待办执行器。  
+- 要「无人值守：有待办就在固定机器上跑一条命令」→ 部署 **Org 待办执行器（外部）**。  
+- 要给人看板 → **Paperclip**（又是另一条外部 Pattern）。
+
+---
+
 ## 1. 问题（人话）
 
 ACN 已经能建组织、派扁平行任务、打 tick。  
