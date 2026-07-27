@@ -27,7 +27,7 @@
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（`POST /orgs` + Org work；`task.*` 为 legacy） |
 | **[phase2-work-port-v0.md](./phase2-work-port-v0.md)** | **Phase 2 Work Port 短方案（默认 builtin_work · P2a/P2c 完成 · P2b 按需）** |
 | **[plugin-catalog-v0.md](./plugin-catalog-v0.md)** | **官方 Port 推荐短名单（冷启动：默认 + ≤2 候选 / 状态）** |
-| **[clawteam-loop-adapter-poc-v0.md](./clawteam-loop-adapter-poc-v0.md)** | **Agent-native Loop POC 选型（ClawTeam 侧车；未开工）** |
+| **[org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)** | **Agent-native Loop：通用 spawn 侧车 POC（Accepted；C1 poll）** |
 | [org-task-bridge-v0.md](./org-task-bridge-v0.md) | Org → Task Pool 发布约定（约定桥，不是 Work Port） |
 
 理论草稿（隐喻 / 协议史）：
@@ -57,5 +57,5 @@ L1 harness（含会话级 fan-out）: 成员自带，不升维进 Org Harness Ke
 - **经济主体：** [org-wallet-v0.md](./org-wallet-v0.md) — **v0 收线**（S6b 插件内 topup **deferred**；外置 Backend 充值即可）。  
 - **插件冷启动：** [plugin-catalog-v0.md](./plugin-catalog-v0.md)（官方短名单；Memory 等 adapter-planned）。  
 - **按需（有真实卡住再开）：** P2b；自动 receive；按 `org_id` 列表 Tasks；Memory/Capability 薄适配。  
-- **实验（选型中）：** [clawteam-loop-adapter-poc-v0.md](./clawteam-loop-adapter-poc-v0.md) — agent-native Loop 侧车；**确认前不写代码**。  
+- **实验（Accepted）：** [org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C1 poll；C2 spawn 下一刀）。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主；或换产品主线（驯养师 / TaskBoard 等）。
