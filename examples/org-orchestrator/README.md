@@ -55,12 +55,12 @@ python3 run_orchestrator.py --once --no-mark-in-progress
 # A — 编排器 alone（需治理 key）
 ACN_BASE_URL=… ACN_API_KEY=acn_… ./scripts/smoke_org_orchestrator.sh
 
-# B — 成员侧解析（无网络：跳过 fetch）
+# B–F — 成员侧 e2e：inbox → handle_wake → done
+ACN_BASE_URL=… ACN_API_KEY=acn_… ./scripts/smoke_org_orchestrator_member_e2e.sh
+
+# 仅解析（无网络）
 echo '{"type":"acn.org.work_wake","org_id":"org_x","work_id":"work_y","assignee":"agt_z"}' \
   | HANDLE_WAKE_SKIP_FETCH=1 python3 handle_wake.py
-
-# 端到端成员步骤见：
-# docs/org-harness/org-orchestrator-member-playbook-v0.md
 ```
 
 ## 成员侧 `handle_wake.py`
