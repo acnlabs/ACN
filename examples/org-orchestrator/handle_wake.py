@@ -8,6 +8,8 @@ Env:
   ACN_BASE_URL, ACN_API_KEY — member key (list work / agents/me)
   HANDLE_WAKE_IDEM_PATH — member-side seen keys (default ./.handle-wake-idem.json)
   HANDLE_WAKE_SKIP_FETCH — if set, parse only (no API / no dedupe claim)
+  HANDLE_WAKE_SKIP_KB — if set, do not load Org knowledge sidecar
+  ORG_KB_ROOT — filesystem knowledge root (default: ../org-knowledge/data)
 
 Exit 0: handled, deduped, ignored non-wake, or skip-fetch parse ok.
 Exit 1: wake recognized but validation/API failed.
@@ -20,12 +22,14 @@ import json
 import os
 import sys
 import urllib.error
+from pathlib import Path
 from typing import Any
 
 from acn_client_min import WorkNotFoundError, agents_me, get_work, normalize_base
 from idempotency import IdempotencyStore
 
 WAKE_TYPE = "acn.org.work_wake"
+_KB_DIR = Path(__file__).resolve().parent.parent / "org-knowledge"
 
 
 def _load_stdin() -> Any:
@@ -138,10 +142,56 @@ def assignee_matches_me(
     return True, ""
 
 
+def load_knowledge_bundle(wake: dict[str, Any]) -> str | None:
+    """Read Org KB sidecar using wake.kb_refs or default charter. None if skipped/missing."""
+    if str(_KB_DIR) not in sys.path:
+        sys.path.insert(0, str(_KB_DIR))
+    try:
+        from kb import (  # type: ignore
+            default_kb_root,
+            default_refs_for_org,
+            format_bundle,
+            read_refs,
+        )
+    except ImportError as e:
+        print(f"[handle_wake] kb import failed: {e}", flush=True)
+        return None
+
+    org_id = str(wake.get("org_id") or "").strip()
+    if not org_id:
+        return None
+
+    if not os.environ.get("ORG_KB_ROOT", "").strip():
+        # Prefer example data next to this repo layout.
+        os.environ.setdefault("ORG_KB_ROOT", str(default_kb_root()))
+
+    raw_refs = wake.get("kb_refs")
+    refs: list[Any]
+    if isinstance(raw_refs, list) and raw_refs:
+        refs = raw_refs
+    else:
+        refs = default_refs_for_org(org_id)
+
+    try:
+        pairs = read_refs(refs, expected_org_id=org_id)
+    except FileNotFoundError as e:
+        print(f"[handle_wake] kb missing (ok to continue): {e}", flush=True)
+        return None
+    except (ValueError, OSError) as e:
+        print(f"[handle_wake] kb load failed: {e}", flush=True)
+        return None
+    return format_bundle(pairs)
+
+
 def main() -> int:
     base_url = os.environ.get("ACN_BASE_URL", "").strip()
     api_key = os.environ.get("ACN_API_KEY", "").strip()
     skip_fetch = os.environ.get("HANDLE_WAKE_SKIP_FETCH", "").strip() in (
+        "1",
+        "true",
+        "yes",
+    )
+    skip_kb = os.environ.get("HANDLE_WAKE_SKIP_KB", "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -174,6 +224,11 @@ def main() -> int:
     if skip_fetch:
         print("[handle_wake] HANDLE_WAKE_SKIP_FETCH set — not calling API", flush=True)
         print(json.dumps(wake, ensure_ascii=False, indent=2), flush=True)
+        if not skip_kb:
+            bundle = load_knowledge_bundle(wake)
+            if bundle:
+                print("[handle_wake] knowledge bundle:", flush=True)
+                print(bundle, end="" if bundle.endswith("\n") else "\n", flush=True)
         return 0
 
     if not base_url or not api_key:
@@ -252,7 +307,28 @@ def main() -> int:
         "ask governance to PATCH done|cancelled when finished.",
         flush=True,
     )
-    print(json.dumps({"wake": wake, "work": work}, ensure_ascii=False, indent=2), flush=True)
+    kb_bundle = None
+    if not skip_kb:
+        kb_bundle = load_knowledge_bundle(wake)
+        if kb_bundle:
+            print("[handle_wake] knowledge bundle:", flush=True)
+            print(
+                kb_bundle,
+                end="" if kb_bundle.endswith("\n") else "\n",
+                flush=True,
+            )
+    print(
+        json.dumps(
+            {
+                "wake": wake,
+                "work": work,
+                "knowledge_loaded": bool(kb_bundle),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        flush=True,
+    )
     try:
         store.confirm(idem)
     except OSError as e:

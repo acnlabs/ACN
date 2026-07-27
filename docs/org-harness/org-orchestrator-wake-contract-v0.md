@@ -63,7 +63,10 @@
   "title": "…",
   "status": "todo",
   "assignee": "agt_…",
-  "hint": "Fetch work with acn org work show; complete then ask governance to mark done."
+  "hint": "Fetch work with acn org work show; complete then ask governance to mark done.",
+  "kb_refs": [
+    { "uri": "orgkb://org_…/charter.md", "title": "charter.md" }
+  ]
 }
 ```
 
@@ -76,8 +79,10 @@
 | `title` | 是 | 便于展示；权威仍以 API 为准 |
 | `status` / `assignee` | 建议 | 发送时快照 |
 | `hint` | 否 | 给人/agent 的操作提示 |
+| `kb_refs` | 否 | 组织知识指针（**不塞全文**）；见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。成员用 sidecar 解析 `orgkb://` |
 
-成员侧：**以 `work_id` 再拉一次 Org API 为准**，勿盲信快照字段。
+成员侧：**以 `work_id` 再拉一次 Org API 为准**，勿盲信快照字段。  
+`kb_refs` 的 org_id 须与信封 `org_id` 一致；全文由 [`examples/org-knowledge/`](../../examples/org-knowledge/) 拉取（`handle_wake.py` 已接）。
 
 ### 3.2 与 Mode B runtime 的关系
 
@@ -118,6 +123,7 @@
 ## 6. 成员收到后怎么做（契约期望）
 
 1. 解析 `type == acn.org.work_wake`。  
+1b. （可选）按 `kb_refs` 或默认 `charter.md` 只读拉组织知识，再开工。  
 2. `acn org work list` / 等价 list API 找到该 `work_id`，确认仍 open 且自己是 assignee（v0 **无** `GET /work/{id}`）。  
 3. 用自身 L1 执行。  
 4. 完成：经治理路径 `PATCH` → `done`（成员 key 若无治理权，则回报 Owner/编排器代关，或人工/脚本）。  

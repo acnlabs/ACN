@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
+import pytest
+
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "org-orchestrator"
+KB_DATA = Path(__file__).resolve().parents[2] / "examples" / "org-knowledge" / "data"
 sys.path.insert(0, str(EXAMPLES))
 
-from handle_wake import assignee_matches_me, parse_wake, resolve_idempotency_key  # noqa: E402
+from handle_wake import (  # noqa: E402
+    assignee_matches_me,
+    load_knowledge_bundle,
+    parse_wake,
+    resolve_idempotency_key,
+)
+from run_orchestrator import build_envelope  # noqa: E402
 
 
 def test_parse_direct_wake_object() -> None:
@@ -91,3 +101,42 @@ def test_assignee_matches_me() -> None:
         my_id="agt_a",
     )
     assert ok is True
+
+
+def test_build_envelope_includes_work_kb_refs() -> None:
+    env = build_envelope(
+        "org_1",
+        {
+            "work_id": "work_1",
+            "assignee_agent_id": "agt_a",
+            "title": "t",
+            "status": "todo",
+            "kb_refs": [{"uri": "orgkb://org_1/sop/x.md", "title": "x"}],
+        },
+    )
+    assert env["kb_refs"][0]["uri"] == "orgkb://org_1/sop/x.md"
+
+
+def test_build_envelope_attach_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORG_KB_ATTACH_DEFAULTS", "1")
+    monkeypatch.delenv("ORG_KB_REFS_JSON", raising=False)
+    env = build_envelope(
+        "org_demo",
+        {
+            "work_id": "work_1",
+            "assignee_agent_id": "agt_a",
+            "title": "t",
+            "status": "todo",
+        },
+    )
+    assert env["kb_refs"][0]["uri"] == "orgkb://org_demo/charter.md"
+
+
+def test_load_knowledge_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORG_KB_ROOT", str(KB_DATA))
+    wake = {
+        "org_id": "org_demo",
+        "kb_refs": [{"uri": "orgkb://org_demo/charter.md"}],
+    }
+    bundle = load_knowledge_bundle(wake)
+    assert bundle and "Charter" in bundle

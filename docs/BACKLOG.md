@@ -896,7 +896,8 @@ Still deferred (Phase 2b / 3+):
 - **DEF-WORK-PLUGIN** — ~~P2a `builtin_work`~~ / ~~P2c Paperclip Org path~~ done；
   remaining **P2b** `plugins.work=task_pool` in-process（按需）— 见
   [`org-harness/phase2-work-port-v0.md`](org-harness/phase2-work-port-v0.md)
-- **DEF-MEM** — Org Memory / SOPs (Pattern-local; Mem0/Zep/PG+vector)
+- **DEF-KB** — Org Knowledge (`IOrgKnowledge`; charter/SOP/Skills sidecar; see [`org-harness/org-knowledge-base-v0.md`](org-harness/org-knowledge-base-v0.md))
+- **DEF-MEM** — Org Memory (facts/narrative; Mem0/Zep/PG+vector; ≠ SOP)
 - **DEF-ORGREP** — Cross-org reputation (beyond per-agent ERC-8004 reads)
 - **DEF-DISPUTE** — Dispute / jury after escrow window (ADR-0010 Future)
 - **DEF-FED** — Federation across ACN instances ([federation.md](federation.md))

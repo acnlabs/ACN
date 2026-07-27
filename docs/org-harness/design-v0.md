@@ -1,7 +1,7 @@
 # Org Harness 方案设计与架构 v0
 
 **Status:** Design v0 — mechanics decided in [ADR-0014](../adr/0014-org-harness-module.md)（Accepted）  
-**Date:** 2026-07-19 · **Narrative sync:** 2026-07-27（架构导读：Kernel / Ports / 外部 Pattern 分界）  
+**Date:** 2026-07-19 · **Narrative sync:** 2026-07-27（架构导读：Kernel / Ports / 外部 Pattern 分界；补 `IOrgKnowledge`）  
 **Audience:** ACN / AgentPlanet 产品与工程  
 **Supersedes (naming & ownership):** 本文纠正早期「ACN = Pasture System」「Org 只活在 Paperclip」的表述；Network Core 契约仍见 [api-surface-tiers.md](./api-surface-tiers.md)。  
 **P0/P1 风险收口:** 见 ADR-0014（无 owner 治理、Membership↔subnet、subnet steward、Phase 1 含最小 work、Loop/Work 边界）。
@@ -197,7 +197,7 @@ Org:    unclaimed | owned_by human | owned_by agent
 ### 5.1 原则
 
 - **Kernel 不可替换**：Org 是什么（身份、可选 Owner、agent 成员、subnet 绑定）——即持久 **Org Graph**。
-- **Ports 可替换**：Org 怎么运转（活、环、记忆、能力池、策略、事件出口）。
+- **Ports 可替换**：Org 怎么运转（活、环、知识库、记忆、能力池、策略、事件出口）。
 - **三层叠加，不是二选一**（对齐业界 loop/graph 讨论的硬共识）：
   - **Org Graph**（Kernel）——谁长期在组织里、角色与围栏；
   - **Control Loop**（`IOrgLoop`）——组织心跳：观察队列 → 分派/唤醒 → 回收；
@@ -222,16 +222,18 @@ Membership **不是**「加人产品」：进围栏走既有 subnet admission；
 | **`IWorkPattern`** | 活怎么建模、认领、状态 | **`builtin_work`**（Phase 1 `OrgWorkItem`） | TaskPool（可选/deferred）；自研 DAG；**Paperclip = 外部 Pattern**（非 `plugins.work`） |
 | **`IOrgLoop`** | 看队列→分派/唤醒→回收 | Heartbeat / 简单 dispatcher | （将来）ClawTeam **Loop 适配器**、自定义巡检；今日自定义走**外部 Pattern** |
 | **`ICapabilityPool`** | 组织能力目录 | 聚合成员 ACN skills（可先内置非插件） | 外挂 MCP catalog |
-| **`IOrgMemory`** | 集体记忆 / SOP | `noop` | Mem0、PG+vector、Skills 包 |
+| **`IOrgKnowledge`** | 权威知识（章程 / SOP / Skills） | 外部侧车（见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)）；`plugins.knowledge` 预留 | git/文件、外挂 KB、RAG 侧车 |
+| **`IOrgMemory`** | 集体记忆（事实 / 偏好 / 叙事） | `noop` | Mem0、Zep/Graphiti、PG+vector |
 | **`IPolicyBudget`** | 角色权限、花费 | Kernel 角色枚举 | 审批流、月度硬停 |
 | **`IEventSink`** | 生命周期外推 | subnet harness webhook | 多 webhook、OTel |
 
 **v0 必要实现：** Kernel + `IWorkPattern` + 薄 `IOrgLoop` + `IEventSink`。  
-其余 Port **占位即可**，避免一次做成「小 OpenHarness 复刻」。
+其余 Port **占位即可**，避免一次做成「小 OpenHarness 复刻」。  
+**知识库**与 Memory 同级问题轴：内容用成熟栈侧车交货，**不进 Kernel**；见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。
 
-> **Port 名 ≠ 货架上已有货。** 「可替换示例」是问题轴上的方向；进程内是否接线见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。Paperclip / 待办执行器走外部，不进 `plugins.*`。
+> **Port 名 ≠ 货架上已有货。** 「可替换示例」是问题轴上的方向；进程内是否接线见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。Paperclip / 待办执行器 / 知识库侧车走外部，不进 `plugins.*`。
 
-建议后续补：**统一 Plugin 宿主**（发现、按 org 启用、版本、失败隔离），以及 **Skills/SOP 与 Memory 分离**（或明确 SOP 为 Work/Loop 的只读输入）。
+建议后续补：**统一 Plugin 宿主**（发现、按 org 启用、版本、失败隔离）。**Skills/SOP 已从 Memory 拆出** → `IOrgKnowledge`。
 
 ### 5.4 Org Graph · Control Loop · Work Graph
 
@@ -408,13 +410,14 @@ Org Harness **消费** Core，不重新实现：
 
 ### Phase 3 — 增强 Port
 
-- Policy/Budget、Memory、Capability 真插件化  
+- Policy/Budget、Memory、Knowledge、Capability 真插件化  
 - ClawTeam / Swarm 适配器实验  
 - 统一 Plugin 宿主（发现 / 版本 / 热加载；Phase 2 仅最小 resolve）  
 
 ### 明确后置
 
-Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（见 [org-pattern-adapter-spec-v0.md § Deferred](./org-pattern-adapter-spec-v0.md#7-deferred-enhancements) / BACKLOG）。
+Org Memory 深度、知识库进程内多后端、跨 org 信誉、Dispute、Federation、agentic 支付轨（见 [org-pattern-adapter-spec-v0.md § Deferred](./org-pattern-adapter-spec-v0.md#7-deferred-enhancements) / BACKLOG）。  
+知识库 **K0–K2 已补**（问题轴 + sidecar + wake `kb_refs`）；见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。
 
 ---
 
@@ -433,6 +436,7 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 | D9 | v0 不做「加人」叙事；复用 subnet 围栏 |
 | D10 | v0 只做满 Kernel + Work + 薄 Loop + Events，避免过度对称 |
 | D11 | 自定义优先 **外部 Pattern**；`plugins.*` 仅官方 Builtin 白名单（见 plugin-catalog） |
+| D12 | **`IOrgKnowledge`** 与 Memory 并列；权威 SOP/Skills ≠ 可写记忆；不进 Kernel；v0 侧车交货（[org-knowledge-base-v0.md](./org-knowledge-base-v0.md)） |
 
 ---
 
@@ -442,6 +446,7 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 |---|---|
 | [README.md](./README.md) | 本目录索引 |
 | [plugin-catalog-v0.md](./plugin-catalog-v0.md) | Port 短名单与「外部 Pattern vs plugins.*」硬约定 |
+| [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) | Org 知识库 Port / 与 Memory 分界 / 侧车路径 |
 | [../adr/0014-org-harness-module.md](../adr/0014-org-harness-module.md) | **P0/P1 决策 ADR（Accepted）** |
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core / Pattern 消费契约 |
 | [org-model-v0.md](./org-model-v0.md) | 数据模型（随本文修订 ownership） |
@@ -459,6 +464,6 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 
 ## 13. 一句话总结
 
-> **Org Harness = ACN 内建 Kernel（Org Graph：Org + 可选 Owner + agent 成员 + subnet）+ 薄 Control Loop + 可插拔 Ports（Work / Memory / Policy / Events…）。**  
-> **自定义运转方式优先外部 Pattern**（Paperclip、待办执行器等）；`plugins.*` 仅官方 Builtin。  
+> **Org Harness = ACN 内建 Kernel（Org Graph：Org + 可选 Owner + agent 成员 + subnet）+ 薄 Control Loop + 可插拔 Ports（Work / Knowledge / Memory / Policy / Events…）。**  
+> **自定义运转方式优先外部 Pattern**（Paperclip、待办执行器、知识库侧车等）；`plugins.*` 仅官方 Builtin。  
 > L1 harness 由成员自带；ClawTeam/Swarm/LangGraph 是外部适配**候选**，不是内核平替。Network Core 是底座——不是把 ACN 改名叫 Pasture，也不是在内核复刻 Ultra。
