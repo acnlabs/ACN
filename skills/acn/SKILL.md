@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "0.17.13"
+  version: "0.17.14"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -879,11 +879,20 @@ Harness itself. Design: [`docs/org-harness/`](../../docs/org-harness/README.md).
 | [`org-task-bridge-v0.md`](../../docs/org-harness/org-task-bridge-v0.md) | Publish/import network Tasks (≠ Work Port, ≠ P2b) |
 | [`org-wallet-v0.md`](../../docs/org-harness/org-wallet-v0.md) | Org Credits wallet (S0–S6 done; fund via Backend) |
 | [`plugin-catalog-v0.md`](../../docs/org-harness/plugin-catalog-v0.md) | Official Port shortlist + **custom = external Pattern/sidecar** |
+| [`org-orchestrator-v0.md`](../../docs/org-harness/org-orchestrator-v0.md) | **Org 编排器**（外部）：叫醒成员 agent；**不需要 Paperclip** |
+| [`org-orchestrator-wake-contract-v0.md`](../../docs/org-harness/org-orchestrator-wake-contract-v0.md) | Wake envelope `acn.org.work_wake` |
 
 **Plugins hard rule:** customize via **external Pattern / sidecar**;
 `org.plugins.*` is an **allowlist of builtins** only (`builtin_work` /
 `heartbeat` / `noop`). Do not invent `plugins.work=paperclip` or
 `plugins.memory=mem0` — those ids are not process-local plugins today.
+
+**Org 编排器（外部 Pattern，可选）：** 无 Paperclip 时也可自动派活。侧车 poll
+带 `assignee` 的 open work → `POST /communication/send` 发 `acn.org.work_wake`
+→ 成员用自己的 L1 干活；关单仍走 **governance** PATCH。示例：
+[`examples/org-orchestrator/`](../../examples/org-orchestrator/) ·
+`scripts/smoke_org_orchestrator.sh`。  
+这不是 `plugins.loop=*`，也不是 [待办执行器](../../docs/org-harness/org-loop-spawn-sidecar-poc-v0.md)（本机跑命令）。
 
 ```bash
 # Create Org (binds or creates a subnet fence; plugins default as above)

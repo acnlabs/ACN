@@ -46,12 +46,13 @@ export ACN_API_KEY="$KEY"
 export ORCHESTRATOR_IDEM_PATH="$IDEM"
 python3 "${ORCH}/run_orchestrator.py" --once
 
-echo "==> Verify idempotency recorded"
+echo "==> Verify idempotency recorded (includes assignee)"
 python3 -c "
 import json
 d=json.load(open('${IDEM}'))
-key='${ORG_ID}:${WORK_ID}:wake:1'
+key='${ORG_ID}:${WORK_ID}:wake:1:${AGENT_ID}'
 assert key in d.get('sent', {}), (key, d)
+assert d['sent'][key].get('pending') is False
 print('    idem ok', key)
 "
 

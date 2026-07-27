@@ -27,8 +27,9 @@ WAKE_TYPE = "acn.org.work_wake"
 WAKE_GENERATION = 1
 
 
-def wake_key(org_id: str, wid: str) -> str:
-    return f"{org_id}:{wid}:wake:{WAKE_GENERATION}"
+def wake_key(org_id: str, wid: str, assignee: str) -> str:
+    """Include assignee so reassignment wakes the new member."""
+    return f"{org_id}:{wid}:wake:{WAKE_GENERATION}:{assignee}"
 
 
 def build_envelope(org_id: str, item: dict) -> dict:
@@ -37,7 +38,7 @@ def build_envelope(org_id: str, item: dict) -> dict:
     return {
         "type": WAKE_TYPE,
         "schema_version": 1,
-        "idempotency_key": wake_key(org_id, wid),
+        "idempotency_key": wake_key(org_id, wid, assignee),
         "org_id": org_id,
         "work_id": wid,
         "title": str(item.get("title") or ""),
@@ -77,22 +78,36 @@ def process_item(
         )
         return
 
-    key = wake_key(org_id, wid)
-    if store.has(key):
-        print(f"[org-orchestrator] skip {wid}: already sent {key}", flush=True)
-        return
-
+    key = wake_key(org_id, wid, assignee)
     envelope = build_envelope(org_id, item)
     text = json.dumps(envelope, ensure_ascii=False)
     title = item.get("title") or ""
+
+    if dry_run:
+        # Dry-run does not claim; still surface skip if already recorded.
+        if store.has(key):
+            print(f"[org-orchestrator] skip {wid}: already sent {key}", flush=True)
+            return
+        print(
+            f"[org-orchestrator] wake work={wid} assignee={assignee} title={title!r}",
+            flush=True,
+        )
+        print(f"  dry-run payload: {text}", flush=True)
+        return
+
+    try:
+        claimed = store.try_claim(key, work_id=wid, assignee=assignee)
+    except OSError as e:
+        print(f"[org-orchestrator] idempotency claim failed: {e}", file=sys.stderr)
+        return
+    if not claimed:
+        print(f"[org-orchestrator] skip {wid}: already sent {key}", flush=True)
+        return
+
     print(
         f"[org-orchestrator] wake work={wid} assignee={assignee} title={title!r}",
         flush=True,
     )
-
-    if dry_run:
-        print(f"  dry-run payload: {text}", flush=True)
-        return
 
     try:
         send_message(
@@ -105,9 +120,22 @@ def process_item(
         print("  send → ok", flush=True)
     except urllib.error.HTTPError as e:
         print(f"  send failed HTTP {e.code}: {e.reason}", file=sys.stderr)
+        try:
+            store.release(key)
+        except OSError as release_err:
+            print(
+                f"  idempotency release failed: {release_err}",
+                file=sys.stderr,
+            )
         return
 
-    store.mark(key, work_id=wid, assignee=assignee)
+    try:
+        store.confirm(key)
+    except OSError as e:
+        print(
+            f"  idempotency confirm failed: {e} (wake already sent)",
+            file=sys.stderr,
+        )
 
     if mark_in_progress and item.get("status") == "todo":
         try:

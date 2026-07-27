@@ -44,9 +44,10 @@ python3 run_orchestrator.py --once --no-mark-in-progress
 
 1. 无 `assignee_agent_id` → 跳过 + 日志  
 2. assignee 非 active 成员 → 跳过  
-3. 幂等键已发送 → 跳过  
-4. `communication/send` 成功 → 记幂等；默认 `todo` → `in_progress`  
-5. **不**自动关 `done`（成员干活后走治理 PATCH）
+3. 幂等键 `{org}:{work}:wake:1:{assignee}` 已 claim/发送 → 跳过（**改派会换键，新成员可叫醒**）  
+4. flock 文件锁 + `try_claim` → `send` → `confirm`（失败 `release`）  
+5. 默认 `todo` → `in_progress`（需治理 key）  
+6. **不**自动关 `done`（成员干活后走治理 PATCH）
 
 ## 狗粮
 
