@@ -1,6 +1,6 @@
 # Org Loop spawn sidecar — 选型 + POC v0
 
-**Status:** Accepted（C0）· C1 in progress  
+**Status:** Accepted · **C1 + C2 shipped**（C3 webhook 按需）  
 **Date:** 2026-07-27  
 **Audience:** Org Harness 维护者 / Pattern 作者  
 **Depends on:** [design-v0.md](./design-v0.md) §5–§6 · [plugin-catalog-v0.md](./plugin-catalog-v0.md) · [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md)  
@@ -62,8 +62,8 @@ ACN Org
 | 切片 | 产出 | 状态 |
 |---|---|---|
 | **C0** | 本文 Accepted + catalog 指向 | **done** |
-| **C1** | poll open work + 日志（不 spawn） | **本 PR** |
-| **C2** | `spawnCommand` + 成功后 PATCH done | 下一刀 |
+| **C1** | poll open work + 日志（不 spawn） | **done** |
+| **C2** | `spawnCommand` + 成功后 PATCH done | **done** — `run_sidecar.py` + `smoke_org_loop_spawn_sidecar.sh` |
 | **C3** | webhook / 重试幂等（可选） | 按需 |
 
 ---
