@@ -29,7 +29,10 @@
 | **[phase2-work-port-v0.md](./phase2-work-port-v0.md)** | **Phase 2 Work Port 短方案（默认 builtin_work · P2a/P2c 完成 · P2b 按需）** |
 | **[plugin-catalog-v0.md](./plugin-catalog-v0.md)** | **官方 Port 推荐短名单（冷启动：默认 + ≤2 候选 / 状态）** |
 | **[org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)** | **Org 待办执行器（外部）— agent 自动跑命令 POC（C1–C2）** |
-| [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md) | ClawTeam ↔ Org Loop 适配器选型（未实现；≠ 待办执行器） |
+| **[org-orchestrator-v0.md](./org-orchestrator-v0.md)** | **ACN Org 编排器产品定义（P0 Accepted；未实现代码）** |
+| [org-orchestrator-wake-contract-v0.md](./org-orchestrator-wake-contract-v0.md) | Org 编排器唤醒契约 P1（`acn.org.work_wake`） |
+| [`examples/org-orchestrator/`](../../examples/org-orchestrator/) | Org 编排器 P2 最小侧车 + `smoke_org_orchestrator.sh` |
+| [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md) | ClawTeam ↔ Org Loop 适配器选型（编排器的可选实现；≠ 待办执行器） |
 | [org-task-bridge-v0.md](./org-task-bridge-v0.md) | Org → Task Pool 发布约定（约定桥，不是 Work Port） |
 
 理论草稿（隐喻 / 协议史）：
@@ -63,5 +66,6 @@ L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 - **插件冷启动：** [plugin-catalog-v0.md](./plugin-catalog-v0.md)（官方短名单；Memory 等 adapter-planned）。  
 - **按需（有真实卡住再开）：** P2b；自动 receive；按 `org_id` 列表 Tasks；Memory/Capability 薄适配。  
 - **实验（C1–C2）：** [Org 待办执行器（外部）](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C3 webhook 按需）。  
-- **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（有真实多 worker 协调需求再开）。  
+- **Org 编排器：** [产品定义](./org-orchestrator-v0.md) P0 + [唤醒契约](./org-orchestrator-wake-contract-v0.md) P1 + [P2 侧车](../../examples/org-orchestrator/)；P3 webhook/催办按需。  
+- **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（编排器可选后端，有需求再开）。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主；或换产品主线（驯养师 / TaskBoard 等）。
