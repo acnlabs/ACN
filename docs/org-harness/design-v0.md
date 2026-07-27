@@ -70,10 +70,10 @@ Work Graph（IWorkPattern Port）
               │
               │ API / org.* webhook
               ▼
-  外部可选：Paperclip │ 待办执行器 │（将来）真·Loop/Work 适配器
+  外部可选：Paperclip │ 待办执行器 │ [Org 编排器](./org-orchestrator-v0.md)（产品定义）│ 其他 Loop/Work 适配
 ```
 
-细节从 §4 总体架构、§5 模块内设计展开；插件短名单见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。
+细节从 §4 总体架构、§5 模块内设计展开；插件短名单见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。Org 节拍产品见 [org-orchestrator-v0.md](./org-orchestrator-v0.md)。
 
 ---
 
@@ -447,6 +447,9 @@ Org Memory 深度、跨 org 信誉、Dispute、Federation、agentic 支付轨（
 | [org-model-v0.md](./org-model-v0.md) | 数据模型（随本文修订 ownership） |
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（`POST /orgs` + Org work；`task.*` legacy）；以本文 + ADR-0014 为准 |
 | [org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md) | Org 待办执行器（外部）POC——**不是** Loop Builtin |
+| [org-orchestrator-v0.md](./org-orchestrator-v0.md) | ACN Org 编排器产品定义（P0 Accepted） |
+| [org-orchestrator-wake-contract-v0.md](./org-orchestrator-wake-contract-v0.md) | 编排器唤醒契约 P1（`acn.org.work_wake`） |
+| [`../../examples/org-orchestrator/`](../../examples/org-orchestrator/) | Org 编排器 P2 最小侧车 |
 | [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md) | ClawTeam ↔ Org Loop 适配器选型（未实现；外部 Pattern） |
 | [clawteam-loop-adapter-poc-v0.md](./clawteam-loop-adapter-poc-v0.md) | **废弃文件名**跳转页（勿按名理解） |
 | [`../_drafts/pasture-engineering.md`](../_drafts/pasture-engineering.md) | 学科隐喻与升维理论（Draft） |

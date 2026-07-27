@@ -87,7 +87,8 @@ Port 划分（Work / Loop / Memory / …）是**问题轴**，充分用于架构
 | **`heartbeat`** | **shipped** | 默认薄 tick（`POST …/loop/tick`）。别名 `thin` → `heartbeat`。 |
 | Paperclip / harness 唤醒 | **shipped**（外部） | Pattern 或 subnet harness 收 `org.*` 后驱动成员 L1；不必换 loop id。 |
 | **Org 待办执行器（外部）**（任意 `spawnCommand`；ClawTeam 等为配方） | **adapter-planned**（C1–C2 in examples） | 外部 Pattern，非 `plugins.loop=*`；见 [org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)。 |
-| **ClawTeam ↔ Org Loop 适配器** | **adapter-planned**（选型 only） | 外部 Pattern：Org work ↔ CT task；**不是** spawn 一行命令。见 [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md)。无 `plugins.loop=clawteam`。 |
+| **ACN Org 编排器**（叫醒成员 agent） | **adapter-planned**（P2 examples） | Loop 轴外部 Pattern；[产品定义](./org-orchestrator-v0.md) · [唤醒契约](./org-orchestrator-wake-contract-v0.md) · [`examples/org-orchestrator/`](../../examples/org-orchestrator/)。无 `plugins.loop=orchestrator`。 |
+| **ClawTeam ↔ Org Loop 适配器** | **adapter-planned**（选型 only） | 编排器的**可选**执行后端：Org work ↔ CT task；见 [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md)。 |
 
 ### 3. Memory — `IOrgMemory`（`plugins.memory`）
 
