@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from enum import StrEnum
+from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 
 from kb import _safe_file, max_file_bytes, org_dir
+
+# Sidecars often run on host Python (CN deploy hosts may be 3.10).
+# Keep this module importable below ACN server's requires-python (>=3.11).
+UTC = timezone.utc
 
 _AGENT_ZONE_PREFIXES = (
     "sop/",
@@ -30,7 +34,7 @@ _CHARTER_PREFIXES = ("charter/",)
 _MD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+/-]*\.md$")
 
 
-class ContributeDecision(StrEnum):
+class ContributeDecision(str, Enum):
     ACCEPTED = "accepted"
     DISPUTED = "disputed"
     REJECTED = "rejected"
