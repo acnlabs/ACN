@@ -2,7 +2,8 @@
 
 按 `org_id` 的**文件系统 / git** 知识树。  
 **成员 agent 主贡献**：`contribute_kb.py` 写入 `sop|skills|playbooks|wiki|sources`；`charter` 需 `--as-owner`；冲突进 `disputed/`。  
-**不是** ACN Kernel，**不是** `plugins.knowledge`（未接线），**不是** Memory。
+**不是** ACN Kernel，**不是** Memory。  
+ACN Org 可配 `plugins.knowledge=git|noop`（K3）；侧车内容仍在本目录。Runner 可设 `ORG_PLUGINS_KNOWLEDGE=noop` 拒绝 contribute / 跳过 wake 加载。
 
 | 文档 | 链接 |
 |---|---|
@@ -36,6 +37,7 @@ $ORG_KB_ROOT/orgs/<org_id>/
 | `ORG_KB_ROOT` | 知识树根；默认 `./data` |
 | `ORG_KB_ORG_ID` | 默认 org；与 `--org` 一起会**钉死** URI 的 org_id |
 | `ORG_KB_MAX_FILE_BYTES` | 单文件上限，默认 `524288` |
+| `ORG_PLUGINS_KNOWLEDGE` | 显式 `noop` 时 `contribute` 拒绝（`knowledge_plugin_noop`） |
 
 ## 试用
 

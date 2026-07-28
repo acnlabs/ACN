@@ -32,8 +32,20 @@ def wake_key(org_id: str, wid: str, assignee: str) -> str:
     return f"{org_id}:{wid}:wake:{WAKE_GENERATION}:{assignee}"
 
 
+def _knowledge_plugin_disabled() -> bool:
+    """True only when runner explicitly mirrors ``plugins.knowledge=noop``."""
+    return (os.environ.get("ORG_PLUGINS_KNOWLEDGE") or "").strip().lower() == "noop"
+
+
 def _kb_refs_for_item(org_id: str, item: dict) -> list[dict]:
-    """Optional kb_refs: work field → ORG_KB_REFS_JSON → ORG_KB_ATTACH_DEFAULTS."""
+    """Optional kb_refs: work field → ORG_KB_REFS_JSON → ORG_KB_ATTACH_DEFAULTS.
+
+    When ``ORG_PLUGINS_KNOWLEDGE=noop``, never attach kb_refs. Unset env keeps
+    prior sidecar behavior (opt-in via ORG_KB_*).
+    """
+    if _knowledge_plugin_disabled():
+        return []
+
     raw = item.get("kb_refs")
     if isinstance(raw, list) and raw:
         return [x for x in raw if isinstance(x, dict) and x.get("uri")]

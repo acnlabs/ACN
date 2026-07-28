@@ -43,6 +43,21 @@ def test_member_accepts_sop(root: Path) -> None:
     assert "agt_1" in text
 
 
+def test_knowledge_plugin_noop_rejects_write(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORG_PLUGINS_KNOWLEDGE", "noop")
+    r = contribute(
+        ContributeProposal(
+            org_id="org_x",
+            path="sop/tip.md",
+            body="# tip\n",
+            from_agent="agt_1",
+        ),
+        root=root,
+    )
+    assert r.decision == ContributeDecision.REJECTED
+    assert r.reason == "knowledge_plugin_noop"
+
+
 def test_member_rejected_on_charter(root: Path) -> None:
     r = contribute(
         ContributeProposal(

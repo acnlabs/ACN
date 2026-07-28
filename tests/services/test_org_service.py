@@ -786,6 +786,42 @@ class TestOrgPluginResolve:
         )
         assert org.plugins["work"] == "builtin_work"
         assert org.plugins["loop"] == "heartbeat"
+        assert org.plugins["knowledge"] == "noop"
+
+    async def test_create_accepts_knowledge_git(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        subnet = Subnet(
+            slug="org-kb-git",
+            name="KB Git",
+            owner="agt_steward",
+            member_agent_ids={"agt_steward"},
+        )
+        mock_subnet_service.get_subnet = AsyncMock(
+            side_effect=[SubnetNotFoundException("x"), subnet]
+        )
+        mock_subnet_service.create_subnet = AsyncMock(return_value=subnet)
+        org = await org_service.create_org(
+            display_name="KB Git",
+            caller_type="agent",
+            caller_sub="agt_steward",
+            subnet_id="org-kb-git",
+            plugins={"knowledge": "git"},
+        )
+        assert org.plugins["knowledge"] == "git"
+
+    async def test_create_rejects_unknown_knowledge_plugin(
+        self, org_service, mock_org_repo
+    ):
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.create_org(
+                display_name="Bad KB",
+                caller_type="agent",
+                caller_sub="agt_steward",
+                plugins={"knowledge": "mem0"},
+            )
+        assert ei.value.reason == "unknown_plugin"
+        mock_org_repo.save_org.assert_not_called()
 
     async def test_update_rejects_unavailable_plugin(
         self, org_service, mock_org_repo

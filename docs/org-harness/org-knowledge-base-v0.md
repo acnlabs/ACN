@@ -1,7 +1,8 @@
 # Org 知识库 — 产品与 Port 定义 v0
 
-**Status:** Design Accepted · **K1–K4 examples 已落地**（读 + agent contribute）  
+**Status:** Design Accepted · **K1–K4 examples 已落地** · **K3 `plugins.knowledge` 已接线**  
 **Code：** [`examples/org-knowledge/`](../../examples/org-knowledge/)（`read_kb.py` · `contribute_kb.py` · wake 加载）  
+**Plugins：** `acn.services.knowledge_patterns`（`noop` | `git`）  
 **Smoke：** [`scripts/smoke_org_knowledge.sh`](../../scripts/smoke_org_knowledge.sh)  
 
 **Date:** 2026-07-27  
@@ -70,7 +71,7 @@ agent 干活 → 读 KB → 产出
 ```
 
 **K1/K2：** 读路径。**K4：** 侧车 `contribute`（成员区自动收；charter 需 Owner；冲突 → `disputed/`）。  
-进程内 `plugins.knowledge` 仍未接线。
+进程内 `plugins.knowledge`：**K3 已接线**（默认 `noop`；`git` 启用侧车契约）。
 
 ### 与 Memory 的硬边界
 
@@ -148,7 +149,7 @@ orgs/<org_id>/
 - Kernel CRUD 文档 API  
 - 自研向量引擎 / 跨 org 联邦  
 
-### `plugins.knowledge` 预留
+### `plugins.knowledge`（K3）
 
 ```json
 {
@@ -159,14 +160,14 @@ orgs/<org_id>/
 }
 ```
 
-| id（规划） | 状态 | 说明 |
+| id | 状态 | 说明 |
 |---|---|---|
-| `noop` | **plugin-planned** | 无组织知识库 |
-| `git` | **examples-shipped**（读+写 K4） | 默认推荐 |
-| `llm_wiki` | **adapter-planned** | Karpathy 配方；可选第二档 |
+| `noop` | **wired**（默认） | 无组织知识库；runner 可设 `ORG_PLUGINS_KNOWLEDGE=noop` 跳过读/写 |
+| `git` | **wired** + 侧车 examples | 启用 filesystem/git 侧车契约（`read_kb` / `contribute_kb`） |
+| `llm_wiki` | **plugin-unavailable**（K5） | Karpathy 配方；可选第二档 |
 | 外挂 KB / RAG | **community-welcome** | |
 
-今日创建 Org **不要**伪造未接线的 `plugins.knowledge` id；读写继续走侧车。
+创建 Org 时可显式传 `knowledge=git`；内容仍在侧车，不进 Kernel CRUD。
 
 ---
 
@@ -234,7 +235,7 @@ python3 contribute_kb.py --org org_x --from-agent agt_1 \
 | **K0** | 问题轴升格 | **done** |
 | **K1–K2** | 读侧车 + wake `kb_refs` | **done** |
 | **K4** | **agent contribute** + 最小治理（`contribute_kb.py`） | **done** |
-| **K3** | 用户可选：`git` / `noop`（`plugins.knowledge`）；可选向量 | 按需 |
+| **K3** | 用户可选：`git` / `noop`（`plugins.knowledge`）；可选向量 | **done**（向量后置） |
 | **K5** | 可选 `llm_wiki` 配方（sources→wiki，Obsidian 前端） | 按需 |
 | **后置** | `plugins.knowledge` 多后端、审批 UI | Phase 3+ |
 

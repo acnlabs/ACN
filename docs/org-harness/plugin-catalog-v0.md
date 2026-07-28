@@ -32,7 +32,7 @@
 |---|---|
 | 组织内派活 + Paperclip Issues | **默认** `builtin_work` + 装 [`paperclip-acn-plugin`](https://github.com/acnlabs/paperclip-acn-plugin)（外部 Pattern，**不是** `plugins.work=paperclip`） |
 | 面向网络发赏金 | **旁路** [org-task-bridge](./org-task-bridge-v0.md) / Org wallet；**不要**改 `plugins.work` |
-| 组织知识库（**agent 主贡献**） | 读：[`examples/org-knowledge/`](../../examples/org-knowledge/)；写路径设计中。可选方向 `git` / `noop` /（将来）`llm_wiki`。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。勿伪造未接线 `plugins.knowledge=*` |
+| 组织知识库（**agent 主贡献**） | `plugins.knowledge=noop|git`（K3）；侧车 [`examples/org-knowledge/`](../../examples/org-knowledge/)。`llm_wiki` → K5。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) |
 | 组织共享记忆（事实 / 叙事） | 先 `memory=noop`；需要时按下方 Memory 短名单自建侧车 |
 | Task Pool 当组织工单后端 | **`deferred`**（`plugins.work=task_pool` 会 `plugin_unavailable`） |
 
@@ -46,7 +46,7 @@
 
 | 路径 | 谁用 | v0 事实 |
 |---|---|---|
-| **`org.plugins.*`（进程内 registry）** | ACN 内置 Builtin | 白名单 id only（今日：`builtin_work` / `heartbeat` / `noop`）。任意第三方字符串 → 拒绝。完整第三方进程内插件 → **Phase 3**（宿主 + 信任模型）之后才谈。 |
+| **`org.plugins.*`（进程内 registry）** | ACN 内置 Builtin | 白名单 id only（今日：`builtin_work` / `heartbeat` / `memory=noop` / `knowledge=noop|git`）。任意第三方字符串 → 拒绝。完整第三方进程内插件 → **Phase 3**（宿主 + 信任模型）之后才谈。 |
 | **外部 Pattern / 侧车** | 用户与社区的主自定义路径 | 消费 Org / work / harness 事件（见 [adapter spec](./org-pattern-adapter-spec-v0.md)），或按 `org_id` 挂 Memory/MCP 侧车。**不**要求改 `plugins.work=…`。Paperclip 即此路。 |
 
 因此：
@@ -94,13 +94,13 @@ Port 划分（Work / Loop / Knowledge / Memory / …）是**问题轴**，充分
 | **ACN Org 编排器**（叫醒成员 agent） | **adapter-planned**（P2 examples） | Loop 轴外部 Pattern；[产品定义](./org-orchestrator-v0.md) · [唤醒契约](./org-orchestrator-wake-contract-v0.md) · [`examples/org-orchestrator/`](../../examples/org-orchestrator/)。无 `plugins.loop=orchestrator`。 |
 | **ClawTeam ↔ Org Loop 适配器** | **adapter-planned**（选型 only） | 编排器的**可选**执行后端：Org work ↔ CT task；见 [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md)。 |
 
-### 3. Knowledge — `IOrgKnowledge`（`plugins.knowledge` 预留）
+### 3. Knowledge — `IOrgKnowledge`（`plugins.knowledge` · K3）
 
 | id / 方向 | 状态 | 说明 |
 |---|---|---|
-| **`git` / 文件侧车**（按 `org_id`） | **examples-shipped**（读 K1/K2 · 写 K4） | **默认推荐**。`read_kb` + `contribute_kb`；wake `kb_refs`。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。 |
-| **`llm_wiki`**（Karpathy 编译层 + 可选 Obsidian） | **adapter-planned** | 可选第二档；agent 维护 wiki/；须治理，不替代 charter。 |
-| `noop`（进程内） | **plugin-planned**（未接线） | 不要组织知识库。 |
+| **`noop`** | **wired**（默认） | 不要组织知识库。 |
+| **`git` / 文件侧车**（按 `org_id`） | **wired** + examples（读 K1/K2 · 写 K4） | 启用侧车契约。`read_kb` + `contribute_kb`；wake `kb_refs`。见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。 |
+| **`llm_wiki`**（Karpathy 编译层 + 可选 Obsidian） | **plugin-unavailable**（K5） | 可选第二档；agent 维护 wiki/；须治理，不替代 charter。 |
 | 外挂 KB / RAG | **community-welcome** | 成熟栈接入；ACN **不自研**引擎。 |
 
 组织刚需；**主贡献者是 agent**；与 Memory **分开选型**。

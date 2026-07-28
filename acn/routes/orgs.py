@@ -262,7 +262,8 @@ class OrgCreateRequest(BaseModel):
     plugins: dict[str, str] | None = Field(
         default=None,
         description=(
-            "Org plugin map; work defaults to builtin_work. "
+            "Org plugin map; work defaults to builtin_work; "
+            "knowledge: noop|git (K3). "
             "Legacy aliases minimal→builtin_work, thin→heartbeat."
         ),
     )
