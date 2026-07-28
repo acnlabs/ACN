@@ -88,6 +88,7 @@ class Org:
             "work": "builtin_work",
             "loop": "heartbeat",
             "memory": "noop",
+            "knowledge": "noop",
         }
     )
     roles: list[str] = field(default_factory=lambda: list(_DEFAULT_ROLES))
@@ -148,6 +149,7 @@ class Org:
                 "work": "builtin_work",
                 "loop": "heartbeat",
                 "memory": "noop",
+                "knowledge": "noop",
             },
             roles=list(data.get("roles") or _DEFAULT_ROLES),
             status=data.get("status") or "active",

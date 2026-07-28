@@ -7,11 +7,12 @@ from ...core.interfaces.org_repository import IOrgRepository
 from ...core.interfaces.work_pattern import IWorkPattern
 from .builtin import BuiltinWorkPattern
 
-# Canonical defaults (phase2-work-port-v0).
+# Canonical defaults (phase2-work-port-v0 + K3 knowledge).
 DEFAULT_ORG_PLUGINS: dict[str, str] = {
     "work": "builtin_work",
     "loop": "heartbeat",
     "memory": "noop",
+    "knowledge": "noop",
 }
 
 # Legacy Phase 1 ids still accepted when reading stored Orgs.
@@ -33,6 +34,9 @@ _WORK_KNOWN_UNAVAILABLE: frozenset[str] = frozenset({"task_pool", "paperclip"})
 
 _LOOP_KNOWN: frozenset[str] = frozenset({"heartbeat"})
 _MEMORY_KNOWN: frozenset[str] = frozenset({"noop"})
+# K3: git = filesystem/git sidecar (examples/org-knowledge); llm_wiki = K5 later.
+_KNOWLEDGE_KNOWN: frozenset[str] = frozenset({"noop", "git"})
+_KNOWLEDGE_KNOWN_UNAVAILABLE: frozenset[str] = frozenset({"llm_wiki"})
 
 
 def canonicalize_work_plugin(plugin_id: str) -> str:
@@ -41,6 +45,11 @@ def canonicalize_work_plugin(plugin_id: str) -> str:
 
 def canonicalize_loop_plugin(plugin_id: str) -> str:
     return _LOOP_ALIASES.get(plugin_id, plugin_id)
+
+
+def canonicalize_knowledge_plugin(plugin_id: str) -> str:
+    pid = (plugin_id or "noop").strip() or "noop"
+    return pid
 
 
 def normalize_org_plugins(plugins: dict[str, str] | None) -> dict[str, str]:
@@ -52,6 +61,9 @@ def normalize_org_plugins(plugins: dict[str, str] | None) -> dict[str, str]:
     merged["loop"] = canonicalize_loop_plugin(merged.get("loop", "heartbeat"))
     if "memory" not in merged or not merged["memory"]:
         merged["memory"] = "noop"
+    merged["knowledge"] = canonicalize_knowledge_plugin(
+        merged.get("knowledge", "noop")
+    )
     return merged
 
 
@@ -83,6 +95,20 @@ def validate_org_plugins(plugins: dict[str, str]) -> None:
         raise OrgConflictError(
             "unknown_plugin",
             f"unknown memory plugin: {memory!r}",
+        )
+
+    knowledge = canonicalize_knowledge_plugin(plugins.get("knowledge", "noop"))
+    if knowledge in _KNOWLEDGE_KNOWN:
+        pass
+    elif knowledge in _KNOWLEDGE_KNOWN_UNAVAILABLE:
+        raise OrgConflictError(
+            "plugin_unavailable",
+            f"knowledge plugin '{knowledge}' is not available yet (K5+)",
+        )
+    else:
+        raise OrgConflictError(
+            "unknown_plugin",
+            f"unknown knowledge plugin: {plugins.get('knowledge')!r}",
         )
 
 

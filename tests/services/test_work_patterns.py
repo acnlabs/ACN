@@ -21,6 +21,7 @@ def test_default_plugins_are_canonical():
         "work": "builtin_work",
         "loop": "heartbeat",
         "memory": "noop",
+        "knowledge": "noop",
     }
 
 
@@ -29,7 +30,14 @@ def test_normalize_legacy_aliases():
         "work": "builtin_work",
         "loop": "heartbeat",
         "memory": "noop",
+        "knowledge": "noop",
     }
+
+
+def test_normalize_knowledge_default_and_git():
+    assert normalize_org_plugins(None)["knowledge"] == "noop"
+    assert normalize_org_plugins({"knowledge": "git"})["knowledge"] == "git"
+    assert normalize_org_plugins({"knowledge": ""})["knowledge"] == "noop"
 
 
 def test_validate_unknown_plugin():
@@ -45,6 +53,17 @@ def test_validate_unavailable_plugins():
     with pytest.raises(OrgConflictError) as ei:
         validate_org_plugins({"work": "paperclip"})
     assert ei.value.reason == "plugin_unavailable"
+
+
+def test_validate_knowledge_plugins():
+    validate_org_plugins(normalize_org_plugins({"knowledge": "noop"}))
+    validate_org_plugins(normalize_org_plugins({"knowledge": "git"}))
+    with pytest.raises(OrgConflictError) as ei:
+        validate_org_plugins(normalize_org_plugins({"knowledge": "llm_wiki"}))
+    assert ei.value.reason == "plugin_unavailable"
+    with pytest.raises(OrgConflictError) as ei:
+        validate_org_plugins(normalize_org_plugins({"knowledge": "mem0"}))
+    assert ei.value.reason == "unknown_plugin"
 
 
 def test_resolve_builtin_and_aliases():

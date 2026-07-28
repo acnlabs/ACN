@@ -6,6 +6,7 @@ from ...core.interfaces.work_pattern import IWorkPattern
 from .builtin import BuiltinWorkPattern
 from .registry import (
     DEFAULT_ORG_PLUGINS,
+    canonicalize_knowledge_plugin,
     canonicalize_work_plugin,
     normalize_org_plugins,
     resolve_work_pattern,
@@ -16,6 +17,7 @@ __all__ = [
     "BuiltinWorkPattern",
     "DEFAULT_ORG_PLUGINS",
     "IWorkPattern",
+    "canonicalize_knowledge_plugin",
     "canonicalize_work_plugin",
     "normalize_org_plugins",
     "resolve_work_pattern",

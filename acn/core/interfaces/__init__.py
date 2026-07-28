@@ -19,6 +19,7 @@ from .join_flow_event_publisher import (
     JoinFlowEventType,
     JoinFlowEventVia,
 )
+from .org_knowledge import IOrgKnowledge
 from .org_repository import IOrgRepository
 from .settlement_outbox_repository import (
     ISettlementOutboxRepository,
@@ -42,6 +43,7 @@ __all__ = [
     "JoinFlowEventTrigger",
     "JoinFlowEventType",
     "JoinFlowEventVia",
+    "IOrgKnowledge",
     "IOrgRepository",
     "ISettlementOutboxRepository",
     "SettlementEvent",

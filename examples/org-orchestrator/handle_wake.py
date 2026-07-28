@@ -143,7 +143,14 @@ def assignee_matches_me(
 
 
 def load_knowledge_bundle(wake: dict[str, Any]) -> str | None:
-    """Read Org KB sidecar using wake.kb_refs or default charter. None if skipped/missing."""
+    """Read Org KB sidecar using wake.kb_refs or default charter. None if skipped/missing.
+
+    Honors explicit ``ORG_PLUGINS_KNOWLEDGE=noop`` (K3) like ``HANDLE_WAKE_SKIP_KB``.
+    Unset env keeps prior sidecar load behavior.
+    """
+    if (os.environ.get("ORG_PLUGINS_KNOWLEDGE") or "").strip().lower() == "noop":
+        return None
+
     if str(_KB_DIR) not in sys.path:
         sys.path.insert(0, str(_KB_DIR))
     try:

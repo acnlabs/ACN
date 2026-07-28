@@ -122,6 +122,18 @@ def contribute(
     *,
     root: Path | None = None,
 ) -> ContributeResult:
+    import os
+
+    # K3: runner may mirror Org plugins.knowledge=noop to block writes.
+    knowledge = (os.environ.get("ORG_PLUGINS_KNOWLEDGE") or "").strip().lower()
+    if knowledge == "noop":
+        return ContributeResult(
+            decision=ContributeDecision.REJECTED,
+            path=(prop.path or "").strip(),
+            abs_path="",
+            reason="knowledge_plugin_noop",
+        )
+
     if not prop.from_agent.strip():
         raise ValueError("from_agent required")
     rel = normalize_rel_path(prop.path)
