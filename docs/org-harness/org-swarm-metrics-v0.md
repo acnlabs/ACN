@@ -5,6 +5,7 @@
 **Audience:** 产品 / Org 编排器维护者  
 **Depends on:** [design-v0.md](./design-v0.md) §0 · [org-orchestrator-v0.md](./org-orchestrator-v0.md) · [org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md) · 现网 `OrgWorkItem`（无 `metadata`）  
 **Inspiration:** Kimi Agent Swarm（PARL / 关键路径 / Context Sharding）— **只借度量与反模式，不复制闭源 Swarm 产品**  
+**Related（正交）：** [sparse-collab-contract-v0.md](../sparse-collab-contract-v0.md) — L0→L2 **进场与结算**；本文只度量 L2 **内部**并行质量  
 **Code：** [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) · [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh)
 
 > **一句话：** 给 **Org 编排器（外部 Pattern）** 增加「协作是否真并行、是否偷懒、墙钟是否缩短」的可观测指标；可选再做「一票拆多子票并行唤醒」。  
@@ -153,7 +154,7 @@ M1 建议写入形状（键名 `wave`，避免与 L1「swarm」混淆；若已�
 | 指标 | **规范定义** | 防什么 |
 |---|---|---|
 | **R — Result** | 母票（或波次代表票）终态为 `done` → 1，否则 0。聚合：窗口内 `done` 占比 | 空转 |
-| **P — Parallelism** | 观测日志上，波次内 **同时** `status=in_progress` 的子票数的**峰值** | 串行崩溃 |
+| **P — Parallelism** | 观测日志上，波次内 **同时** `status=in_progress` 的子票数的**峰值**（报表字段 `P`；`P_norm=P/n` 仅评分用） | 串行崩溃 |
 | **C — Completion** | `子票 done 数 / 子票创建数`（`cancelled` 计入分母） | 虚假并行 |
 | **K — Critical path（代理）** | 单波次、**无阶段划分**时：`K = max_i (t_terminal_i - t_first_in_progress_i)`（缺 in_progress 观测则用 `updated_at - created_at`）。多阶段 DAG 留 M2 | 假并行不省墙钟 |
 
@@ -175,17 +176,18 @@ M1 建议写入形状（键名 `wave`，避免与 L1「swarm」混淆；若已�
 
 | 代码 | 条件（默认阈值，可配） | 含义 |
 |---|---|---|
-| `SERIAL_COLLAPSE` | 子票数 ≥ 2 且峰值 P = 1，且墙钟总历时 ≥ 0.85 × Σ 各子票历时 | 名拆实串 |
+| `SERIAL_COLLAPSE` | 子票数 ≥ 2、峰值 P = 1、且墙钟总历时 ≥ 0.85 × Σ 各子票历时；**须有绝对时间轴**（`started_at`/`ended_at`）。仅有 `duration_sec` 时不告警（否则 wall:=Σ 会假阳性） | 名拆实串 |
 | `FAKE_PARALLEL` | 子票数 ≥ 3 且 C &lt; 0.3，或 cancelled 占比 &gt; 0.5 | 滥拆 |
 | `CRITICAL_PATH_REGRESSION` | 同 root 重跑时 K 显著变差（需基线） | **M2** |
 
 ### 4.3 评分（可选；M0 可不算）
 
 ```text
-score = 0.5 * R + 0.25 * normalize(P) + 0.25 * C
+score = 0.5 * R + 0.25 * P_norm + 0.25 * C
+P_norm = min(1, P / max(1, child_count))
 ```
 
-- `normalize(P)`：`min(1, P / max(1, child_count))`（峰值相对子票数）。  
+- 报表输出峰值计数为 `P`；`P_norm` 仅用于评分。  
 - **只展示与告警**，不自动改派、不扣 Org wallet。  
 - 与 Escrow / XP **解耦**。
 
@@ -296,5 +298,5 @@ score = 0.5 * R + 0.25 * normalize(P) + 0.25 * C
 
 ## 11. 参考
 
-- 内部：[org-orchestrator-v0.md](./org-orchestrator-v0.md) · [org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md) · [design-v0.md](./design-v0.md) §0 · `acn/core/entities/org.py` (`OrgWorkItem`)  
+- 内部：[org-orchestrator-v0.md](./org-orchestrator-v0.md) · [org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md) · [design-v0.md](./design-v0.md) §0 · [sparse-collab-contract-v0.md](../sparse-collab-contract-v0.md) · `acn/core/entities/org.py` (`OrgWorkItem`)  
 - 外部：Kimi Agent Swarm（指挥官冻结队员、三维奖励、关键路径、Context Sharding）

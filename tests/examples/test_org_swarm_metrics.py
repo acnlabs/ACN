@@ -32,10 +32,25 @@ def test_serial_collapse_alert() -> None:
         ],
     }
     r = score_wave(wave)
-    assert r["peak_parallelism"] == 1
+    assert r["P"] == 1
+    assert r["P_norm"] == 0.5
     assert "SERIAL_COLLAPSE" in r["alerts"]
     assert r["R"] == 1.0
     assert r["C"] == 1.0
+
+
+def test_duration_only_no_serial_alert() -> None:
+    """duration_sec without absolute timeline must not false-positive SERIAL."""
+    wave = {
+        "wave_id": "wv_dur",
+        "root_status": "done",
+        "children": [
+            {"work_id": "a", "status": "done", "duration_sec": 10},
+            {"work_id": "b", "status": "done", "duration_sec": 10},
+        ],
+    }
+    r = score_wave(wave)
+    assert "SERIAL_COLLAPSE" not in r["alerts"]
 
 
 def test_true_parallel_no_serial_alert() -> None:
@@ -58,7 +73,8 @@ def test_true_parallel_no_serial_alert() -> None:
         ],
     }
     r = score_wave(wave)
-    assert r["peak_parallelism"] == 2
+    assert r["P"] == 2
+    assert r["P_norm"] == 1.0
     assert "SERIAL_COLLAPSE" not in r["alerts"]
     assert r["K_sec"] == 12 * 60
 

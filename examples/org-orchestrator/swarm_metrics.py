@@ -135,24 +135,30 @@ def score_wave(wave: dict[str, Any]) -> dict[str, Any]:
     allow_alerts = kind != "window"
 
     if n == 0:
-        p = 1.0 if root_status in ("done", "in_progress") else 0.0
+        peak = 1 if root_status in ("done", "in_progress") else 0
         c = 1.0 if root_status == "done" else 0.0
+        p_norm = 1.0 if peak else 0.0
         return {
             "wave_id": wave.get("wave_id"),
             "root_work_id": wave.get("root_work_id"),
             "kind": kind,
             "R": r,
-            "P": p,
+            "P": peak,
+            "P_norm": p_norm,
             "C": c,
             "K_sec": None,
             "child_count": 0,
-            "peak_parallelism": int(p),
             "alerts": [],
-            "score": round(0.5 * r + 0.25 * p + 0.25 * c, 4),
+            "score": round(0.5 * r + 0.25 * p_norm + 0.25 * c, 4),
         }
 
     c_rate = (done_n / created_n) if created_n else 0.0
+    has_abs_timeline = any(
+        _parse_ts(c.get("started_at")) and _parse_ts(c.get("ended_at"))
+        for c in children
+    )
     peak = _peak_parallelism(children)
+    # Doc §4.0: P = peak concurrent count; P_norm is score-only 0..1
     p_norm = (peak / n) if n else 0.0
     k = _critical_path_sec(children)
     wall = _wall_clock_sec(children)
@@ -169,9 +175,12 @@ def score_wave(wave: dict[str, Any]) -> dict[str, Any]:
     if allow_alerts:
         min_serial = int(os.environ.get("SWARM_SERIAL_MIN_CHILDREN", "2"))
         serial_ratio = float(os.environ.get("SWARM_SERIAL_WALL_RATIO", "0.85"))
-        # Doc §4.2: n≥2, peak P=1, wall ≥ 0.85 × Σ child durations
+        # Doc §4.2: n≥2, peak P=1, wall ≥ 0.85 × Σ child durations.
+        # Require absolute started_at/ended_at — duration_sec-only fixtures
+        # force peak=1 and wall:=sum, which would false-positive SERIAL.
         if (
-            n >= min_serial
+            has_abs_timeline
+            and n >= min_serial
             and peak <= 1
             and have_all_dur
             and wall is not None
@@ -191,14 +200,14 @@ def score_wave(wave: dict[str, Any]) -> dict[str, Any]:
         "root_work_id": wave.get("root_work_id"),
         "kind": kind,
         "R": r,
-        "P": round(p_norm, 4),
+        "P": peak,
+        "P_norm": round(p_norm, 4),
         "C": round(c_rate, 4),
         "K_sec": k,
         "wall_sec": wall,
         "child_count": n,
         "done_count": done_n,
         "cancelled_count": cancelled_n,
-        "peak_parallelism": peak,
         "alerts": sorted(set(alerts)),
         "score": score,
     }
