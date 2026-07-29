@@ -44,6 +44,22 @@
 
 ---
 
+## 2.1 成员↔成员交班（handoff）
+
+闲聊可走普通 A2A；**把活交给同事**须遵守 [交班契约](./org-work-handoff-contract-v0.md)。  
+v0 = **治理改派后的通知**（不是成员自助转派）：
+
+1. 若无 open work：**治理**代建（成员通常不能 `create_work`）；  
+2. **治理**将 `assignee` 改为接手方；  
+3. 成员（或治理）向接手方 `communication/send`，正文 `type: acn.org.work_handoff`；  
+4. 接手方校验 **入站 sender ≡ `from_agent`**，且 assignee=自己后开工（解析可复用 wake 流程，认不同 `type`）。
+
+编排器**不**转发 handoff；若 work 仍 open，编排器仍可能再发 `work_wake`——接手方对 wake/handoff **分别幂等**。
+
+实现状态：契约 Accepted；playbook 本段 **done**；skill / 示例脚本 / CN 狗粮见契约 §9（H1b–H3 未开工）。
+
+---
+
 ## 3. Mode B：`listen` + `handle_wake.py`
 
 ```bash
@@ -98,5 +114,6 @@ v0 不要求编排器自动 `done`（避免未干完误关）。
 | [`run_orchestrator.py`](../../examples/org-orchestrator/run_orchestrator.py) | 编排器侧车 |
 | [`smoke_org_orchestrator.sh`](../../scripts/smoke_org_orchestrator.sh) | 狗粮 A（无成员 listen） |
 | [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) | 组织知识库 / `kb_refs`（可选） |
+| [org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md) | 成员交班信封 `acn.org.work_handoff` |
 | [`examples/org-knowledge/read_kb.py`](../../examples/org-knowledge/read_kb.py) | 接活前读 charter/SOP |
 | [`examples/org-knowledge/contribute_kb.py`](../../examples/org-knowledge/contribute_kb.py) | K4：干完后贡献 sop/skills/… |

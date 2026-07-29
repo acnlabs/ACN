@@ -56,16 +56,18 @@ ACN 内：Kernel + builtin_work + heartbeat + events   ← SoT 仍在这里
 | 干活主体 | **Org 成员 agent**（有 ACN 身份），不是匿名本机进程优先 |
 | 关单 | v0：**治理 key** PATCH（`todo`\|`in_progress`\|`done`\|`cancelled`） |
 
+成员之间要把活交给同事时，走 [交班契约](./org-work-handoff-contract-v0.md)（`acn.org.work_handoff`），**不是**编排器广播。v0 为治理改派后的通知，不是成员自助转派。
+
 ---
 
 ## 3. 和相邻产品的边界
 
-| | **Org 编排器（默认路径）** | [待办执行器](./org-loop-spawn-sidecar-poc-v0.md) | Paperclip（可选） | 成员互派 |
+| | **Org 编排器（默认路径）** | [待办执行器](./org-loop-spawn-sidecar-poc-v0.md) | Paperclip（可选） | 成员互派 / [交班](./org-work-handoff-contract-v0.md) |
 |---|---|---|---|---|
 | 前提 | **不需要 Paperclip** | 一台 runner 机器 | 人要看板时才装 | 无 |
 | 给谁 | 纯 agent Org 自动派活 / 唤醒 | 固定机器跑命令 | 人 + 被唤醒的 agent | 成员自觉协作 |
 | 谁执行 | **成员 agent** | 本机 `spawnCommand` | Paperclip 拉起的 agent | 成员自己 |
-| 核心动作 | 选人 → ACN 信道唤醒 → 收结果 | poll → 跑命令 → 关单 | Issues ↔ work + 自带 wakeup | A2A / CLI |
+| 核心动作 | 选人 → ACN 信道唤醒 → 收结果 | poll → 跑命令 → 关单 | Issues ↔ work + 自带 wakeup | A2A；**派活须挂 work + handoff** |
 | ClawTeam | **可选**执行适配（[选型](./clawteam-org-loop-adapter-v0.md)） | 仅配方 | 无关 | 成员自用 |
 
 **命名约束：** 对外说「Org 编排器」；不要说「装 ClawTeam / Paperclip 进 ACN」。二者都是可选周边，不是默认依赖。
@@ -114,7 +116,9 @@ ACN 内：Kernel + builtin_work + heartbeat + events   ← SoT 仍在这里
 | P2 | 最小侧车：poll → 校验 assignee → `communication/send` → 幂等日志 | **done** · [`examples/org-orchestrator/`](../../examples/org-orchestrator/) · `scripts/smoke_org_orchestrator.sh` |
 | P2.1 | 成员 playbook + `handle_wake.py` | **done** · [playbook](./org-orchestrator-member-playbook-v0.md) |
 | P3 | `org.*` / tick 驱动、催办、超时策略 | 按需 |
+| P3.5 | 编排质量账本（wave R/P/C/K；不依赖 P3） | Draft·审核修订 · [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md) |
 | P4 | 可选：ClawTeam 等执行适配（[选型](./clawteam-org-loop-adapter-v0.md)） | 有需求再开 |
+| P5 | 平行拆票 + 并行 wake（metrics M1） | 前置 `work.metadata` + 真可拆场景；见 wave-metrics |
 
 ---
 

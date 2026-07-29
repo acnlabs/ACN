@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "0.17.15"
+  version: "0.17.16"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -882,6 +882,7 @@ Harness itself. Design: [`docs/org-harness/`](../../docs/org-harness/README.md).
 | [`org-orchestrator-v0.md`](../../docs/org-harness/org-orchestrator-v0.md) | **Org 编排器**（外部）：叫醒成员 agent；**不需要 Paperclip** |
 | [`org-orchestrator-wake-contract-v0.md`](../../docs/org-harness/org-orchestrator-wake-contract-v0.md) | Wake envelope `acn.org.work_wake` |
 | [`org-orchestrator-member-playbook-v0.md`](../../docs/org-harness/org-orchestrator-member-playbook-v0.md) | 成员收到 wake 后怎么干 / 关单 |
+| [`org-work-handoff-contract-v0.md`](../../docs/org-harness/org-work-handoff-contract-v0.md) | 成员交班 `acn.org.work_handoff`（v0=治理改派后通知） |
 
 **Plugins hard rule:** customize via **external Pattern / sidecar**;
 `org.plugins.*` is an **allowlist of builtins** only (`builtin_work` /
@@ -896,6 +897,11 @@ Harness itself. Design: [`docs/org-harness/`](../../docs/org-harness/README.md).
 成员侧：[`handle_wake.py`](../../examples/org-orchestrator/handle_wake.py) +
 [playbook](../../docs/org-harness/org-orchestrator-member-playbook-v0.md)
 （Mode B：`acn listen --runtime command --wake-exec 'python3 handle_wake.py'`）。  
+成员↔成员交班：闲聊可自由 A2A；**派活须挂 Org work**。v0 先 **governance 改派
+`assignee`**，再 `communication/send` 发 `acn.org.work_handoff`（见
+[交班契约](../../docs/org-harness/org-work-handoff-contract-v0.md)）；接收方用
+[`handle_handoff.py`](../../examples/org-orchestrator/handle_handoff.py)，须校验入站
+sender ≡ 信封 `from_agent`。编排器**不**转发 handoff。  
 这不是 `plugins.loop=*`，也不是 [待办执行器](../../docs/org-harness/org-loop-spawn-sidecar-poc-v0.md)（本机跑命令）。
 
 ```bash

@@ -93,6 +93,28 @@ def patch_work_status(
     )
 
 
+def patch_work(
+    base: str,
+    org_id: str,
+    work_id: str,
+    api_key: str,
+    *,
+    status: str | None = None,
+    assignee_agent_id: str | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    if status is not None:
+        body["status"] = status
+    if assignee_agent_id is not None:
+        body["assignee_agent_id"] = assignee_agent_id
+    return _request(
+        "PATCH",
+        f"{base}/orgs/{org_id}/work/{work_id}",
+        api_key,
+        body,
+    )
+
+
 def send_message(
     base: str,
     api_key: str,

@@ -6,6 +6,7 @@
 |---|---|
 | 产品定义 | [org-orchestrator-v0.md](../../docs/org-harness/org-orchestrator-v0.md) |
 | 唤醒契约 | [org-orchestrator-wake-contract-v0.md](../../docs/org-harness/org-orchestrator-wake-contract-v0.md) |
+| 成员交班 | [org-work-handoff-contract-v0.md](../../docs/org-harness/org-work-handoff-contract-v0.md) |
 
 **不是** [Org 待办执行器](../org-loop-spawn-sidecar/)（那是本机跑命令）。
 
@@ -66,6 +67,22 @@ echo '{"type":"acn.org.work_wake","org_id":"org_x","work_id":"work_y","assignee"
 
 # 知识库 sidecar（无 ACN）
 ../scripts/smoke_org_knowledge.sh
+
+# 成员交班：治理改派 → send_handoff → handle_handoff（含 spoof 拒收）
+ACN_BASE_URL=… ACN_API_KEY=acn_steward_… ./scripts/smoke_org_work_handoff.sh
+```
+
+## 成员交班 `send_handoff.py` / `handle_handoff.py`
+
+v0 = 治理改派之后再通知（不是自助转派）：
+
+```bash
+# governance
+curl -X PATCH …/orgs/$ORG/work/$WORK -d '{"assignee_agent_id":"agt_B"}'
+# previous holder (or any member) notifies B
+ACN_API_KEY=acn_from_… python3 send_handoff.py --work "$WORK" --to agt_B --note '…'
+# B receives (Mode B listen or inbox pipe); transport must carry from_agent
+# bare JSON smoke: HANDOFF_TRUSTED_SENDER=agt_from python3 handle_handoff.py
 ```
 
 ## 成员侧 `handle_wake.py`

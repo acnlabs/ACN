@@ -330,6 +330,8 @@ class OrgPublishTaskRequest(BaseModel):
 
 
 class OrgWorkUpdateRequest(BaseModel):
+    # status required today; reassign-only needs status echoed (handoff dogfood).
+    # Optional status+assignee-only PATCH is a follow-up API change.
     status: Literal["todo", "in_progress", "done", "cancelled"]
     assignee_agent_id: str | None = None
 
