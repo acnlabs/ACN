@@ -1,0 +1,53 @@
+{
+  "waves": [
+    {
+      "wave_id": "wv_serial_demo",
+      "root_work_id": "work_root_serial",
+      "root_status": "done",
+      "children": [
+        {
+          "work_id": "work_a",
+          "status": "done",
+          "started_at": "2026-07-29T08:00:00+00:00",
+          "ended_at": "2026-07-29T08:15:00+00:00"
+        },
+        {
+          "work_id": "work_b",
+          "status": "done",
+          "started_at": "2026-07-29T08:15:00+00:00",
+          "ended_at": "2026-07-29T08:30:00+00:00"
+        }
+      ]
+    },
+    {
+      "wave_id": "wv_parallel_demo",
+      "root_work_id": "work_root_par",
+      "root_status": "done",
+      "children": [
+        {
+          "work_id": "work_c",
+          "status": "done",
+          "started_at": "2026-07-29T09:00:00+00:00",
+          "ended_at": "2026-07-29T09:10:00+00:00"
+        },
+        {
+          "work_id": "work_d",
+          "status": "done",
+          "started_at": "2026-07-29T09:00:00+00:00",
+          "ended_at": "2026-07-29T09:12:00+00:00"
+        }
+      ]
+    },
+    {
+      "wave_id": "wv_fake_demo",
+      "root_work_id": "work_root_fake",
+      "root_status": "cancelled",
+      "children": [
+        {"work_id": "work_e", "status": "cancelled", "duration_sec": 2},
+        {"work_id": "work_f", "status": "cancelled", "duration_sec": 2},
+        {"work_id": "work_g", "status": "cancelled", "duration_sec": 2},
+        {"work_id": "work_h", "status": "todo", "duration_sec": 0}
+      ]
+    }
+  ]
+}

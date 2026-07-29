@@ -7,6 +7,7 @@
 | 产品定义 | [org-orchestrator-v0.md](../../docs/org-harness/org-orchestrator-v0.md) |
 | 唤醒契约 | [org-orchestrator-wake-contract-v0.md](../../docs/org-harness/org-orchestrator-wake-contract-v0.md) |
 | 成员交班 | [org-work-handoff-contract-v0.md](../../docs/org-harness/org-work-handoff-contract-v0.md) |
+| 质量指标 M0 | [org-swarm-metrics-v0.md](../../docs/org-harness/org-swarm-metrics-v0.md) |
 
 **不是** [Org 待办执行器](../org-loop-spawn-sidecar/)（那是本机跑命令）。
 
@@ -70,6 +71,10 @@ echo '{"type":"acn.org.work_wake","org_id":"org_x","work_id":"work_y","assignee"
 
 # 成员交班：治理改派 → send_handoff → handle_handoff（含 spoof 拒收）
 ACN_BASE_URL=… ACN_API_KEY=acn_steward_… ./scripts/smoke_org_work_handoff.sh
+
+# 编排质量 M0（无 ACN；fixtures）
+./scripts/smoke_org_swarm_metrics.sh
+python3 swarm_metrics.py fixtures/swarm_metrics_demo.json
 ```
 
 ## 成员交班 `send_handoff.py` / `handle_handoff.py`
