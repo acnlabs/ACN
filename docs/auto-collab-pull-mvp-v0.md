@@ -1,7 +1,7 @@
 # 自动拉人协作 — 最小版（MVP）v0
 
-**Status:** Draft · **MVP-1 + MVP-2a/2b 示例已落地**（`examples/auto-collab-pull/` · `smoke --live`）· 产品全文未标 Accepted  
-**Date:** 2026-07-30 · **MVP-1/2a/2b code:** 2026-07-31  
+**Status:** **Accepted（工程切片）** · MVP-1 + MVP-2a/2b 示例已落地 · **A4 上层一键「需要协作」已落地**  
+**Date:** 2026-07-30 · **MVP-1/2a/2b code:** 2026-07-31 · **Ack P1–P5 / A4:** 2026-07-31  
 **Audience:** 产品 / ACN / 上层 BFF  
 **Depends on:** [sparse-collab-contract-v0.md](./sparse-collab-contract-v0.md)（**Accepted**）· [task-invite-sender.md](./features/task-invite-sender.md) · [org-orchestrator-v0.md](./org-harness/org-orchestrator-v0.md)  
 **Related：** [org-swarm-metrics-v0](./org-harness/org-swarm-metrics-v0.md)（上岗之后干得好不好；本文管 **怎么自动拉人上岗**）
@@ -206,11 +206,11 @@ MVP-1 风险相对可控（名单已知），仍须遵守 P1/P3。
 
 | # | 提案 | 状态 |
 |---|---|---|
-| P1 | 先做 MVP-1，再做 MVP-2 | **建议 Ack** |
-| P2 | 拉人器 = 外部侧车/上层服务，不进 Kernel | **建议 Ack** |
-| P3 | 默认不建临时网络 | **建议 Ack** |
-| P4 | 与 wave / 稀疏契约 **分 PR** | **建议 Ack** |
-| P5 | 下一刀工程：MVP-1 侧车 + smoke | **done 2026-07-31**；**审核全修**（B1 补叫 + W1–W4）同日 |
+| P1 | 先做 MVP-1，再做 MVP-2 | **Ack** 2026-07-31 |
+| P2 | 拉人器 = 外部侧车/上层服务，不进 Kernel | **Ack** 2026-07-31 |
+| P3 | 默认不建临时网络 | **Ack** 2026-07-31 |
+| P4 | 与 wave / 稀疏契约 **分 PR** | **Ack** 2026-07-31 |
+| P5 | 下一刀工程：MVP-1 侧车 + smoke | **Ack / done** 2026-07-31（含 B1 + W1–W4） |
 | P6 | 匹配 = 硬过滤 +（先标签后向量）召回 + 可选短名单重排；**禁止**全网 Router Agent | **Ack（对话定调）** |
 | P7 | 遵守稀疏契约 §7 隐私 P1–P3；机密任务禁 MVP-2 | **Ack 2026-07-30** |
 | P8 | 维度优先级：硬过滤 → 标签+语义画像 → 表现加分 → 短名单 LLM；表现分不进向量主索引 | **Ack 2026-07-31** |
@@ -230,7 +230,7 @@ MVP-1 风险相对可控（名单已知），仍须遵守 P1/P3。
 | A3b | MVP-2b：语义召回 · `semantic.py`（默认词法引擎，可换 HTTP embedding）+ `MATCH_MODE=hybrid` | **done** 2026-07-31 |
 | A3c | 表现分钩子 · `performance.py` 接入 hybrid（冷启动省略） | **done** 2026-07-31 |
 | A3d | 完成率灌数 · Kernel `agent_performance` + settle 钩子 + refresh API；侧车 `run_perf_enrich` 调 Kernel；历史窗口 last 50 | **done** 2026-07-31 |
-| A4 | 上层 UI/BFF：一键「需要协作」 | 待办 |
+| A4 | 上层 UI/BFF：一键「需要协作」→ Backend `POST …/collab-match`（tags 召回 → ACN invite / `task_request` 叫醒；**不**跑 MVP-1 `collab_pull` 侧车）+ CN BFF 透传（含 `/invite`，invite 须校验任务主人）+ ParticipantsCard | **done** 2026-07-31 |
 | A5 | （可选）短名单 LLM 重排 | 待办 |
 
 ---
