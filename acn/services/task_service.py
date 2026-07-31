@@ -30,6 +30,7 @@ from .activity_service import ActivityService
 from .subnet_service import SubnetService
 
 if TYPE_CHECKING:
+    from .agent_service import AgentService
     from .message_service import MessageService
 
 logger = structlog.get_logger()
@@ -88,6 +89,7 @@ class TaskService:
         subnet_service: SubnetService | None = None,
         org_service: Any | None = None,
         message_service: MessageService | None = None,
+        agent_service: AgentService | None = None,
         # Settlement saga v0.1 — keyword-only, all three OPTIONAL so
         # Redis-only / in-memory deployments and legacy test fixtures
         # constructed without saga wiring keep working unchanged. The
@@ -124,6 +126,8 @@ class TaskService:
             message_service: MessageService for best-effort A2A invite
                 push (optional). When None, ``invite_agent`` only
                 updates the whitelist — matches pre-push behavior.
+            agent_service: AgentService for best-effort
+                ``metadata.performance`` refresh after settle (optional).
             settlement_outbox: Outbox repository for the settlement saga
                 (v0.1). When None, ``complete_task`` uses its legacy
                 non-atomic path — see docstring there.
@@ -146,11 +150,37 @@ class TaskService:
         self.subnet_service = subnet_service
         self.org_service = org_service
         self.message_service = message_service
+        self.agent_service = agent_service
         # Saga wiring — see attribute docstrings on each, and the
         # decision matrix on ``_saga_enabled`` below.
         self.settlement_outbox = settlement_outbox
         self.unit_of_work = unit_of_work
         self.outbox_enqueue_required = outbox_enqueue_required
+
+    async def _refresh_agent_performance(self, agent_id: str | None) -> None:
+        """Best-effort denorm of ``metadata.performance`` after settle.
+
+        Failures are logged only — never roll back task state.
+        """
+        if not agent_id or self.agent_service is None:
+            return
+        try:
+            from .agent_performance import DEFAULT_HISTORY_LIMIT, DEFAULT_MIN_SAMPLES
+
+            items = await self.get_agent_task_history(
+                agent_id, limit=DEFAULT_HISTORY_LIMIT
+            )
+            await self.agent_service.refresh_performance_from_history(
+                agent_id,
+                items,
+                min_samples=DEFAULT_MIN_SAMPLES,
+            )
+        except Exception as e:  # noqa: BLE001 — never fail the settle path
+            logger.warning(
+                "agent_performance_refresh_failed",
+                agent_id=agent_id,
+                error=str(e),
+            )
 
     @property
     def _saga_enabled(self) -> bool:
@@ -970,6 +1000,8 @@ class TaskService:
             assignee_id=task.assignee_id,
         )
 
+        await self._refresh_agent_performance(task.assignee_id)
+
         return task
 
     async def _check_and_finalize_exhaustion(self, task: Task, new_count: int) -> bool:
@@ -1037,6 +1069,8 @@ class TaskService:
 
         # Check if task is exhausted (all slots filled)
         await self._check_and_finalize_exhaustion(task, new_count)
+
+        await self._refresh_agent_performance(p.participant_id)
 
     async def review_participation(
         self,
@@ -1128,6 +1162,7 @@ class TaskService:
             await self._notify_participation_webhook(
                 WebhookEventType.PARTICIPATION_APPROVED, task, p
             )
+            await self._refresh_agent_performance(p.participant_id)
         else:
             # Reject participation — set status to REJECTED and decrement active count
             was_active = p.status in (ParticipationStatus.ACTIVE, ParticipationStatus.SUBMITTED)
@@ -1166,6 +1201,7 @@ class TaskService:
             await self._notify_participation_webhook(
                 WebhookEventType.PARTICIPATION_REJECTED, task, p
             )
+            await self._refresh_agent_performance(p.participant_id)
 
         return await self.get_task(task_id)
 
@@ -1682,6 +1718,8 @@ class TaskService:
         # so a cascade failure cannot roll back the completion.
         await self._dissolve_task_scoped_subnets(task_id)
 
+        await self._refresh_agent_performance(task.assignee_id)
+
         return task
 
     async def reject_task(
@@ -1749,6 +1787,8 @@ class TaskService:
         # linked to this task. Runs after the webhook so a cascade
         # failure cannot roll back the rejection.
         await self._dissolve_task_scoped_subnets(task_id)
+
+        await self._refresh_agent_performance(task.assignee_id)
 
         return task
 

@@ -51,6 +51,17 @@ class IdempotencyStore:
             finally:
                 fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
 
+    def list_sent(self) -> dict[str, Any]:
+        """Snapshot of sent map (keys → entry dict). Used by auto-collab-pull B1."""
+        with self._with_lock() as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            try:
+                self._load_unlocked()
+                raw = self._data.get("sent") or {}
+                return {str(k): dict(v) if isinstance(v, dict) else {} for k, v in raw.items()}
+            finally:
+                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+
     def mark(self, key: str, *, work_id: str, assignee: str) -> None:
         """Persist then update memory. Raises OSError if disk write fails."""
         entry = {

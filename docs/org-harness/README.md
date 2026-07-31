@@ -39,6 +39,8 @@
 | [`examples/org-orchestrator/`](../../examples/org-orchestrator/) | 编排器侧车 + `handle_wake.py` + smoke |
 | [clawteam-org-loop-adapter-v0.md](./clawteam-org-loop-adapter-v0.md) | ClawTeam ↔ Org Loop 适配器选型（编排器的可选实现；≠ 待办执行器） |
 | [org-task-bridge-v0.md](./org-task-bridge-v0.md) | Org → Task Pool 发布约定（约定桥，不是 Work Port） |
+| [../sparse-collab-contract-v0.md](../sparse-collab-contract-v0.md) | **全网稀疏协作契约（Accepted 2026-07-30；Candidate→Active→Settle；与 wave 正交）** |
+| [../auto-collab-pull-mvp-v0.md](../auto-collab-pull-mvp-v0.md) | **自动拉人最小版（MVP-1 示例已落地；MVP-2 技能检索未做）** |
 
 理论草稿（隐喻 / 协议史）：
 

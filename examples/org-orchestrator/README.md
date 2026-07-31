@@ -9,7 +9,8 @@
 | 成员交班 | [org-work-handoff-contract-v0.md](../../docs/org-harness/org-work-handoff-contract-v0.md) |
 | 质量指标 M0 | [org-swarm-metrics-v0.md](../../docs/org-harness/org-swarm-metrics-v0.md) |
 
-**不是** [Org 待办执行器](../org-loop-spawn-sidecar/)（那是本机跑命令）。
+**不是** [Org 待办执行器](../org-loop-spawn-sidecar/)（那是本机跑命令）。  
+**不是** [Task 自动拉人](../auto-collab-pull/)（那是 Task Pool `acn.task.collab_pull`；本目录管 Org `work_wake`）。
 
 ## 环境变量
 

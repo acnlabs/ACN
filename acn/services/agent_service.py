@@ -1364,6 +1364,55 @@ class AgentService:
         logger.info("agent_api_key_rotated", agent_id=agent_id)
         return new_plaintext
 
+    async def upsert_performance(
+        self,
+        agent_id: str,
+        performance: dict,
+    ) -> Agent:
+        """Replace ``metadata["performance"]`` with ``performance`` (wholesale).
+
+        Other metadata keys are preserved; the performance block itself is
+        not deep-merged. Clients cannot PATCH arbitrary metadata; this is
+        the sole write path for denormalized completion / response signals
+        used by auto-collab matching. Callers pass a full aggregate.
+        """
+        agent = await self.get_agent(agent_id)
+        metadata = dict(agent.metadata or {})
+        # Drop stale rate when aggregate omits it (cold sample window).
+        metadata["performance"] = dict(performance)
+        agent.metadata = metadata
+        await self.repository.save(agent)
+        logger.info(
+            "agent_performance_upserted",
+            agent_id=agent_id,
+            settled=performance.get("settled"),
+            has_rate="completion_rate" in performance,
+        )
+        return agent
+
+    async def refresh_performance_from_history(
+        self,
+        agent_id: str,
+        history_items: list[dict],
+        *,
+        min_samples: int = 3,
+    ) -> dict:
+        """Aggregate history items and persist ``metadata.performance``.
+
+        ``history_items`` must already be fetched by the caller (typically
+        ``TaskService.get_agent_task_history`` with
+        ``limit=DEFAULT_HISTORY_LIMIT`` / last 50) to avoid a circular
+        import between AgentService and TaskService.
+        """
+        from .agent_performance import aggregate_performance_from_history
+
+        performance = aggregate_performance_from_history(
+            history_items,
+            min_samples=min_samples,
+        )
+        await self.upsert_performance(agent_id, performance)
+        return performance
+
 
 def build_erc8004_registration_file(
     agent: Agent,

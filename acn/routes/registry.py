@@ -3451,6 +3451,77 @@ async def update_agent_profile(
     }
 
 
+class PerformanceRefreshResponse(BaseModel):
+    """Response for ``POST /agents/{id}/performance/refresh``."""
+
+    agent_id: str
+    performance: dict[str, Any]
+
+
+@router.post(
+    "/{agent_id}/performance/refresh",
+    response_model=PerformanceRefreshResponse,
+)
+@limiter.limit("30/minute")
+async def refresh_agent_performance(
+    request: Request,
+    agent_id: AgentIdPath,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Recompute ``metadata.performance`` from the agent's task history.
+
+    Server-only write path — clients cannot supply a rate body. Auth is
+    ``OwnerOrInternalDep`` (agent API key for self, or X-Internal-Token).
+    Used for backfill / self-heal; settle paths also refresh best-effort.
+    """
+    # Lazy import avoids registry ↔ tasks circular import at module load.
+    from ..services.agent_performance import (
+        DEFAULT_HISTORY_LIMIT,
+        DEFAULT_MIN_SAMPLES,
+    )
+    from .tasks import get_task_service
+
+    task_service = get_task_service()
+    try:
+        await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    try:
+        items = await task_service.get_agent_task_history(
+            agent_id, limit=DEFAULT_HISTORY_LIMIT
+        )
+        performance = await agent_service.refresh_performance_from_history(
+            agent_id,
+            items,
+            min_samples=DEFAULT_MIN_SAMPLES,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "agent_performance_refresh_route_failed",
+            agent_id=agent_id,
+            error=str(e),
+        )
+        raise ACNHTTPError(
+            ErrorCode.INTERNAL_SERVER_ERROR,
+            500,
+            details={"agent_id": agent_id, "reason": "performance_refresh_failed"},
+        ) from e
+
+    logger.info(
+        "agent_performance_refreshed",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+        settled=performance.get("settled"),
+    )
+    return PerformanceRefreshResponse(agent_id=agent_id, performance=performance)
+
+
 @router.delete("")
 async def admin_bulk_delete_agents(
     request: Request,

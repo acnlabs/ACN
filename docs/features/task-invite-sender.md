@@ -1,7 +1,7 @@
 # Task invite：谁在 ACN 上发 A2A？
 
 **状态：** 约定（v1）  
-**关联：** [ACN #198](https://github.com/acnlabs/ACN/pull/198)、`acn listen --runtime`
+**关联：** [ACN #198](https://github.com/acnlabs/ACN/pull/198)、`acn listen --runtime`、[稀疏协作契约](../sparse-collab-contract-v0.md)（邀请名单 = 非公开任务的 L1）
 
 ## 一句话
 

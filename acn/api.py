@@ -652,6 +652,8 @@ async def lifespan(app: FastAPI):
         org_service=org_service_instance,
         # Task invite → A2A push (Mode A/B/inbox via MessageRouter)
         message_service=message_service_instance,
+        # Best-effort metadata.performance denorm after task settle
+        agent_service=agent_service_instance,
         # Settlement saga v0.1 — both are None in Redis-only mode,
         # which forces ``complete_task`` onto its legacy non-atomic
         # path (existing pre-v0.1 behavior). In PG mode the saga
