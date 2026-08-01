@@ -132,7 +132,8 @@ M1 建议写入形状（键名 `wave`，避免与 L1「swarm」混淆；若已�
 
 - **峰值并行度 / 历时** 只从该日志推导，不假设 ACN 提供转移历史。  
 - 关掉 metrics 模块 = 不写日志、不算分；唤醒/关单路径零改动（M0-S3）。  
-- **落地：** [`work_observe.py`](../../examples/org-orchestrator/work_observe.py)；编排器设 `ORG_METRICS_OBSERVE_PATH=<jsonl>` 时额外拉 `open_only=false` 并差分写入。报表默认 `kind=window`；可选 `--wave-graph` 侧车关系图打真 wave 告警。
+- **落地：** [`work_observe.py`](../../examples/org-orchestrator/work_observe.py)；编排器设 `ORG_METRICS_OBSERVE_PATH=<jsonl>` 时额外拉 `open_only=false` 并差分写入。报表默认 `kind=window`；可选 `--wave-graph` 侧车关系图打真 wave 告警。  
+- **并发 / 崩溃：** JSONL 为 last-seen SoT；`flock` + 批量 append + 再写 `.state.json` 镜像；中途崩溃不因镜像丢失而重复记同一状态。
 
 ### 3.4 Context Sharding（成员回写约定）
 
@@ -171,7 +172,9 @@ M1 建议写入形状（键名 `wave`，避免与 L1「swarm」混淆；若已�
 |---|---|
 | R_window | 时间窗 T 内终态票中 `done` 占比 |
 | P_proxy | 当前 open 票中 **不同** `assignee_agent_id` 数 |
-| K_proxy | 窗内 `max(updated_at - created_at)`（终态票） |
+| K_proxy | 窗内 `max(updated_at - created_at)`（终态票；**不用**观测 `started_at`/`ended_at`） |
+
+**M0 时间窗：** T = **当次 `list_work` 全量快照**（含终态）；尚无滑动/日历窗过滤。真正「最近 N 小时」留给 P6 / 看板。
 
 ### 4.2 反模式告警（仅真 wave）
 

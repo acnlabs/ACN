@@ -8,13 +8,15 @@ Event shape (doc):
   { ts, work_id, status, assignee_agent_id, observed_at }
 
 Files:
-  <path>           JSONL events (append-only)
-  <path>.state.json last seen (status, assignee) for diff
+  <path>            JSONL events (append-only; SoT for last-seen)
+  <path>.state.json mirror of last-seen (inspect / cache)
+  <path>.lock       flock for multi-process + crash-safe batches
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import sys
@@ -55,31 +57,22 @@ def assignee_id(item: dict[str, Any]) -> str:
 
 
 class ObservationStore:
-    """Diff poll snapshots → append-only JSONL + last-seen state."""
+    """Diff poll snapshots → append-only JSONL + last-seen mirror.
+
+    Last-seen is rebuilt from the JSONL under flock so a crash after append
+    (before state mirror) does not duplicate the same transition.
+    """
 
     def __init__(self, events_path: str | Path) -> None:
         self.events_path = Path(events_path)
         self.state_path = Path(str(self.events_path) + ".state.json")
+        self.lock_path = Path(str(self.events_path) + ".lock")
 
-    def _load_state(self) -> dict[str, dict[str, str]]:
-        if not self.state_path.is_file():
-            return {}
-        try:
-            raw = json.loads(self.state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        if not isinstance(raw, dict):
-            return {}
-        out: dict[str, dict[str, str]] = {}
-        for wid, row in raw.items():
-            if isinstance(row, dict):
-                out[str(wid)] = {
-                    "status": str(row.get("status") or ""),
-                    "assignee_agent_id": str(row.get("assignee_agent_id") or ""),
-                }
-        return out
+    def _with_lock(self):
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        return open(self.lock_path, "a+", encoding="utf-8")
 
-    def _save_state(self, state: dict[str, dict[str, str]]) -> None:
+    def _save_state_unlocked(self, state: dict[str, dict[str, str]]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
         tmp.write_text(
@@ -88,50 +81,7 @@ class ObservationStore:
         )
         os.replace(tmp, self.state_path)
 
-    def _append(self, event: dict[str, Any]) -> None:
-        self.events_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.events_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-    def observe(
-        self,
-        items: list[dict[str, Any]],
-        *,
-        observed_at: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Write one event per work whose status or assignee changed (incl. first sight)."""
-        ts = observed_at or _utc_now_iso()
-        state = self._load_state()
-        written: list[dict[str, Any]] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            wid = work_id(item)
-            if not wid:
-                continue
-            status = str(item.get("status") or "")
-            assignee = assignee_id(item)
-            prev = state.get(wid)
-            if (
-                prev is not None
-                and prev.get("status") == status
-                and prev.get("assignee_agent_id") == assignee
-            ):
-                continue
-            event = {
-                "ts": ts,
-                "work_id": wid,
-                "status": status,
-                "assignee_agent_id": assignee,
-                "observed_at": ts,
-            }
-            self._append(event)
-            written.append(event)
-            state[wid] = {"status": status, "assignee_agent_id": assignee}
-        self._save_state(state)
-        return written
-
-    def read_events(self) -> list[dict[str, Any]]:
+    def _read_events_unlocked(self) -> list[dict[str, Any]]:
         if not self.events_path.is_file():
             return []
         out: list[dict[str, Any]] = []
@@ -146,6 +96,81 @@ class ObservationStore:
             if isinstance(row, dict) and row.get("work_id"):
                 out.append(row)
         return out
+
+    def _last_seen_from_events_unlocked(self) -> dict[str, dict[str, str]]:
+        """JSONL is SoT — survives crash between append and state mirror."""
+        last: dict[str, dict[str, str]] = {}
+        for ev in self._read_events_unlocked():
+            wid = str(ev.get("work_id") or "")
+            if not wid:
+                continue
+            last[wid] = {
+                "status": str(ev.get("status") or ""),
+                "assignee_agent_id": str(ev.get("assignee_agent_id") or ""),
+            }
+        return last
+
+    def observe(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        observed_at: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Write one event per work whose status or assignee changed (incl. first sight)."""
+        ts = observed_at or _utc_now_iso()
+        with self._with_lock() as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            try:
+                state = self._last_seen_from_events_unlocked()
+                pending: list[dict[str, Any]] = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    wid = work_id(item)
+                    if not wid:
+                        continue
+                    status = str(item.get("status") or "")
+                    assignee = assignee_id(item)
+                    prev = state.get(wid)
+                    if (
+                        prev is not None
+                        and prev.get("status") == status
+                        and prev.get("assignee_agent_id") == assignee
+                    ):
+                        continue
+                    event = {
+                        "ts": ts,
+                        "work_id": wid,
+                        "status": status,
+                        "assignee_agent_id": assignee,
+                        "observed_at": ts,
+                    }
+                    pending.append(event)
+                    state[wid] = {
+                        "status": status,
+                        "assignee_agent_id": assignee,
+                    }
+                if pending:
+                    self.events_path.parent.mkdir(parents=True, exist_ok=True)
+                    chunk = "".join(
+                        json.dumps(ev, ensure_ascii=False) + "\n" for ev in pending
+                    )
+                    with self.events_path.open("a", encoding="utf-8") as ef:
+                        ef.write(chunk)
+                        ef.flush()
+                        os.fsync(ef.fileno())
+                    self._save_state_unlocked(state)
+                return pending
+            finally:
+                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+
+    def read_events(self) -> list[dict[str, Any]]:
+        with self._with_lock() as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_SH)
+            try:
+                return self._read_events_unlocked()
+            finally:
+                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
 
 
 def timeline_from_events(
@@ -216,10 +241,12 @@ def window_proxies(
     }
     p_proxy = len(assignees)
 
+    # Doc §4.1: K_proxy = max(updated_at - created_at) on terminal tickets.
+    # Observe-derived started_at/ended_at feed score_wave K_sec, not K_proxy.
     k_vals: list[float] = []
     for c in terminal:
-        start = _parse_ts(c.get("started_at") or c.get("created_at"))
-        end = _parse_ts(c.get("ended_at") or c.get("updated_at"))
+        start = _parse_ts(c.get("created_at"))
+        end = _parse_ts(c.get("updated_at"))
         if start and end:
             k_vals.append(max(0.0, (end - start).total_seconds()))
     k_proxy = max(k_vals) if k_vals else None

@@ -133,12 +133,33 @@ def test_window_proxies_open_assignees() -> None:
     children = [
         {"work_id": "a", "status": "in_progress", "assignee_agent_id": "x"},
         {"work_id": "b", "status": "todo", "assignee_agent_id": "y"},
-        {"work_id": "c", "status": "done", "assignee_agent_id": "x"},
+        {
+            "work_id": "c",
+            "status": "done",
+            "assignee_agent_id": "x",
+            "created_at": "2026-08-01T10:00:00+00:00",
+            "updated_at": "2026-08-01T10:05:00+00:00",
+            # observe times must NOT drive K_proxy (§4.1)
+            "started_at": "2026-08-01T10:00:00+00:00",
+            "ended_at": "2026-08-01T12:00:00+00:00",
+        },
     ]
     p = window_proxies(children)
     assert p["P_proxy"] == 2
     assert p["R_window"] == 1.0
     assert p["terminal_count"] == 1
+    assert p["K_proxy_sec"] == 300.0
+
+
+def test_observe_no_duplicate_after_stale_state(tmp_path: Path) -> None:
+    """Crash after append before state mirror: JSONL SoT prevents re-write."""
+    store = ObservationStore(tmp_path / "events.jsonl")
+    snap = [{"work_id": "w1", "status": "todo", "assignee_agent_id": "a"}]
+    assert len(store.observe(snap, observed_at="2026-08-01T10:00:00+00:00")) == 1
+    # Simulate lost/stale mirror
+    store.state_path.write_text("{}", encoding="utf-8")
+    assert store.observe(snap, observed_at="2026-08-01T10:01:00+00:00") == []
+    assert len(store.read_events()) == 1
 
 
 def test_cli_observe_and_report(tmp_path: Path) -> None:
