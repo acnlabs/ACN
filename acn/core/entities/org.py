@@ -205,6 +205,19 @@ class OrgMembership:
         )
 
 
+def normalize_work_metadata(raw: Any) -> dict[str, Any] | None:
+    """Validate optional work metadata (Kernel stores; does not interpret).
+
+    ``None`` clears / means absent. Non-object JSON (list/str/…) is rejected.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("work metadata must be a JSON object or null")
+    # Shallow copy — callers own nested mutation; Kernel does not deep-parse.
+    return dict(raw)
+
+
 @dataclass
 class OrgWorkItem:
     """Minimal work queue item (Phase 1; not full Task Pool)."""
@@ -214,6 +227,7 @@ class OrgWorkItem:
     title: str
     status: WorkStatus = "todo"
     assignee_agent_id: str | None = None
+    metadata: dict[str, Any] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -226,6 +240,7 @@ class OrgWorkItem:
             raise ValueError("title cannot be empty")
         if self.status not in _WORK_STATUSES:
             raise ValueError(f"invalid work status: {self.status!r}")
+        self.metadata = normalize_work_metadata(self.metadata)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -234,6 +249,7 @@ class OrgWorkItem:
             "title": self.title,
             "status": self.status,
             "assignee_agent_id": self.assignee_agent_id,
+            "metadata": self.metadata,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -252,6 +268,7 @@ class OrgWorkItem:
             title=data["title"],
             status=data.get("status") or "todo",
             assignee_agent_id=data.get("assignee_agent_id"),
+            metadata=data.get("metadata"),
             created_at=created_at or datetime.now(UTC),
             updated_at=updated_at or datetime.now(UTC),
         )

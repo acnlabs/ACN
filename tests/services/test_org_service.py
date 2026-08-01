@@ -434,6 +434,7 @@ class TestWorkAndLoop:
             assignee_agent_id="agt_steward",
         )
         assert work.status == "todo"
+        assert work.metadata is None
         mock_org_repo.save_work.assert_awaited()
 
         mock_org_repo.list_work.return_value = [work]
@@ -446,6 +447,68 @@ class TestWorkAndLoop:
         events = [c.kwargs["event"] for c in mock_webhook.send_to.await_args_list]
         assert WebhookEventType.ORG_WORK_CREATED in events
         assert WebhookEventType.ORG_LOOP_TICK in events
+
+    async def test_work_metadata_create_update_clear(
+        self, org_service, mock_org_repo
+    ):
+        """Opaque metadata passthrough — Kernel does not parse wave keys."""
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        wave_meta = {
+            "wave": {
+                "role": "root",
+                "wave_id": "wv_1",
+                "root_work_id": "work_pending",
+            }
+        }
+        work = await org_service.create_work(
+            org.org_id,
+            title="Root",
+            caller_type="agent",
+            caller_sub="agt_steward",
+            metadata=wave_meta,
+        )
+        assert work.metadata == wave_meta
+        saved = mock_org_repo.save_work.await_args.args[0]
+        assert saved.metadata == wave_meta
+
+        mock_org_repo.find_work.return_value = work
+        patched = await org_service.update_work_status(
+            org.org_id,
+            work.work_id,
+            status="in_progress",
+            caller_type="agent",
+            caller_sub="agt_steward",
+            metadata={
+                "wave": {
+                    "role": "root",
+                    "wave_id": "wv_1",
+                    "root_work_id": work.work_id,
+                }
+            },
+        )
+        assert patched.metadata["wave"]["root_work_id"] == work.work_id
+
+        mock_org_repo.find_work.return_value = patched
+        unchanged = await org_service.update_work_status(
+            org.org_id,
+            work.work_id,
+            status="in_progress",
+            caller_type="agent",
+            caller_sub="agt_steward",
+        )
+        assert unchanged.metadata == patched.metadata
+
+        mock_org_repo.find_work.return_value = unchanged
+        cleared = await org_service.update_work_status(
+            org.org_id,
+            work.work_id,
+            status="todo",
+            caller_type="agent",
+            caller_sub="agt_steward",
+            metadata=None,
+        )
+        assert cleared.metadata is None
 
 
 class TestUpdateAndMembersView:

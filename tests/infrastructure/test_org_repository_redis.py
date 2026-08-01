@@ -30,6 +30,8 @@ from acn.infrastructure.persistence.redis.org_repository import (
     RedisOrgRepository,
     _org_key,
     _org_subnet_idx,
+    _work_key,
+    _work_set_key,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -230,3 +232,31 @@ async def test_work_round_trip_and_open_filter(repo):
     all_items = await repo.list_work("org_a", open_only=False)
     assert {w.work_id for w in all_items} == {"w1", "w2"}
     assert await repo.delete_work_for_org("org_a") == 2
+
+
+async def test_work_metadata_round_trip(repo):
+    await repo.save_org(_org("org_a", "fence-1"))
+    meta = {"wave": {"role": "child", "wave_id": "wv_x", "root_work_id": "w_root"}}
+    await repo.save_work(
+        OrgWorkItem(
+            work_id="w1",
+            org_id="org_a",
+            title="shard",
+            metadata=meta,
+        )
+    )
+    got = await repo.find_work("org_a", "w1")
+    assert got is not None
+    assert got.metadata == meta
+    assert "metadata" in got.to_dict()
+    # legacy row without metadata key still loads
+    import json
+
+    legacy = OrgWorkItem(work_id="w2", org_id="org_a", title="old")
+    raw = legacy.to_dict()
+    del raw["metadata"]
+    await repo.redis.set(_work_key("org_a", "w2"), json.dumps(raw))
+    await repo.redis.sadd(_work_set_key("org_a"), "w2")
+    loaded = await repo.find_work("org_a", "w2")
+    assert loaded is not None
+    assert loaded.metadata is None

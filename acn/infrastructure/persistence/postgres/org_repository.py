@@ -193,6 +193,22 @@ class PostgresOrgRepository(IOrgRepository):
             await session.commit()
             return result.rowcount or 0
 
+    @staticmethod
+    def _work_from_row(row: OrgWorkItemModel) -> OrgWorkItem:
+        meta = row.work_metadata
+        if meta is not None and not isinstance(meta, dict):
+            meta = None
+        return OrgWorkItem(
+            work_id=row.work_id,
+            org_id=row.org_id,
+            title=row.title,
+            status=row.status,  # type: ignore[arg-type]
+            assignee_agent_id=row.assignee_agent_id,
+            metadata=meta,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
     async def save_work(self, work: OrgWorkItem) -> None:
         async with self._session_factory() as session:
             existing = await session.get(OrgWorkItemModel, work.work_id)
@@ -201,6 +217,7 @@ class PostgresOrgRepository(IOrgRepository):
                 existing.title = work.title
                 existing.status = work.status
                 existing.assignee_agent_id = work.assignee_agent_id
+                existing.work_metadata = work.metadata
                 existing.updated_at = work.updated_at
             else:
                 session.add(
@@ -210,6 +227,7 @@ class PostgresOrgRepository(IOrgRepository):
                         title=work.title,
                         status=work.status,
                         assignee_agent_id=work.assignee_agent_id,
+                        work_metadata=work.metadata,
                         created_at=work.created_at,
                         updated_at=work.updated_at,
                     )
@@ -221,15 +239,7 @@ class PostgresOrgRepository(IOrgRepository):
             row = await session.get(OrgWorkItemModel, work_id)
             if not row or row.org_id != org_id:
                 return None
-            return OrgWorkItem(
-                work_id=row.work_id,
-                org_id=row.org_id,
-                title=row.title,
-                status=row.status,  # type: ignore[arg-type]
-                assignee_agent_id=row.assignee_agent_id,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-            )
+            return self._work_from_row(row)
 
     async def list_work(
         self,
@@ -244,18 +254,7 @@ class PostgresOrgRepository(IOrgRepository):
                     OrgWorkItemModel.status.in_(("todo", "in_progress"))
                 )
             result = await session.execute(stmt)
-            return [
-                OrgWorkItem(
-                    work_id=r.work_id,
-                    org_id=r.org_id,
-                    title=r.title,
-                    status=r.status,  # type: ignore[arg-type]
-                    assignee_agent_id=r.assignee_agent_id,
-                    created_at=r.created_at,
-                    updated_at=r.updated_at,
-                )
-                for r in result.scalars().all()
-            ]
+            return [self._work_from_row(r) for r in result.scalars().all()]
 
     async def delete_work_for_org(self, org_id: str) -> int:
         async with self._session_factory() as session:

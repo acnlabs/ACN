@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
-from ...core.entities.org import OrgWorkItem, WorkStatus
+from ...core.entities.org import OrgWorkItem, WorkStatus, normalize_work_metadata
 from ...core.interfaces.org_repository import IOrgRepository
-from ...core.interfaces.work_pattern import IWorkPattern
+from ...core.interfaces.work_pattern import METADATA_UNSET, IWorkPattern
 
 
 class BuiltinWorkPattern(IWorkPattern):
@@ -24,6 +25,7 @@ class BuiltinWorkPattern(IWorkPattern):
         *,
         title: str,
         assignee_agent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> OrgWorkItem:
         now = datetime.now(UTC)
         work = OrgWorkItem(
@@ -31,6 +33,7 @@ class BuiltinWorkPattern(IWorkPattern):
             org_id=org_id,
             title=title,
             assignee_agent_id=assignee_agent_id,
+            metadata=metadata,
             status="todo",
             created_at=now,
             updated_at=now,
@@ -45,6 +48,7 @@ class BuiltinWorkPattern(IWorkPattern):
         *,
         status: WorkStatus,
         assignee_agent_id: str | None = None,
+        metadata: Any = METADATA_UNSET,
     ) -> OrgWorkItem:
         # Local import avoids circular import with OrgService.
         from ..org_service import OrgWorkNotFoundError
@@ -55,6 +59,8 @@ class BuiltinWorkPattern(IWorkPattern):
         work.status = status
         if assignee_agent_id is not None:
             work.assignee_agent_id = assignee_agent_id
+        if metadata is not METADATA_UNSET:
+            work.metadata = normalize_work_metadata(metadata)
         work.updated_at = datetime.now(UTC)
         await self._repo.save_work(work)
         return work

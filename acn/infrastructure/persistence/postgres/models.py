@@ -806,6 +806,10 @@ class OrgWorkItemModel(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="todo")
     assignee_agent_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Attribute cannot be ``metadata`` (SQLAlchemy reserved); API field is metadata.
+    work_metadata: Mapped[dict | None] = mapped_column(
+        "metadata", JSONB, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

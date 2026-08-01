@@ -623,6 +623,8 @@ class ACNClient:
         body: dict[str, Any] = {"title": request.title}
         if request.assignee_agent_id:
             body["assignee_agent_id"] = request.assignee_agent_id
+        if request.metadata is not None:
+            body["metadata"] = request.metadata
         data = await self._request(
             "POST",
             f"/api/v1/orgs/{org_id}/work",
@@ -640,6 +642,9 @@ class ACNClient:
         body: dict[str, Any] = {"status": request.status}
         if request.assignee_agent_id:
             body["assignee_agent_id"] = request.assignee_agent_id
+        # Include metadata when explicitly set (incl. null clear via model_fields_set).
+        if "metadata" in request.model_fields_set:
+            body["metadata"] = request.metadata
         data = await self._request(
             "PATCH",
             f"/api/v1/orgs/{org_id}/work/{work_id}",

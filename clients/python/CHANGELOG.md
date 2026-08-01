@@ -4,6 +4,11 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `OrgWorkItem.metadata` / create+update request fields — opaque JSON object
+  passthrough (`metadata.wave` for Org wave metrics; server stores only).
+
 ## [0.13.0] - 2026-07-23
 
 ### Added — Org Harness Work Port (parity with TypeScript 0.15)

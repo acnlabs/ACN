@@ -3,7 +3,7 @@
 **Status:** Accepted · **审核修订 2026-07-29**（B1–B3 / W1–W7）· **M0 fixtures+smoke + §3.3 observe 已落地**  
 **Date:** 2026-07-29 · **observe：** 2026-08-01  
 **Audience:** 产品 / Org 编排器维护者  
-**Depends on:** [design-v0.md](./design-v0.md) §0 · [org-orchestrator-v0.md](./org-orchestrator-v0.md) · [org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md) · 现网 `OrgWorkItem`（无 `metadata`）  
+**Depends on:** [design-v0.md](./design-v0.md) §0 · [org-orchestrator-v0.md](./org-orchestrator-v0.md) · [org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md) · `OrgWorkItem`（可选 `metadata` 已落地；Kernel 只存不解析）  
 **Inspiration:** Kimi Agent Swarm（PARL / 关键路径 / Context Sharding）— **只借度量与反模式，不复制闭源 Swarm 产品**  
 **Related（正交）：** [sparse-collab-contract-v0.md](../sparse-collab-contract-v0.md) — L0→L2 **进场与结算**；本文只度量 L2 **内部**并行质量  
 **Code：** [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) · [`work_observe.py`](../../examples/org-orchestrator/work_observe.py) · [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh)
@@ -26,13 +26,14 @@
 
 ### 0.1 现网约束（审核锁定）
 
-今日 `OrgWorkItem` 字段仅为：
+`OrgWorkItem` 字段：
 
-`work_id · org_id · title · status · assignee_agent_id · created_at · updated_at`
+`work_id · org_id · title · status · assignee_agent_id · metadata? · created_at · updated_at`
 
-- **无** `metadata`、**无** 状态转移历史、**无** 验收态（仅有 `todo|in_progress|done|cancelled`）。  
+- **有**可选 `metadata`（JSON object / null；CREATE/PATCH/LIST 透传；Kernel **不解析**键）。  
+- **无** 状态转移历史、**无** 验收态（仅有 `todo|in_progress|done|cancelled`）。  
 - `GET .../work?open_only=false` 可列出含终态票；编排器 poll 只能看见**当前快照**。  
-→ M0 必须用**侧车本地观测日志**补时间轴；M1 依赖 **`work.metadata` 先落地**（或显式侧车关系图），见 §3.2 / D4。
+→ M0 仍用**侧车本地观测日志**补时间轴；真 wave 关系可写 `metadata.wave`（见 §3.2）。自动扇出仍属 M1。
 
 ---
 
@@ -98,12 +99,12 @@ child_work_ids[] # 本波次平行子票
 
 ### 3.2 子票关系存放（B1 收口）
 
-现网 **无** `OrgWorkItem.metadata`。关系存放按阶段：
+关系存放按阶段：
 
 | 阶段 | 存放 | 说明 |
 |---|---|---|
-| **M0** | 侧车本地（JSON/SQLite）`wave_id → {root, children[]}`；smoke 用合成 fixtures | **不改** Kernel |
-| **M1 前置（阻塞）** | ACN 为 `OrgWorkItem` 增加可选 **`metadata: object`**（JSON），编排器写入 `metadata.wave` | Kernel **只存不解析** |
+| **M0** | 侧车本地（JSON/SQLite）`wave_id → {root, children[]}`；smoke 用合成 fixtures | 观测不依赖 metadata |
+| **M1 前置** | `OrgWorkItem.metadata`（可选 JSON）已落地；编排器写入 `metadata.wave` | Kernel **只存不解析** · **done** |
 | **备选（不推荐作主路径）** | 侧车关系图永不进 ACN | 多编排器实例无法共享图；仅单机 POC |
 
 M1 建议写入形状（键名 `wave`，避免与 L1「swarm」混淆；若已有草稿用 `swarm` 亦可，但文档与实现须统一一种）：
@@ -203,7 +204,7 @@ P_norm = min(1, P / max(1, child_count))
 |---|---|---|
 | **P3**（已规划） | tick / 催办 / 超时 | 与本文 **无硬依赖** |
 | **P3.5（本文 M0）** | fixtures 真 wave → R/P/C/K + 告警 + smoke；§3.3 poll 差分日志 | **done**（生产扇出仍待 M1） |
-| **P5（本文 M1）** | **前置：** `OrgWorkItem.metadata`；再拆平行子票 + 并行 wake | 有真实可拆任务且 metadata 已合并 |
+| **P5（本文 M1）** | 拆平行子票 + 写 `metadata.wave` + 并行 wake | **前置 metadata 已合并**；等真实可拆任务 |
 | **P6** | 看板（CLI / `org wave report`）或可选 Paperclip | 有狗粮再做 |
 
 不插入 P4（ClawTeam）关键路径；P4 仍按需。
@@ -227,8 +228,7 @@ P_norm = min(1, P / max(1, child_count))
 
 **不做（M0）：**
 
-- 改 ACN Kernel / 加 `metadata`（那是 **M1 前置**）  
-- 自动拆票、自动改 assignee  
+- 自动拆票、自动改 assignee（属 M1；`metadata` 透传已单独落地）  
 - 沙箱、模型 RL、`plugins.*`  
 - 指标绑 XP / Escrow  
 - 对 window bundle 打 `SERIAL_*` / `FAKE_*`
@@ -249,7 +249,7 @@ P_norm = min(1, P / max(1, child_count))
 **前置（全部满足再开工）：**
 
 1. 真实可拆场景（多源调研 / 多角色评审等）。  
-2. ACN `OrgWorkItem` **可选 `metadata`** 已合并并有 list/PATCH 透传。  
+2. ~~ACN `OrgWorkItem` 可选 `metadata`~~ → **已合并**（CREATE/LIST/PATCH 透传）。  
 3. M0 smoke 绿。
 
 **步骤：**
@@ -270,7 +270,7 @@ P_norm = min(1, P / max(1, child_count))
 | D1 | 指标落在编排器侧车，不进 Kernel | **Ack（审核）** |
 | D2 | M0 只观测、不自动拆票 | **Ack（审核）** |
 | D3 | 指标不进 Escrow/XP | **Ack（审核）** |
-| D4 | M1 子票关系：**先**落地 `work.metadata`，再写 `metadata.wave`；M0 用侧车/fixtures | **条件 Ack（审核）** |
+| D4 | M1 子票关系：**先**落地 `work.metadata`，再写 `metadata.wave`；M0 用侧车/fixtures | **Ack · metadata 已落地** |
 | D5 | 下一步工程 = M0 账本 + fixture smoke（不依赖 P3） | **Ack · M0 done** |
 
 ---

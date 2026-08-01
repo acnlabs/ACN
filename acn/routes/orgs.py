@@ -294,6 +294,8 @@ class OrgMemberAddRequest(BaseModel):
 class OrgWorkCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     assignee_agent_id: str | None = None
+    # Opaque JSON object; Kernel stores only (e.g. metadata.wave).
+    metadata: dict[str, Any] | None = None
 
 
 class OrgWorkImportTaskRequest(BaseModel):
@@ -334,6 +336,8 @@ class OrgWorkUpdateRequest(BaseModel):
     # Optional status+assignee-only PATCH is a follow-up API change.
     status: Literal["todo", "in_progress", "done", "cancelled"]
     assignee_agent_id: str | None = None
+    # Omit to leave unchanged; null clears; object replaces (no deep merge).
+    metadata: dict[str, Any] | None = None
 
 
 def _org_response(org) -> dict[str, Any]:
@@ -730,6 +734,7 @@ async def create_work(
             caller_type=caller_type,
             caller_sub=caller_sub,
             assignee_agent_id=body.assignee_agent_id,
+            metadata=body.metadata,
         )
         return work.to_dict()
     except OrgNotFoundError as e:
@@ -741,6 +746,10 @@ async def create_work(
     except OrgConflictError as e:
         # Legacy Phase 1 Orgs may store unavailable work plugins.
         raise _map_conflict(e) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
+        ) from e
 
 
 @router.post("/{org_id}/publish-task")
@@ -1009,7 +1018,12 @@ async def update_work(
     payload: dict = OrgAuthDep,
     org_service: OrgService = Depends(get_org_service),
 ):
+    from ..core.interfaces.work_pattern import METADATA_UNSET
+
     caller_type, caller_sub = _caller(payload)
+    meta_arg: Any = METADATA_UNSET
+    if "metadata" in body.model_fields_set:
+        meta_arg = body.metadata
     try:
         work = await org_service.update_work_status(
             org_id,
@@ -1018,6 +1032,7 @@ async def update_work(
             caller_type=caller_type,
             caller_sub=caller_sub,
             assignee_agent_id=body.assignee_agent_id,
+            metadata=meta_arg,
         )
         return work.to_dict()
     except OrgNotFoundError as e:
@@ -1034,6 +1049,10 @@ async def update_work(
         raise _map_permission(e, org_id) from e
     except OrgConflictError as e:
         raise _map_conflict(e) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST, 400, details={"reason": str(e)}
+        ) from e
 
 
 @router.post("/{org_id}/loop/tick")

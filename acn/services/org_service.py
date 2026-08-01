@@ -31,6 +31,7 @@ from ..protocols.ap2 import WebhookEventType
 from ..protocols.ap2.webhook import WebhookService
 from .agent_service import AgentService
 from .subnet_service import SubnetService
+from ..core.interfaces.work_pattern import METADATA_UNSET
 from .work_patterns import (
     normalize_org_plugins,
     resolve_work_pattern,
@@ -1054,6 +1055,7 @@ class OrgService:
         caller_type: CallerType,
         caller_sub: str,
         assignee_agent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> OrgWorkItem:
         org = await self.get_org(org_id)
         self._require_governance(org, caller_type, caller_sub)
@@ -1061,6 +1063,7 @@ class OrgService:
             org_id,
             title=title,
             assignee_agent_id=assignee_agent_id,
+            metadata=metadata,
         )
         await self._emit(
             org,
@@ -1171,6 +1174,7 @@ class OrgService:
         caller_type: CallerType,
         caller_sub: str,
         assignee_agent_id: str | None = None,
+        metadata: Any = METADATA_UNSET,
     ) -> OrgWorkItem:
         org = await self.get_org(org_id)
         self._require_governance(org, caller_type, caller_sub)
@@ -1179,6 +1183,7 @@ class OrgService:
             work_id,
             status=status,
             assignee_agent_id=assignee_agent_id,
+            metadata=metadata,
         )
         await self._emit(
             org,

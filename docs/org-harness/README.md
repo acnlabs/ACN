@@ -33,7 +33,7 @@
 | [org-orchestrator-wake-contract-v0.md](./org-orchestrator-wake-contract-v0.md) | Org 编排器唤醒契约 P1（`acn.org.work_wake`） |
 | [org-orchestrator-member-playbook-v0.md](./org-orchestrator-member-playbook-v0.md) | 成员侧：收到 wake → 干活 → 治理关单 |
 | **[org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md)** | **成员交班契约（`acn.org.work_handoff`；v0=治理改派后通知；示例+狗粮已落地）** |
-| **[org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md)** | **编排质量 / wave 指标（Accepted；M0 + §3.3 observe；M1 需 work.metadata）** |
+| **[org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md)** | **编排质量 / wave 指标（Accepted；M0 + observe；`work.metadata` 已落地；M1 扇出待真实场景）** |
 | **[org-knowledge-base-v0.md](./org-knowledge-base-v0.md)** | **Org 知识库 Port（`IOrgKnowledge`；与 Memory 分界；侧车路径）** |
 | [`examples/org-knowledge/`](../../examples/org-knowledge/) | 知识库 K1：`read_kb.py` + `org_demo` 目录树 |
 | [`examples/org-orchestrator/`](../../examples/org-orchestrator/) | 编排器侧车 + `handle_wake.py` + smoke |

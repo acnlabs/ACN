@@ -106,12 +106,16 @@ def patch_work(
     *,
     status: str | None = None,
     assignee_agent_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    set_metadata: bool = False,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {}
     if status is not None:
         body["status"] = status
     if assignee_agent_id is not None:
         body["assignee_agent_id"] = assignee_agent_id
+    if set_metadata:
+        body["metadata"] = metadata
     return _request(
         "PATCH",
         f"{base}/orgs/{org_id}/work/{work_id}",

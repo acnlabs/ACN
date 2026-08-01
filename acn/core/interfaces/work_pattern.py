@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from ..entities.org import OrgWorkItem, WorkStatus
+
+# Sentinel: omit metadata on PATCH (distinct from explicit null clear).
+METADATA_UNSET: Any = object()
 
 
 class IWorkPattern(ABC):
@@ -24,6 +28,7 @@ class IWorkPattern(ABC):
         *,
         title: str,
         assignee_agent_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> OrgWorkItem:
         """Create a work item in ``todo`` status."""
 
@@ -35,8 +40,13 @@ class IWorkPattern(ABC):
         *,
         status: WorkStatus,
         assignee_agent_id: str | None = None,
+        metadata: Any = METADATA_UNSET,
     ) -> OrgWorkItem:
-        """Update status and optional assignee."""
+        """Update status and optional assignee / metadata.
+
+        Pass ``metadata=None`` to clear; omit (default ``METADATA_UNSET``) to
+        leave unchanged. Kernel does not interpret metadata keys.
+        """
 
     @abstractmethod
     async def list_work(

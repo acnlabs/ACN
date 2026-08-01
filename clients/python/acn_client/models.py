@@ -829,6 +829,7 @@ class OrgWorkItem(BaseModel):
     title: str
     status: str
     assignee_agent_id: str | None = None
+    metadata: dict[str, Any] | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -838,6 +839,7 @@ class OrgWorkCreateRequest(BaseModel):
 
     title: str
     assignee_agent_id: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class OrgWorkUpdateRequest(BaseModel):
@@ -845,6 +847,7 @@ class OrgWorkUpdateRequest(BaseModel):
 
     status: str
     assignee_agent_id: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class OrgWorkListResponse(BaseModel):
