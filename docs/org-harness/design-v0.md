@@ -1,7 +1,7 @@
 # Org Harness 方案设计与架构 v0
 
 **Status:** Design v0 — mechanics decided in [ADR-0014](../adr/0014-org-harness-module.md)（Accepted）  
-**Date:** 2026-07-19 · **Narrative sync:** 2026-07-27（架构导读：Kernel / Ports / 外部 Pattern 分界；补 `IOrgKnowledge`）  
+**Date:** 2026-07-19 · **Narrative sync:** 2026-08-01（补运转模式按需插拔；见 [org-runtime-modes-v0.md](./org-runtime-modes-v0.md)）  
 **Audience:** ACN / AgentPlanet 产品与工程  
 **Supersedes (naming & ownership):** 本文纠正早期「ACN = Pasture System」「Org 只活在 Paperclip」的表述；Network Core 契约仍见 [api-surface-tiers.md](./api-surface-tiers.md)。  
 **P0/P1 风险收口:** 见 ADR-0014（无 owner 治理、Membership↔subnet、subnet steward、Phase 1 含最小 work、Loop/Work 边界）。
@@ -74,6 +74,11 @@ Work Graph（IWorkPattern Port）
 ```
 
 细节从 §4 总体架构、§5 模块内设计展开；插件短名单见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。Org 节拍产品见 [org-orchestrator-v0.md](./org-orchestrator-v0.md)。
+
+### 0.5 运转模式按需选用（动态、可混合）
+
+中心派工、成员自组织、graph、混合等 **都是 Pattern**，不是单一正统。Org 行为可以随时间切换。  
+波次质量指标是旁路观测，不绑定某一种模式。收口见 **[org-runtime-modes-v0.md](./org-runtime-modes-v0.md)**。
 
 ---
 

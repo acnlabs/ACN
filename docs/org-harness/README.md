@@ -1,7 +1,7 @@
 # Org Harness
 
 **Status:** Design v0 + [ADR-0014](../adr/0014-org-harness-module.md) Accepted；**Phase 1 Kernel + Phase 2a/P2c 已落地**（`/api/v1/orgs*` · Work Port `builtin_work` · Paperclip Org path）  
-**Last updated:** 2026-07-27
+**Last updated:** 2026-08-01
 
 > **Org Harness** 是 ACN 的**新模块**：给「一群 agent 组成的 Org」提供组织层挽具。  
 > **ACN** 仍叫 ACN（智能体协作网络），不是 Pasture。  
@@ -33,7 +33,8 @@
 | [org-orchestrator-wake-contract-v0.md](./org-orchestrator-wake-contract-v0.md) | Org 编排器唤醒契约 P1（`acn.org.work_wake`） |
 | [org-orchestrator-member-playbook-v0.md](./org-orchestrator-member-playbook-v0.md) | 成员侧：收到 wake → 干活 → 治理关单 |
 | **[org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md)** | **成员交班契约（`acn.org.work_handoff`；v0=治理改派后通知；示例+狗粮已落地）** |
-| **[org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md)** | **编排质量 / wave 指标（Accepted；M0 + observe；`work.metadata` 已落地；M1 扇出待真实场景）** |
+| **[org-runtime-modes-v0.md](./org-runtime-modes-v0.md)** | **运转模式按需插拔（中心 / 去中心 / graph / 混合；wave 为旁路观测）** |
+| **[org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md)** | **编排质量 / wave 指标（Accepted；M0 + observe；`work.metadata` 已落地；自动扇出 = 可选 Pattern）** |
 | **[org-knowledge-base-v0.md](./org-knowledge-base-v0.md)** | **Org 知识库 Port（`IOrgKnowledge`；与 Memory 分界；侧车路径）** |
 | [`examples/org-knowledge/`](../../examples/org-knowledge/) | 知识库 K1：`read_kb.py` + `org_demo` 目录树 |
 | [`examples/org-orchestrator/`](../../examples/org-orchestrator/) | 编排器侧车 + `handle_wake.py` + smoke |
@@ -76,6 +77,7 @@ L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 - **实验（C1–C2）：** [Org 待办执行器（外部）](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C3 webhook 按需）。  
 - **Org 编排器：** [产品定义](./org-orchestrator-v0.md) P0 + [唤醒契约](./org-orchestrator-wake-contract-v0.md) P1 + [P2 侧车](../../examples/org-orchestrator/)；P3 催办/超时按需。  
 - **成员交班：** [契约](./org-work-handoff-contract-v0.md) + [`send_handoff`/`handle_handoff`](../../examples/org-orchestrator/) + [`smoke_org_work_handoff.sh`](../../scripts/smoke_org_work_handoff.sh)。  
+- **运转模式：** [org-runtime-modes-v0.md](./org-runtime-modes-v0.md) — Pattern 按 Org 选用/混合；自动扇出非必经。  
 - **编排质量（M0 Accepted）：** [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md) + [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) + [`work_observe.py`](../../examples/org-orchestrator/work_observe.py) + [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh) + [`smoke_org_work_metadata_wave.sh`](../../scripts/smoke_org_work_metadata_wave.sh)（`metadata.wave` 狗粮）。  
 - **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（编排器可选后端，有需求再开）。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主。

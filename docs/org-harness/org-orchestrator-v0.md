@@ -118,7 +118,7 @@ ACN 内：Kernel + builtin_work + heartbeat + events   ← SoT 仍在这里
 | P3 | `org.*` / tick 驱动、催办、超时策略 | 按需 |
 | P3.5 | 编排质量账本（wave R/P/C/K；不依赖 P3） | **Accepted · M0 done** · [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md) |
 | P4 | 可选：ClawTeam 等执行适配（[选型](./clawteam-org-loop-adapter-v0.md)） | 有需求再开 |
-| P5 | 平行拆票 + 并行 wake（metrics M1） | 前置 `work.metadata` + 真可拆场景；见 wave-metrics |
+| P5 | 平行拆票 + 并行 wake（metrics M1；**可选 Pattern**） | 非必经；真可拆场景再开 · [runtime-modes](./org-runtime-modes-v0.md) · [wave-metrics](./org-swarm-metrics-v0.md) |
 
 ---
 

@@ -203,11 +203,12 @@ P_norm = min(1, P / max(1, child_count))
 | 步 | 内容 | 相对现网 |
 |---|---|---|
 | **P3**（已规划） | tick / 催办 / 超时 | 与本文 **无硬依赖** |
-| **P3.5（本文 M0）** | fixtures 真 wave → R/P/C/K + 告警 + smoke；§3.3 poll 差分日志 | **done**（生产扇出仍待 M1） |
-| **P5（本文 M1）** | 拆平行子票 + 写 `metadata.wave` + 并行 wake | **前置 metadata 已合并**；等真实可拆任务 |
+| **P3.5（本文 M0）** | fixtures 真 wave → R/P/C/K + 告警 + smoke；§3.3 poll 差分日志 | **done** |
+| **P5（本文 M1）** | **可选 Pattern：** 中心编排器自动拆票 + 并行 wake | **非必经**；有真实可拆场景再开（见 [runtime-modes](./org-runtime-modes-v0.md)） |
 | **P6** | 看板（CLI / `org wave report`）或可选 Paperclip | 有狗粮再做 |
 
-不插入 P4（ClawTeam）关键路径；P4 仍按需。
+不插入 P4（ClawTeam）关键路径；P4 仍按需。  
+**模式中立：** 去中心自建子票 / graph 写出的平行活，只要挂上 `metadata.wave`（或侧车图），同样可观测——不必先做 M1 扇出。
 
 ---
 
@@ -245,9 +246,11 @@ P_norm = min(1, P / max(1, child_count))
 
 ---
 
-## 7. M1 扇出（仅草案；阻塞前置写清）
+## 7. M1 扇出（可选 Pattern；非 Harness 主干）
 
-**前置（全部满足再开工）：**
+> 自动扇出 = **中心派工**下的一种策略，不是所有 Org 的必经关卡。其它模式见 [org-runtime-modes-v0.md](./org-runtime-modes-v0.md)。
+
+**前置（要做这一 Pattern 时全部满足）：**
 
 1. 真实可拆场景（多源调研 / 多角色评审等）。  
 2. ~~ACN `OrgWorkItem` 可选 `metadata`~~ → **已合并**（CREATE/LIST/PATCH 透传）。  
