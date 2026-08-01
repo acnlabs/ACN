@@ -7,7 +7,8 @@ All notable changes to `acn-client` are documented here.
 ### Added
 
 - `OrgWorkItem.metadata` / create+update request fields — opaque JSON object
-  passthrough (`metadata.wave` for Org wave metrics; server stores only).
+  passthrough (`metadata.wave` for Org wave metrics; server stores only,
+  64 KiB serialised cap).
 
 ## [0.13.0] - 2026-07-23
 

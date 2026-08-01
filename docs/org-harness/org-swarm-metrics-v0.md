@@ -30,7 +30,7 @@
 
 `work_id · org_id · title · status · assignee_agent_id · metadata? · created_at · updated_at`
 
-- **有**可选 `metadata`（JSON object / null；CREATE/PATCH/LIST 透传；Kernel **不解析**键）。  
+- **有**可选 `metadata`（JSON object / null；CREATE/PATCH/LIST 透传；Kernel **不解析**键；序列化体积 ≤ **64 KiB**）。  
 - **无** 状态转移历史、**无** 验收态（仅有 `todo|in_progress|done|cancelled`）。  
 - `GET .../work?open_only=false` 可列出含终态票；编排器 poll 只能看见**当前快照**。  
 → M0 仍用**侧车本地观测日志**补时间轴；真 wave 关系可写 `metadata.wave`（见 §3.2）。自动扇出仍属 M1。

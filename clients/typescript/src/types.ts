@@ -1157,6 +1157,8 @@ export interface OrgWorkItem {
   title: string;
   status: OrgWorkStatus | string;
   assignee_agent_id?: string | null;
+  /** Opaque JSON object; server stores only (e.g. metadata.wave). */
+  metadata?: Record<string, unknown> | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -1164,11 +1166,14 @@ export interface OrgWorkItem {
 export interface OrgWorkCreateRequest {
   title: string;
   assignee_agent_id?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface OrgWorkUpdateRequest {
   status: OrgWorkStatus;
   assignee_agent_id?: string | null;
+  /** Omit to leave unchanged; null clears; object replaces. */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface OrgWorkListResponse {

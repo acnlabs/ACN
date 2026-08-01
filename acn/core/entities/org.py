@@ -209,11 +209,15 @@ def normalize_work_metadata(raw: Any) -> dict[str, Any] | None:
     """Validate optional work metadata (Kernel stores; does not interpret).
 
     ``None`` clears / means absent. Non-object JSON (list/str/…) is rejected.
+    Serialised size capped at 64 KiB (same budget as other metadata fields).
     """
+    from ..validators import check_dict_size_64k
+
     if raw is None:
         return None
     if not isinstance(raw, dict):
         raise ValueError("work metadata must be a JSON object or null")
+    check_dict_size_64k("metadata", raw)
     # Shallow copy — callers own nested mutation; Kernel does not deep-parse.
     return dict(raw)
 

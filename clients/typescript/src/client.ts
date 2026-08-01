@@ -1626,6 +1626,9 @@ export class ACNClient {
     if (request.assignee_agent_id != null && request.assignee_agent_id !== '') {
       body.assignee_agent_id = request.assignee_agent_id;
     }
+    if (request.metadata !== undefined) {
+      body.metadata = request.metadata;
+    }
     return this.post(
       `/api/v1/orgs/${encodeURIComponent(orgId)}/work`,
       body,
@@ -1641,6 +1644,9 @@ export class ACNClient {
     const body: Record<string, unknown> = { status: request.status };
     if (request.assignee_agent_id != null && request.assignee_agent_id !== '') {
       body.assignee_agent_id = request.assignee_agent_id;
+    }
+    if (Object.prototype.hasOwnProperty.call(request, 'metadata')) {
+      body.metadata = request.metadata ?? null;
     }
     return this.patch(
       `/api/v1/orgs/${encodeURIComponent(orgId)}/work/${encodeURIComponent(workId)}`,

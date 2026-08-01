@@ -16,11 +16,12 @@ from fastapi import (
     Request,
 )
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..auth.middleware import verify_token
 from ..config import get_settings
 from ..core.errors import ACNHTTPError, ErrorCode
+from ..core.validators import check_dict_size_64k
 from ..routes.dependencies import (
     _schedule_alive_renewal,
     get_agent_service,
@@ -297,6 +298,13 @@ class OrgWorkCreateRequest(BaseModel):
     # Opaque JSON object; Kernel stores only (e.g. metadata.wave).
     metadata: dict[str, Any] | None = None
 
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_size(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        if v is None:
+            return v
+        return check_dict_size_64k("metadata", v)
+
 
 class OrgWorkImportTaskRequest(BaseModel):
     task_id: str = Field(..., min_length=1, max_length=128)
@@ -338,6 +346,13 @@ class OrgWorkUpdateRequest(BaseModel):
     assignee_agent_id: str | None = None
     # Omit to leave unchanged; null clears; object replaces (no deep merge).
     metadata: dict[str, Any] | None = None
+
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_size(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        if v is None:
+            return v
+        return check_dict_size_64k("metadata", v)
 
 
 def _org_response(org) -> dict[str, Any]:

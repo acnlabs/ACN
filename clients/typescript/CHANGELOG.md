@@ -4,6 +4,11 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `OrgWorkItem.metadata` / create+update request fields — opaque JSON object
+  passthrough (aligned with Python SDK; server stores only, 64 KiB cap).
+
 ## [0.15.0] - 2026-07-23
 
 ### Added — Org Harness Work Port (builtin_work)

@@ -100,6 +100,7 @@ describe('Org Harness SDK', () => {
     await client.updateWork('org_abc', 'work_1', { status: 'done' });
     expect(calls[1]!.url.pathname).toBe('/api/v1/orgs/org_abc/work/work_1');
     expect(calls[1]!.init.method).toBe('PATCH');
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({ status: 'done' });
 
     const listed = await client.listWork('org_abc', { openOnly: true });
     expect(listed.work).toHaveLength(1);
@@ -109,6 +110,24 @@ describe('Org Harness SDK', () => {
     expect(tick.open_count).toBe(1);
     expect(calls[3]!.url.pathname).toBe('/api/v1/orgs/org_abc/loop/tick');
     expect(calls[3]!.init.method).toBe('POST');
+
+    await client.createWork('org_abc', {
+      title: 'Root',
+      metadata: { wave: { role: 'root', wave_id: 'wv_1' } },
+    });
+    expect(JSON.parse(String(calls[4]!.init.body))).toEqual({
+      title: 'Root',
+      metadata: { wave: { role: 'root', wave_id: 'wv_1' } },
+    });
+
+    await client.updateWork('org_abc', 'work_1', {
+      status: 'todo',
+      metadata: null,
+    });
+    expect(JSON.parse(String(calls[5]!.init.body))).toEqual({
+      status: 'todo',
+      metadata: null,
+    });
   });
 
   it('orgSubnetId prefers fencing', () => {
