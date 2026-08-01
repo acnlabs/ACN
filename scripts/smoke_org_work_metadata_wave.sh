@@ -15,9 +15,13 @@ if [[ -x "${ROOT}/.venv/bin/python" ]]; then
 fi
 
 echo "==> unit: metadata.wave graph"
-"$PY" -m pytest \
-  "${ROOT}/tests/examples/test_org_work_observe.py::test_wave_graph_from_metadata_and_report" \
-  -q -p no:cov -o addopts=
+if "$PY" -c "import pytest" 2>/dev/null; then
+  "$PY" -m pytest \
+    "${ROOT}/tests/examples/test_org_work_observe.py::test_wave_graph_from_metadata_and_report" \
+    -q -p no:cov -o addopts=
+else
+  echo "    skip (pytest not installed in this python)"
+fi
 
 echo "==> offline: serial wave via metadata.wave"
 OBS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/org-meta-wave.XXXXXX")"
