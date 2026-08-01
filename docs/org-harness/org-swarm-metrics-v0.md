@@ -1,12 +1,12 @@
 # Org 编排质量指标（wave metrics）v0
 
-**Status:** Accepted · **审核修订 2026-07-29**（B1–B3 / W1–W7）· **M0 fixtures+smoke 已落地**  
-**Date:** 2026-07-29  
+**Status:** Accepted · **审核修订 2026-07-29**（B1–B3 / W1–W7）· **M0 fixtures+smoke + §3.3 observe 已落地**  
+**Date:** 2026-07-29 · **observe：** 2026-08-01  
 **Audience:** 产品 / Org 编排器维护者  
 **Depends on:** [design-v0.md](./design-v0.md) §0 · [org-orchestrator-v0.md](./org-orchestrator-v0.md) · [org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md) · 现网 `OrgWorkItem`（无 `metadata`）  
 **Inspiration:** Kimi Agent Swarm（PARL / 关键路径 / Context Sharding）— **只借度量与反模式，不复制闭源 Swarm 产品**  
 **Related（正交）：** [sparse-collab-contract-v0.md](../sparse-collab-contract-v0.md) — L0→L2 **进场与结算**；本文只度量 L2 **内部**并行质量  
-**Code：** [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) · [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh)
+**Code：** [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) · [`work_observe.py`](../../examples/org-orchestrator/work_observe.py) · [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh)
 
 > **一句话：** 给 **Org 编排器（外部 Pattern）** 增加「协作是否真并行、是否偷懒、墙钟是否缩短」的可观测指标；可选再做「一票拆多子票并行唤醒」。  
 > **对外名：** 编排质量 / **wave**（波次）。文中 `swarm` 仅作可选 metadata 键名与灵感标注，**≠** L1 会话内 fan-out。  
@@ -131,7 +131,8 @@ M1 建议写入形状（键名 `wave`，避免与 L1「swarm」混淆；若已�
 ```
 
 - **峰值并行度 / 历时** 只从该日志推导，不假设 ACN 提供转移历史。  
-- 关掉 metrics 模块 = 不写日志、不算分；唤醒/关单路径零改动（M0-S3）。
+- 关掉 metrics 模块 = 不写日志、不算分；唤醒/关单路径零改动（M0-S3）。  
+- **落地：** [`work_observe.py`](../../examples/org-orchestrator/work_observe.py)；编排器设 `ORG_METRICS_OBSERVE_PATH=<jsonl>` 时额外拉 `open_only=false` 并差分写入。报表默认 `kind=window`；可选 `--wave-graph` 侧车关系图打真 wave 告警。
 
 ### 3.4 Context Sharding（成员回写约定）
 
@@ -198,7 +199,7 @@ P_norm = min(1, P / max(1, child_count))
 | 步 | 内容 | 相对现网 |
 |---|---|---|
 | **P3**（已规划） | tick / 催办 / 超时 | 与本文 **无硬依赖** |
-| **P3.5（本文 M0）** | fixtures 真 wave → R/P/C/K + 告警 + smoke | **done**（live 观测日志 poll 后续） |
+| **P3.5（本文 M0）** | fixtures 真 wave → R/P/C/K + 告警 + smoke；§3.3 poll 差分日志 | **done**（生产扇出仍待 M1） |
 | **P5（本文 M1）** | **前置：** `OrgWorkItem.metadata`；再拆平行子票 + 并行 wake | 有真实可拆任务且 metadata 已合并 |
 | **P6** | 看板（CLI / `org wave report`）或可选 Paperclip | 有狗粮再做 |
 
@@ -211,13 +212,15 @@ P_norm = min(1, P / max(1, child_count))
 **已做：**
 
 1. [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py)：对 **fixture 真 wave** 算 R/P/C/K；`kind=window` 不算 §4.2 告警。  
-2. [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh) + demo fixtures（不连活 Org）。  
-3. README / orchestrator §6 已链。
+2. [`work_observe.py`](../../examples/org-orchestrator/work_observe.py)：`list_work` 快照差分 → JSONL；从日志重建 `started_at`/`ended_at`；默认 **window** 报表；可选侧车 `wave-graph` 打真 wave 告警。  
+3. [`run_orchestrator.py`](../../examples/org-orchestrator/run_orchestrator.py)：设 `ORG_METRICS_OBSERVE_PATH` 时额外 `open_only=false` poll 并写入；**未设置则唤醒路径零改动**（M0-S3）。  
+4. [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh) + demo fixtures（不连活 Org）。  
+5. README / orchestrator 已链。
 
 **未做（不挡 Accepted）：**
 
-- poll `list_work` → 本地差分事件日志（§3.3）  
-- 成员 playbook「并行子票只回摘要」专节（M1 前补）
+- 成员 playbook「并行子票只回摘要」专节（M1 前补）  
+- 持久侧车 wave 关系图的运维约定（现可用 `--wave-graph` JSON；生产共享图仍待 `metadata`）
 
 **不做（M0）：**
 

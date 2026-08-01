@@ -23,6 +23,7 @@
 | `ORCHESTRATOR_IDEM_PATH` | 幂等文件，默认 `./.org-orchestrator-idem.json` |
 | `ORG_KB_ATTACH_DEFAULTS` | `1` 时 wake 附带 `kb_refs` → `orgkb://{org}/charter.md` |
 | `ORG_KB_REFS_JSON` | 全局默认 `kb_refs` JSON（list 或 `{kb_refs:[…]}`） |
+| `ORG_METRICS_OBSERVE_PATH` | 可选；设为 JSONL 路径则每次 poll 差分写观测日志（§3.3）；**不设 = 指标关闭** |
 
 ## 跑一轮
 
@@ -73,9 +74,14 @@ echo '{"type":"acn.org.work_wake","org_id":"org_x","work_id":"work_y","assignee"
 # 成员交班：治理改派 → send_handoff → handle_handoff（含 spoof 拒收）
 ACN_BASE_URL=… ACN_API_KEY=acn_steward_… ./scripts/smoke_org_work_handoff.sh
 
-# 编排质量 M0（无 ACN；fixtures）
+# 编排质量 M0（无 ACN；fixtures + observe）
 ./scripts/smoke_org_swarm_metrics.sh
 python3 swarm_metrics.py fixtures/swarm_metrics_demo.json
+
+# 观测日志：合成 poll → report（window；可选 --wave-graph 真 wave）
+python3 work_observe.py observe --events /tmp/org-obs.jsonl --snapshot snap.json
+python3 work_observe.py report --events /tmp/org-obs.jsonl --snapshot snap.json --org-id org_…
+# 编排器挂载：ORG_METRICS_OBSERVE_PATH=/tmp/org-obs.jsonl python3 run_orchestrator.py --once
 ```
 
 ## 成员交班 `send_handoff.py` / `handle_handoff.py`

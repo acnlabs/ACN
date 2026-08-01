@@ -52,6 +52,11 @@ def fetch_open_work(base: str, org_id: str, api_key: str) -> dict[str, Any]:
     return _request("GET", f"{base}/orgs/{org_id}/work?open_only=true", api_key)
 
 
+def fetch_all_work(base: str, org_id: str, api_key: str) -> dict[str, Any]:
+    """Include terminal tickets (needed for observe ended_at / window proxies)."""
+    return _request("GET", f"{base}/orgs/{org_id}/work?open_only=false", api_key)
+
+
 def fetch_members(base: str, org_id: str, api_key: str) -> dict[str, Any]:
     return _request("GET", f"{base}/orgs/{org_id}/members", api_key)
 

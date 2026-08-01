@@ -14,6 +14,7 @@ from acn_client_min import (
     active_member_ids,
     agents_me,
     assignee_id,
+    fetch_all_work,
     fetch_members,
     fetch_open_work,
     normalize_base,
@@ -238,8 +239,17 @@ def main() -> int:
         print("agents/me missing agent_id", file=sys.stderr)
         return 2
 
+    # Metrics observe (§3.3): unset path = off; wake/PATCH path unchanged (M0-S3).
+    observe_path = os.environ.get("ORG_METRICS_OBSERVE_PATH", "").strip()
+    observe_store = None
+    if observe_path:
+        from work_observe import ObservationStore
+
+        observe_store = ObservationStore(observe_path)
+
     print(
-        f"[org-orchestrator] from_agent={from_agent} org={org_id} idem={store_path}",
+        f"[org-orchestrator] from_agent={from_agent} org={org_id} idem={store_path}"
+        + (f" observe={observe_path}" if observe_store else ""),
         flush=True,
     )
 
@@ -253,6 +263,20 @@ def main() -> int:
                 f"members={len(members)}",
                 flush=True,
             )
+            if observe_store is not None:
+                try:
+                    all_payload = fetch_all_work(base, org_id, api_key)
+                    wrote = observe_store.observe(all_payload.get("work") or [])
+                    if wrote:
+                        print(
+                            f"[org-orchestrator] observe wrote={len(wrote)}",
+                            flush=True,
+                        )
+                except Exception as obs_err:
+                    print(
+                        f"[org-orchestrator] observe skipped: {obs_err}",
+                        file=sys.stderr,
+                    )
             for item in items:
                 process_item(
                     base=base,
