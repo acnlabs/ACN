@@ -1,7 +1,7 @@
 # Org Harness 方案设计与架构 v0
 
 **Status:** Design v0 — mechanics decided in [ADR-0014](../adr/0014-org-harness-module.md)（Accepted）  
-**Date:** 2026-07-19 · **Narrative sync:** 2026-08-01（补运转模式按需插拔；见 [org-runtime-modes-v0.md](./org-runtime-modes-v0.md)）  
+**Date:** 2026-07-19 · **Narrative sync:** 2026-08-02（`heartbeat` vs 外部真节拍；Pattern 挂卸见 [org-runtime-modes-v0.md](./org-runtime-modes-v0.md) §6）  
 **Audience:** ACN / AgentPlanet 产品与工程  
 **Supersedes (naming & ownership):** 本文纠正早期「ACN = Pasture System」「Org 只活在 Paperclip」的表述；Network Core 契约仍见 [api-surface-tiers.md](./api-surface-tiers.md)。  
 **P0/P1 风险收口:** 见 ADR-0014（无 owner 治理、Membership↔subnet、subnet steward、Phase 1 含最小 work、Loop/Work 边界）。
@@ -53,6 +53,27 @@ Work Graph（IWorkPattern Port）
 
 硬约定见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)：想换运转方式 → 优先外部 Pattern；**不要**伪造 `plugins.loop=clawteam` / `plugins.work=paperclip`（今日会拒绝或语义错误）。
 
+**`heartbeat` ≠ 产品上的「组织节拍」：**
+
+| | 进程内 `plugins.loop=heartbeat` | 外部编排器 / 待办执行器 / Pattern |
+|---|---|---|
+| 做什么 | 薄 tick（队列观察插座） | **真正**叫醒成员、巡检、回写策略 |
+| 换运转方式时 | **通常不用改**这个 id | **停/起侧车**，或换外部 Pattern |
+| 常见误解 | 「设 `plugins.loop=orchestrator`」 | 今日无此 Builtin；编排器走 API / 事件 |
+
+```text
+今日真实形态（Phase 1–2）：
+
+  ACN 内：Kernel + builtin_work + heartbeat（薄） + events
+              │
+              │ API / org.* webhook
+              ▼
+  外部可选（真节拍在这里）：
+    Paperclip │ 待办执行器 │ [Org 编排器](./org-orchestrator-v0.md) │ 其他 Loop/Work 适配
+```
+
+细节从 §4 总体架构、§5 模块内设计展开；插件短名单见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。Org 节拍产品见 [org-orchestrator-v0.md](./org-orchestrator-v0.md)。
+
 ### 0.4 外部集成放哪（常见混淆）
 
 | 东西 | 正确位置 | 不是 |
@@ -63,22 +84,11 @@ Work Graph（IWorkPattern Port）
 | OpenHarness / Claude Code | **L1**，成员自带 | 不插进 Org Harness |
 | LangGraph / Swarm / CrewAI | 多挂 **Work 策略**或外部 Pattern | 不替代 Control Loop |
 
-```text
-今日真实形态（Phase 1–2）：
-
-  ACN 内：Kernel + builtin_work + heartbeat + events
-              │
-              │ API / org.* webhook
-              ▼
-  外部可选：Paperclip │ 待办执行器 │ [Org 编排器](./org-orchestrator-v0.md)（产品定义）│ 其他 Loop/Work 适配
-```
-
-细节从 §4 总体架构、§5 模块内设计展开；插件短名单见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)。Org 节拍产品见 [org-orchestrator-v0.md](./org-orchestrator-v0.md)。
-
 ### 0.5 运转模式按需选用（动态、可混合）
 
 中心派工、成员自组织、graph、混合等 **都是 Pattern**，不是单一正统。Org 行为可以随时间切换。  
-波次质量指标是旁路观测，不绑定某一种模式。收口见 **[org-runtime-modes-v0.md](./org-runtime-modes-v0.md)**。
+波次质量指标是旁路观测，不绑定某一种模式。  
+**切换 / 卸 Pattern 时 work SoT 怎么办** → **[org-runtime-modes-v0.md](./org-runtime-modes-v0.md)** §6。
 
 ---
 

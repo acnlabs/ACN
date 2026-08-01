@@ -72,12 +72,12 @@ L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 - **对外发布 / 导入（v0）：** [org-task-bridge-v0.md](./org-task-bridge-v0.md)（`publish-task` / `import-task`；**不是** P2b）。  
 - **经济主体：** [org-wallet-v0.md](./org-wallet-v0.md) — **v0 收线**（S6b 插件内 topup **deferred**；外置 Backend 充值即可）。  
 - **插件冷启动：** [plugin-catalog-v0.md](./plugin-catalog-v0.md)（官方短名单；Knowledge / Memory 等 adapter-planned）。  
-- **Org 知识库：** [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)（**agent 主贡献**；读 K1/K2 + **写 K4**）· [侧车](../../examples/org-knowledge/) · [`smoke_org_knowledge.sh`](../../scripts/smoke_org_knowledge.sh)。  
-- **按需（有真实卡住再开）：** P2b；自动 receive；按 `org_id` 列表 Tasks；Memory/Capability 薄适配；知识库 K3。  
+- **Org 知识库：** [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)（**agent 主贡献**；`plugins.knowledge` K3 + 读 K1/K2 + **写 K4**）· [侧车](../../examples/org-knowledge/) · [`smoke_org_knowledge.sh`](../../scripts/smoke_org_knowledge.sh)。  
+- **按需（有真实卡住再开）：** P2b；自动 receive；按 `org_id` 列表 Tasks；Memory/Capability 薄适配；知识库 K5（`llm_wiki`）。  
 - **实验（C1–C2）：** [Org 待办执行器（外部）](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C3 webhook 按需）。  
 - **Org 编排器：** [产品定义](./org-orchestrator-v0.md) P0 + [唤醒契约](./org-orchestrator-wake-contract-v0.md) P1 + [P2 侧车](../../examples/org-orchestrator/)；P3 催办/超时按需。  
 - **成员交班：** [契约](./org-work-handoff-contract-v0.md) + [`send_handoff`/`handle_handoff`](../../examples/org-orchestrator/) + [`smoke_org_work_handoff.sh`](../../scripts/smoke_org_work_handoff.sh)。  
-- **运转模式：** [org-runtime-modes-v0.md](./org-runtime-modes-v0.md) — Pattern 按 Org 选用/混合；自动扇出非必经。  
+- **运转模式：** [org-runtime-modes-v0.md](./org-runtime-modes-v0.md) — Pattern 选用/混合；**§6** 挂卸 runbook；`heartbeat`≠外部真节拍；自动扇出非必经。  
 - **编排质量（M0 Accepted）：** [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md) + [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) + [`work_observe.py`](../../examples/org-orchestrator/work_observe.py) + [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh) + [`smoke_org_work_metadata_wave.sh`](../../scripts/smoke_org_work_metadata_wave.sh)（`metadata.wave` 狗粮）。  
 - **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（编排器可选后端，有需求再开）。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主。
