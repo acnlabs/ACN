@@ -216,7 +216,8 @@ P_norm = min(1, P / max(1, child_count))
 **已做：**
 
 1. [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py)：对 **fixture 真 wave** 算 R/P/C/K；`kind=window` 不算 §4.2 告警。  
-2. [`work_observe.py`](../../examples/org-orchestrator/work_observe.py)：`list_work` 快照差分 → JSONL；从日志重建 `started_at`/`ended_at`；默认 **window** 报表；可选侧车 `wave-graph` 打真 wave 告警。  
+2. [`work_observe.py`](../../examples/org-orchestrator/work_observe.py)：`list_work` 快照差分 → JSONL；从日志重建 `started_at`/`ended_at`；默认 **window** 报表；真 wave 可从 **`metadata.wave`** 推导（或 `--wave-graph`）。  
+2b. [`smoke_org_work_metadata_wave.sh`](../../scripts/smoke_org_work_metadata_wave.sh)：人工 root/children + `metadata.wave` + observe 报表狗粮（可选 live）。  
 3. [`run_orchestrator.py`](../../examples/org-orchestrator/run_orchestrator.py)：设 `ORG_METRICS_OBSERVE_PATH` 时额外 `open_only=false` poll 并写入；**未设置则唤醒路径零改动**（M0-S3）。  
 4. [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh) + demo fixtures（不连活 Org）。  
 5. README / orchestrator 已链。
@@ -224,7 +225,7 @@ P_norm = min(1, P / max(1, child_count))
 **未做（不挡 Accepted）：**
 
 - 成员 playbook「并行子票只回摘要」专节（M1 前补）  
-- 持久侧车 wave 关系图的运维约定（现可用 `--wave-graph` JSON；生产共享图仍待 `metadata`）
+- 自动扇出 / 并行 wake（M1；`metadata.wave` 人工狗粮见 `smoke_org_work_metadata_wave.sh`）
 
 **不做（M0）：**
 

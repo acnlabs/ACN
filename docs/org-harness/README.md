@@ -76,6 +76,6 @@ L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 - **实验（C1–C2）：** [Org 待办执行器（外部）](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C3 webhook 按需）。  
 - **Org 编排器：** [产品定义](./org-orchestrator-v0.md) P0 + [唤醒契约](./org-orchestrator-wake-contract-v0.md) P1 + [P2 侧车](../../examples/org-orchestrator/)；P3 催办/超时按需。  
 - **成员交班：** [契约](./org-work-handoff-contract-v0.md) + [`send_handoff`/`handle_handoff`](../../examples/org-orchestrator/) + [`smoke_org_work_handoff.sh`](../../scripts/smoke_org_work_handoff.sh)。  
-- **编排质量（M0 Accepted）：** [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md) + [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) + [`work_observe.py`](../../examples/org-orchestrator/work_observe.py) + [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh)。  
+- **编排质量（M0 Accepted）：** [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md) + [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) + [`work_observe.py`](../../examples/org-orchestrator/work_observe.py) + [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh) + [`smoke_org_work_metadata_wave.sh`](../../scripts/smoke_org_work_metadata_wave.sh)（`metadata.wave` 狗粮）。  
 - **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（编排器可选后端，有需求再开）。  
 - **其后：** Phase 3 增强 Port / Plugin 宿主。

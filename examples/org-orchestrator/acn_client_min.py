@@ -48,6 +48,23 @@ def agents_me(base: str, api_key: str) -> dict[str, Any]:
     return _request("GET", f"{base}/agents/me", api_key)
 
 
+def create_work(
+    base: str,
+    org_id: str,
+    api_key: str,
+    *,
+    title: str,
+    assignee_agent_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {"title": title}
+    if assignee_agent_id:
+        body["assignee_agent_id"] = assignee_agent_id
+    if metadata is not None:
+        body["metadata"] = metadata
+    return _request("POST", f"{base}/orgs/{org_id}/work", api_key, body)
+
+
 def fetch_open_work(base: str, org_id: str, api_key: str) -> dict[str, Any]:
     return _request("GET", f"{base}/orgs/{org_id}/work?open_only=true", api_key)
 

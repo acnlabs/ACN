@@ -78,10 +78,13 @@ ACN_BASE_URL=… ACN_API_KEY=acn_steward_… ./scripts/smoke_org_work_handoff.sh
 ./scripts/smoke_org_swarm_metrics.sh
 python3 swarm_metrics.py fixtures/swarm_metrics_demo.json
 
-# 观测日志：合成 poll → report（window；可选 --wave-graph 真 wave）
+# 观测日志：合成 poll → report（window；默认从 metadata.wave 建真 wave）
 python3 work_observe.py observe --events /tmp/org-obs.jsonl --snapshot snap.json
 python3 work_observe.py report --events /tmp/org-obs.jsonl --snapshot snap.json --org-id org_…
 # 编排器挂载：ORG_METRICS_OBSERVE_PATH=/tmp/org-obs.jsonl python3 run_orchestrator.py --once
+
+# metadata.wave 狗粮（离线必跑；设 ACN_API_KEY 则 live）
+../scripts/smoke_org_work_metadata_wave.sh
 ```
 
 ## 成员交班 `send_handoff.py` / `handle_handoff.py`

@@ -14,6 +14,7 @@ from work_observe import (  # noqa: E402
     build_true_waves_from_graph,
     report,
     timeline_from_events,
+    wave_graph_from_metadata,
     window_proxies,
 )
 
@@ -160,6 +161,97 @@ def test_observe_no_duplicate_after_stale_state(tmp_path: Path) -> None:
     store.state_path.write_text("{}", encoding="utf-8")
     assert store.observe(snap, observed_at="2026-08-01T10:01:00+00:00") == []
     assert len(store.read_events()) == 1
+
+
+def test_wave_graph_from_metadata_and_report() -> None:
+    items = [
+        {
+            "work_id": "root",
+            "status": "done",
+            "assignee_agent_id": "g",
+            "metadata": {
+                "wave": {
+                    "role": "root",
+                    "wave_id": "wv_meta",
+                    "root_work_id": "root",
+                }
+            },
+        },
+        {
+            "work_id": "a",
+            "status": "done",
+            "assignee_agent_id": "x",
+            "metadata": {
+                "wave": {
+                    "role": "child",
+                    "wave_id": "wv_meta",
+                    "root_work_id": "root",
+                }
+            },
+            "started_at": "2026-08-01T10:00:00+00:00",
+            "ended_at": "2026-08-01T10:10:00+00:00",
+        },
+        {
+            "work_id": "b",
+            "status": "done",
+            "assignee_agent_id": "y",
+            "metadata": {
+                "wave": {
+                    "role": "child",
+                    "wave_id": "wv_meta",
+                    "root_work_id": "root",
+                }
+            },
+            "started_at": "2026-08-01T10:10:00+00:00",
+            "ended_at": "2026-08-01T10:20:00+00:00",
+        },
+    ]
+    graph = wave_graph_from_metadata(items)
+    assert graph["waves"][0]["root_work_id"] == "root"
+    assert set(graph["waves"][0]["child_work_ids"]) == {"a", "b"}
+
+    # Synthetic observe events matching serial timeline
+    events = [
+        {
+            "ts": "2026-08-01T10:00:00+00:00",
+            "work_id": "a",
+            "status": "in_progress",
+            "assignee_agent_id": "x",
+            "observed_at": "2026-08-01T10:00:00+00:00",
+        },
+        {
+            "ts": "2026-08-01T10:10:00+00:00",
+            "work_id": "a",
+            "status": "done",
+            "assignee_agent_id": "x",
+            "observed_at": "2026-08-01T10:10:00+00:00",
+        },
+        {
+            "ts": "2026-08-01T10:10:00+00:00",
+            "work_id": "b",
+            "status": "in_progress",
+            "assignee_agent_id": "y",
+            "observed_at": "2026-08-01T10:10:00+00:00",
+        },
+        {
+            "ts": "2026-08-01T10:20:00+00:00",
+            "work_id": "b",
+            "status": "done",
+            "assignee_agent_id": "y",
+            "observed_at": "2026-08-01T10:20:00+00:00",
+        },
+        {
+            "ts": "2026-08-01T10:20:00+00:00",
+            "work_id": "root",
+            "status": "done",
+            "assignee_agent_id": "g",
+            "observed_at": "2026-08-01T10:20:00+00:00",
+        },
+    ]
+    out = report(items, events, org_id="org_t", from_metadata=True)
+    assert out["wave_graph_source"] == "metadata.wave"
+    assert out["wave_count"] == 1
+    assert "SERIAL_COLLAPSE" in out["waves"][0]["alerts"]
 
 
 def test_cli_observe_and_report(tmp_path: Path) -> None:

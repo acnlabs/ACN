@@ -304,6 +304,60 @@ def build_window_wave(
     }
 
 
+def wave_graph_from_metadata(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build sidecar wave graph from ``metadata.wave`` on list_work items.
+
+    Expected shape (doc §3.2)::
+
+      {"wave": {"role": "root"|"child", "wave_id": "wv_…",
+                "root_work_id": "work_…", "shard_hint": "…"}}
+
+    Kernel does not parse this; orchestration / report does.
+    """
+    waves: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("metadata")
+        if not isinstance(meta, dict):
+            continue
+        wave = meta.get("wave")
+        if not isinstance(wave, dict):
+            continue
+        wv = str(wave.get("wave_id") or "").strip()
+        if not wv:
+            continue
+        role = str(wave.get("role") or "").strip().lower()
+        root_hint = str(wave.get("root_work_id") or "").strip()
+        entry = waves.setdefault(
+            wv,
+            {"wave_id": wv, "root_work_id": "", "child_work_ids": []},
+        )
+        wid = work_id(item)
+        if role == "root":
+            entry["root_work_id"] = wid or root_hint
+        elif role == "child":
+            if wid and wid not in entry["child_work_ids"]:
+                entry["child_work_ids"].append(wid)
+            if root_hint and not entry["root_work_id"]:
+                entry["root_work_id"] = root_hint
+        else:
+            # Unknown role: treat as child if not the declared root.
+            if root_hint and wid == root_hint:
+                entry["root_work_id"] = wid
+            elif wid and wid not in entry["child_work_ids"]:
+                entry["child_work_ids"].append(wid)
+            if root_hint and not entry["root_work_id"]:
+                entry["root_work_id"] = root_hint
+    return {
+        "waves": [
+            w
+            for w in waves.values()
+            if w.get("root_work_id") or w.get("child_work_ids")
+        ]
+    }
+
+
 def build_true_waves_from_graph(
     graph: dict[str, Any],
     items: list[dict[str, Any]],
@@ -361,20 +415,29 @@ def report(
     *,
     org_id: str = "",
     wave_graph: dict[str, Any] | None = None,
+    from_metadata: bool = True,
 ) -> dict[str, Any]:
-    """Window bundle always; true waves if sidecar graph provided."""
+    """Window bundle always; true waves from graph file and/or metadata.wave."""
     window = build_window_wave(items, events, org_id=org_id)
     window_score = score_wave(window)
     proxies = window_proxies(window["children"])
+    graph = wave_graph
+    graph_source = "explicit" if graph else None
+    if graph is None and from_metadata:
+        derived = wave_graph_from_metadata(items)
+        if derived.get("waves"):
+            graph = derived
+            graph_source = "metadata.wave"
     out: dict[str, Any] = {
         "kind": "observe_report",
         "org_id": org_id or None,
         "event_count": len(events),
         "window": {**window_score, **proxies},
         "waves": [],
+        "wave_graph_source": graph_source,
     }
-    if wave_graph:
-        true_waves = build_true_waves_from_graph(wave_graph, items, events)
+    if graph:
+        true_waves = build_true_waves_from_graph(graph, items, events)
         scored = evaluate({"waves": true_waves})
         out["waves"] = scored["waves"]
         out["wave_count"] = scored["wave_count"]
@@ -419,7 +482,13 @@ def main(argv: list[str] | None = None) -> int:
     p_rep.add_argument(
         "--wave-graph",
         default="",
-        help="optional sidecar wave graph JSON",
+        help="optional sidecar wave graph JSON (wins over metadata.wave)",
+    )
+    p_rep.add_argument(
+        "--from-metadata",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="derive true waves from item metadata.wave (default: on)",
     )
 
     args = p.parse_args(argv)
@@ -464,6 +533,8 @@ def main(argv: list[str] | None = None) -> int:
             store.read_events(),
             org_id=args.org_id,
             wave_graph=graph,
+            # Explicit file wins; otherwise derive from metadata.wave when enabled.
+            from_metadata=bool(args.from_metadata) and not bool(args.wave_graph),
         )
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
