@@ -122,6 +122,10 @@ UNION_SCHEMA_CODES: dict[str, str] = {
         "registry dev-mode-disabled uses {reason}; tasks JWT scope check "
         "uses {required_permission}"
     ),
+    "INTERNAL_SERVER_ERROR": (
+        "org wallet proxy uses {org_id, reason} when BACKEND_URL missing; "
+        "registry uses {agent_id, reason} for agent-scoped misconfig paths"
+    ),
     # ``COMMUNICATION_REJECTED`` was a union-schema candidate during
     # sprint #2a's planning (registry catch-all proxy was originally
     # going to carry an ``upstream_status_code`` extra field). The
