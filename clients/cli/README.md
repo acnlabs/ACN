@@ -89,6 +89,24 @@ Semantics: CLI answers `message/send` / `message/stream` with a valid A2A
 wake the host. Wake failure is logged (`wake_failed`) and does **not** fail
 the A2A reply. Dedupe is on by default (`--no-dedupe` to disable).
 
+**Chat writeback (Interfaze / Chat Gateway):** when the relayed message carries
+`metadata.agentplanet.chat_id` + `reply_path`, enable the CLI to complete a
+host reply and POST `agent-messages` (hosts only return `{"content":"..."}`):
+
+```bash
+export AGENTPLANET_API_BASE=https://api.example.com
+export AGENTPLANET_INTERNAL_TOKEN=…   # or AGENTPLANET_INTERNAL_API_TOKEN
+
+acn listen --runtime http \
+  --wake-url http://127.0.0.1:10122/hooks/agent \
+  --chat-writeback \
+  --chat-complete-url http://127.0.0.1:10122/chat/complete
+# or: --chat-complete-exec 'python3 /path/to/complete.py'
+```
+
+Task / Org wakes still use `--wake-url` / `--wake-exec`. Chat envelopes skip
+wake and use the complete → writeback path instead.
+
 **Coverage:** only traffic that arrives over the Mode B relay. Open Task Pool
 rows that were never pushed as A2A still need `acn tasks list` / reconcile.
 

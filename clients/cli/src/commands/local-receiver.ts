@@ -12,6 +12,11 @@ import {
   type NormalizedEvent,
 } from './normalize-event.js';
 import {
+  handleChatWriteback,
+  type ChatWritebackDeps,
+  type ChatWritebackOptions,
+} from './chat-writeback.js';
+import {
   wakeRuntime,
   type RuntimeWakeOptions,
   type WakeDeps,
@@ -31,9 +36,11 @@ export interface ReceiverResponseFrame {
 export interface LocalReceiverOptions extends RuntimeWakeOptions {
   dedupe: boolean;
   dedupeTtlSec: number;
+  /** When set, chat envelopes skip wakeRuntime and use Gateway writeback. */
+  chatWriteback?: ChatWritebackOptions;
 }
 
-export interface LocalReceiverDeps extends WakeDeps {
+export interface LocalReceiverDeps extends WakeDeps, ChatWritebackDeps {
   generateId?: () => string;
   now?: () => Date;
   logFn?: (line: string) => void;
@@ -191,6 +198,24 @@ export function dispatchLocalReceiver(
 
   const event = result.event;
   const key = opts.dedupe ? dedupeKey(event) : null;
+
+  // Chat Gateway envelopes: complete host reply + writeback (not task wake).
+  if (event.chat && opts.chatWriteback?.enabled) {
+    void handleChatWriteback(event, opts.chatWriteback, deps)
+      .then((written) => {
+        if (!written.ok && key) dedupeStore.forget(key);
+      })
+      .catch((err: unknown) => {
+        if (key) dedupeStore.forget(key);
+        const msg = err instanceof Error ? err.message : String(err);
+        logFn(
+          `[acn listen] chat_writeback_failed message_id=${event.message_id} ` +
+            `reason=${msg.slice(0, 200)}`
+        );
+      });
+    return;
+  }
+
   void wakeRuntime(event, opts, deps)
     .then((wake) => {
       if (!wake.ok) {
@@ -234,6 +259,27 @@ export async function dispatchLocalReceiverAndWaitWake(
   }
 
   const key = opts.dedupe ? dedupeKey(result.event) : null;
+
+  if (result.event.chat && opts.chatWriteback?.enabled) {
+    try {
+      const written = await handleChatWriteback(
+        result.event,
+        opts.chatWriteback,
+        deps
+      );
+      if (!written.ok && key) dedupeStore.forget(key);
+      return { dedupeHit: false, woke: written.ok };
+    } catch (err) {
+      if (key) dedupeStore.forget(key);
+      const msg = err instanceof Error ? err.message : String(err);
+      logFn(
+        `[acn listen] chat_writeback_failed message_id=${result.event.message_id} ` +
+          `reason=${msg.slice(0, 200)}`
+      );
+      return { dedupeHit: false, woke: false };
+    }
+  }
+
   try {
     const wake = await wakeRuntime(result.event, opts, deps);
     if (!wake.ok) {

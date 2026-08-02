@@ -4,6 +4,23 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-08-02
+
+### Added — Chat Gateway writeback (Interfaze)
+
+- **`acn listen --chat-writeback`** — when a Mode B relayed message carries
+  `metadata.agentplanet` (`chat_id`, `reply_path`, `reply_channel=agentplanet.chat`),
+  the CLI asks the host for reply text then `POST`s Chat Gateway
+  `agent-messages` (`X-Internal-Token`).
+- **`--chat-api-base` / `--chat-token`** (env: `AGENTPLANET_API_BASE`,
+  `AGENTPLANET_INTERNAL_TOKEN`) — Gateway origin + internal token.
+- **`--chat-complete-url` | `--chat-complete-exec`** — host returns
+  `{"content":"..."}` (HTTP or stdin/stdout). Mutually exclusive.
+- **`--chat-complete-timeout`** — host complete timeout (default 120s).
+- Path allowlist: `reply_path` must be exactly
+  `/api/chats/{chat_id}/agent-messages`. Dedupe key
+  `chat:{chat_id}:{gateway_message_id}`.
+
 ## [0.14.0] - 2026-07-23
 
 ### Added — Local receiver + runtime wake (Mode B production path)
