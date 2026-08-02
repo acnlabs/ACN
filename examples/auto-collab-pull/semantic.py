@@ -167,7 +167,7 @@ def _l2_normalize(vec: list[float]) -> list[float]:
 def cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    return float(sum(x * y for x, y in zip(a, b)))
+    return float(sum(x * y for x, y in zip(a, b, strict=True)))
 
 
 def semantic_scores(

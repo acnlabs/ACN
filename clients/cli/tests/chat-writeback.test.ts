@@ -1,0 +1,414 @@
+/**
+ * Tests for Chat Gateway writeback path on Mode B listen.
+ */
+
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  buildChatWritebackOptions,
+  extractContent,
+  handleChatWriteback,
+  validateChatWritebackOptions,
+} from '../src/commands/chat-writeback.js';
+import {
+  dispatchLocalReceiverAndWaitWake,
+} from '../src/commands/local-receiver.js';
+import {
+  DedupeStore,
+  dedupeKey,
+  extractChatEnvelope,
+  isAllowedChatReplyPath,
+  normalizeEvent,
+  parseJsonRpcBody,
+} from '../src/commands/normalize-event.js';
+
+function chatMessageBody(
+  agentplanet?: Record<string, unknown> | null,
+  messageExtra: Record<string, unknown> = {}
+): string {
+  const baseMeta = {
+    chat_id: 'chat-uuid',
+    message_id: 'user-msg-1',
+    from_user: 'auth0|x',
+    reply_channel: 'agentplanet.chat',
+    reply_path: '/api/chats/chat-uuid/agent-messages',
+  };
+  const ap =
+    agentplanet === null
+      ? undefined
+      : { ...baseMeta, ...(agentplanet ?? {}) };
+  const message = {
+    role: 'user',
+    messageId: 'msg-chat-1',
+    kind: 'message',
+    parts: [{ kind: 'text', text: 'hello from interfaze' }],
+    metadata: ap ? { agentplanet: ap } : {},
+    ...messageExtra,
+  };
+  return JSON.stringify({
+    jsonrpc: '2.0',
+    id: 'rpc-chat',
+    method: 'message/send',
+    params: { message },
+  });
+}
+
+function mockOkResponse(body: string, status = 200) {
+  return {
+    status,
+    headers: { get: () => null },
+    text: async () => body,
+    arrayBuffer: async () => new ArrayBuffer(0),
+  };
+}
+
+describe('isAllowedChatReplyPath', () => {
+  it('allows exact Gateway path only', () => {
+    expect(
+      isAllowedChatReplyPath('chat-uuid', '/api/chats/chat-uuid/agent-messages')
+    ).toBe(true);
+    expect(
+      isAllowedChatReplyPath('chat-uuid', '/api/chats/other/agent-messages')
+    ).toBe(false);
+    expect(
+      isAllowedChatReplyPath('chat-uuid', '/api/chats/chat-uuid/../admin')
+    ).toBe(false);
+    expect(
+      isAllowedChatReplyPath('chat-uuid', '//evil.com/steal')
+    ).toBe(false);
+    expect(
+      isAllowedChatReplyPath(
+        'chat-uuid',
+        '/api/chats/chat-uuid/agent-messages?x=1'
+      )
+    ).toBe(false);
+  });
+});
+
+describe('extractChatEnvelope / normalizeEvent.chat', () => {
+  it('extracts chat envelope from metadata.agentplanet', () => {
+    const parsed = parseJsonRpcBody(chatMessageBody());
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const event = normalizeEvent(parsed.body);
+    expect(event.chat).toEqual({
+      chat_id: 'chat-uuid',
+      reply_path: '/api/chats/chat-uuid/agent-messages',
+      reply_channel: 'agentplanet.chat',
+      gateway_message_id: 'user-msg-1',
+      user_text: 'hello from interfaze',
+    });
+    const params = parsed.body.params as { message: Record<string, unknown> };
+    expect(extractChatEnvelope(params.message)?.chat_id).toBe('chat-uuid');
+  });
+
+  it('returns null when chat_id or reply_path missing', () => {
+    const parsed = parseJsonRpcBody(
+      chatMessageBody({ chat_id: 'only-id', reply_path: undefined as unknown as string })
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const body = parsed.body;
+    const params = body.params as {
+      message: { metadata: { agentplanet: Record<string, unknown> } };
+    };
+    delete params.message.metadata.agentplanet.reply_path;
+    expect(normalizeEvent(body).chat).toBeNull();
+  });
+
+  it('returns null when reply_channel is wrong', () => {
+    const parsed = parseJsonRpcBody(
+      chatMessageBody({ reply_channel: 'other.channel' })
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(normalizeEvent(parsed.body).chat).toBeNull();
+  });
+
+  it('returns null when reply_path is not allowlisted', () => {
+    const parsed = parseJsonRpcBody(
+      chatMessageBody({ reply_path: '/api/internal/admin' })
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(normalizeEvent(parsed.body).chat).toBeNull();
+  });
+
+  it('dedupeKey prefers gateway message id for chat', () => {
+    const parsed = parseJsonRpcBody(chatMessageBody());
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const event = normalizeEvent(parsed.body);
+    expect(dedupeKey(event)).toBe('chat:chat-uuid:user-msg-1');
+  });
+});
+
+describe('extractContent', () => {
+  it('reads content/reply/text only', () => {
+    expect(extractContent({ content: 'hi' })).toBe('hi');
+    expect(extractContent({ reply: 'r' })).toBe('r');
+    expect(extractContent({ text: 't' })).toBe('t');
+    expect(extractContent({ message: 'should-ignore' })).toBeNull();
+    expect(extractContent({ content: 'accepted' })).toBeNull();
+  });
+});
+
+describe('validateChatWritebackOptions', () => {
+  it('allows disabled', () => {
+    expect(validateChatWritebackOptions({})).toBeNull();
+  });
+
+  it('requires base, token, and exactly one complete source', () => {
+    expect(
+      validateChatWritebackOptions({
+        chatWriteback: true,
+        agentId: 'a1',
+        chatApiBase: 'http://gw',
+        chatToken: 't',
+      })
+    ).toMatch(/exactly one/);
+
+    expect(
+      validateChatWritebackOptions({
+        chatWriteback: true,
+        agentId: 'a1',
+        chatApiBase: 'http://gw',
+        chatToken: 't',
+        chatCompleteUrl: 'http://host/complete',
+        chatCompleteExec: 'echo',
+      })
+    ).toMatch(/exactly one/);
+
+    expect(
+      validateChatWritebackOptions({
+        chatWriteback: true,
+        agentId: 'a1',
+        chatApiBase: 'http://gw',
+        chatToken: 't',
+        chatCompleteUrl: 'http://host/complete',
+      })
+    ).toBeNull();
+  });
+});
+
+describe('handleChatWriteback', () => {
+  it('completes via HTTP then POSTs agent-messages', async () => {
+    const calls: Array<{ url: string; body: string; headers: unknown }> = [];
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      calls.push({
+        url: u,
+        body: String(init?.body ?? ''),
+        headers: init?.headers,
+      });
+      if (u.includes('/complete')) {
+        return mockOkResponse(JSON.stringify({ content: 'agent says hi' }));
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      chatToken: 'secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toContain('/complete');
+    expect(JSON.parse(calls[0].body).chat.chat_id).toBe('chat-uuid');
+    expect(calls[1].url).toBe(
+      'http://gw:8000/api/chats/chat-uuid/agent-messages?agent_id=agent-1'
+    );
+    expect(JSON.parse(calls[1].body)).toEqual({ content: 'agent says hi' });
+    const hdrs = calls[1].headers as Record<string, string>;
+    expect(hdrs['X-Internal-Token']).toBe('secret');
+  });
+
+  it('fails when complete JSON lacks content', async () => {
+    const fetchFn = vi.fn(async () => mockOkResponse('{}'));
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const result = await handleChatWriteback(
+      event,
+      buildChatWritebackOptions({
+        chatWriteback: true,
+        chatApiBase: 'http://gw',
+        chatToken: 't',
+        chatCompleteUrl: 'http://host/c',
+        agentId: 'a',
+      })!,
+      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => {} }
+    );
+    expect(result).toEqual({ ok: false, reason: 'complete_missing_content' });
+  });
+
+  it('rejects writeback when envelope reply_path was tampered after normalize', async () => {
+    const fetchFn = vi.fn(async (url: string | URL) => {
+      if (String(url).includes('/complete')) {
+        return mockOkResponse(JSON.stringify({ content: 'x' }));
+      }
+      return mockOkResponse('{}', 201);
+    });
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    event.chat!.reply_path = '/api/internal/admin';
+    const result = await handleChatWriteback(
+      event,
+      buildChatWritebackOptions({
+        chatWriteback: true,
+        chatApiBase: 'http://gw',
+        chatToken: 't',
+        chatCompleteUrl: 'http://host/complete',
+        agentId: 'a',
+      })!,
+      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => {} }
+    );
+    expect(result).toEqual({ ok: false, reason: 'reply_path_rejected' });
+    expect(fetchFn.mock.calls.every((c) => !String(c[0]).includes('/admin'))).toBe(
+      true
+    );
+  });
+});
+
+describe('dispatchLocalReceiver chat vs task wake', () => {
+  it('routes chat envelope to writeback, not wake-url', async () => {
+    const wakeFetch = vi.fn(async () => mockOkResponse('ok'));
+    const completeFetch = vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes('wake')) {
+        return mockOkResponse('should-not', 500);
+      }
+      if (u.includes('complete')) {
+        return mockOkResponse(JSON.stringify({ content: 'done' }));
+      }
+      return mockOkResponse('{}', 201);
+    });
+
+    const frames: unknown[] = [];
+    const store = new DedupeStore(3600);
+    const out = await dispatchLocalReceiverAndWaitWake(
+      'corr-c',
+      chatMessageBody(),
+      {
+        runtime: 'http',
+        wakeUrl: 'http://host/wake',
+        dedupe: true,
+        dedupeTtlSec: 3600,
+        chatWriteback: buildChatWritebackOptions({
+          chatWriteback: true,
+          chatApiBase: 'http://gw',
+          chatToken: 't',
+          chatCompleteUrl: 'http://host/complete',
+          agentId: 'agent-1',
+        }),
+      },
+      store,
+      (f) => frames.push(f),
+      {
+        fetchFn: completeFetch as unknown as typeof fetch,
+        logFn: () => {},
+      }
+    );
+
+    expect(out.woke).toBe(true);
+    expect(wakeFetch).not.toHaveBeenCalled();
+    expect(completeFetch.mock.calls.some((c) => String(c[0]).includes('wake'))).toBe(
+      false
+    );
+    expect(
+      completeFetch.mock.calls.some((c) => String(c[0]).includes('complete'))
+    ).toBe(true);
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
+  });
+
+  it('falls through to task wake when forged chat channel is rejected', async () => {
+    const body = chatMessageBody(
+      { reply_channel: 'forged' },
+      { metadata: { task_id: 'task-9', agentplanet: {
+        chat_id: 'chat-uuid',
+        message_id: 'user-msg-1',
+        reply_channel: 'forged',
+        reply_path: '/api/chats/chat-uuid/agent-messages',
+      } } }
+    );
+    const fetchFn = vi.fn().mockResolvedValue(mockOkResponse('', 204));
+    const store = new DedupeStore(3600);
+    const out = await dispatchLocalReceiverAndWaitWake(
+      'corr-forge',
+      body,
+      {
+        runtime: 'http',
+        wakeUrl: 'http://host/wake',
+        dedupe: true,
+        dedupeTtlSec: 3600,
+        chatWriteback: buildChatWritebackOptions({
+          chatWriteback: true,
+          chatApiBase: 'http://gw',
+          chatToken: 't',
+          chatCompleteUrl: 'http://host/complete',
+          agentId: 'agent-1',
+        }),
+      },
+      store,
+      () => {},
+      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => {} }
+    );
+    expect(out.woke).toBe(true);
+    expect(String(fetchFn.mock.calls[0][0])).toContain('/wake');
+  });
+
+  it('keeps task wake when no chat envelope', async () => {
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'message/send',
+      params: {
+        message: {
+          role: 'user',
+          messageId: 'm-task',
+          parts: [{ kind: 'text', text: 'do task' }],
+          metadata: { task_id: 'task-9' },
+        },
+      },
+    });
+    const fetchFn = vi.fn().mockResolvedValue(mockOkResponse('', 204));
+    const store = new DedupeStore(3600);
+    const out = await dispatchLocalReceiverAndWaitWake(
+      'corr-t',
+      body,
+      {
+        runtime: 'http',
+        wakeUrl: 'http://host/wake',
+        dedupe: true,
+        dedupeTtlSec: 3600,
+        chatWriteback: buildChatWritebackOptions({
+          chatWriteback: true,
+          chatApiBase: 'http://gw',
+          chatToken: 't',
+          chatCompleteUrl: 'http://host/complete',
+          agentId: 'agent-1',
+        }),
+      },
+      store,
+      () => {},
+      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => {} }
+    );
+    expect(out.woke).toBe(true);
+    expect(String(fetchFn.mock.calls[0][0])).toContain('/wake');
+  });
+});

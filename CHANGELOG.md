@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Agent skill 0.17.14 / 0.17.15** — Org 编排器入口、wake 契约、成员 playbook。
 
+## [0.15.9] - 2026-08-02
+
+CLI patch: Interfaze / Chat Gateway writeback. Server and SDK package versions
+unchanged (publish jobs skip already-published artifacts); CLI publishes
+**0.14.1**.
+
+### Added
+
+- **`@acnlabs/acn-cli@0.14.1`** — `acn listen --chat-writeback` completes host
+  reply (`{"content"}`) then POSTs Chat Gateway `agent-messages`. See
+  `clients/cli/CHANGELOG.md`.
+
+### Docs
+
+- **Agent skill 0.17.17** — document `--chat-writeback` + complete URL/exec.
+
 ## [0.15.8] - 2026-07-25
 
 Server patch: Org wallet **S6** soft-val proxy + Org Harness docs/skill closeout.

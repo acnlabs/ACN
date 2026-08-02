@@ -3,6 +3,12 @@ import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import WebSocket from 'ws';
 import { loadConfig } from '../config.js';
+import {
+  buildChatWritebackOptions,
+  DEFAULT_COMPLETE_TIMEOUT_MS,
+  validateChatWritebackOptions,
+  type ChatWritebackOptions,
+} from './chat-writeback.js';
 import { DedupeStore } from './normalize-event.js';
 import { dispatchLocalReceiver } from './local-receiver.js';
 import {
@@ -36,6 +42,11 @@ import {
  *   --runtime http|command|log  built-in A2A receiver + wake host (production default)
  *   --forward <url>             tunnel to a local A2A server (compat; SSE streamed)
  *   --exec <command>            stdout = full A2A JSON-RPC response (compat; buffered)
+ *
+ * Chat writeback (optional, with --runtime):
+ *   When a relayed message carries metadata.agentplanet.chat_id + reply_path,
+ *   ask the host for {"content"} then POST Chat Gateway agent-messages.
+ *   Task / Org wakes keep using --wake-url / --wake-exec.
  */
 
 export interface A2aRequestFrame {
@@ -87,6 +98,7 @@ export interface RuntimeHandlerOptions {
   wakeTimeoutMs?: number;
   dedupe: boolean;
   dedupeTtlSec: number;
+  chatWriteback?: ChatWritebackOptions;
 }
 
 export interface HandlerOptions {
@@ -512,6 +524,34 @@ export function listenCommand(): Command {
       '--exec <command>',
       'Compat: shell per request; stdout must be a full A2A JSON-RPC response'
     )
+    .option(
+      '--chat-writeback',
+      'On Chat Gateway envelopes: complete host reply then POST agent-messages ' +
+        '(requires --runtime)'
+    )
+    .option(
+      '--chat-api-base <url>',
+      'Chat Gateway origin for writeback ' +
+        '(env: ACN_CHAT_API_BASE or AGENTPLANET_API_BASE)'
+    )
+    .option(
+      '--chat-token <token>',
+      'X-Internal-Token for agent-messages (env: ACN_CHAT_WRITEBACK_TOKEN, ' +
+        'AGENTPLANET_INTERNAL_TOKEN, or AGENTPLANET_INTERNAL_API_TOKEN)'
+    )
+    .option(
+      '--chat-complete-url <url>',
+      'POST NormalizedEvent → JSON {"content":"..."} (mutually exclusive with --chat-complete-exec)'
+    )
+    .option(
+      '--chat-complete-exec <cmd>',
+      'Shell: event JSON on stdin → stdout JSON {"content":"..."}'
+    )
+    .option(
+      '--chat-complete-timeout <ms>',
+      `Host complete timeout in ms (default ${DEFAULT_COMPLETE_TIMEOUT_MS})`,
+      String(DEFAULT_COMPLETE_TIMEOUT_MS)
+    )
     .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
     .action(
       (opts: {
@@ -524,6 +564,12 @@ export function listenCommand(): Command {
         dedupeTtl?: string;
         forward?: string;
         exec?: string;
+        chatWriteback?: boolean;
+        chatApiBase?: string;
+        chatToken?: string;
+        chatCompleteUrl?: string;
+        chatCompleteExec?: string;
+        chatCompleteTimeout?: string;
         agentId?: string;
       }) => {
         const config = loadConfig();
@@ -555,6 +601,38 @@ export function listenCommand(): Command {
           process.exit(1);
         }
 
+        const chatApiBase =
+          opts.chatApiBase?.trim() ||
+          process.env.ACN_CHAT_API_BASE?.trim() ||
+          process.env.AGENTPLANET_API_BASE?.trim();
+        const chatToken =
+          opts.chatToken?.trim() ||
+          process.env.ACN_CHAT_WRITEBACK_TOKEN?.trim() ||
+          process.env.AGENTPLANET_INTERNAL_TOKEN?.trim() ||
+          process.env.AGENTPLANET_INTERNAL_API_TOKEN?.trim();
+        const chatCompleteUrl =
+          opts.chatCompleteUrl?.trim() ||
+          process.env.ACN_CHAT_COMPLETE_URL?.trim();
+        const chatCompleteExec = opts.chatCompleteExec?.trim();
+
+        if (opts.chatWriteback && !opts.runtime) {
+          console.error('--chat-writeback requires --runtime http|command|log.');
+          process.exit(1);
+        }
+
+        const chatErr = validateChatWritebackOptions({
+          chatWriteback: opts.chatWriteback,
+          chatApiBase,
+          chatToken,
+          chatCompleteUrl,
+          chatCompleteExec,
+          agentId,
+        });
+        if (chatErr) {
+          console.error(chatErr);
+          process.exit(1);
+        }
+
         let wakeHeaders: Record<string, string> | undefined;
         if (opts.runtime === 'http') {
           try {
@@ -567,6 +645,10 @@ export function listenCommand(): Command {
 
         const wakeTimeoutMs = Number.parseInt(opts.wakeTimeout ?? '', 10);
         const dedupeTtlSec = Number.parseInt(opts.dedupeTtl ?? '', 10);
+        const chatCompleteTimeoutMs = Number.parseInt(
+          opts.chatCompleteTimeout ?? '',
+          10
+        );
         if (opts.runtime && (!Number.isFinite(wakeTimeoutMs) || wakeTimeoutMs <= 0)) {
           console.error('--wake-timeout must be a positive integer (ms).');
           process.exit(1);
@@ -575,6 +657,25 @@ export function listenCommand(): Command {
           console.error('--dedupe-ttl must be a positive integer (seconds).');
           process.exit(1);
         }
+        if (
+          opts.chatWriteback &&
+          (!Number.isFinite(chatCompleteTimeoutMs) || chatCompleteTimeoutMs <= 0)
+        ) {
+          console.error('--chat-complete-timeout must be a positive integer (ms).');
+          process.exit(1);
+        }
+
+        const chatWriteback = buildChatWritebackOptions({
+          chatWriteback: opts.chatWriteback,
+          chatApiBase,
+          chatToken,
+          chatCompleteUrl,
+          chatCompleteExec,
+          chatCompleteTimeoutMs: opts.chatWriteback
+            ? chatCompleteTimeoutMs
+            : undefined,
+          agentId,
+        });
 
         runListener({
           agentId,
@@ -592,6 +693,7 @@ export function listenCommand(): Command {
                 // commander: --no-dedupe sets dedupe=false; default true
                 dedupe: opts.dedupe !== false,
                 dedupeTtlSec,
+                chatWriteback,
               }
             : undefined,
         });

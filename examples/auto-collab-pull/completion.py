@@ -8,9 +8,8 @@ fixtures and optional local ``PERF_CACHE`` overlay in the matcher.
 from __future__ import annotations
 
 import json
-import math
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,7 @@ def _parse_ts(raw: Any) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 

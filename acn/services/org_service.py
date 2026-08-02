@@ -27,11 +27,11 @@ from ..core.exceptions import (
 )
 from ..core.interfaces.org_repository import IOrgRepository
 from ..core.interfaces.task_repository import ITaskRepository
+from ..core.interfaces.work_pattern import METADATA_UNSET
 from ..protocols.ap2 import WebhookEventType
 from ..protocols.ap2.webhook import WebhookService
 from .agent_service import AgentService
 from .subnet_service import SubnetService
-from ..core.interfaces.work_pattern import METADATA_UNSET
 from .work_patterns import (
     normalize_org_plugins,
     resolve_work_pattern,

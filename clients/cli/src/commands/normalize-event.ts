@@ -3,12 +3,27 @@
  * provide an in-process TTL dedupe window (restart clears the window).
  */
 
+/** Required reply_channel on Chat Gateway writeback envelopes. */
+export const CHAT_REPLY_CHANNEL = 'agentplanet.chat';
+
+/** Chat Gateway / Interfaze writeback envelope (metadata.agentplanet). */
+export interface ChatEnvelope {
+  chat_id: string;
+  reply_path: string;
+  reply_channel: typeof CHAT_REPLY_CHANNEL;
+  /** Stable user-message id from Gateway (preferred for dedupe). */
+  gateway_message_id: string | null;
+  user_text: string | null;
+}
+
 export interface NormalizedEvent {
   event_type: 'a2a_message';
   task_id: string | null;
   message_id: string;
   context_id: string | null;
   from_agent: string | null;
+  /** Present when Chat Gateway attached a writeback contract. */
+  chat: ChatEnvelope | null;
   received_at: string;
   raw: Record<string, unknown>;
 }
@@ -92,6 +107,69 @@ function extractFromAgent(message: Record<string, unknown>): string | null {
   );
 }
 
+function extractUserText(message: Record<string, unknown>): string | null {
+  const parts = message.parts;
+  if (!Array.isArray(parts)) return null;
+  const chunks: string[] = [];
+  for (const part of parts) {
+    const p = asRecord(part);
+    if (!p || p.kind !== 'text') continue;
+    const t = asNonEmptyString(p.text);
+    if (t) chunks.push(t);
+  }
+  return chunks.length > 0 ? chunks.join('\n') : null;
+}
+
+/**
+ * Allowlist Chat Gateway writeback path.
+ * Exact match only — blocks `..`, `//`, query, fragment, and other hosts/paths
+ * that could exfiltrate X-Internal-Token on the same apiBase origin.
+ */
+export function isAllowedChatReplyPath(
+  chatId: string,
+  replyPath: string
+): boolean {
+  if (!chatId || !replyPath) return false;
+  if (
+    replyPath.includes('..') ||
+    replyPath.includes('?') ||
+    replyPath.includes('#') ||
+    replyPath.includes('//') ||
+    replyPath.includes('\\') ||
+    !replyPath.startsWith('/')
+  ) {
+    return false;
+  }
+  return replyPath === `/api/chats/${chatId}/agent-messages`;
+}
+
+/**
+ * Extract Chat Gateway writeback envelope from message.metadata.agentplanet.
+ * Requires chat_id, reply_channel=agentplanet.chat, and allowlisted reply_path.
+ */
+export function extractChatEnvelope(
+  message: Record<string, unknown>
+): ChatEnvelope | null {
+  const metadata = asRecord(message.metadata);
+  if (!metadata) return null;
+  const ap = asRecord(metadata.agentplanet);
+  if (!ap) return null;
+  const chatId = asNonEmptyString(ap.chat_id);
+  const replyPath = asNonEmptyString(ap.reply_path);
+  const replyChannel = asNonEmptyString(ap.reply_channel);
+  if (!chatId || !replyPath) return null;
+  if (replyChannel !== CHAT_REPLY_CHANNEL) return null;
+  if (!isAllowedChatReplyPath(chatId, replyPath)) return null;
+  return {
+    chat_id: chatId,
+    reply_path: replyPath,
+    reply_channel: CHAT_REPLY_CHANNEL,
+    gateway_message_id:
+      asNonEmptyString(ap.message_id) ?? asNonEmptyString(ap.messageId),
+    user_text: extractUserText(message),
+  };
+}
+
 /**
  * Build a normalized wake event from a valid JSON-RPC body.
  * Call only after parseJsonRpcBody succeeds for message/send|stream.
@@ -111,12 +189,17 @@ export function normalizeEvent(
     message_id: extractMessageId(message, generateId),
     context_id: extractContextId(message),
     from_agent: extractFromAgent(message),
+    chat: extractChatEnvelope(message),
     received_at: now().toISOString(),
     raw: body,
   };
 }
 
 export function dedupeKey(event: NormalizedEvent): string {
+  if (event.chat) {
+    const mid = event.chat.gateway_message_id ?? event.message_id;
+    return `chat:${event.chat.chat_id}:${mid}`;
+  }
   return event.task_id ?? event.message_id;
 }
 

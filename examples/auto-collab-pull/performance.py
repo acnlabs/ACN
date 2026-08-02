@@ -11,7 +11,7 @@ Optional metadata hooks (product/BFF may fill later):
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -20,7 +20,7 @@ def _parse_ts(raw: Any) -> datetime | None:
         return None
     if isinstance(raw, (int, float)):
         try:
-            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+            return datetime.fromtimestamp(float(raw), tz=UTC)
         except (OverflowError, OSError, ValueError):
             return None
     s = str(raw).strip()
@@ -33,7 +33,7 @@ def _parse_ts(raw: Any) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -41,8 +41,8 @@ def _freshness(ts: datetime | None, *, half_life_hours: float = 24.0) -> float |
     """1.0 = just now, decays toward 0; None if unknown."""
     if ts is None:
         return None
-    now = datetime.now(timezone.utc)
-    age_h = max(0.0, (now - ts.astimezone(timezone.utc)).total_seconds() / 3600.0)
+    now = datetime.now(UTC)
+    age_h = max(0.0, (now - ts.astimezone(UTC)).total_seconds() / 3600.0)
     # exponential-ish: half_life → 0.5
     score = 0.5 ** (age_h / max(half_life_hours, 1e-6))
     return float(max(0.0, min(1.0, score)))
@@ -142,7 +142,7 @@ def _self_test() -> None:
         "status": "online",
         "inbound_reachable": True,
         "consec_push_failures": 0,
-        "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+        "last_heartbeat": datetime.now(UTC).isoformat(),
         "metadata": {
             "performance": {
                 "completion_rate": 0.9,
