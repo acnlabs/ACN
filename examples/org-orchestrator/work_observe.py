@@ -20,7 +20,7 @@ import fcntl
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,14 +28,14 @@ from swarm_metrics import evaluate, score_wave
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def _parse_ts(raw: Any) -> datetime | None:
     if raw is None or raw == "":
         return None
     if isinstance(raw, (int, float)):
-        return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        return datetime.fromtimestamp(float(raw), tz=UTC)
     s = str(raw).strip()
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
@@ -44,7 +44,7 @@ def _parse_ts(raw: Any) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -191,7 +191,7 @@ def timeline_from_events(
     for wid, rows in by_id.items():
         def _sort_key(r: dict[str, Any]) -> datetime:
             return _parse_ts(r.get("observed_at") or r.get("ts")) or datetime(
-                1970, 1, 1, tzinfo=timezone.utc
+                1970, 1, 1, tzinfo=UTC
             )
 
         rows.sort(key=_sort_key)

@@ -5,9 +5,8 @@ See docs/auto-collab-pull-mvp-v0.md §3 · sparse-collab-contract §7 P2.
 
 from __future__ import annotations
 
-from typing import Any, Literal
-
 import os
+from typing import Any, Literal
 
 from effective_cap import effective_cap_from_task, parse_sparse_collab
 from performance import performance_scores

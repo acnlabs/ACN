@@ -27,8 +27,8 @@ from acn_client import (  # noqa: E402
     normalize_base,
     search_agents,
 )
-from effective_cap import effective_cap_from_task  # noqa: E402
 from completion import PerfCache  # noqa: E402
+from effective_cap import effective_cap_from_task  # noqa: E402
 from match import (  # noqa: E402
     MatchEmptyError,
     MatchForbiddenError,

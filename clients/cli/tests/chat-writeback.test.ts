@@ -193,13 +193,13 @@ describe('validateChatWritebackOptions', () => {
 
 describe('handleChatWriteback', () => {
   it('completes via HTTP then POSTs agent-messages', async () => {
-    const calls: Array<{ url: string; body: string; headers: HeadersInit }> = [];
+    const calls: Array<{ url: string; body: string; headers: unknown }> = [];
     const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
       calls.push({
         url: u,
         body: String(init?.body ?? ''),
-        headers: init?.headers ?? {},
+        headers: init?.headers,
       });
       if (u.includes('/complete')) {
         return mockOkResponse(JSON.stringify({ content: 'agent says hi' }));

@@ -15,7 +15,6 @@ import sys
 
 from acn_client_min import agents_me, normalize_base, send_message
 
-
 HANDOFF_TYPE = "acn.org.work_handoff"
 
 

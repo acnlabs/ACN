@@ -19,8 +19,8 @@ from effective_cap import (  # noqa: E402
     effective_cap_from_task,
     seats_taken,
 )
-from idempotency import IdempotencyStore  # noqa: E402
 from handle_collab_pull import parse_collab_pull, resolve_idempotency_key  # noqa: E402
+from idempotency import IdempotencyStore  # noqa: E402
 from match import (  # noqa: E402
     MatchEmptyError,
     MatchForbiddenError,
@@ -137,7 +137,7 @@ def main() -> int:
     except MatchEmptyError:
         pass
 
-    from semantic import lexical_similarity, agent_profile_text, task_query_text
+    from semantic import agent_profile_text, lexical_similarity, task_query_text
 
     t = {
         "title": "fix login authentication",
