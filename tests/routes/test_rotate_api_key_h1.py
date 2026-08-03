@@ -118,9 +118,9 @@ class TestAgentSelfRotation:
         # Disable dev-mode so the *real* agent-key dispatcher branch
         # fires; otherwise dev-mode would synthesise a "dev" payload
         # and bypass the agent_id self-check the test pins.
-        from acn.routes.tasks import settings as tasks_settings
+        from acn.config import get_settings
 
-        monkeypatch.setattr(tasks_settings, "dev_mode", False)
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
 
         _wire(stub_agent_service)
 
@@ -148,9 +148,9 @@ class TestAgentSelfRotation:
         only authorises rotating *that agent's own* credential.
         Otherwise any compromised agent key would let the attacker
         invalidate every other agent's credential."""
-        from acn.routes.tasks import settings as tasks_settings
+        from acn.config import get_settings
 
-        monkeypatch.setattr(tasks_settings, "dev_mode", False)
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
@@ -181,13 +181,13 @@ class TestOwnerJwtRotation:
         """The recovery flow: agent has lost its key, owner steps in
         via Auth0 to force-rotate. The owner's ``sub`` must match
         the agent's ``owner`` field."""
-        from acn.routes.tasks import settings as tasks_settings
+        from acn.config import get_settings
 
         async def _fake_verify_token(*args, **kwargs):
             return {"sub": "owner-alice", "permissions": ["acn:write"]}
 
-        monkeypatch.setattr(tasks_settings, "dev_mode", False)
-        monkeypatch.setattr("acn.routes.tasks.verify_token", _fake_verify_token)
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
+        monkeypatch.setattr("acn.routes.registry.verify_token", _fake_verify_token)
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
@@ -202,21 +202,43 @@ class TestOwnerJwtRotation:
         assert body["agent_id"] == "agent-target"
         assert body["api_key"].startswith("acn_")
 
+    def test_owner_jwt_without_acn_write_still_rotates(
+        self, stub_agent_service, monkeypatch
+    ):
+        """Labs SPA owners typically have openid/profile/email only —
+        recovery must not require Auth0 RBAC ``acn:write``."""
+        from acn.config import get_settings
+
+        async def _fake_verify_token(*args, **kwargs):
+            return {"sub": "owner-alice", "permissions": []}
+
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
+        monkeypatch.setattr("acn.routes.registry.verify_token", _fake_verify_token)
+        _wire(stub_agent_service)
+
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/v1/agents/agent-target/rotate-key",
+                headers={"Authorization": "Bearer some-auth0-jwt"},
+            )
+
+        assert r.status_code == 200, r.text
+        assert r.json()["api_key"].startswith("acn_")
+
     def test_non_owner_jwt_rejected_with_ownership_mismatch(
         self, stub_agent_service, monkeypatch
     ):
-        """A JWT with ``acn:write`` is *not* a free pass — it must
-        be the *specific* owner of the target agent. Otherwise any
-        Auth0 user with ``acn:write`` could rotate every agent's key
-        on the platform."""
-        from acn.routes.tasks import settings as tasks_settings
+        """A valid human JWT is *not* a free pass — it must be the
+        *specific* owner of the target agent. Otherwise any logged-in
+        Auth0 user could rotate every agent's key on the platform."""
+        from acn.config import get_settings
 
         async def _fake_verify_token(*args, **kwargs):
             # owner-bob owns agent-other, NOT agent-target
             return {"sub": "owner-bob", "permissions": ["acn:write"]}
 
-        monkeypatch.setattr(tasks_settings, "dev_mode", False)
-        monkeypatch.setattr("acn.routes.tasks.verify_token", _fake_verify_token)
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
+        monkeypatch.setattr("acn.routes.registry.verify_token", _fake_verify_token)
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
@@ -245,15 +267,15 @@ class TestRotationAuthFailures:
         """Anonymous rotation is never allowed — the entire endpoint
         is a credential mutator and would be useless if unauthed
         callers could hit it."""
-        from acn.routes.tasks import settings as tasks_settings
+        from acn.config import get_settings
 
         async def _fake_verify_token(*args, **kwargs):
             from acn.core.errors import ACNHTTPError, ErrorCode
 
             raise ACNHTTPError(ErrorCode.AUTHENTICATION_REQUIRED, 401, details={})
 
-        monkeypatch.setattr(tasks_settings, "dev_mode", False)
-        monkeypatch.setattr("acn.routes.tasks.verify_token", _fake_verify_token)
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
+        monkeypatch.setattr("acn.routes.registry.verify_token", _fake_verify_token)
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
@@ -267,9 +289,9 @@ class TestRotationAuthFailures:
         resolves to no agent must return 401, not 403 — same shape
         as every other ``invalid_agent_api_key`` failure across the
         codebase so a single client error handler covers everything."""
-        from acn.routes.tasks import settings as tasks_settings
+        from acn.config import get_settings
 
-        monkeypatch.setattr(tasks_settings, "dev_mode", False)
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
@@ -290,13 +312,13 @@ class TestRotationAuthFailures:
         agent). Otherwise the 404 would let an attacker enumerate
         existing agent_ids by comparing 404 vs 403.
         """
-        from acn.routes.tasks import settings as tasks_settings
+        from acn.config import get_settings
 
         async def _fake_verify_token(*args, **kwargs):
             return {"sub": "owner-alice", "permissions": ["acn:write"]}
 
-        monkeypatch.setattr(tasks_settings, "dev_mode", False)
-        monkeypatch.setattr("acn.routes.tasks.verify_token", _fake_verify_token)
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
+        monkeypatch.setattr("acn.routes.registry.verify_token", _fake_verify_token)
         _wire(stub_agent_service)
 
         with TestClient(app) as client:
@@ -330,10 +352,10 @@ class TestRotationInvalidatesAuthCache:
         the entry. ``_api_key_cache_by_agent`` is the reverse index
         the M3 fix relies on for O(1) eviction.
         """
+        from acn.config import get_settings
         from acn.routes.dependencies import _cache_agent
-        from acn.routes.tasks import settings as tasks_settings
 
-        monkeypatch.setattr(tasks_settings, "dev_mode", False)
+        monkeypatch.setattr(get_settings(), "dev_mode", False)
         _wire(stub_agent_service)
 
         _cache_agent(

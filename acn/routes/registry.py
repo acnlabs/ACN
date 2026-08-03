@@ -75,6 +75,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     # exposing it as a public name would force a shim layer that adds
     # zero value.
     _wallet_rate_limit_key,
+    _schedule_alive_renewal,
     evict_agent_from_cache,
     limiter,
     verify_owner_or_internal,
@@ -4348,6 +4349,79 @@ async def release_agent(
         ) from e
 
 
+async def _require_rotate_key_auth(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    credentials: HTTPAuthorizationCredentials | None,
+    x_internal_token: str | None,
+    agent_service: Any,
+) -> dict:
+    """Auth for ``POST /agents/{id}/rotate-key``.
+
+    Same dual-track shape as task writes (internal / agent key / human JWT),
+    but the human JWT path does **not** require ``acn:write``. Labs SPA
+    owners authenticate with ``openid profile email`` only; recovery is
+    gated by ``sub == agent.owner`` in the route handler (same model as
+    claim). Task-pool writes keep the stricter ``acn:write`` gate.
+    """
+    s = get_settings()
+
+    if s.dev_mode:
+        if credentials and credentials.credentials.startswith("acn_"):
+            agent = await agent_service.get_agent_by_api_key(credentials.credentials)
+            if agent:
+                request.state.rate_limit_key = f"agent:{agent.agent_id}"
+                return {
+                    "sub": agent.agent_id,
+                    "type": "agent",
+                    "agent_name": agent.name,
+                    "permissions": ["acn:read", "acn:write", "acn:admin"],
+                }
+        sub = credentials.credentials if credentials else "dev@clients"
+        request.state.rate_limit_key = f"dev:{sub}"
+        return {
+            "sub": sub,
+            "type": "dev",
+            "permissions": ["acn:read", "acn:write", "acn:admin"],
+        }
+
+    if (
+        x_internal_token
+        and s.internal_api_token
+        and secrets.compare_digest(x_internal_token, s.internal_api_token)
+    ):
+        creator_id = request.headers.get("x-creator-id")
+        request.state.rate_limit_key = (
+            f"internal:{creator_id}" if creator_id else "internal:backend"
+        )
+        return {
+            "sub": "backend@internal",
+            "type": "internal",
+            "permissions": ["acn:read", "acn:write", "acn:admin"],
+        }
+
+    if credentials and credentials.credentials.startswith("acn_"):
+        agent = await agent_service.get_agent_by_api_key(credentials.credentials)
+        if not agent:
+            raise ACNHTTPError(
+                ErrorCode.AUTHENTICATION_REQUIRED,
+                401,
+                details={"reason": "invalid_agent_api_key"},
+            )
+        request.state.rate_limit_key = f"agent:{agent.agent_id}"
+        _schedule_alive_renewal(background_tasks, agent_service, agent.agent_id)
+        return {
+            "sub": agent.agent_id,
+            "type": "agent",
+            "agent_name": agent.name,
+            "permissions": ["acn:read", "acn:write"],
+        }
+
+    payload = await verify_token(request, credentials)
+    request.state.rate_limit_key = f"jwt:{payload.get('sub', 'unknown')}"
+    return {**payload, "type": "jwt"}
+
+
 @router.post("/{agent_id}/rotate-key", response_model=AgentRotateKeyResponse)
 @limiter.limit("10/hour")
 async def rotate_agent_api_key(
@@ -4363,8 +4437,8 @@ async def rotate_agent_api_key(
 
     Authorization (any one of):
       * The agent itself, via ``Bearer acn_<its current key>``.
-      * The owner, via Auth0 JWT with ``acn:write`` permission whose
-        ``sub`` matches ``agent.owner``.
+      * The owner, via Auth0 / human JWT whose ``sub`` matches
+        ``agent.owner`` (Labs recovery; ``acn:write`` not required).
       * Trusted backend, via ``X-Internal-Token`` header.
 
     The two-track design lets agents rotate their own credentials
@@ -4377,13 +4451,7 @@ async def rotate_agent_api_key(
       * No reputation / on-chain identity change — the agent_id is
         preserved, so ERC-8004 binding and subnet membership survive.
     """
-    # Resolve actor via the same double-track auth we use for task writes,
-    # then enforce per-agent ownership semantics below. Importing lazily
-    # keeps registry.py free of a static dependency on routes/tasks.
-    from .tasks import require_task_write_auth
-
-    auth_dep = require_task_write_auth()
-    payload = await auth_dep(
+    payload = await _require_rotate_key_auth(
         request=request,
         background_tasks=background_tasks,
         credentials=await _bearer_scheme_for_rotate(request),
@@ -4455,14 +4523,12 @@ async def _bearer_scheme_for_rotate(request: Request):
     """Extract Bearer credentials manually for the rotate-key endpoint.
 
     We can't use the regular ``Depends(HTTPBearer(...))`` plumbing here
-    because we're invoking ``require_task_write_auth`` programmatically
+    because we're invoking ``_require_rotate_key_auth`` programmatically
     rather than as a FastAPI dependency tree. This mirrors what the
     HTTPBearer scheme would have parsed from the Authorization header,
     returning ``None`` on absence so dev mode and internal-token paths
     still work.
     """
-    from fastapi.security import HTTPAuthorizationCredentials
-
     auth = request.headers.get("authorization")
     if not auth or not auth.lower().startswith("bearer "):
         return None

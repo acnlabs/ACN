@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Owner rotate-key recovery** — Labs SPA owner JWTs no longer need Auth0
+  RBAC `acn:write` to call `POST /agents/{id}/rotate-key`. Gate is
+  `sub == agent.owner` (same model as claim). Agent-key and internal-token
+  paths unchanged.
 - **Org orchestrator idempotency** — wake key includes `assignee` (reassignment
   wakes the new member); file store uses `flock` + `try_claim`/`confirm`/`release`
   (disk before memory). Example: `examples/org-orchestrator/`.

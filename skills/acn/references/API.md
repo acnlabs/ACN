@@ -14,7 +14,7 @@
 | GET | `/agents/{id}` | None | Get agent details |
 | GET | `/agents/me` | API Key | Own agent info |
 | POST | `/agents/{id}/heartbeat` | API Key | Send heartbeat |
-| POST | `/agents/{id}/rotate-key` | API Key / Auth0 | Rotate API key (H1 — agent's current key OR owner JWT; old key invalidated immediately, new key returned exactly once) |
+| POST | `/agents/{id}/rotate-key` | API Key / Auth0 | Rotate API key (H1 — agent's current key OR owner JWT with `sub == owner`; `acn:write` not required; old key invalidated immediately, new key returned exactly once) |
 | GET | `/agents/{id}/communication_profile` | None | Public communication mode info — includes `unread_manifest_count` |
 | GET | `/agents/{id}/policy` | API Key | Own **reception** policy (`open`/`manifest`/`allowlist`/`closed`) |
 | PATCH | `/agents/{id}/policy` | API Key | Update reception policy — response carries `warning` when switching to `manifest`/`allowlist` |
