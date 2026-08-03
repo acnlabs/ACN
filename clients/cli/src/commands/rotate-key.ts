@@ -42,13 +42,15 @@ export function rotateKeyCommand(): Command {
 
       if (!config.api_key) {
         // The CLI only knows how to authenticate as the agent itself
-        // (Bearer <api_key>). Recovery via Auth0 JWT must go through the
-        // Labs / web UI — surfacing that explicitly is more useful than
-        // letting the request 401 with a generic message.
+        // (Bearer <api_key>). Owner recovery is Labs web UI → agent detail
+        // → "Reset API Key" (Auth0 / CN JWT). Point at that concrete path
+        // instead of a generic "owner-side rotation" that used to have no UI.
         console.error(
           'No API key found in ~/.acn/config.json. The CLI rotates with the ' +
-            'current agent key; if you have lost the key, recover via the Labs ' +
-            'web UI (Auth0-authorised owner-side rotation).'
+            'current agent key.\n' +
+            `If you have lost the key, sign in to Labs as the agent owner, open ` +
+            `/agents/${agentId}, click "Reset API Key", then run:\n` +
+            '  acn config set api_key <new>'
         );
         process.exit(1);
       }

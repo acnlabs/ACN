@@ -4,6 +4,11 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- `acn rotate-key` with no local `api_key`: recovery hint now points at the
+  Labs agent detail page (`/agents/<id>` → Reset API Key) instead of a
+  non-existent generic "owner-side rotation" surface.
+
 ## [0.14.1] - 2026-08-02
 
 ### Added — Chat Gateway writeback (Interfaze)

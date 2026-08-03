@@ -138,6 +138,12 @@ describe('acn rotate-key', () => {
     expect(errSpy).toHaveBeenCalledWith(
       expect.stringContaining('No API key found'),
     );
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/agents/agent-1'),
+    );
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Reset API Key'),
+    );
 
     exitSpy.mockRestore();
     errSpy.mockRestore();
