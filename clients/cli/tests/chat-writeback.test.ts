@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildChatWritebackOptions,
+  clearAgentJwtCache,
   extractContent,
   handleChatWriteback,
   validateChatWritebackOptions,
@@ -158,13 +159,13 @@ describe('validateChatWritebackOptions', () => {
     expect(validateChatWritebackOptions({})).toBeNull();
   });
 
-  it('requires base, token, and exactly one complete source', () => {
+  it('requires base, api key, and exactly one complete source', () => {
     expect(
       validateChatWritebackOptions({
         chatWriteback: true,
         agentId: 'a1',
+        apiKey: 'acn_key',
         chatApiBase: 'http://gw',
-        chatToken: 't',
       })
     ).toMatch(/exactly one/);
 
@@ -172,8 +173,8 @@ describe('validateChatWritebackOptions', () => {
       validateChatWritebackOptions({
         chatWriteback: true,
         agentId: 'a1',
+        apiKey: 'acn_key',
         chatApiBase: 'http://gw',
-        chatToken: 't',
         chatCompleteUrl: 'http://host/complete',
         chatCompleteExec: 'echo',
       })
@@ -183,16 +184,26 @@ describe('validateChatWritebackOptions', () => {
       validateChatWritebackOptions({
         chatWriteback: true,
         agentId: 'a1',
+        apiKey: 'acn_key',
         chatApiBase: 'http://gw',
-        chatToken: 't',
         chatCompleteUrl: 'http://host/complete',
       })
     ).toBeNull();
+
+    expect(
+      validateChatWritebackOptions({
+        chatWriteback: true,
+        agentId: 'a1',
+        chatApiBase: 'http://gw',
+        chatCompleteUrl: 'http://host/complete',
+      })
+    ).toMatch(/API key/);
   });
 });
 
 describe('handleChatWriteback', () => {
-  it('completes via HTTP then POSTs agent-messages', async () => {
+  it('completes via HTTP then POSTs agent-messages with ACN JWT', async () => {
+    clearAgentJwtCache();
     const calls: Array<{ url: string; body: string; headers: unknown }> = [];
     const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
@@ -204,6 +215,11 @@ describe('handleChatWriteback', () => {
       if (u.includes('/complete')) {
         return mockOkResponse(JSON.stringify({ content: 'agent says hi' }));
       }
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
       return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
     });
 
@@ -214,7 +230,8 @@ describe('handleChatWriteback', () => {
     const opts = buildChatWritebackOptions({
       chatWriteback: true,
       chatApiBase: 'http://gw:8000',
-      chatToken: 'secret',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
       chatCompleteUrl: 'http://127.0.0.1:9/complete',
       agentId: 'agent-1',
     })!;
@@ -224,15 +241,22 @@ describe('handleChatWriteback', () => {
       logFn: () => {},
     });
     expect(result).toEqual({ ok: true, httpStatus: 201 });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0].url).toContain('/complete');
     expect(JSON.parse(calls[0].body).chat.chat_id).toBe('chat-uuid');
-    expect(calls[1].url).toBe(
-      'http://gw:8000/api/chats/chat-uuid/agent-messages?agent_id=agent-1'
+    expect(calls[1].url).toBe('https://api.acnlabs.dev/oauth/token');
+    expect(JSON.parse(calls[1].body)).toMatchObject({
+      grant_type: 'client_credentials',
+      client_id: 'agent-1',
+      client_secret: 'acn_secret',
+    });
+    expect(calls[2].url).toBe(
+      'http://gw:8000/api/chats/chat-uuid/agent-messages'
     );
-    expect(JSON.parse(calls[1].body)).toEqual({ content: 'agent says hi' });
-    const hdrs = calls[1].headers as Record<string, string>;
-    expect(hdrs['X-Internal-Token']).toBe('secret');
+    expect(JSON.parse(calls[2].body)).toEqual({ content: 'agent says hi' });
+    const hdrs = calls[2].headers as Record<string, string>;
+    expect(hdrs['Authorization']).toBe('Bearer jwt-from-acn');
+    expect(hdrs['X-Internal-Token']).toBeUndefined();
   });
 
   it('fails when complete JSON lacks content', async () => {
@@ -246,7 +270,8 @@ describe('handleChatWriteback', () => {
       buildChatWritebackOptions({
         chatWriteback: true,
         chatApiBase: 'http://gw',
-        chatToken: 't',
+        acnBaseUrl: 'https://api.acnlabs.dev',
+        apiKey: 'acn_key',
         chatCompleteUrl: 'http://host/c',
         agentId: 'a',
       })!,
@@ -272,7 +297,8 @@ describe('handleChatWriteback', () => {
       buildChatWritebackOptions({
         chatWriteback: true,
         chatApiBase: 'http://gw',
-        chatToken: 't',
+        acnBaseUrl: 'https://api.acnlabs.dev',
+        apiKey: 'acn_key',
         chatCompleteUrl: 'http://host/complete',
         agentId: 'a',
       })!,
@@ -287,6 +313,7 @@ describe('handleChatWriteback', () => {
 
 describe('dispatchLocalReceiver chat vs task wake', () => {
   it('routes chat envelope to writeback, not wake-url', async () => {
+    clearAgentJwtCache();
     const wakeFetch = vi.fn(async () => mockOkResponse('ok'));
     const completeFetch = vi.fn(async (url: string | URL) => {
       const u = String(url);
@@ -295,6 +322,11 @@ describe('dispatchLocalReceiver chat vs task wake', () => {
       }
       if (u.includes('complete')) {
         return mockOkResponse(JSON.stringify({ content: 'done' }));
+      }
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
       }
       return mockOkResponse('{}', 201);
     });
@@ -312,7 +344,8 @@ describe('dispatchLocalReceiver chat vs task wake', () => {
         chatWriteback: buildChatWritebackOptions({
           chatWriteback: true,
           chatApiBase: 'http://gw',
-          chatToken: 't',
+          acnBaseUrl: 'https://api.acnlabs.dev',
+          apiKey: 'acn_key',
           chatCompleteUrl: 'http://host/complete',
           agentId: 'agent-1',
         }),
@@ -359,7 +392,8 @@ describe('dispatchLocalReceiver chat vs task wake', () => {
         chatWriteback: buildChatWritebackOptions({
           chatWriteback: true,
           chatApiBase: 'http://gw',
-          chatToken: 't',
+          acnBaseUrl: 'https://api.acnlabs.dev',
+          apiKey: 'acn_key',
           chatCompleteUrl: 'http://host/complete',
           agentId: 'agent-1',
         }),
@@ -399,7 +433,8 @@ describe('dispatchLocalReceiver chat vs task wake', () => {
         chatWriteback: buildChatWritebackOptions({
           chatWriteback: true,
           chatApiBase: 'http://gw',
-          chatToken: 't',
+          acnBaseUrl: 'https://api.acnlabs.dev',
+          apiKey: 'acn_key',
           chatCompleteUrl: 'http://host/complete',
           agentId: 'agent-1',
         }),

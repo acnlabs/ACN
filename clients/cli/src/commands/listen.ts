@@ -527,7 +527,7 @@ export function listenCommand(): Command {
     .option(
       '--chat-writeback',
       'On Chat Gateway envelopes: complete host reply then POST agent-messages ' +
-        '(requires --runtime)'
+        'with ACN agent JWT (requires --runtime; uses config api-key)'
     )
     .option(
       '--chat-api-base <url>',
@@ -536,8 +536,7 @@ export function listenCommand(): Command {
     )
     .option(
       '--chat-token <token>',
-      'X-Internal-Token for agent-messages (env: ACN_CHAT_WRITEBACK_TOKEN, ' +
-        'AGENTPLANET_INTERNAL_TOKEN, or AGENTPLANET_INTERNAL_API_TOKEN)'
+      'Deprecated/ignored: writeback now mints ACN agent JWT from api-key'
     )
     .option(
       '--chat-complete-url <url>',
@@ -605,11 +604,6 @@ export function listenCommand(): Command {
           opts.chatApiBase?.trim() ||
           process.env.ACN_CHAT_API_BASE?.trim() ||
           process.env.AGENTPLANET_API_BASE?.trim();
-        const chatToken =
-          opts.chatToken?.trim() ||
-          process.env.ACN_CHAT_WRITEBACK_TOKEN?.trim() ||
-          process.env.AGENTPLANET_INTERNAL_TOKEN?.trim() ||
-          process.env.AGENTPLANET_INTERNAL_API_TOKEN?.trim();
         const chatCompleteUrl =
           opts.chatCompleteUrl?.trim() ||
           process.env.ACN_CHAT_COMPLETE_URL?.trim();
@@ -619,14 +613,26 @@ export function listenCommand(): Command {
           console.error('--chat-writeback requires --runtime http|command|log.');
           process.exit(1);
         }
+        if (
+          opts.chatWriteback &&
+          (opts.chatToken?.trim() ||
+            process.env.ACN_CHAT_WRITEBACK_TOKEN?.trim() ||
+            process.env.AGENTPLANET_INTERNAL_TOKEN?.trim() ||
+            process.env.AGENTPLANET_INTERNAL_API_TOKEN?.trim())
+        ) {
+          console.error(
+            '[acn listen] warning: --chat-token / AGENTPLANET_INTERNAL_TOKEN is ignored; ' +
+              'writeback authenticates with ACN agent JWT minted from your api-key.'
+          );
+        }
 
         const chatErr = validateChatWritebackOptions({
           chatWriteback: opts.chatWriteback,
           chatApiBase,
-          chatToken,
           chatCompleteUrl,
           chatCompleteExec,
           agentId,
+          apiKey,
         });
         if (chatErr) {
           console.error(chatErr);
@@ -668,13 +674,17 @@ export function listenCommand(): Command {
         const chatWriteback = buildChatWritebackOptions({
           chatWriteback: opts.chatWriteback,
           chatApiBase,
-          chatToken,
+          acnBaseUrl: config.base_url,
+          apiKey: apiKey!,
           chatCompleteUrl,
           chatCompleteExec,
           chatCompleteTimeoutMs: opts.chatWriteback
             ? chatCompleteTimeoutMs
             : undefined,
           agentId,
+          audience:
+            process.env.ACN_CHAT_JWT_AUDIENCE?.trim() ||
+            process.env.AGENTPLANET_JWT_AUDIENCE?.trim(),
         });
 
         runListener({

@@ -4,7 +4,8 @@
  * When a relayed A2A message carries metadata.agentplanet (chat_id + reply_path),
  * the CLI:
  *   1) asks the host for reply text (--chat-complete-url | --chat-complete-exec)
- *   2) POSTs { content } to Chat Gateway agent-messages
+ *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
+ *   3) POSTs { content } to Chat Gateway agent-messages with Bearer JWT
  *
  * Hosts only need to return {"content":"..."} — they do not call Gateway themselves.
  */
@@ -16,12 +17,16 @@ import { isAllowedChatReplyPath } from './normalize-event.js';
 
 export interface ChatWritebackOptions {
   enabled: boolean;
-  /** Chat Gateway origin, e.g. https://api.example.com */
+  /** Chat Gateway origin, e.g. https://api.agentplanet.org */
   apiBase: string;
-  /** X-Internal-Token for AgentPlanet INTERNAL_API_TOKEN */
-  token: string;
-  /** This listener's ACN agent_id (query param on writeback). */
+  /** ACN origin for /oauth/token, e.g. https://api.acnlabs.dev */
+  acnBaseUrl: string;
+  /** Long-lived acn_* API key (client_secret for JWT mint). */
+  apiKey: string;
+  /** This listener's ACN agent_id (client_id for JWT mint; must match key). */
   agentId: string;
+  /** JWT audience expected by Chat Gateway (default: apiBase origin). */
+  audience: string;
   /** POST NormalizedEvent → JSON {"content":"..."} */
   completeUrl?: string;
   /** Shell: event JSON on stdin → stdout JSON {"content":"..."} */
@@ -44,6 +49,10 @@ export interface ChatWritebackDeps {
 const DEFAULT_COMPLETE_TIMEOUT_MS = 120_000;
 const DEFAULT_WRITEBACK_TIMEOUT_MS = 30_000;
 
+/** Process-local JWT cache (restart clears). */
+let cachedJwt: { token: string; expEpochSec: number; agentId: string } | null =
+  null;
+
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
     ? (v as Record<string, unknown>)
@@ -54,23 +63,20 @@ function asRecord(v: unknown): Record<string, unknown> | null {
 export function validateChatWritebackOptions(opts: {
   chatWriteback?: boolean;
   chatApiBase?: string;
-  chatToken?: string;
   chatCompleteUrl?: string;
   chatCompleteExec?: string;
   agentId?: string;
+  apiKey?: string;
 }): string | null {
   if (!opts.chatWriteback) return null;
   if (!opts.agentId) {
     return '--chat-writeback requires a known agent id (join / --agent-id).';
   }
+  if (!opts.apiKey?.trim()) {
+    return '--chat-writeback requires an ACN API key (acn join / config set api-key).';
+  }
   if (!opts.chatApiBase?.trim()) {
     return '--chat-writeback requires --chat-api-base (or ACN_CHAT_API_BASE / AGENTPLANET_API_BASE).';
-  }
-  if (!opts.chatToken?.trim()) {
-    return (
-      '--chat-writeback requires --chat-token ' +
-      '(or ACN_CHAT_WRITEBACK_TOKEN / AGENTPLANET_INTERNAL_TOKEN / AGENTPLANET_INTERNAL_API_TOKEN).'
-    );
   }
   const hasUrl = Boolean(opts.chatCompleteUrl?.trim());
   const hasExec = Boolean(opts.chatCompleteExec?.trim());
@@ -86,19 +92,32 @@ export function validateChatWritebackOptions(opts: {
 export function buildChatWritebackOptions(opts: {
   chatWriteback?: boolean;
   chatApiBase?: string;
-  chatToken?: string;
+  acnBaseUrl: string;
+  apiKey: string;
   chatCompleteUrl?: string;
   chatCompleteExec?: string;
   chatCompleteTimeoutMs?: number;
   chatWritebackTimeoutMs?: number;
   agentId: string;
+  audience?: string;
 }): ChatWritebackOptions | undefined {
   if (!opts.chatWriteback) return undefined;
+  const apiBase = opts.chatApiBase!.replace(/\/+$/, '');
+  let audience = opts.audience?.trim();
+  if (!audience) {
+    try {
+      audience = new URL(apiBase).origin;
+    } catch {
+      audience = 'https://api.agentplanet.org';
+    }
+  }
   return {
     enabled: true,
-    apiBase: opts.chatApiBase!.replace(/\/+$/, ''),
-    token: opts.chatToken!,
+    apiBase,
+    acnBaseUrl: opts.acnBaseUrl.replace(/\/+$/, ''),
+    apiKey: opts.apiKey,
     agentId: opts.agentId,
+    audience,
     completeUrl: opts.chatCompleteUrl?.trim() || undefined,
     completeExec: opts.chatCompleteExec?.trim() || undefined,
     completeTimeoutMs: opts.chatCompleteTimeoutMs,
@@ -122,6 +141,67 @@ export function extractContent(payload: unknown): string | null {
     }
   }
   return null;
+}
+
+/** Mint (or reuse cached) ACN agent JWT for Chat Gateway. Exported for tests. */
+export async function mintAgentJwt(
+  opts: Pick<ChatWritebackOptions, 'acnBaseUrl' | 'apiKey' | 'agentId' | 'audience'>,
+  fetchFn: typeof fetch = fetch
+): Promise<{ ok: true; token: string } | { ok: false; reason: string }> {
+  const now = Math.floor(Date.now() / 1000);
+  if (
+    cachedJwt &&
+    cachedJwt.agentId === opts.agentId &&
+    cachedJwt.expEpochSec > now + 60
+  ) {
+    return { ok: true, token: cachedJwt.token };
+  }
+
+  const url = `${opts.acnBaseUrl.replace(/\/+$/, '')}/oauth/token`;
+  try {
+    const res = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'client_credentials',
+        client_id: opts.agentId,
+        client_secret: opts.apiKey,
+        audience: opts.audience,
+      }),
+    });
+    const text = await res.text();
+    if (res.status < 200 || res.status >= 300) {
+      return { ok: false, reason: `oauth_http_${res.status}` };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { ok: false, reason: 'oauth_invalid_json' };
+    }
+    const rec = asRecord(parsed);
+    const token =
+      typeof rec?.access_token === 'string' ? rec.access_token.trim() : '';
+    if (!token) return { ok: false, reason: 'oauth_missing_access_token' };
+    const expiresIn =
+      typeof rec?.expires_in === 'number' && rec.expires_in > 0
+        ? rec.expires_in
+        : 1800;
+    cachedJwt = {
+      token,
+      agentId: opts.agentId,
+      expEpochSec: now + expiresIn,
+    };
+    return { ok: true, token };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: msg.slice(0, 200) };
+  }
+}
+
+/** Test helper: clear process-local JWT cache. */
+export function clearAgentJwtCache(): void {
+  cachedJwt = null;
 }
 
 async function completeViaHttp(
@@ -232,7 +312,6 @@ async function postWriteback(
   const chat = event.chat;
   if (!chat) return { ok: false, reason: 'no_chat_envelope' };
 
-  // Defense in depth: never trust reply_path without allowlist (INTERNAL token).
   if (!isAllowedChatReplyPath(chat.chat_id, chat.reply_path)) {
     return { ok: false, reason: 'reply_path_rejected' };
   }
@@ -241,7 +320,12 @@ async function postWriteback(
   }
 
   const fetchFn = deps.fetchFn ?? fetch;
-  const path = chat.reply_path; // already allowlisted absolute path
+  const minted = await mintAgentJwt(opts, fetchFn);
+  if (!minted.ok) {
+    return { ok: false, reason: minted.reason };
+  }
+
+  const path = chat.reply_path;
   let url: URL;
   let baseOrigin: string;
   try {
@@ -253,7 +337,6 @@ async function postWriteback(
   if (url.origin !== baseOrigin) {
     return { ok: false, reason: 'reply_url_origin_mismatch' };
   }
-  url.searchParams.set('agent_id', opts.agentId);
 
   const timeoutMs = opts.writebackTimeoutMs ?? DEFAULT_WRITEBACK_TIMEOUT_MS;
   const controller = new AbortController();
@@ -263,7 +346,7 @@ async function postWriteback(
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'X-Internal-Token': opts.token,
+        Authorization: `Bearer ${minted.token}`,
       },
       body: JSON.stringify({ content }),
       signal: controller.signal,
