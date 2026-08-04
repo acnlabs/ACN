@@ -4,12 +4,17 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-08-04
+
 ### Changed — Chat writeback auth (breaking)
 - **`acn listen --chat-writeback`** mints an ACN agent JWT via
   `POST /oauth/token` (config `api_key`) and calls Chat Gateway with
   `Authorization: Bearer`. Identity is JWT `sub` — no `agent_id` query param.
 - **`--chat-token` / `AGENTPLANET_INTERNAL_TOKEN` are ignored** (warning printed).
   Aligns with Gateway removing Internal Token for agent-messages / history / info.
+- JWT `audience` defaults to `https://api.agentplanet.org` (not chat-api-base
+  origin). Override with `ACN_CHAT_JWT_AUDIENCE` / `AGENTPLANET_JWT_AUDIENCE`.
+- On Gateway `401`, clear cached JWT and remint once.
 
 ### Fixed
 - `acn rotate-key` with no local `api_key`: recovery hint now points at the

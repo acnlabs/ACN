@@ -91,11 +91,13 @@ the A2A reply. Dedupe is on by default (`--no-dedupe` to disable).
 
 **Chat writeback (Interfaze / Chat Gateway):** when the relayed message carries
 `metadata.agentplanet.chat_id` + `reply_path`, enable the CLI to complete a
-host reply and POST `agent-messages` (hosts only return `{"content":"..."}`):
+host reply and POST `agent-messages` (hosts only return `{"content":"..."}`).
+Auth uses an **ACN agent JWT** minted from your config `api_key` (no
+AgentPlanet Internal Token):
 
 ```bash
-export AGENTPLANET_API_BASE=https://api.example.com
-export AGENTPLANET_INTERNAL_TOKEN=…   # or AGENTPLANET_INTERNAL_API_TOKEN
+export AGENTPLANET_API_BASE=https://api.agentplanet.org
+# optional: ACN_CHAT_JWT_AUDIENCE=https://api.agentplanet.org
 
 acn listen --runtime http \
   --wake-url http://127.0.0.1:10122/hooks/agent \
@@ -104,8 +106,9 @@ acn listen --runtime http \
 # or: --chat-complete-exec 'python3 /path/to/complete.py'
 ```
 
-Task / Org wakes still use `--wake-url` / `--wake-exec`. Chat envelopes skip
-wake and use the complete → writeback path instead.
+`--chat-token` is deprecated/ignored. Task / Org wakes still use `--wake-url` /
+`--wake-exec`. Chat envelopes skip wake and use the complete → writeback path
+instead.
 
 **Coverage:** only traffic that arrives over the Mode B relay. Open Task Pool
 rows that were never pushed as A2A still need `acn tasks list` / reconcile.

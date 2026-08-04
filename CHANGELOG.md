@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.10] - 2026-08-04
+
+CLI patch: Chat Gateway writeback switches to **ACN agent JWT** (breaking for
+hosts still using Internal Token). Server and SDK package versions unchanged
+(publish jobs skip already-published artifacts); CLI publishes **0.14.2**.
+
+### Changed
+
+- **`@acnlabs/acn-cli@0.14.2`** — `acn listen --chat-writeback` mints JWT via
+  `POST /oauth/token` and POSTs `agent-messages` with `Authorization: Bearer`.
+  `--chat-token` / `AGENTPLANET_INTERNAL_TOKEN` ignored. See
+  `clients/cli/CHANGELOG.md`.
+
 ### Fixed
 
 - **Owner rotate-key recovery** — Labs SPA owner JWTs no longer need Auth0
