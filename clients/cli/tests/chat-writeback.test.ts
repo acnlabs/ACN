@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildChatWritebackOptions,
   clearAgentJwtCache,
+  DEFAULT_CHAT_JWT_AUDIENCE,
   extractContent,
   handleChatWriteback,
   validateChatWritebackOptions,
@@ -249,6 +250,7 @@ describe('handleChatWriteback', () => {
       grant_type: 'client_credentials',
       client_id: 'agent-1',
       client_secret: 'acn_secret',
+      audience: DEFAULT_CHAT_JWT_AUDIENCE,
     });
     expect(calls[2].url).toBe(
       'http://gw:8000/api/chats/chat-uuid/agent-messages'
@@ -257,6 +259,65 @@ describe('handleChatWriteback', () => {
     const hdrs = calls[2].headers as Record<string, string>;
     expect(hdrs['Authorization']).toBe('Bearer jwt-from-acn');
     expect(hdrs['X-Internal-Token']).toBeUndefined();
+  });
+
+  it('defaults JWT audience to AgentPlanet canonical, not chat-api-base origin', () => {
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://127.0.0.1:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_key',
+      chatCompleteUrl: 'http://host/c',
+      agentId: 'a',
+    })!;
+    expect(opts.audience).toBe(DEFAULT_CHAT_JWT_AUDIENCE);
+    expect(opts.audience).not.toBe('http://127.0.0.1:8000');
+  });
+
+  it('remints JWT once after Gateway 401', async () => {
+    clearAgentJwtCache();
+    let oauthCalls = 0;
+    let writeCalls = 0;
+    const fetchFn = vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes('/complete')) {
+        return mockOkResponse(JSON.stringify({ content: 'retry me' }));
+      }
+      if (u.includes('/oauth/token')) {
+        oauthCalls += 1;
+        return mockOkResponse(
+          JSON.stringify({
+            access_token: `jwt-${oauthCalls}`,
+            expires_in: 1800,
+          })
+        );
+      }
+      writeCalls += 1;
+      if (writeCalls === 1) {
+        return mockOkResponse('{"detail":"invalid"}', 401);
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const result = await handleChatWriteback(
+      event,
+      buildChatWritebackOptions({
+        chatWriteback: true,
+        chatApiBase: 'http://gw:8000',
+        acnBaseUrl: 'https://api.acnlabs.dev',
+        apiKey: 'acn_secret',
+        chatCompleteUrl: 'http://127.0.0.1:9/complete',
+        agentId: 'agent-1',
+      })!,
+      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => {} }
+    );
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    expect(oauthCalls).toBe(2);
+    expect(writeCalls).toBe(2);
   });
 
   it('fails when complete JSON lacks content', async () => {

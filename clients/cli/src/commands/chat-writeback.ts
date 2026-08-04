@@ -48,6 +48,8 @@ export interface ChatWritebackDeps {
 
 const DEFAULT_COMPLETE_TIMEOUT_MS = 120_000;
 const DEFAULT_WRITEBACK_TIMEOUT_MS = 30_000;
+/** Must match AgentPlanet ``ACN_JWT_AUDIENCE`` (not the chat-api-base host). */
+export const DEFAULT_CHAT_JWT_AUDIENCE = 'https://api.agentplanet.org';
 
 /** Process-local JWT cache (restart clears). */
 let cachedJwt: { token: string; expEpochSec: number; agentId: string } | null =
@@ -103,14 +105,7 @@ export function buildChatWritebackOptions(opts: {
 }): ChatWritebackOptions | undefined {
   if (!opts.chatWriteback) return undefined;
   const apiBase = opts.chatApiBase!.replace(/\/+$/, '');
-  let audience = opts.audience?.trim();
-  if (!audience) {
-    try {
-      audience = new URL(apiBase).origin;
-    } catch {
-      audience = 'https://api.agentplanet.org';
-    }
-  }
+  const audience = opts.audience?.trim() || DEFAULT_CHAT_JWT_AUDIENCE;
   return {
     enabled: true,
     apiBase,
@@ -320,10 +315,6 @@ async function postWriteback(
   }
 
   const fetchFn = deps.fetchFn ?? fetch;
-  const minted = await mintAgentJwt(opts, fetchFn);
-  if (!minted.ok) {
-    return { ok: false, reason: minted.reason };
-  }
 
   const path = chat.reply_path;
   let url: URL;
@@ -339,36 +330,70 @@ async function postWriteback(
   }
 
   const timeoutMs = opts.writebackTimeoutMs ?? DEFAULT_WRITEBACK_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetchFn(url.toString(), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        Authorization: `Bearer ${minted.token}`,
-      },
-      body: JSON.stringify({ content }),
-      signal: controller.signal,
-    });
-    if (res.status === 200 || res.status === 201) {
-      return { ok: true, httpStatus: res.status };
-    }
+
+  const postOnce = async (
+    token: string
+  ): Promise<{ ok: true; status: number } | { ok: false; status: number; reason: string }> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      await res.arrayBuffer();
-    } catch {
-      /* ignore */
+      const res = await fetchFn(url.toString(), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ content }),
+        signal: controller.signal,
+      });
+      if (res.status === 200 || res.status === 201) {
+        return { ok: true, status: res.status };
+      }
+      try {
+        await res.arrayBuffer();
+      } catch {
+        /* ignore */
+      }
+      return {
+        ok: false,
+        status: res.status,
+        reason: `writeback_http_${res.status}`,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (controller.signal.aborted || /abort|timeout/i.test(msg)) {
+        return { ok: false, status: 0, reason: 'writeback_timeout' };
+      }
+      return { ok: false, status: 0, reason: msg.slice(0, 200) };
+    } finally {
+      clearTimeout(timer);
     }
-    return { ok: false, reason: `writeback_http_${res.status}` };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (controller.signal.aborted || /abort|timeout/i.test(msg)) {
-      return { ok: false, reason: 'writeback_timeout' };
-    }
-    return { ok: false, reason: msg.slice(0, 200) };
-  } finally {
-    clearTimeout(timer);
+  };
+
+  const minted = await mintAgentJwt(opts, fetchFn);
+  if (!minted.ok) {
+    return { ok: false, reason: minted.reason };
   }
+
+  let result = await postOnce(minted.token);
+  if (result.ok) {
+    return { ok: true, httpStatus: result.status };
+  }
+
+  // Cached / near-expired JWT rejected — drop cache and remint once.
+  if (result.status === 401) {
+    clearAgentJwtCache();
+    const reminted = await mintAgentJwt(opts, fetchFn);
+    if (!reminted.ok) {
+      return { ok: false, reason: reminted.reason };
+    }
+    result = await postOnce(reminted.token);
+    if (result.ok) {
+      return { ok: true, httpStatus: result.status };
+    }
+  }
+
+  return { ok: false, reason: result.reason };
 }
 
 /**
