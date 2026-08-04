@@ -68,6 +68,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     # not to the front proxy. Lifting it to a public name would split
     # ownership; keep the import explicit + commented instead.
     _get_real_ip,
+    _schedule_alive_renewal,
     # ``_wallet_rate_limit_key`` is the L418 secondary key_func used by
     # ``@limiter.limit(WALLET_RATE_LIMIT, key_func=...)`` on the four
     # proxy entry points below. Same module-private rationale as
@@ -75,7 +76,6 @@ from .dependencies import (  # type: ignore[import-untyped]
     # exposing it as a public name would force a shim layer that adds
     # zero value.
     _wallet_rate_limit_key,
-    _schedule_alive_renewal,
     evict_agent_from_cache,
     limiter,
     verify_owner_or_internal,
