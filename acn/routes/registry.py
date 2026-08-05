@@ -4303,7 +4303,7 @@ async def cancel_transfer_invite(
 async def release_agent(
     request: Request,
     agent_id: AgentIdPath,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(verify_token),
     agent_service: AgentServiceDep = None,
 ):
     """
@@ -4311,6 +4311,10 @@ async def release_agent(
 
     Only the current owner can release the agent.
     After release, anyone can claim the agent again.
+
+    Auth: human JWT via ``verify_token`` (same as claim) — ``acn:write``
+    is not required so Interfaze / Labs SPAs with ``openid profile email``
+    can release. Ownership is enforced by ``sub == agent.owner``.
     """
     token_owner: str = payload.get("sub", "")
 
