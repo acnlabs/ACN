@@ -18,10 +18,12 @@ so this suite focuses on the route → service seam.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+VALID_INTERNAL_TOKEN = "test-internal-token-for-allowlist"
 
 from acn.api import app
 from acn.core.exceptions import AgentNotFoundException
@@ -382,6 +384,27 @@ class TestListAllowlist:
         kwargs = stub_allowlist_service.list_targets.await_args.kwargs
         assert kwargs["limit"] == 10
         assert kwargs["offset"] == 5
+
+    def test_internal_token_can_list(
+        self, stub_allowlist_service, stub_agent_service
+    ):
+        """Chat Gateway proxies with X-Internal-Token after human owner assert."""
+        stub_allowlist_service.list_targets = AsyncMock(return_value=[])
+        stub_allowlist_service.count = AsyncMock(return_value=0)
+        _wire(stub_allowlist_service, stub_agent_service)
+
+        with patch(
+            "acn.routes.dependencies.settings.internal_api_token",
+            VALID_INTERNAL_TOKEN,
+        ):
+            with TestClient(app) as client:
+                r = client.get(
+                    "/api/v1/agents/agent-target/allowlist",
+                    headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+                )
+
+        assert r.status_code == 200, r.text
+        stub_allowlist_service.list_targets.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

@@ -1,20 +1,17 @@
 """Allowlist Routes (Phase 2 PR #2).
 
-Three endpoints, owner-authenticated, that maintain an agent's
+Three endpoints that maintain an agent's
 ``communication_policy.mode=allowlist`` trust list::
 
-    POST   /api/v1/agents/{agent_id}/allowlist/{target_id}   # owner API key
-    DELETE /api/v1/agents/{agent_id}/allowlist/{target_id}   # owner API key
-    GET    /api/v1/agents/{agent_id}/allowlist               # owner API key
+    POST   /api/v1/agents/{agent_id}/allowlist/{target_id}
+    DELETE /api/v1/agents/{agent_id}/allowlist/{target_id}
+    GET    /api/v1/agents/{agent_id}/allowlist
 
-There is **no public read** endpoint and no "incoming allowlist"
-endpoint (where target_id queries who has them). The proposal
-treats allowlist membership as a privacy-sensitive trust signal:
-exposing "who trusts whom" publicly would leak relationship
-information that the recipient may not want disclosed. Even the
-``GET`` listing is owner-only — the recipient sees their own list
-but no one else can. This mirrors the proposal's "不提供 GET
-/allowlist/incoming" decision.
+Auth is ``OwnerOrInternalDep`` (agent API key for the path agent, or
+``X-Internal-Token``). Chat Gateway / Interfaze human owners assert
+ownership then proxy with the internal token — same pattern as
+profile / policy. There is **no public read** and no "incoming
+allowlist" endpoint (privacy-sensitive trust signal).
 
 Routing precedence: included in ``api.py`` BEFORE
 ``registry.router`` (registry has a catch-all
@@ -28,7 +25,7 @@ call mutated state). 200 on idempotent re-add / re-remove.
 Errors:
 
   - 400 SelfAllowlistError — recipient cannot allowlist themselves.
-  - 403 caller != path agent_id — owner-only auth check.
+  - 403 API key for a different agent.
   - 404 target_id unknown — same shape as follow's "follow a
     non-existent agent" path.
   - 429 capacity exceeded (MAX_ALLOWLIST_SIZE = 500).
@@ -48,9 +45,9 @@ from ..services import (
 )
 from ..services.allowlist_service import MAX_ALLOWLIST_SIZE
 from .dependencies import (
-    AgentApiKeyDep,
     AgentIdPath,
     AllowlistServiceDep,
+    OwnerOrInternalDep,
     limiter,
 )
 
@@ -162,30 +159,7 @@ class AllowlistListResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _ensure_owner(caller: dict, agent_id: str) -> None:
-    """Allowlist routes are owner-only.
-
-    Centralised here so the same 403 message shape covers all
-    three routes; the GET listing also goes through this gate
-    because the owner's allowlist is private (see module docstring).
-    """
-    if caller["agent_id"] != agent_id:
-        raise ACNHTTPError(
-            ErrorCode.API_KEY_AGENT_MISMATCH,
-            403,
-            details={
-                "path_agent": agent_id,
-                "key_agent": caller["agent_id"],
-            },
-        )
-
-
-# ---------------------------------------------------------------------------
-# Mutation endpoints — owner API key required
+# Mutation endpoints — owner API key or internal token
 # ---------------------------------------------------------------------------
 
 
@@ -199,7 +173,7 @@ async def add_to_allowlist(
     request: Request,
     agent_id: AgentIdPath,
     target_id: AgentIdPath,
-    caller: AgentApiKeyDep,
+    caller: OwnerOrInternalDep,
     allowlist_service: AllowlistServiceDep,
     body: AddAllowlistBody | None = None,
 ):
@@ -219,7 +193,7 @@ async def add_to_allowlist(
     the model has only one field so the surface is small enough
     to trust).
     """
-    _ensure_owner(caller, agent_id)
+    del caller  # OwnerOrInternalDep enforces path/auth match
     reason = body.reason if body is not None else None
 
     try:
@@ -268,7 +242,7 @@ async def remove_from_allowlist(
     request: Request,
     agent_id: AgentIdPath,
     target_id: AgentIdPath,
-    caller: AgentApiKeyDep,
+    caller: OwnerOrInternalDep,
     allowlist_service: AllowlistServiceDep,
 ):
     """Drop ``target_id`` from ``agent_id``'s allowlist.
@@ -287,7 +261,7 @@ async def remove_from_allowlist(
     flipping the policy mode itself). The recipient still has the
     audit trail of what was sent during the trust window.
     """
-    _ensure_owner(caller, agent_id)
+    del caller  # OwnerOrInternalDep enforces path/auth match
     removed = await allowlist_service.remove(
         owner_id=agent_id,
         target_id=target_id,
@@ -314,7 +288,7 @@ async def remove_from_allowlist(
 async def list_allowlist(
     request: Request,
     agent_id: AgentIdPath,
-    caller: AgentApiKeyDep,
+    caller: OwnerOrInternalDep,
     allowlist_service: AllowlistServiceDep,
     limit: int = Query(
         default=_DEFAULT_PAGE_LIMIT,
@@ -331,7 +305,7 @@ async def list_allowlist(
     Listings always come from the canonical PG side (the Redis
     cache lacks ``created_at`` / ``reason``).
     """
-    _ensure_owner(caller, agent_id)
+    del caller  # OwnerOrInternalDep enforces path/auth match
     entries = await allowlist_service.list_targets(
         owner_id=agent_id,
         limit=limit,
