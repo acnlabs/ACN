@@ -158,6 +158,16 @@ curl "http://localhost:8000/api/v1/payments/discover?payment_method=usdc&network
 
 ACN provides official client SDKs for TypeScript/JavaScript and Python.
 
+### Server ↔ SDK Compatibility
+
+| Server | Python `acn-client` | TypeScript `acn-client` | `@acnlabs/acn-cli` | Agent skill |
+|--------|---------------------|-------------------------|--------------------|-------------|
+| **1.0.0** (current) | **1.0.0** | **1.0.0** | **1.0.0** | **1.0.0** |
+| 0.15.10 | 0.13.0 | 0.15.0 | 0.14.2 | 0.17.18 |
+
+Pin clients to the row matching your deployed server. Product version
+**V1.0.0** corresponds to server tag `v1.0.0`.
+
 ### TypeScript/JavaScript
 
 ```bash

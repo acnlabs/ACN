@@ -5,9 +5,12 @@
  * the CLI:
  *   1) asks the host for reply text (--chat-complete-url | --chat-complete-exec)
  *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
- *   3) POSTs { content } to Chat Gateway agent-messages with Bearer JWT
+ *   3) POSTs { content, reply_to_id?, usage? } to Chat Gateway agent-messages
+ *      with Bearer JWT
  *
- * Hosts only need to return {"content":"..."} — they do not call Gateway themselves.
+ * Hosts return {"content":"..."} and optionally
+ * {"usage":{"input_tokens":N,"output_tokens":M}} for chat billing settle.
+ * They do not call Gateway themselves.
  */
 
 import { spawn } from 'child_process';
@@ -120,6 +123,17 @@ export function buildChatWritebackOptions(opts: {
   };
 }
 
+export type ChatTokenUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  meter_source?: 'peer_self' | 'gateway' | 'runtime_attested' | 'protocol';
+};
+
+export type ChatCompleteResult = {
+  content: string;
+  usage?: ChatTokenUsage;
+};
+
 /**
  * Host complete response → reply text.
  * Prefer content/reply/text; never treat a nested "message" object or ACK as content.
@@ -136,6 +150,56 @@ export function extractContent(payload: unknown): string | null {
     }
   }
   return null;
+}
+
+function asNonNegInt(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+    return Math.floor(v);
+  }
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  }
+  return null;
+}
+
+/**
+ * Optional token usage from host complete JSON (chat billing settle).
+ * Accepts usage.input_tokens/output_tokens or prompt_tokens/completion_tokens.
+ */
+export function extractUsage(payload: unknown): ChatTokenUsage | undefined {
+  const rec = asRecord(payload);
+  if (!rec) return undefined;
+  const usageRec = asRecord(rec.usage) ?? rec;
+  const input =
+    asNonNegInt(usageRec.input_tokens) ?? asNonNegInt(usageRec.prompt_tokens);
+  const output =
+    asNonNegInt(usageRec.output_tokens) ??
+    asNonNegInt(usageRec.completion_tokens);
+  if (input === null && output === null) return undefined;
+  const out: ChatTokenUsage = {
+    input_tokens: input ?? 0,
+    output_tokens: output ?? 0,
+  };
+  const ms = usageRec.meter_source;
+  if (
+    ms === 'peer_self' ||
+    ms === 'gateway' ||
+    ms === 'runtime_attested' ||
+    ms === 'protocol'
+  ) {
+    out.meter_source = ms;
+  }
+  return out;
+}
+
+function parseCompletePayload(
+  payload: unknown
+): { ok: true; result: ChatCompleteResult } | { ok: false; reason: string } {
+  const content = extractContent(payload);
+  if (!content) return { ok: false, reason: 'complete_missing_content' };
+  const usage = extractUsage(payload);
+  return { ok: true, result: usage ? { content, usage } : { content } };
 }
 
 /** Mint (or reuse cached) ACN agent JWT for Chat Gateway. Exported for tests. */
@@ -203,7 +267,9 @@ async function completeViaHttp(
   event: NormalizedEvent,
   opts: ChatWritebackOptions,
   deps: ChatWritebackDeps
-): Promise<{ ok: true; content: string } | { ok: false; reason: string }> {
+): Promise<
+  { ok: true; result: ChatCompleteResult } | { ok: false; reason: string }
+> {
   const fetchFn = deps.fetchFn ?? fetch;
   const timeoutMs = opts.completeTimeoutMs ?? DEFAULT_COMPLETE_TIMEOUT_MS;
   const controller = new AbortController();
@@ -225,9 +291,7 @@ async function completeViaHttp(
     } catch {
       return { ok: false, reason: 'complete_invalid_json' };
     }
-    const content = extractContent(parsed);
-    if (!content) return { ok: false, reason: 'complete_missing_content' };
-    return { ok: true, content };
+    return parseCompletePayload(parsed);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (controller.signal.aborted || /abort|timeout/i.test(msg)) {
@@ -243,7 +307,9 @@ function completeViaExec(
   event: NormalizedEvent,
   opts: ChatWritebackOptions,
   deps: ChatWritebackDeps
-): Promise<{ ok: true; content: string } | { ok: false; reason: string }> {
+): Promise<
+  { ok: true; result: ChatCompleteResult } | { ok: false; reason: string }
+> {
   const spawnFn = deps.spawnFn ?? spawn;
   const timeoutMs = opts.completeTimeoutMs ?? DEFAULT_COMPLETE_TIMEOUT_MS;
   const body = Buffer.from(JSON.stringify(event), 'utf-8');
@@ -254,7 +320,11 @@ function completeViaExec(
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
 
-    const finish = (result: { ok: true; content: string } | { ok: false; reason: string }) => {
+    const finish = (
+      result:
+        | { ok: true; result: ChatCompleteResult }
+        | { ok: false; reason: string }
+    ) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -283,12 +353,7 @@ function completeViaExec(
       const text = Buffer.concat(stdout).toString('utf-8').trim();
       try {
         const parsed = JSON.parse(text) as unknown;
-        const content = extractContent(parsed);
-        if (!content) {
-          finish({ ok: false, reason: 'complete_missing_content' });
-          return;
-        }
-        finish({ ok: true, content });
+        finish(parseCompletePayload(parsed));
       } catch {
         finish({ ok: false, reason: 'complete_invalid_json' });
       }
@@ -300,7 +365,7 @@ function completeViaExec(
 
 async function postWriteback(
   event: NormalizedEvent,
-  content: string,
+  complete: ChatCompleteResult,
   opts: ChatWritebackOptions,
   deps: ChatWritebackDeps
 ): Promise<ChatWritebackResult> {
@@ -330,6 +395,18 @@ async function postWriteback(
   }
 
   const timeoutMs = opts.writebackTimeoutMs ?? DEFAULT_WRITEBACK_TIMEOUT_MS;
+  const replyToId = chat.gateway_message_id ?? event.message_id;
+  const body: Record<string, unknown> = {
+    content: complete.content,
+    reply_to_id: replyToId,
+  };
+  if (complete.usage) {
+    body.usage = {
+      input_tokens: complete.usage.input_tokens,
+      output_tokens: complete.usage.output_tokens,
+      meter_source: complete.usage.meter_source ?? 'peer_self',
+    };
+  }
 
   const postOnce = async (
     token: string
@@ -343,7 +420,7 @@ async function postWriteback(
           'content-type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
       if (res.status === 200 || res.status === 201) {
@@ -420,7 +497,7 @@ export async function handleChatWriteback(
     return { ok: false, reason: completed.reason };
   }
 
-  const written = await postWriteback(event, completed.content, opts, deps);
+  const written = await postWriteback(event, completed.result, opts, deps);
   if (!written.ok) {
     logFn(
       `[acn listen] chat_writeback_failed chat_id=${event.chat.chat_id} ` +
@@ -429,9 +506,13 @@ export async function handleChatWriteback(
     return written;
   }
 
+  const usageNote = completed.result.usage
+    ? ` usage_in=${completed.result.usage.input_tokens}` +
+      ` usage_out=${completed.result.usage.output_tokens}`
+    : '';
   logFn(
     `[acn listen] chat_writeback_ok chat_id=${event.chat.chat_id} ` +
-      `message_id=${event.message_id} http=${written.httpStatus}`
+      `message_id=${event.message_id} http=${written.httpStatus}${usageNote}`
   );
   return written;
 }

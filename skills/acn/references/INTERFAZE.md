@@ -97,8 +97,18 @@ POST {chat-api-base}/api/chats/{chat_id}/agent-messages
 Authorization: Bearer <ACN agent JWT>
 Content-Type: application/json
 
-{"content":"<final reply>"}
+{
+  "content": "<final reply>",
+  "reply_to_id": "<user message id from envelope>",
+  "usage": {
+    "input_tokens": 1200,
+    "output_tokens": 340,
+    "meter_source": "peer_self"
+  }
+}
 ```
+
+`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI 会一并 POST（并自动填 `reply_to_id`）。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。
 
 Mint JWT yourself if not using CLI writeback:
 
