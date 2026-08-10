@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent skill 0.17.18** — Interfaze chat procedure
+  ([`references/INTERFAZE.md`](skills/acn/references/INTERFAZE.md));
+  Mode B writeback docs align with CLI **0.14.2** (ACN agent JWT, not
+  Internal Token); document `GET /hop-receipts/{hop_id}` for attention/task
+  settlement evidence.
+
 ## [0.15.10] - 2026-08-04
 
 CLI patch: Chat Gateway writeback switches to **ACN agent JWT** (breaking for
