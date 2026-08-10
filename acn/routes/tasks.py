@@ -1055,8 +1055,11 @@ def _task_requires_cultivator_human(task) -> bool:
             return True
     except (TypeError, ValueError):
         pass
-    task_type = getattr(task, "task_type", None) or meta.get("task_type") or ""
-    return task_type == "agent_feedback"
+    task_type = str(
+        getattr(task, "task_type", None) or meta.get("task_type") or ""
+    ).lower()
+    # studio = 代训主单（与 Labs CULTIVATOR_HUMAN_TASK_TYPES 对齐）
+    return task_type in ("agent_feedback", "studio")
 
 
 @router.post("/{task_id}/accept", response_model=TaskAcceptResponse)
