@@ -4,6 +4,11 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-10
+
+Coordinated major with ACN server **1.0.0**. No intentional
+API break beyond the 0.15.x surface.
+
 ### Added
 
 - `OrgWorkItem.metadata` / create+update request fields — opaque JSON object

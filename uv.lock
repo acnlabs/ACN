@@ -34,7 +34,7 @@ http-server = [
 
 [[package]]
 name = "acn"
-version = "0.15.10"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk", extra = ["http-server"] },

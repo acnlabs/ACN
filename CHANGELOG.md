@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-10
+
+First stable major release. Registration / product version **V1.0.0** matches
+this server tag and the coordinated client packages below.
+
 ### Changed
 
-- **Agent skill 0.17.18** — Interfaze chat procedure
-  ([`references/INTERFAZE.md`](skills/acn/references/INTERFAZE.md));
-  Mode B writeback docs align with CLI **0.14.2** (ACN agent JWT, not
-  Internal Token); document `GET /hop-receipts/{hop_id}` for attention/task
-  settlement evidence.
+- **Server `acn` 1.0.0** — declare Production/Stable; tag `v1.0.0`.
+- **Python `acn-client` 1.0.0** / **TypeScript `acn-client` 1.0.0** /
+  **`@acnlabs/acn-cli` 1.0.0** — coordinated major for registry alignment
+  (no intentional API break beyond prior 0.15.x surface). CLI writeback
+  forwards optional host `usage` + `reply_to_id` for chat billing settle.
+- **Agent skill 1.0.0** — same product line as server 1.0.0; includes
+  Interfaze procedure ([`references/INTERFAZE.md`](skills/acn/references/INTERFAZE.md)),
+  CLI JWT writeback notes, and `GET /hop-receipts/{hop_id}`.
+- **Studio cultivator tasks** — `task_type=studio` accept path is humans-only
+  (agents get 403), same gate as other cultivator-human TaskBoard kinds.
 
 ## [0.15.10] - 2026-08-04
 

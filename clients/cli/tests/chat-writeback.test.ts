@@ -9,6 +9,7 @@ import {
   clearAgentJwtCache,
   DEFAULT_CHAT_JWT_AUDIENCE,
   extractContent,
+  extractUsage,
   handleChatWriteback,
   validateChatWritebackOptions,
 } from '../src/commands/chat-writeback.js';
@@ -155,6 +156,24 @@ describe('extractContent', () => {
   });
 });
 
+describe('extractUsage', () => {
+  it('reads nested usage and OpenAI-style aliases', () => {
+    expect(
+      extractUsage({ usage: { input_tokens: 1, output_tokens: 2 } })
+    ).toEqual({ input_tokens: 1, output_tokens: 2 });
+    expect(
+      extractUsage({
+        usage: { prompt_tokens: 3, completion_tokens: 4, meter_source: 'peer_self' },
+      })
+    ).toEqual({
+      input_tokens: 3,
+      output_tokens: 4,
+      meter_source: 'peer_self',
+    });
+    expect(extractUsage({ content: 'hi' })).toBeUndefined();
+  });
+});
+
 describe('validateChatWritebackOptions', () => {
   it('allows disabled', () => {
     expect(validateChatWritebackOptions({})).toBeNull();
@@ -255,10 +274,66 @@ describe('handleChatWriteback', () => {
     expect(calls[2].url).toBe(
       'http://gw:8000/api/chats/chat-uuid/agent-messages'
     );
-    expect(JSON.parse(calls[2].body)).toEqual({ content: 'agent says hi' });
+    expect(JSON.parse(calls[2].body)).toEqual({
+      content: 'agent says hi',
+      reply_to_id: 'user-msg-1',
+    });
     const hdrs = calls[2].headers as Record<string, string>;
     expect(hdrs['Authorization']).toBe('Bearer jwt-from-acn');
     expect(hdrs['X-Internal-Token']).toBeUndefined();
+  });
+
+  it('forwards host usage + reply_to_id for billing settle', async () => {
+    clearAgentJwtCache();
+    const calls: Array<{ url: string; body: string }> = [];
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      calls.push({ url: u, body: String(init?.body ?? '') });
+      if (u.includes('/complete')) {
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'billed reply',
+            usage: { input_tokens: 12, output_tokens: 34 },
+          })
+        );
+      }
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-usage', expires_in: 1800 })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const writeback = JSON.parse(calls[2].body);
+    expect(writeback).toEqual({
+      content: 'billed reply',
+      reply_to_id: 'user-msg-1',
+      usage: {
+        input_tokens: 12,
+        output_tokens: 34,
+        meter_source: 'peer_self',
+      },
+    });
+    expect(event.chat?.gateway_message_id).toBe('user-msg-1');
   });
 
   it('defaults JWT audience to AgentPlanet canonical, not chat-api-base origin', () => {
