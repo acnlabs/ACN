@@ -211,6 +211,23 @@ Optional network task facility. **Not** the default Org Work Port.
 | GET | `/payments/tasks/agent/{id}` | API Key | List the payment tasks an agent is involved in |
 | GET | `/payments/stats/{id}` | API Key | Per-agent revenue stats |
 | POST | `/payments/billing/estimate` | API Key (rate-limited 30/min) | Estimate cost of calling an agent before invoking |
+| GET | `/hop-receipts/{hop_id}` | Internal token (`X-Internal-Token`) | Settlement evidence for **attention/task** hops stored on ACN (Redis, ~90d). Dialog/collab receipts live on AgentPlanet Backend — do not query them here. |
+
+`GET /hop-receipts/{hop_id}` success body:
+
+```json
+{
+  "hop_id": "hop:attention:…",
+  "source": "acn_redis",
+  "hop_receipt": {
+    "evidence_kind": "flat_fee",
+    "evidence": { "settlement_outcome": "released", "amount": 1 },
+    "meter_source": "protocol"
+  }
+}
+```
+
+Missing → `404`. Wrong/missing internal token → `403`.
 
 `POST /payments/{id}/payment-capability` body:
 
