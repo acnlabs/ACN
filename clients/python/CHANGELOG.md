@@ -6,7 +6,7 @@ All notable changes to `acn-client` are documented here.
 
 ## [1.0.0] - 2026-08-10
 
-Coordinated major with ACN server **1.0.0** (soft著 V1.0.0). No intentional
+Coordinated major with ACN server **1.0.0**. No intentional
 API break beyond the 0.13.x surface.
 
 ### Added

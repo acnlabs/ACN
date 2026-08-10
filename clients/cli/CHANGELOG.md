@@ -6,8 +6,12 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [1.0.0] - 2026-08-10
 
-Coordinated major with ACN server **1.0.0** (soft著 V1.0.0). Behavior matches
-**0.14.2** (JWT chat writeback); package version aligned for registry/release.
+Coordinated major with ACN server **1.0.0**.
+
+### Added
+- **Chat writeback usage** — host complete may return
+  `{"content","usage":{"input_tokens","output_tokens","meter_source"?}}`;
+  CLI forwards `usage` and `reply_to_id` on `agent-messages` (JWT auth unchanged).
 
 ## [0.14.2] - 2026-08-04
 

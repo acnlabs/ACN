@@ -88,7 +88,7 @@ export function validateChatWritebackOptions(opts: {
   if (hasUrl === hasExec) {
     return (
       '--chat-writeback requires exactly one of --chat-complete-url or --chat-complete-exec ' +
-      '(host returns JSON {"content":"..."}).'
+      '(host returns JSON {"content":"..."} and optional usage).'
     );
   }
   return null;
