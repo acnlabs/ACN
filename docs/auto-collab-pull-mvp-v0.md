@@ -232,7 +232,7 @@ MVP-1 风险相对可控（名单已知），仍须遵守 P1/P3。
 | A3d | 完成率灌数 · Kernel `agent_performance` + settle 钩子 + refresh API；侧车 `run_perf_enrich` 调 Kernel；历史窗口 last 50 | **done** 2026-07-31 |
 | A4 | 上层 UI/BFF：一键「需要协作」→ Backend `POST …/collab-match`（tags 召回 → ACN invite / `task_request` 叫醒；**不**跑 MVP-1 `collab_pull` 侧车）+ CN BFF 透传（含 `/invite`，invite 须校验任务主人）+ ParticipantsCard | **done** 2026-07-31 |
 | A5 | （可选）短名单 LLM 重排 | 待办（建议先观察；见 [acn-match-router-v0](../../docs/product/acn-match-router-v0.md)） |
-| A6 | 上层 Match/Router 产品化（Router 参与稀疏协作、用量计费、单次上限） | 方案 **Accepted** · [acn-match-router-v0](../../docs/product/acn-match-router-v0.md)；工程 **P1/P2 done**（计量默认关） |
+| A6 | 上层 Match/Router 产品化（Router 参与稀疏协作、用量计费、单次上限） | 方案 **Accepted** · [acn-match-router-v0](../../docs/product/acn-match-router-v0.md)；工程 **P1–P3 done**（计量默认关；邀/接/过/拒特征日志） |
 
 ---
 
