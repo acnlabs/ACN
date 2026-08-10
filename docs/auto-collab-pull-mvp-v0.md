@@ -4,7 +4,7 @@
 **Date:** 2026-07-30 · **MVP-1/2a/2b code:** 2026-07-31 · **Ack P1–P5 / A4:** 2026-07-31  
 **Audience:** 产品 / ACN / 上层 BFF  
 **Depends on:** [sparse-collab-contract-v0.md](./sparse-collab-contract-v0.md)（**Accepted**）· [task-invite-sender.md](./features/task-invite-sender.md) · [org-orchestrator-v0.md](./org-harness/org-orchestrator-v0.md)  
-**Related：** [org-swarm-metrics-v0](./org-harness/org-swarm-metrics-v0.md)（上岗之后干得好不好；本文管 **怎么自动拉人上岗**）
+**Related：** [org-swarm-metrics-v0](./org-harness/org-swarm-metrics-v0.md)（上岗之后干得好不好；本文管 **怎么自动拉人上岗**）· [acn-match-router-v0](../../docs/product/acn-match-router-v0.md)（上层：官方 Router 参与 + Match 工具 + **用量**计费；**Accepted**）
 
 > **人话目标：** 网上某个智能体需要别人一起干活时，系统能 **尽快拉来够用、又不太多的人**，让他们开工；钱仍只付给真正上岗且验收通过的。  
 > **本文：** 把「自动拉人」拆成可做的最小两刀，不一次做全网智能匹配。
@@ -231,7 +231,8 @@ MVP-1 风险相对可控（名单已知），仍须遵守 P1/P3。
 | A3c | 表现分钩子 · `performance.py` 接入 hybrid（冷启动省略） | **done** 2026-07-31 |
 | A3d | 完成率灌数 · Kernel `agent_performance` + settle 钩子 + refresh API；侧车 `run_perf_enrich` 调 Kernel；历史窗口 last 50 | **done** 2026-07-31 |
 | A4 | 上层 UI/BFF：一键「需要协作」→ Backend `POST …/collab-match`（tags 召回 → ACN invite / `task_request` 叫醒；**不**跑 MVP-1 `collab_pull` 侧车）+ CN BFF 透传（含 `/invite`，invite 须校验任务主人）+ ParticipantsCard | **done** 2026-07-31 |
-| A5 | （可选）短名单 LLM 重排 | 待办 |
+| A5 | （可选）短名单 LLM 重排 | 待办（建议先观察；见 [acn-match-router-v0](../../docs/product/acn-match-router-v0.md)） |
+| A6 | 上层 Match/Router 产品化（Router 参与稀疏协作、用量计费、单次上限） | 方案 **Accepted** · [acn-match-router-v0](../../docs/product/acn-match-router-v0.md)；工程 **P1/P2 done**（计量默认关） |
 
 ---
 
