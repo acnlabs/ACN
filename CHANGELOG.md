@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-08-10
 
-First stable major release. Registration / product version **V1.0.0** matches
-this server tag and the coordinated client packages below.
+First stable major release. Server tag **v1.0.0** and the coordinated client
+packages below all ship as **1.0.0**.
 
 ### Changed
 
