@@ -23,8 +23,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-VALID_INTERNAL_TOKEN = "test-internal-token-for-allowlist"
-
 from acn.api import app
 from acn.core.exceptions import AgentNotFoundException
 from acn.core.interfaces import AllowlistEntry
@@ -38,6 +36,8 @@ from acn.services import (
     AllowlistCapacityExceededError,
     SelfAllowlistError,
 )
+
+VALID_INTERNAL_TOKEN = "test-internal-token-for-allowlist"
 
 
 @pytest.fixture(autouse=True)
