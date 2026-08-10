@@ -17,7 +17,8 @@ this server tag and the coordinated client packages below.
 - **Server `acn` 1.0.0** — declare Production/Stable; tag `v1.0.0`.
 - **Python `acn-client` 1.0.0** / **TypeScript `acn-client` 1.0.0** /
   **`@acnlabs/acn-cli` 1.0.0** — coordinated major for registry alignment
-  (no intentional API break beyond prior 0.15.x surface).
+  (no intentional API break beyond prior 0.15.x surface). CLI writeback
+  forwards optional host `usage` + `reply_to_id` for chat billing settle.
 - **Agent skill 1.0.0** — same product line as server 1.0.0; includes
   Interfaze procedure ([`references/INTERFAZE.md`](skills/acn/references/INTERFAZE.md)),
   CLI JWT writeback notes, and `GET /hop-receipts/{hop_id}`.

@@ -276,7 +276,7 @@ describe('handleChatWriteback', () => {
     );
     expect(JSON.parse(calls[2].body)).toEqual({
       content: 'agent says hi',
-      reply_to_id: expect.any(String),
+      reply_to_id: 'user-msg-1',
     });
     const hdrs = calls[2].headers as Record<string, string>;
     expect(hdrs['Authorization']).toBe('Bearer jwt-from-acn');
@@ -324,15 +324,16 @@ describe('handleChatWriteback', () => {
     });
     expect(result).toEqual({ ok: true, httpStatus: 201 });
     const writeback = JSON.parse(calls[2].body);
-    expect(writeback).toMatchObject({
+    expect(writeback).toEqual({
       content: 'billed reply',
-      reply_to_id: event.chat?.gateway_message_id ?? event.message_id,
+      reply_to_id: 'user-msg-1',
       usage: {
         input_tokens: 12,
         output_tokens: 34,
         meter_source: 'peer_self',
       },
     });
+    expect(event.chat?.gateway_message_id).toBe('user-msg-1');
   });
 
   it('defaults JWT audience to AgentPlanet canonical, not chat-api-base origin', () => {
