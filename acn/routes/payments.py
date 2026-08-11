@@ -26,6 +26,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     AgentServiceDep,
     BillingServiceDep,
     InternalTokenDep,
+    OwnerOrInternalDep,
     PaymentDiscoveryDep,
     PaymentTasksDep,
     limiter,
@@ -600,25 +601,18 @@ async def get_billing_config():
 async def set_token_pricing(
     agent_id: str,
     request: TokenPricingRequest,
-    agent_info: AgentApiKeyDep,
+    caller: OwnerOrInternalDep,
     agent_service: AgentServiceDep = None,
     payment_discovery: PaymentDiscoveryDep = None,
 ):
     """
-    Set token-based pricing for an agent (requires Agent API Key).
+    Set token-based pricing for an agent.
 
-    The authenticated agent must match the path `agent_id`.
+    Auth: ``OwnerOrInternalDep`` — the agent's own API key, or
+    ``X-Internal-Token`` (Host Gateway asserts human owner then proxies).
     This enables OpenAI-style per-token billing for the agent.
     """
-    if agent_info["agent_id"] != agent_id:
-        raise ACNHTTPError(
-            ErrorCode.API_KEY_AGENT_MISMATCH,
-            status_code=403,
-            details={
-                "path_agent": agent_id,
-                "key_agent": agent_info["agent_id"],
-            },
-        )
+    del caller  # auth only; path agent_id already matched for API-key callers
     # ``find_agent`` (non-throwing) matches the legacy
     # ``AgentRegistry.get_agent`` contract this call site was wired
     # against — absence is a normal 404 branch, not an exception.

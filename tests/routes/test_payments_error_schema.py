@@ -25,7 +25,7 @@ Coverage matrix
 
 * ``API_KEY_AGENT_MISMATCH`` (×4 — `set_payment_capability`,
   `get_agent_payment_tasks`, `get_agent_payment_stats`,
-  `set_token_pricing` path-mismatch sites). Each site is exercised
+  `set_token_pricing` via ``OwnerOrInternalDep``). Each site is exercised
   individually — they all share the same gating pattern but live in
   different handlers, so a future refactor that breaks one without
   breaking the others would otherwise hide.
@@ -54,6 +54,7 @@ from fastapi.testclient import TestClient
 
 from acn.api import app
 from acn.core.exceptions import AgentNotFoundException
+from acn.core.errors import ACNHTTPError, ErrorCode
 from acn.routes.dependencies import (
     get_agent_service,
     get_billing_service,
@@ -61,6 +62,7 @@ from acn.routes.dependencies import (
     get_payment_tasks,
     verify_agent_api_key,
     verify_internal_token,
+    verify_owner_or_internal,
 )
 from tests.routes.conftest import _assert_flat_shape
 
@@ -126,6 +128,14 @@ def _wire_self_authed(agent_id: str = "agent-self") -> None:
     app.dependency_overrides[verify_agent_api_key] = lambda: _agent_info(agent_id)
 
 
+def _wire_owner_or_internal_agent(agent_id: str = "agent-self") -> None:
+    """Override ``verify_owner_or_internal`` for token-pricing routes."""
+    app.dependency_overrides[verify_owner_or_internal] = lambda: {
+        "caller_kind": "agent",
+        "agent_id": agent_id,
+    }
+
+
 def _wire_internal_token() -> None:
     app.dependency_overrides[verify_internal_token] = lambda: None
 
@@ -187,7 +197,15 @@ class TestApiKeyAgentMismatchFlatShape:
         assert body["details"] == self.EXPECTED_DETAILS
 
     def test_set_token_pricing_403_flat_shape(self):
-        _wire_self_authed("agent-other")
+        # Mismatch is enforced inside OwnerOrInternalDep (not the handler).
+        def _mismatch() -> dict:
+            raise ACNHTTPError(
+                ErrorCode.API_KEY_AGENT_MISMATCH,
+                status_code=403,
+                details=self.EXPECTED_DETAILS,
+            )
+
+        app.dependency_overrides[verify_owner_or_internal] = _mismatch
         with TestClient(app) as client:
             r = client.post(
                 "/api/v1/payments/agent-target/token-pricing",
@@ -234,7 +252,7 @@ class TestAgentNotFoundFlatShape:
         assert body["details"] == {"agent_id": "agent-x"}
 
     def test_set_token_pricing_404_flat_shape(self, stub_agent_service_missing_agent):
-        _wire_self_authed("agent-x")
+        _wire_owner_or_internal_agent("agent-x")
         app.dependency_overrides[get_agent_service] = (
             lambda: stub_agent_service_missing_agent
         )
