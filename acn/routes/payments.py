@@ -140,6 +140,11 @@ class TokenPricingRequest(BaseModel):
 
     input_price_per_million: float = Field(..., ge=0, description="USD per 1M input tokens")
     output_price_per_million: float = Field(..., ge=0, description="USD per 1M output tokens")
+    model_id: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Host Model Catalog id for this listing (e.g. openai/gpt-4o-mini)",
+    )
 
 
 class EstimateCostRequest(BaseModel):
@@ -626,34 +631,69 @@ async def set_token_pricing(
         )
 
     try:
-        # Create token pricing
+        # Create token pricing (AP2 redis index — input/output only)
         token_pricing = TokenPricing(
             input_price_per_million=request.input_price_per_million,
             output_price_per_million=request.output_price_per_million,
         )
 
-        # Get existing capability or create new one
-        existing = await payment_discovery.get_agent_payment_capability(agent_id)
-        if existing:
-            existing.token_pricing = token_pricing
-            capability = existing
-        else:
-            capability = PaymentCapability(
-                accepts_payment=True,
-                payment_methods=[SupportedPaymentMethod.PLATFORM_CREDITS],
-                token_pricing=token_pricing,
+        # Persist full L2 listing on Agent (includes optional model_id for Host billing).
+        # Price-only updates must keep a previously stored model_id so Host
+        # chat billing does not silently fall off agent_declared.
+        listing: dict = {
+            "input_price_per_million": request.input_price_per_million,
+            "output_price_per_million": request.output_price_per_million,
+            "currency": "USD",
+        }
+        prior = agent.token_pricing if isinstance(agent.token_pricing, dict) else {}
+        if request.model_id is not None:
+            mid = request.model_id.strip()
+            if mid:
+                listing["model_id"] = mid
+            # Whitespace / empty string: do not persist blank; keep prior if any.
+            elif isinstance(prior.get("model_id"), str) and prior["model_id"].strip():
+                listing["model_id"] = prior["model_id"].strip()
+        elif isinstance(prior.get("model_id"), str) and prior["model_id"].strip():
+            listing["model_id"] = prior["model_id"].strip()
+
+        agent.token_pricing = listing
+        agent.accepts_payment = True
+        if "platform_credits" not in (agent.payment_methods or []):
+            agent.payment_methods = list(agent.payment_methods or []) + ["platform_credits"]
+        await agent_service.repository.save(agent)
+
+        # Redis discovery is best-effort after PG save — lookup/index failures
+        # must not 500 once the Host-facing listing is already persisted.
+        capability = PaymentCapability(
+            accepts_payment=True,
+            payment_methods=[SupportedPaymentMethod.PLATFORM_CREDITS],
+            token_pricing=token_pricing,
+        )
+        try:
+            existing = await payment_discovery.get_agent_payment_capability(agent_id)
+            if existing:
+                existing.token_pricing = token_pricing
+                capability = existing
+        except Exception:
+            logger.warning(
+                "token_pricing_discovery_lookup_failed",
+                agent_id=agent_id,
+                exc_info=True,
             )
 
-        await payment_discovery.index_payment_capability(agent_id, capability)
+        try:
+            await payment_discovery.index_payment_capability(agent_id, capability)
+        except Exception:
+            logger.warning(
+                "token_pricing_discovery_index_failed",
+                agent_id=agent_id,
+                exc_info=True,
+            )
 
         return {
             "status": "configured",
             "agent_id": agent_id,
-            "token_pricing": {
-                "input_price_per_million": request.input_price_per_million,
-                "output_price_per_million": request.output_price_per_million,
-                "currency": "USD",
-            },
+            "token_pricing": listing,
             "network_fee_rate": NETWORK_FEE_RATE,
         }
 

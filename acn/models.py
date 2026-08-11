@@ -106,6 +106,13 @@ class AgentInfo(BaseModel):
         default_factory=list,
         description="Accepted payment methods (e.g., 'usdc', 'eth', 'credit_card')",
     )
+    token_pricing: dict | None = Field(
+        default=None,
+        description=(
+            "L2 listing: USD per 1M input/output tokens, optional model_id. "
+            "Used by Host chat billing (pricing_ref.source=agent_declared)."
+        ),
+    )
 
     # Follow graph counts (see docs/features/acn-follow-proposal.md).
     # Defaults to 0 so existing clients stay happy when the follow

@@ -1062,6 +1062,7 @@ def _agent_entity_to_info(
         wallet_addresses=agent.wallet_addresses or None,
         accepts_payment=agent.accepts_payment,
         payment_methods=agent.payment_methods,
+        token_pricing=agent.token_pricing,
         social_card_url=agent.social_card_url,
     )
 
