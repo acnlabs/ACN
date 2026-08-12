@@ -15,6 +15,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   dispatchA2aRequest,
   handleA2aRequest,
+  postAgentHeartbeat,
+  resolvePreferredModel,
   toWebsocketUrl,
   type A2aRequestFrame,
   type A2aStreamChunkFrame,
@@ -198,5 +200,46 @@ describe('handleA2aRequest --exec', () => {
     const resp = await handleA2aRequest(makeRequest(), { exec: 'false' }, { spawnFn });
     expect(resp.status).toBe(500);
     expect(JSON.parse(resp.body).error).toContain('boom');
+  });
+});
+
+describe('resolvePreferredModel', () => {
+  it('prefers --model flag over env', () => {
+    expect(
+      resolvePreferredModel({
+        model: 'openai/gpt-4o',
+        env: { ACN_PREFERRED_MODEL: 'openai/gpt-4o-mini' } as NodeJS.ProcessEnv,
+      })
+    ).toBe('openai/gpt-4o');
+  });
+
+  it('falls back to ACN_PREFERRED_MODEL', () => {
+    expect(
+      resolvePreferredModel({
+        env: { ACN_PREFERRED_MODEL: ' anthropic/claude-sonnet-4 ' } as NodeJS.ProcessEnv,
+      })
+    ).toBe('anthropic/claude-sonnet-4');
+  });
+});
+
+describe('postAgentHeartbeat', () => {
+  it('POSTs preferred_model when provided', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ok', preferred_model: 'openai/gpt-4o-mini' }),
+    });
+    const r = await postAgentHeartbeat({
+      baseUrl: 'https://api.acnlabs.dev',
+      agentId: 'ag-1',
+      apiKey: 'acn_key',
+      preferredModel: 'openai/gpt-4o-mini',
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    expect(r).toEqual({ ok: true, preferred_model: 'openai/gpt-4o-mini' });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.acnlabs.dev/api/v1/agents/ag-1/heartbeat');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe(JSON.stringify({ preferred_model: 'openai/gpt-4o-mini' }));
   });
 });
