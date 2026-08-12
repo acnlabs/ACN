@@ -9,7 +9,8 @@ export function heartbeatCommand(): Command {
     .option('-i, --agent-id <id>', 'Agent ID (defaults to value in ~/.acn/config.json)')
     .option(
       '-m, --model <modelId>',
-      'Declare runtime model (Host Catalog id) for Host Pricing prefill — self-reported',
+      'Declare runtime model (Host Catalog id) for Host Pricing prefill — self-reported ' +
+        '(env: ACN_PREFERRED_MODEL)',
     )
     .action(async (opts: { agentId?: string; model?: string }) => {
       const config = loadConfig();
@@ -21,10 +22,11 @@ export function heartbeatCommand(): Command {
       }
 
       try {
-        const body =
-          opts.model && opts.model.trim()
-            ? { preferred_model: opts.model.trim() }
-            : undefined;
+        const model =
+          (opts.model && opts.model.trim()) ||
+          process.env.ACN_PREFERRED_MODEL?.trim() ||
+          '';
+        const body = model ? { preferred_model: model.slice(0, 200) } : undefined;
         const res = await acnPost<{
           status?: string;
           preferred_model?: string;

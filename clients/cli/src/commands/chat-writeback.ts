@@ -127,11 +127,15 @@ export type ChatTokenUsage = {
   input_tokens: number;
   output_tokens: number;
   meter_source?: 'peer_self' | 'gateway' | 'runtime_attested' | 'protocol';
+  /** Host Catalog id used for this hop — self-reported; soft mismatch vs listing. */
+  model_id?: string;
 };
 
 export type ChatCompleteResult = {
   content: string;
   usage?: ChatTokenUsage;
+  /** Top-level complete.model_id when no token usage is present. */
+  modelId?: string;
 };
 
 /**
@@ -163,9 +167,27 @@ function asNonNegInt(v: unknown): number | null {
   return null;
 }
 
+/** Host Catalog model id from complete JSON (usage.* or top-level). */
+export function extractModelId(payload: unknown): string | undefined {
+  const rec = asRecord(payload);
+  if (!rec) return undefined;
+  const usageRec = asRecord(rec.usage);
+  for (const raw of [
+    usageRec?.model_id,
+    usageRec?.model,
+    rec.model_id,
+    rec.model,
+  ]) {
+    if (typeof raw === 'string' && raw.trim()) return raw.trim().slice(0, 200);
+  }
+  return undefined;
+}
+
 /**
  * Optional token usage from host complete JSON (chat billing settle).
  * Accepts usage.input_tokens/output_tokens or prompt_tokens/completion_tokens.
+ * model_id-only complete payloads do NOT invent zero-token usage — use
+ * {@link extractModelId} / writeback `usage: { model_id }` instead.
  */
 export function extractUsage(payload: unknown): ChatTokenUsage | undefined {
   const rec = asRecord(payload);
@@ -190,6 +212,8 @@ export function extractUsage(payload: unknown): ChatTokenUsage | undefined {
   ) {
     out.meter_source = ms;
   }
+  const modelId = extractModelId(payload);
+  if (modelId) out.model_id = modelId;
   return out;
 }
 
@@ -199,7 +223,11 @@ function parseCompletePayload(
   const content = extractContent(payload);
   if (!content) return { ok: false, reason: 'complete_missing_content' };
   const usage = extractUsage(payload);
-  return { ok: true, result: usage ? { content, usage } : { content } };
+  const modelId = extractModelId(payload);
+  const result: ChatCompleteResult = { content };
+  if (usage) result.usage = usage;
+  else if (modelId) result.modelId = modelId;
+  return { ok: true, result };
 }
 
 /** Mint (or reuse cached) ACN agent JWT for Chat Gateway. Exported for tests. */
@@ -401,11 +429,18 @@ async function postWriteback(
     reply_to_id: replyToId,
   };
   if (complete.usage) {
-    body.usage = {
+    const usageBody: Record<string, unknown> = {
       input_tokens: complete.usage.input_tokens,
       output_tokens: complete.usage.output_tokens,
       meter_source: complete.usage.meter_source ?? 'peer_self',
     };
+    if (complete.usage.model_id) {
+      usageBody.model_id = complete.usage.model_id;
+    }
+    body.usage = usageBody;
+  } else if (complete.modelId) {
+    // model_id only — do not invent zero token counts; Host defaults tokens to 0.
+    body.usage = { model_id: complete.modelId };
   }
 
   const postOnce = async (

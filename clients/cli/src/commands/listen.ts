@@ -363,11 +363,68 @@ interface ListenerConfig extends HandlerOptions {
   agentId: string;
   apiKey: string;
   baseUrl: string;
+  /** Host Catalog model id — self-reported via REST heartbeat while listening. */
+  preferredModel?: string;
 }
 
 const KEEPALIVE_INTERVAL_MS = 30_000;
+/** Explicit REST heartbeat with preferred_model (WS ping does not carry model). */
+const MODEL_HEARTBEAT_INTERVAL_MS = 15 * 60_000;
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
+
+/** Resolve runtime model for heartbeat: flag → ACN_PREFERRED_MODEL → empty. */
+export function resolvePreferredModel(opts?: {
+  model?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const env = opts?.env ?? process.env;
+  const fromFlag = opts?.model?.trim();
+  if (fromFlag) return fromFlag.slice(0, 200);
+  const fromEnv = env.ACN_PREFERRED_MODEL?.trim();
+  if (fromEnv) return fromEnv.slice(0, 200);
+  return undefined;
+}
+
+/** POST /agents/{id}/heartbeat with optional preferred_model (self-reported). */
+export async function postAgentHeartbeat(opts: {
+  baseUrl: string;
+  agentId: string;
+  apiKey: string;
+  preferredModel?: string;
+  fetchFn?: typeof fetch;
+}): Promise<{ ok: true; preferred_model?: string | null } | { ok: false; reason: string }> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const origin = opts.baseUrl.replace(/\/+$/, '');
+  const url = `${origin}/api/v1/agents/${opts.agentId}/heartbeat`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${opts.apiKey}`,
+    'Content-Type': 'application/json',
+  };
+  const body =
+    opts.preferredModel && opts.preferredModel.trim()
+      ? JSON.stringify({ preferred_model: opts.preferredModel.trim().slice(0, 200) })
+      : undefined;
+  try {
+    const res = await fetchFn(url, { method: 'POST', headers, body });
+    if (!res.ok) {
+      return { ok: false, reason: `http_${res.status}` };
+    }
+    let preferred: string | null | undefined;
+    try {
+      const json = (await res.json()) as { preferred_model?: string | null };
+      preferred = json.preferred_model;
+    } catch {
+      preferred = opts.preferredModel ?? null;
+    }
+    return { ok: true, preferred_model: preferred };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
 
 function runListener(cfg: ListenerConfig): void {
   const wsUrl = toWebsocketUrl(cfg.baseUrl, cfg.agentId);
@@ -382,6 +439,25 @@ function runListener(cfg: ListenerConfig): void {
       headers: { Authorization: `Bearer ${cfg.apiKey}` },
     });
     let keepalive: ReturnType<typeof setInterval> | undefined;
+    let modelHeartbeat: ReturnType<typeof setInterval> | undefined;
+
+    const sendModelHeartbeat = (): void => {
+      if (!cfg.preferredModel || stopped) return;
+      void postAgentHeartbeat({
+        baseUrl: cfg.baseUrl,
+        agentId: cfg.agentId,
+        apiKey: cfg.apiKey,
+        preferredModel: cfg.preferredModel,
+      }).then((r) => {
+        if (!r.ok) {
+          console.error(`[acn listen] preferred_model heartbeat failed: ${r.reason}`);
+          return;
+        }
+        console.error(
+          `[acn listen] preferred_model heartbeat ok model=${r.preferred_model ?? cfg.preferredModel}`
+        );
+      });
+    };
 
     ws.on('open', () => {
       // Status to stderr so stdout stays clean for pipe consumers.
@@ -390,13 +466,23 @@ function runListener(cfg: ListenerConfig): void {
         : cfg.forward
           ? `forward=${cfg.forward}`
           : `exec`;
-      console.error(`[acn listen] connected as ${cfg.agentId} → ${wsUrl} (${mode})`);
+      const modelNote = cfg.preferredModel
+        ? ` preferred_model=${cfg.preferredModel}`
+        : '';
+      console.error(
+        `[acn listen] connected as ${cfg.agentId} → ${wsUrl} (${mode})${modelNote}`
+      );
       backoff = INITIAL_BACKOFF_MS;
       keepalive = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }));
         }
       }, KEEPALIVE_INTERVAL_MS);
+      // REST heartbeat carries preferred_model; WS ping alone cannot.
+      if (cfg.preferredModel) {
+        sendModelHeartbeat();
+        modelHeartbeat = setInterval(sendModelHeartbeat, MODEL_HEARTBEAT_INTERVAL_MS);
+      }
     });
 
     ws.on('message', (data: WebSocket.RawData) => {
@@ -424,6 +510,7 @@ function runListener(cfg: ListenerConfig): void {
 
     ws.on('close', (code: number, reason: Buffer) => {
       if (keepalive) clearInterval(keepalive);
+      if (modelHeartbeat) clearInterval(modelHeartbeat);
       if (stopped) return;
       // 4401/4403 are auth failures (bad/mismatched API key) and 4429 is
       // "too many connections" — none are transient, so retrying forever
@@ -552,6 +639,11 @@ export function listenCommand(): Command {
       String(DEFAULT_COMPLETE_TIMEOUT_MS)
     )
     .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .option(
+      '-m, --model <modelId>',
+      'Declare runtime model (Host Catalog id) on connect + every 15m via REST heartbeat ' +
+        '(self-reported; env: ACN_PREFERRED_MODEL)'
+    )
     .action(
       (opts: {
         runtime?: string;
@@ -570,6 +662,7 @@ export function listenCommand(): Command {
         chatCompleteExec?: string;
         chatCompleteTimeout?: string;
         agentId?: string;
+        model?: string;
       }) => {
         const config = loadConfig();
         const apiKey = config.api_key;
@@ -687,10 +780,13 @@ export function listenCommand(): Command {
             process.env.AGENTPLANET_JWT_AUDIENCE?.trim(),
         });
 
+        const preferredModel = resolvePreferredModel({ model: opts.model });
+
         runListener({
           agentId,
           apiKey: apiKey!,
           baseUrl: config.base_url,
+          preferredModel,
           forward: opts.forward,
           exec: opts.exec,
           runtime: opts.runtime

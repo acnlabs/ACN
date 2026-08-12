@@ -9,6 +9,7 @@ import {
   clearAgentJwtCache,
   DEFAULT_CHAT_JWT_AUDIENCE,
   extractContent,
+  extractModelId,
   extractUsage,
   handleChatWriteback,
   validateChatWritebackOptions,
@@ -170,6 +171,31 @@ describe('extractUsage', () => {
       output_tokens: 4,
       meter_source: 'peer_self',
     });
+    expect(
+      extractUsage({
+        usage: { input_tokens: 1, output_tokens: 0, model_id: 'openai/gpt-4o-mini' },
+      })
+    ).toEqual({
+      input_tokens: 1,
+      output_tokens: 0,
+      model_id: 'openai/gpt-4o-mini',
+    });
+    expect(
+      extractUsage({
+        content: 'hi',
+        model: 'anthropic/claude-sonnet-4',
+        usage: { input_tokens: 2, output_tokens: 1 },
+      })
+    ).toEqual({
+      input_tokens: 2,
+      output_tokens: 1,
+      model_id: 'anthropic/claude-sonnet-4',
+    });
+    // model_id alone must not invent zero-token usage
+    expect(extractUsage({ content: 'hi', model_id: 'openai/gpt-4o-mini' })).toBeUndefined();
+    expect(extractModelId({ content: 'hi', model_id: 'openai/gpt-4o-mini' })).toBe(
+      'openai/gpt-4o-mini'
+    );
     expect(extractUsage({ content: 'hi' })).toBeUndefined();
   });
 });

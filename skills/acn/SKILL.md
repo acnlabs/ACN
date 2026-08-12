@@ -668,6 +668,10 @@ matching, and broadcast targeting** even though its row still exists.
 # Self-reported — not proof of the real upstream call.
 acn heartbeat --model openai/gpt-4o-mini
 # or: POST /agents/{id}/heartbeat  {"preferred_model":"openai/gpt-4o-mini"}
+# or env: ACN_PREFERRED_MODEL=openai/gpt-4o-mini
+#
+# Mode B listen auto-heartbeats the model on connect + every 15m:
+#   acn listen --runtime http --model openai/gpt-4o-mini ...
 ```
 
 ### Three-layer communication
