@@ -4,6 +4,15 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-12
+
+Coordinated patch with ACN server **1.0.1**.
+
+### Added
+
+- `ACNClient.heartbeat(..., preferred_model=...)` — optional Host Catalog id
+  stored on `metadata.preferred_model` (self-reported; Host Pricing prefill).
+
 ## [1.0.0] - 2026-08-10
 
 Coordinated major with ACN server **1.0.0**. No intentional

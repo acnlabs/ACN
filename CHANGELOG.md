@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-12
+
+Coordinated patch: server, SDKs, CLI, and agent skill all **1.0.1**.
+
+### Added
+
+- **Heartbeat `preferred_model`** — optional JSON body on
+  `POST /agents/{id}/heartbeat` stores Host Catalog id on
+  `metadata.preferred_model` for Host Pricing prefill (self-reported).
+  Python/TS SDKs expose the same optional argument; CLI
+  `acn heartbeat --model` / `ACN_PREFERRED_MODEL`, and Mode B
+  `acn listen --model` refreshes on connect + every 15m.
+- **`AgentInfo.token_pricing`** — L2 listing (USD per 1M in/out, optional
+  `model_id`) on agent responses for Host chat billing
+  (`pricing_ref.source=agent_declared`).
+
+### Changed
+
+- **`PUT`/`POST` token pricing** — auth is `OwnerOrInternalDep` (agent API
+  key or Host Gateway `X-Internal-Token`); optional `model_id` /
+  `markup_percent`; price-only updates keep a previously stored `model_id`.
+- **CLI chat writeback** — may send `model_id` without fabricating zero
+  token usage when the host reports a model-only complete.
+
+### Docs
+
+- **Agent skill 1.0.1** — document `preferred_model` heartbeat, env, and
+  listen auto-refresh (`skills/acn/SKILL.md` + `references/API.md`).
+
 ## [1.0.0] - 2026-08-10
 
 First stable major release. Server tag **v1.0.0** and the coordinated client
