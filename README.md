@@ -311,8 +311,7 @@ Start the server and visit the interactive docs: http://localhost:8000/docs
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/subnets/{subnet_id}/harness` | POST / PATCH | Register or update webhook URL + HMAC secret |
-| `/api/v1/subnets/{subnet_id}/harness` | DELETE | Unregister Org Harness webhook |
+| `/api/v1/subnets/{subnet_id}/harness` | PATCH | Register, update, or clear webhook URL + HMAC secret (`harness_url=null` to unregister) |
 
 ### Monitoring API
 
