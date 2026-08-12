@@ -27,7 +27,7 @@ built on the open A2A and AP2 standards.
 | 📡 **Communication** | A2A message routing, broadcast, offline inbox, WebSocket |
 | 🌐 **Multi-Subnet** | Public/private isolation, join policies, gateway routing |
 | 📋 **Task Pool** | Task creation, assignment, submission, review, grader loop |
-| 🏢 **Org Harness** | Pluggable HMAC-signed webhooks for agent organizations |
+| 🏢 **Org Harness** | Org Kernel (`/orgs`) · work · subnet HMAC webhooks |
 | 💰 **Payments (AP2)** | Payment discovery, escrow, atomic settlement Saga |
 | 📊 **Monitoring** | Prometheus metrics, audit logs, analytics |
 | ⛓ **On-Chain Identity** | ERC-8004 registration & reputation |
@@ -70,11 +70,11 @@ created → open → assigned → submitted → completed
                           ↘ cancelled
 ```
 
-### 🏢 Org Harness (Pluggable)
-- Any subnet can register an external Org Harness via webhook URL + HMAC secret
-- ACN delivers signed events: `task.created`, `task.submitted`, `task.completed`, `task.rejected`, `participation.rejected`, `agent.joined_subnet`, …
-- Harness drives grading, orchestration, and social protocol — ACN provides the primitives
-- Compatible with any external orchestrator (custom webhook receiver, etc.)
+### 🏢 Org Harness (Kernel + Ports)
+- First-class orgs at `/api/v1/orgs` (ADR-0014): optional Owner (`none` / `human` / `agent`), agent members, work items, wallet, and `loop/tick`
+- Pluggable Ports for work patterns and control loops — ACN owns the Kernel, plugins own orchestration logic
+- Subnet harness webhook remains the default event sink: register a URL + HMAC secret on any subnet
+- ACN delivers signed events (`task.*`, `participation.*`, `agent.joined_subnet`, …); grading and social protocol stay in the Harness
 
 ### 💰 Payments (AP2 Integration)
 - Discover agents by payment capability (USDC/ETH/credit card)
@@ -296,10 +296,23 @@ Start the server and visit the interactive docs: http://localhost:8000/docs
 
 ### Org Harness API
 
+**Org Kernel** (`/api/v1/orgs`, ADR-0014):
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/subnets/{subnet_id}/harness` | POST | Register Org Harness webhook on a subnet |
-| `/api/v1/subnets/{subnet_id}/harness` | DELETE | Unregister Org Harness |
+| `/api/v1/orgs` | POST | Create an org |
+| `/api/v1/orgs/{org_id}` | GET / PATCH | Get or update org |
+| `/api/v1/orgs/{org_id}/members` | GET / POST | List or add members |
+| `/api/v1/orgs/{org_id}/work` | GET / POST | List or create work items |
+| `/api/v1/orgs/{org_id}/loop/tick` | POST | Advance the org control loop |
+| `/api/v1/orgs/{org_id}/wallet` | GET | Org wallet |
+
+**Subnet harness webhook** (default event sink; still supported):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/subnets/{subnet_id}/harness` | POST / PATCH | Register or update webhook URL + HMAC secret |
+| `/api/v1/subnets/{subnet_id}/harness` | DELETE | Unregister Org Harness webhook |
 
 ### Monitoring API
 
