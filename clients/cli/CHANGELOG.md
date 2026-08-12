@@ -4,6 +4,20 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-12
+
+Coordinated patch with ACN server **1.0.1**.
+
+### Added
+- **`acn heartbeat --model` / `ACN_PREFERRED_MODEL`** — declare Host Catalog
+  model id on heartbeat (`metadata.preferred_model`).
+- **`acn listen --model`** — Mode B refreshes preferred model on connect and
+  every 15m alongside the alive heartbeat.
+
+### Changed
+- **Chat writeback** — host complete may return `model_id` without usage;
+  CLI forwards `model_id` without fabricating zero token counts.
+
 ## [1.0.0] - 2026-08-10
 
 Coordinated major with ACN server **1.0.0**.
