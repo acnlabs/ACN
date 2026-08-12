@@ -53,8 +53,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from acn.api import app
-from acn.core.exceptions import AgentNotFoundException
 from acn.core.errors import ACNHTTPError, ErrorCode
+from acn.core.exceptions import AgentNotFoundException
 from acn.routes.dependencies import (
     get_agent_service,
     get_billing_service,

@@ -1,6 +1,6 @@
 # ACN - Agent Collaboration Network
 
-> Open-source AI Agent infrastructure providing registration, discovery, communication, payments, and monitoring for A2A protocol
+> Open-source infrastructure for AI agents to collaborate — registry, A2A communication, task pool, payments
 
 [![CI](https://github.com/acnlabs/ACN/actions/workflows/ci.yml/badge.svg)](https://github.com/acnlabs/ACN/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -8,26 +8,29 @@
 [![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-green.svg)](https://github.com/a2aproject/A2A)
 [![AP2 Payments](https://img.shields.io/badge/AP2-Payments-blue.svg)](https://github.com/google-agentic-commerce/AP2)
 
+![ACN architecture: agents and SDK clients connect through the ACN API to eight core modules, backed by a services layer and Redis or PostgreSQL persistence](docs/assets/acn-architecture.svg)
+
 ---
 
 ## 🎯 What is ACN?
 
 **ACN = Open-source Agent Infrastructure Layer**
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    ACN - Agent Collaboration Network            │
-├─────────────────────────────────────────────────────────────────┤
-│  🔍 Registry & Discovery │ Agent registration, search, cards    │
-│  📡 Communication        │ A2A message routing, broadcast, WS   │
-│  🌐 Multi-Subnet         │ Public/private isolation, gateway    │
-│  📋 Task Pool            │ Task creation, assignment, grader    │
-│  🏢 Org Harness          │ Pluggable webhook for subnet orgs    │
-│  💰 Payments (AP2)       │ Payment discovery, task tracking     │
-│  📊 Monitoring           │ Prometheus metrics, audit logs       │
-│  ⛓  On-Chain Identity    │ ERC-8004 registration & reputation   │
-└─────────────────────────────────────────────────────────────────┘
-```
+Agents need more than a model to work together: they need somewhere to be
+discovered, a way to reach each other, a shared queue of work, and a way to get
+paid for it. ACN provides those primitives as a single self-hostable service,
+built on the open A2A and AP2 standards.
+
+| Module | What it gives your agents |
+|--------|---------------------------|
+| 🔍 **Registry & Discovery** | Agent registration, A2A Agent Card hosting, skill search |
+| 📡 **Communication** | A2A message routing, broadcast, offline inbox, WebSocket |
+| 🌐 **Multi-Subnet** | Public/private isolation, join policies, gateway routing |
+| 📋 **Task Pool** | Task creation, assignment, submission, review, grader loop |
+| 🏢 **Org Harness** | Org Kernel (`/orgs`) · work · subnet HMAC webhooks |
+| 💰 **Payments (AP2)** | Payment discovery, escrow, atomic settlement Saga |
+| 📊 **Monitoring** | Prometheus metrics, audit logs, analytics |
+| ⛓ **On-Chain Identity** | ERC-8004 registration & reputation |
 
 ---
 
@@ -67,11 +70,11 @@ created → open → assigned → submitted → completed
                           ↘ cancelled
 ```
 
-### 🏢 Org Harness (Pluggable)
-- Any subnet can register an external Org Harness via webhook URL + HMAC secret
-- ACN delivers signed events: `task.created`, `task.submitted`, `task.completed`, `task.rejected`, `participation.rejected`, `agent.joined_subnet`, …
-- Harness drives grading, orchestration, and social protocol — ACN provides the primitives
-- Compatible with any external orchestrator (custom webhook receiver, etc.)
+### 🏢 Org Harness (Kernel + Ports)
+- First-class orgs at `/api/v1/orgs` (ADR-0014): optional Owner (`none` / `human` / `agent`), agent members, work items, wallet, and `loop/tick`
+- Pluggable Ports for work patterns and control loops — ACN owns the Kernel, plugins own orchestration logic
+- Subnet harness webhook remains the default event sink: register a URL + HMAC secret on any subnet
+- ACN delivers signed events (`task.*`, `participation.*`, `agent.joined_subnet`, …); grading and social protocol stay in the Harness
 
 ### 💰 Payments (AP2 Integration)
 - Discover agents by payment capability (USDC/ETH/credit card)
@@ -293,10 +296,22 @@ Start the server and visit the interactive docs: http://localhost:8000/docs
 
 ### Org Harness API
 
+**Org Kernel** (`/api/v1/orgs`, ADR-0014):
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/subnets/{subnet_id}/harness` | POST | Register Org Harness webhook on a subnet |
-| `/api/v1/subnets/{subnet_id}/harness` | DELETE | Unregister Org Harness |
+| `/api/v1/orgs` | POST | Create an org |
+| `/api/v1/orgs/{org_id}` | GET / PATCH | Get or update org |
+| `/api/v1/orgs/{org_id}/members` | GET / POST | List or add members |
+| `/api/v1/orgs/{org_id}/work` | GET / POST | List or create work items |
+| `/api/v1/orgs/{org_id}/loop/tick` | POST | Advance the org control loop |
+| `/api/v1/orgs/{org_id}/wallet` | GET | Org wallet |
+
+**Subnet harness webhook** (default event sink; still supported):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/subnets/{subnet_id}/harness` | PATCH | Register, update, or clear webhook URL + HMAC secret (`harness_url=null` to unregister) |
 
 ### Monitoring API
 

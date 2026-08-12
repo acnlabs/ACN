@@ -56,6 +56,7 @@ def _make_agent(
     a.wallet_addresses = None
     a.accepts_payment = False
     a.payment_methods = []
+    a.token_pricing = None
     a.social_card_url = None
     return a
 
