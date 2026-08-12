@@ -7,7 +7,11 @@ export function heartbeatCommand(): Command {
   return new Command('heartbeat')
     .description('Send a heartbeat to keep this agent online')
     .option('-i, --agent-id <id>', 'Agent ID (defaults to value in ~/.acn/config.json)')
-    .action(async (opts: { agentId?: string }) => {
+    .option(
+      '-m, --model <modelId>',
+      'Declare runtime model (Host Catalog id) for Host Pricing prefill — self-reported',
+    )
+    .action(async (opts: { agentId?: string; model?: string }) => {
       const config = loadConfig();
       const agentId = opts.agentId ?? config.agent_id;
 
@@ -17,8 +21,18 @@ export function heartbeatCommand(): Command {
       }
 
       try {
-        const res = await acnPost<{ success: boolean }>(`/agents/${agentId}/heartbeat`);
-        output(res, `Heartbeat sent for agent ${agentId}`);
+        const body =
+          opts.model && opts.model.trim()
+            ? { preferred_model: opts.model.trim() }
+            : undefined;
+        const res = await acnPost<{
+          status?: string;
+          preferred_model?: string;
+        }>(`/agents/${agentId}/heartbeat`, body);
+        const modelNote = res.preferred_model
+          ? ` (preferred_model=${res.preferred_model})`
+          : '';
+        output(res, `Heartbeat sent for agent ${agentId}${modelNote}`);
       } catch (err) {
         handleError(err);
       }

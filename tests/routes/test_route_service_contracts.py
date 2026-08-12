@@ -466,7 +466,10 @@ class TestRegistryContract:
         app.dependency_overrides.clear()
 
         assert r.status_code == 200
-        stub_agent_service.update_heartbeat.assert_awaited_once_with("agent-hb")
+        stub_agent_service.update_heartbeat.assert_awaited_once_with(
+            "agent-hb",
+            preferred_model=None,
+        )
 
 
 # ─────────────────────────────────────────────

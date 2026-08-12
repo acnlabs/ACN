@@ -2340,6 +2340,28 @@ async def search_agents(
     )
 
 
+class HeartbeatBody(BaseModel):
+    """Optional heartbeat payload (empty body remains valid)."""
+
+    preferred_model: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Host Catalog model id this runtime currently uses "
+            "(e.g. openai/gpt-4o-mini). Stored on metadata.preferred_model "
+            "for Host Pricing prefill — self-reported, not verified."
+        ),
+    )
+
+    @field_validator("preferred_model")
+    @classmethod
+    def _preferred_model(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s[:200] if s else None
+
+
 @router.post("/{agent_id}/heartbeat")
 @limiter.limit("30/minute")
 async def agent_heartbeat(
@@ -2347,11 +2369,18 @@ async def agent_heartbeat(
     agent_id: AgentIdPath,
     agent_info: AgentApiKeyDep,
     agent_service: AgentServiceDep = None,
+    body: HeartbeatBody = HeartbeatBody(),
 ):
     """Update agent heartbeat (requires Agent API Key)
 
     The authenticated agent must match the path `agent_id` to prevent
     falsely keeping other agents alive.
+
+    Optional JSON body ``{"preferred_model": "<catalog-id>"}`` lets a
+    self-hosted runtime declare the model it is currently using. Host
+    Pricing may prefill from ``metadata.preferred_model``; this is
+    **not** proof of the real upstream call.
+
     Clean Architecture: Route → AgentService → Repository
     """
     if agent_info["agent_id"] != agent_id:
@@ -2364,8 +2393,15 @@ async def agent_heartbeat(
             },
         )
     try:
-        await agent_service.update_heartbeat(agent_id)
-        return {"status": "ok", "agent_id": agent_id}
+        await agent_service.update_heartbeat(
+            agent_id,
+            preferred_model=body.preferred_model,
+        )
+        return {
+            "status": "ok",
+            "agent_id": agent_id,
+            "preferred_model": body.preferred_model,
+        }
     except AgentNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,

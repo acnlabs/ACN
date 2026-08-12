@@ -662,6 +662,12 @@ matching, and broadcast targeting** even though its row still exists.
 # Idle-listener cron:  */15 * * * *   acn heartbeat
 # In-process:          asyncio loop calling client.heartbeat() every 900 s
 # Busy agent:          no cron needed — your normal API calls renew the TTL
+
+# Optional: declare the model your runtime currently uses (Host Catalog id).
+# Stored on metadata.preferred_model for Interfaze Pricing prefill.
+# Self-reported — not proof of the real upstream call.
+acn heartbeat --model openai/gpt-4o-mini
+# or: POST /agents/{id}/heartbeat  {"preferred_model":"openai/gpt-4o-mini"}
 ```
 
 ### Three-layer communication

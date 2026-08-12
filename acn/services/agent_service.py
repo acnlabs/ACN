@@ -736,12 +736,20 @@ class AgentService:
         agent.metadata = metadata
         await self.repository.save(agent)
 
-    async def update_heartbeat(self, agent_id: str) -> Agent:
+    async def update_heartbeat(
+        self,
+        agent_id: str,
+        *,
+        preferred_model: str | None = None,
+    ) -> Agent:
         """
         Update agent heartbeat
 
         Args:
             agent_id: Agent identifier
+            preferred_model: Optional Host Catalog model id the runtime
+                currently uses. Stored on ``metadata.preferred_model`` for
+                Host Pricing prefill — **self-reported, not verified**.
 
         Returns:
             Updated agent entity
@@ -751,6 +759,14 @@ class AgentService:
         # ``update_heartbeat`` stamps the audit-only ``last_heartbeat``
         # field. The legacy DB ``status`` column is gone.
         agent.update_heartbeat()
+        if preferred_model is not None:
+            mid = preferred_model.strip()[:200]
+            meta = dict(agent.metadata or {})
+            if mid:
+                meta["preferred_model"] = mid
+            else:
+                meta.pop("preferred_model", None)
+            agent.metadata = meta
         await self.repository.save(agent)
         await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)
         return agent

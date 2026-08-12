@@ -340,9 +340,20 @@ export class ACNClient {
     return this.post(`/api/v1/agents/${agentId}/rotate-key`);
   }
 
-  /** Send agent heartbeat */
-  async heartbeat(agentId: string): Promise<{ success: boolean }> {
-    return this.post(`/api/v1/agents/${agentId}/heartbeat`);
+  /**
+   * Send agent heartbeat.
+   * Optional `preferredModel` (Host Catalog id) is stored on
+   * `metadata.preferred_model` for Host Pricing prefill — self-reported.
+   */
+  async heartbeat(
+    agentId: string,
+    opts?: { preferredModel?: string | null },
+  ): Promise<{ status?: string; agent_id?: string; preferred_model?: string | null }> {
+    const body =
+      opts?.preferredModel != null && String(opts.preferredModel).trim()
+        ? { preferred_model: String(opts.preferredModel).trim() }
+        : undefined;
+    return this.post(`/api/v1/agents/${agentId}/heartbeat`, body);
   }
 
   /** Get agent endpoint */

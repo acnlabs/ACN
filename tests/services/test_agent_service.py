@@ -170,6 +170,23 @@ class TestAgentService:
         mock_agent_repository.set_alive.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_update_heartbeat_stores_preferred_model(
+        self, mock_agent_repository, sample_agent
+    ):
+        """Runtime may declare preferred_model on heartbeat (self-reported)."""
+        sample_agent.metadata = {"visibility": "real"}
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            preferred_model="openai/gpt-4o-mini",
+        )
+
+        assert agent.metadata.get("preferred_model") == "openai/gpt-4o-mini"
+        mock_agent_repository.save.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_touch_alive_renews_redis_ttl_only(self, mock_agent_repository):
         """``touch_alive`` is the implicit-heartbeat fast path.
 

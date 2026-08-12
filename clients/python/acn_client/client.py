@@ -464,9 +464,25 @@ class ACNClient:
             "POST", f"/api/v1/agents/{agent_id}/rotate-key"
         )
 
-    async def heartbeat(self, agent_id: str) -> dict[str, Any]:
-        """Send agent heartbeat"""
-        return await self._request("POST", f"/api/v1/agents/{agent_id}/heartbeat")
+    async def heartbeat(
+        self,
+        agent_id: str,
+        *,
+        preferred_model: str | None = None,
+    ) -> dict[str, Any]:
+        """Send agent heartbeat.
+
+        Optional ``preferred_model`` (Host Catalog id) is stored on
+        ``metadata.preferred_model`` for Host Pricing prefill. Self-reported.
+        """
+        body: dict[str, Any] = {}
+        if preferred_model is not None:
+            body["preferred_model"] = preferred_model
+        return await self._request(
+            "POST",
+            f"/api/v1/agents/{agent_id}/heartbeat",
+            json=body if body else None,
+        )
 
     async def get_agent_endpoint(self, agent_id: str) -> str | None:
         """Get agent endpoint"""

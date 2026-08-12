@@ -146,6 +146,12 @@ class TokenPricingRequest(BaseModel):
         max_length=200,
         description="Host Model Catalog id for this listing (e.g. openai/gpt-4o-mini)",
     )
+    markup_percent: float | None = Field(
+        default=None,
+        ge=0,
+        le=1000,
+        description="Owner UI: listing = catalog(model) × (1 + markup/100). Optional.",
+    )
 
 
 class EstimateCostRequest(BaseModel):
@@ -649,6 +655,13 @@ async def set_token_pricing(
                 listing["model_id"] = prior["model_id"].strip()
         elif isinstance(prior.get("model_id"), str) and prior["model_id"].strip():
             listing["model_id"] = prior["model_id"].strip()
+
+        if request.markup_percent is not None:
+            listing["markup_percent"] = float(request.markup_percent)
+        else:
+            prior_mu = prior.get("markup_percent")
+            if isinstance(prior_mu, (int, float)) and float(prior_mu) >= 0:
+                listing["markup_percent"] = float(prior_mu)
 
         agent.token_pricing = listing
         agent.accepts_payment = True
