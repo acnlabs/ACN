@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Heartbeat `supported_models`** — optional JSON body on
+  `POST /agents/{id}/heartbeat` stores Host Catalog ids on
+  `metadata.supported_models` for Interfaze composer dropdown (self-reported).
+  SDKs + CLI: `acn heartbeat --supported-models` / `ACN_SUPPORTED_MODELS`,
+  and `acn listen --supported-models` refreshes on connect + every 15m.
+  Omit the field to leave prior value unchanged; empty list / CLI
+  `--clear-supported-models` clears.
+- **Mode B wake envelope** — `NormalizedEvent.chat.requested_model` (and
+  `max_output_tokens`) forwarded from Interfaze outbound metadata so host
+  runtimes can switch models per hop.
+
 ## [1.0.1] - 2026-08-12
 
 Coordinated patch: server, SDKs, CLI, and agent skill all **1.0.1**.

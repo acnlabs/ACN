@@ -26,6 +26,32 @@ from ..protocols.ap2.core import (
 ALIVE_GRACE_TTL = 1800  # 30 min — grace period after join, no heartbeat yet
 ALIVE_RENEW_TTL = 3600  # 60 min — renewed on each heartbeat call
 
+# Cap for heartbeat-declared model lists (Interfaze composer dropdown).
+_SUPPORTED_MODELS_MAX = 50
+
+
+def _normalize_supported_model_ids(models: list[str] | None) -> list[str]:
+    """Dedupe + trim Host Catalog model ids from heartbeat self-report."""
+    if not models:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in models:
+        if not isinstance(raw, str):
+            continue
+        mid = raw.strip()[:200]
+        if not mid:
+            continue
+        key = mid.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(mid)
+        if len(out) >= _SUPPORTED_MODELS_MAX:
+            break
+    return out
+
+
 # Inbound reachability policy (decoupled from ``alive``). These describe how a
 # real direct-push history is summarized into a tri-state ``reachable``:
 #   - retain the per-agent record for a week so an abandoned endpoint's last
@@ -741,6 +767,7 @@ class AgentService:
         agent_id: str,
         *,
         preferred_model: str | None = None,
+        supported_models: list[str] | None = None,
     ) -> Agent:
         """
         Update agent heartbeat
@@ -750,6 +777,10 @@ class AgentService:
             preferred_model: Optional Host Catalog model id the runtime
                 currently uses. Stored on ``metadata.preferred_model`` for
                 Host Pricing prefill — **self-reported, not verified**.
+            supported_models: Optional list of Host Catalog model ids this
+                runtime can run (Interfaze composer dropdown). Stored on
+                ``metadata.supported_models`` — **self-reported**. ``None``
+                leaves prior value unchanged; ``[]`` clears it.
 
         Returns:
             Updated agent entity
@@ -759,13 +790,23 @@ class AgentService:
         # ``update_heartbeat`` stamps the audit-only ``last_heartbeat``
         # field. The legacy DB ``status`` column is gone.
         agent.update_heartbeat()
+        meta_dirty = False
+        meta = dict(agent.metadata or {})
         if preferred_model is not None:
             mid = preferred_model.strip()[:200]
-            meta = dict(agent.metadata or {})
             if mid:
                 meta["preferred_model"] = mid
             else:
                 meta.pop("preferred_model", None)
+            meta_dirty = True
+        if supported_models is not None:
+            normalized = _normalize_supported_model_ids(supported_models)
+            if normalized:
+                meta["supported_models"] = normalized
+            else:
+                meta.pop("supported_models", None)
+            meta_dirty = True
+        if meta_dirty:
             agent.metadata = meta
         await self.repository.save(agent)
         await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)

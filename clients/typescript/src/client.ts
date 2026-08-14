@@ -342,18 +342,32 @@ export class ACNClient {
 
   /**
    * Send agent heartbeat.
-   * Optional `preferredModel` (Host Catalog id) is stored on
-   * `metadata.preferred_model` for Host Pricing prefill — self-reported.
+   * - `preferredModel` → `metadata.preferred_model` (current runtime model)
+   * - `supportedModels` → `metadata.supported_models` (Interfaze composer list)
+   * Both self-reported. Omit a field to leave it unchanged; pass
+   * `supportedModels: []` to clear the list.
    */
   async heartbeat(
     agentId: string,
-    opts?: { preferredModel?: string | null },
-  ): Promise<{ status?: string; agent_id?: string; preferred_model?: string | null }> {
-    const body =
-      opts?.preferredModel != null && String(opts.preferredModel).trim()
-        ? { preferred_model: String(opts.preferredModel).trim() }
-        : undefined;
-    return this.post(`/api/v1/agents/${agentId}/heartbeat`, body);
+    opts?: {
+      preferredModel?: string | null;
+      supportedModels?: string[] | null;
+    },
+  ): Promise<{
+    status?: string;
+    agent_id?: string;
+    preferred_model?: string | null;
+    supported_models?: string[] | null;
+  }> {
+    const body: Record<string, unknown> = {};
+    if (opts?.preferredModel != null && String(opts.preferredModel).trim()) {
+      body.preferred_model = String(opts.preferredModel).trim();
+    }
+    if (opts?.supportedModels != null) {
+      body.supported_models = opts.supportedModels;
+    }
+    const payload = Object.keys(body).length ? body : undefined;
+    return this.post(`/api/v1/agents/${agentId}/heartbeat`, payload);
   }
 
   /** Get agent endpoint */

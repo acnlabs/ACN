@@ -17,12 +17,14 @@ import {
   handleA2aRequest,
   postAgentHeartbeat,
   resolvePreferredModel,
+  resolveSupportedModels,
   toWebsocketUrl,
   type A2aRequestFrame,
   type A2aStreamChunkFrame,
   type A2aStreamEndFrame,
   type OutboundFrame,
 } from '../src/commands/listen.js';
+import { formatModelHeartbeatLog } from '../src/commands/model-heartbeat.js';
 
 function makeRequest(overrides: Partial<A2aRequestFrame> = {}): A2aRequestFrame {
   return {
@@ -235,11 +237,68 @@ describe('postAgentHeartbeat', () => {
       preferredModel: 'openai/gpt-4o-mini',
       fetchFn: fetchFn as unknown as typeof fetch,
     });
-    expect(r).toEqual({ ok: true, preferred_model: 'openai/gpt-4o-mini' });
+    expect(r).toMatchObject({ ok: true, preferred_model: 'openai/gpt-4o-mini' });
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.acnlabs.dev/api/v1/agents/ag-1/heartbeat');
     expect(init.method).toBe('POST');
     expect(init.body).toBe(JSON.stringify({ preferred_model: 'openai/gpt-4o-mini' }));
+  });
+
+  it('POSTs supported_models when provided', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: 'ok',
+        supported_models: ['openai/gpt-4o-mini', 'tencenttokenplan/kimi-k2.5'],
+      }),
+    });
+    const r = await postAgentHeartbeat({
+      baseUrl: 'https://api.acnlabs.dev',
+      agentId: 'ag-1',
+      apiKey: 'acn_key',
+      supportedModels: ['openai/gpt-4o-mini', 'tencenttokenplan/kimi-k2.5'],
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    expect(r).toMatchObject({
+      ok: true,
+      supported_models: ['openai/gpt-4o-mini', 'tencenttokenplan/kimi-k2.5'],
+    });
+    const [, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBe(
+      JSON.stringify({
+        supported_models: ['openai/gpt-4o-mini', 'tencenttokenplan/kimi-k2.5'],
+      })
+    );
+  });
+});
+
+describe('resolveSupportedModels', () => {
+  it('parses comma list from flag and env', () => {
+    expect(
+      resolveSupportedModels({
+        models: 'openai/gpt-4o-mini, tencenttokenplan/kimi-k2.5',
+      })
+    ).toEqual(['openai/gpt-4o-mini', 'tencenttokenplan/kimi-k2.5']);
+    expect(
+      resolveSupportedModels({
+        env: { ACN_SUPPORTED_MODELS: 'a/b;c/d' } as NodeJS.ProcessEnv,
+      })
+    ).toEqual(['a/b', 'c/d']);
+  });
+
+  it('clear returns empty list for server wipe', () => {
+    expect(resolveSupportedModels({ clear: true })).toEqual([]);
+  });
+});
+
+describe('formatModelHeartbeatLog', () => {
+  it('parenthesizes preferred so ?? does not break ternary', () => {
+    expect(
+      formatModelHeartbeatLog({
+        preferred: 'openai/gpt-4o-mini',
+        supported: ['a/b'],
+      })
+    ).toBe(' preferred_model=openai/gpt-4o-mini supported_models=a/b');
   });
 });

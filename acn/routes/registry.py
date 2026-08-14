@@ -2352,6 +2352,14 @@ class HeartbeatBody(BaseModel):
             "for Host Pricing prefill — self-reported, not verified."
         ),
     )
+    supported_models: list[str] | None = Field(
+        default=None,
+        description=(
+            "Host Catalog model ids this runtime can run. Stored on "
+            "metadata.supported_models for Interfaze composer dropdown — "
+            "self-reported. Omit to leave unchanged; empty list clears."
+        ),
+    )
 
     @field_validator("preferred_model")
     @classmethod
@@ -2360,6 +2368,28 @@ class HeartbeatBody(BaseModel):
             return None
         s = v.strip()
         return s[:200] if s else None
+
+    @field_validator("supported_models")
+    @classmethod
+    def _supported_models(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in v:
+            if not isinstance(raw, str):
+                continue
+            s = raw.strip()[:200]
+            if not s:
+                continue
+            key = s.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(s)
+            if len(out) >= 50:
+                break
+        return out
 
 
 @router.post("/{agent_id}/heartbeat")
@@ -2376,10 +2406,13 @@ async def agent_heartbeat(
     The authenticated agent must match the path `agent_id` to prevent
     falsely keeping other agents alive.
 
-    Optional JSON body ``{"preferred_model": "<catalog-id>"}`` lets a
-    self-hosted runtime declare the model it is currently using. Host
-    Pricing may prefill from ``metadata.preferred_model``; this is
-    **not** proof of the real upstream call.
+    Optional JSON body may declare runtime models for Host Pricing /
+    Interfaze composer:
+
+    - ``preferred_model`` → ``metadata.preferred_model`` (current)
+    - ``supported_models`` → ``metadata.supported_models`` (capability list)
+
+    Both are **self-reported, not verified**.
 
     Clean Architecture: Route → AgentService → Repository
     """
@@ -2396,12 +2429,16 @@ async def agent_heartbeat(
         await agent_service.update_heartbeat(
             agent_id,
             preferred_model=body.preferred_model,
+            supported_models=body.supported_models,
         )
-        return {
+        payload: dict[str, object] = {
             "status": "ok",
             "agent_id": agent_id,
             "preferred_model": body.preferred_model,
         }
+        if body.supported_models is not None:
+            payload["supported_models"] = body.supported_models
+        return payload
     except AgentNotFoundException as e:
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,

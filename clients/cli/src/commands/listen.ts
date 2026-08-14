@@ -17,6 +17,20 @@ import {
   validateRuntimeOptions,
   type RuntimeId,
 } from './runtime-adapter.js';
+import {
+  formatModelHeartbeatLog,
+  postAgentHeartbeat,
+  resolvePreferredModel,
+  resolveSupportedModels,
+} from './model-heartbeat.js';
+
+/** Re-export model heartbeat helpers (tests historically imported from listen). */
+export {
+  formatModelHeartbeatLog,
+  postAgentHeartbeat,
+  resolvePreferredModel,
+  resolveSupportedModels,
+} from './model-heartbeat.js';
 
 /**
  * ADR-0012 Mode B — agent-side listener.
@@ -365,66 +379,18 @@ interface ListenerConfig extends HandlerOptions {
   baseUrl: string;
   /** Host Catalog model id — self-reported via REST heartbeat while listening. */
   preferredModel?: string;
+  /**
+   * Models this runtime can run — self-reported for Interfaze composer.
+   * ``[]`` clears server metadata; ``undefined`` leaves unchanged.
+   */
+  supportedModels?: string[];
 }
 
 const KEEPALIVE_INTERVAL_MS = 30_000;
-/** Explicit REST heartbeat with preferred_model (WS ping does not carry model). */
+/** Explicit REST heartbeat with model fields (WS ping does not carry model). */
 const MODEL_HEARTBEAT_INTERVAL_MS = 15 * 60_000;
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
-
-/** Resolve runtime model for heartbeat: flag → ACN_PREFERRED_MODEL → empty. */
-export function resolvePreferredModel(opts?: {
-  model?: string | null;
-  env?: NodeJS.ProcessEnv;
-}): string | undefined {
-  const env = opts?.env ?? process.env;
-  const fromFlag = opts?.model?.trim();
-  if (fromFlag) return fromFlag.slice(0, 200);
-  const fromEnv = env.ACN_PREFERRED_MODEL?.trim();
-  if (fromEnv) return fromEnv.slice(0, 200);
-  return undefined;
-}
-
-/** POST /agents/{id}/heartbeat with optional preferred_model (self-reported). */
-export async function postAgentHeartbeat(opts: {
-  baseUrl: string;
-  agentId: string;
-  apiKey: string;
-  preferredModel?: string;
-  fetchFn?: typeof fetch;
-}): Promise<{ ok: true; preferred_model?: string | null } | { ok: false; reason: string }> {
-  const fetchFn = opts.fetchFn ?? fetch;
-  const origin = opts.baseUrl.replace(/\/+$/, '');
-  const url = `${origin}/api/v1/agents/${opts.agentId}/heartbeat`;
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${opts.apiKey}`,
-    'Content-Type': 'application/json',
-  };
-  const body =
-    opts.preferredModel && opts.preferredModel.trim()
-      ? JSON.stringify({ preferred_model: opts.preferredModel.trim().slice(0, 200) })
-      : undefined;
-  try {
-    const res = await fetchFn(url, { method: 'POST', headers, body });
-    if (!res.ok) {
-      return { ok: false, reason: `http_${res.status}` };
-    }
-    let preferred: string | null | undefined;
-    try {
-      const json = (await res.json()) as { preferred_model?: string | null };
-      preferred = json.preferred_model;
-    } catch {
-      preferred = opts.preferredModel ?? null;
-    }
-    return { ok: true, preferred_model: preferred };
-  } catch (err) {
-    return {
-      ok: false,
-      reason: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
 
 function runListener(cfg: ListenerConfig): void {
   const wsUrl = toWebsocketUrl(cfg.baseUrl, cfg.agentId);
@@ -442,20 +408,25 @@ function runListener(cfg: ListenerConfig): void {
     let modelHeartbeat: ReturnType<typeof setInterval> | undefined;
 
     const sendModelHeartbeat = (): void => {
-      if (!cfg.preferredModel || stopped) return;
+      if (stopped) return;
+      // ``[]`` is a deliberate clear — still heartbeat.
+      if (!cfg.preferredModel && cfg.supportedModels === undefined) return;
       void postAgentHeartbeat({
         baseUrl: cfg.baseUrl,
         agentId: cfg.agentId,
         apiKey: cfg.apiKey,
         preferredModel: cfg.preferredModel,
+        supportedModels: cfg.supportedModels,
       }).then((r) => {
         if (!r.ok) {
-          console.error(`[acn listen] preferred_model heartbeat failed: ${r.reason}`);
+          console.error(`[acn listen] model heartbeat failed: ${r.reason}`);
           return;
         }
-        console.error(
-          `[acn listen] preferred_model heartbeat ok model=${r.preferred_model ?? cfg.preferredModel}`
-        );
+        const note = formatModelHeartbeatLog({
+          preferred: r.preferred_model ?? cfg.preferredModel,
+          supported: r.supported_models ?? cfg.supportedModels,
+        });
+        console.error(`[acn listen] model heartbeat ok${note}`);
       });
     };
 
@@ -466,9 +437,10 @@ function runListener(cfg: ListenerConfig): void {
         : cfg.forward
           ? `forward=${cfg.forward}`
           : `exec`;
-      const modelNote = cfg.preferredModel
-        ? ` preferred_model=${cfg.preferredModel}`
-        : '';
+      const modelNote = formatModelHeartbeatLog({
+        preferred: cfg.preferredModel,
+        supported: cfg.supportedModels,
+      });
       console.error(
         `[acn listen] connected as ${cfg.agentId} → ${wsUrl} (${mode})${modelNote}`
       );
@@ -478,8 +450,8 @@ function runListener(cfg: ListenerConfig): void {
           ws.send(JSON.stringify({ type: 'ping' }));
         }
       }, KEEPALIVE_INTERVAL_MS);
-      // REST heartbeat carries preferred_model; WS ping alone cannot.
-      if (cfg.preferredModel) {
+      // REST heartbeat carries model fields; WS ping alone cannot.
+      if (cfg.preferredModel || cfg.supportedModels !== undefined) {
         sendModelHeartbeat();
         modelHeartbeat = setInterval(sendModelHeartbeat, MODEL_HEARTBEAT_INTERVAL_MS);
       }
@@ -644,6 +616,15 @@ export function listenCommand(): Command {
       'Declare runtime model (Host Catalog id) on connect + every 15m via REST heartbeat ' +
         '(self-reported; env: ACN_PREFERRED_MODEL)'
     )
+    .option(
+      '--supported-models <ids>',
+      'Comma-separated Host Catalog model ids this runtime can run ' +
+        '(Interfaze composer dropdown; env: ACN_SUPPORTED_MODELS)'
+    )
+    .option(
+      '--clear-supported-models',
+      'Clear metadata.supported_models on the server (sends empty list)'
+    )
     .action(
       (opts: {
         runtime?: string;
@@ -663,6 +644,8 @@ export function listenCommand(): Command {
         chatCompleteTimeout?: string;
         agentId?: string;
         model?: string;
+        supportedModels?: string;
+        clearSupportedModels?: boolean;
       }) => {
         const config = loadConfig();
         const apiKey = config.api_key;
@@ -781,12 +764,23 @@ export function listenCommand(): Command {
         });
 
         const preferredModel = resolvePreferredModel({ model: opts.model });
+        if (opts.clearSupportedModels && opts.supportedModels?.trim()) {
+          console.error(
+            'Use either --supported-models or --clear-supported-models, not both.'
+          );
+          process.exit(1);
+        }
+        const supportedModels = resolveSupportedModels({
+          models: opts.supportedModels,
+          clear: !!opts.clearSupportedModels,
+        });
 
         runListener({
           agentId,
           apiKey: apiKey!,
           baseUrl: config.base_url,
           preferredModel,
+          supportedModels,
           forward: opts.forward,
           exec: opts.exec,
           runtime: opts.runtime

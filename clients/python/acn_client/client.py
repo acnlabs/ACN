@@ -469,15 +469,20 @@ class ACNClient:
         agent_id: str,
         *,
         preferred_model: str | None = None,
+        supported_models: list[str] | None = None,
     ) -> dict[str, Any]:
         """Send agent heartbeat.
 
-        Optional ``preferred_model`` (Host Catalog id) is stored on
-        ``metadata.preferred_model`` for Host Pricing prefill. Self-reported.
+        Optional ``preferred_model`` (Host Catalog id) → ``metadata.preferred_model``.
+        Optional ``supported_models`` → ``metadata.supported_models`` (composer
+        dropdown). Both self-reported. Omit a field to leave it unchanged;
+        pass ``supported_models=[]`` to clear the list.
         """
         body: dict[str, Any] = {}
         if preferred_model is not None:
             body["preferred_model"] = preferred_model
+        if supported_models is not None:
+            body["supported_models"] = supported_models
         return await self._request(
             "POST",
             f"/api/v1/agents/{agent_id}/heartbeat",

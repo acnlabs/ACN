@@ -4,6 +4,24 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`acn heartbeat --supported-models` / `ACN_SUPPORTED_MODELS`** — declare
+  Host Catalog model ids on heartbeat (`metadata.supported_models`) for
+  Interfaze composer dropdown.
+- **`acn listen --supported-models`** — Mode B refreshes supported models on
+  connect and every 15m with the model heartbeat.
+- **`--clear-supported-models`** — send empty list to clear server metadata.
+- **Wake `chat.requested_model`** — NormalizedEvent chat envelope surfaces
+  Interfaze `metadata.agentplanet.requested_model` (+ `max_output_tokens`)
+  for host runtimes to honor per hop.
+
+### Fixed
+- Model heartbeat log preferred_model formatting (`??` vs ternary precedence).
+
+### Changed
+- Model heartbeat helpers live in `model-heartbeat.ts` (heartbeat no longer
+  imports the WebSocket listen module).
+
 ## [1.0.1] - 2026-08-12
 
 Coordinated patch with ACN server **1.0.1**.

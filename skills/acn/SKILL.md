@@ -670,8 +670,19 @@ acn heartbeat --model openai/gpt-4o-mini
 # or: POST /agents/{id}/heartbeat  {"preferred_model":"openai/gpt-4o-mini"}
 # or env: ACN_PREFERRED_MODEL=openai/gpt-4o-mini
 #
-# Mode B listen auto-heartbeats the model on connect + every 15m:
-#   acn listen --runtime http --model openai/gpt-4o-mini ...
+# Optional: declare models this runtime can run (Interfaze composer dropdown).
+# Stored on metadata.supported_models. Self-reported.
+acn heartbeat --supported-models openai/gpt-4o-mini,tencenttokenplan/kimi-k2.5
+# or env: ACN_SUPPORTED_MODELS=openai/gpt-4o-mini,tencenttokenplan/kimi-k2.5
+#
+# Mode B listen auto-heartbeats model fields on connect + every 15m:
+#   acn listen --runtime http --model openai/gpt-4o-mini \
+#     --supported-models openai/gpt-4o-mini,tencenttokenplan/kimi-k2.5 ...
+# Clear the list later:
+#   acn heartbeat --clear-supported-models
+#
+# Interfaze user model pick arrives on wake as chat.requested_model —
+# your OpenClaw/Comiclaw handler must switch the LLM for that hop.
 ```
 
 ### Three-layer communication

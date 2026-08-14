@@ -4,6 +4,12 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `ACNClient.heartbeat(agentId, { preferredModel, supportedModels })` —
+  optional `supportedModels` → `metadata.supported_models` (Interfaze
+  composer dropdown; self-reported).
+
 ## [1.0.1] - 2026-08-12
 
 Coordinated patch with ACN server **1.0.1**.

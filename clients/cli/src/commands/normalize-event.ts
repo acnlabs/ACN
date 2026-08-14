@@ -14,6 +14,13 @@ export interface ChatEnvelope {
   /** Stable user-message id from Gateway (preferred for dedupe). */
   gateway_message_id: string | null;
   user_text: string | null;
+  /**
+   * User-selected model for this hop (Interfaze composer S1).
+   * Runtime should honor when generating the reply.
+   */
+  requested_model: string | null;
+  /** Soft Host output cap when present. */
+  max_output_tokens: number | null;
 }
 
 export interface NormalizedEvent {
@@ -160,6 +167,15 @@ export function extractChatEnvelope(
   if (!chatId || !replyPath) return null;
   if (replyChannel !== CHAT_REPLY_CHANNEL) return null;
   if (!isAllowedChatReplyPath(chatId, replyPath)) return null;
+  const requested = asNonEmptyString(ap.requested_model);
+  let maxOut: number | null = null;
+  const rawMax = ap.max_output_tokens;
+  if (typeof rawMax === 'number' && Number.isFinite(rawMax) && rawMax > 0) {
+    maxOut = Math.floor(rawMax);
+  } else if (typeof rawMax === 'string' && rawMax.trim()) {
+    const n = Number.parseInt(rawMax.trim(), 10);
+    if (Number.isFinite(n) && n > 0) maxOut = n;
+  }
   return {
     chat_id: chatId,
     reply_path: replyPath,
@@ -167,6 +183,8 @@ export function extractChatEnvelope(
     gateway_message_id:
       asNonEmptyString(ap.message_id) ?? asNonEmptyString(ap.messageId),
     user_text: extractUserText(message),
+    requested_model: requested ? requested.slice(0, 200) : null,
+    max_output_tokens: maxOut,
   };
 }
 

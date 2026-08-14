@@ -101,11 +101,27 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       reply_channel: 'agentplanet.chat',
       gateway_message_id: 'user-msg-1',
       user_text: 'hello from interfaze',
+      requested_model: null,
+      max_output_tokens: null,
     });
     const params = parsed.body.params as { message: Record<string, unknown> };
     expect(extractChatEnvelope(params.message)?.chat_id).toBe('chat-uuid');
   });
 
+  it('extracts requested_model and max_output_tokens for runtime wake', () => {
+    const parsed = parseJsonRpcBody(
+      chatMessageBody({
+        requested_model: 'openai/gpt-4o-mini',
+        max_output_tokens: 2048,
+      })
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(normalizeEvent(parsed.body).chat).toMatchObject({
+      requested_model: 'openai/gpt-4o-mini',
+      max_output_tokens: 2048,
+    });
+  });
   it('returns null when chat_id or reply_path missing', () => {
     const parsed = parseJsonRpcBody(
       chatMessageBody({ chat_id: 'only-id', reply_path: undefined as unknown as string })

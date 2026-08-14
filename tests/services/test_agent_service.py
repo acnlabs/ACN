@@ -187,6 +187,36 @@ class TestAgentService:
         mock_agent_repository.save.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_update_heartbeat_stores_supported_models(
+        self, mock_agent_repository, sample_agent
+    ):
+        """Runtime may declare supported_models for Interfaze composer."""
+        sample_agent.metadata = {"preferred_model": "openai/gpt-4o-mini"}
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            supported_models=[
+                "openai/gpt-4o-mini",
+                " anthropic/claude-sonnet-4 ",
+                "openai/gpt-4o-mini",  # dedupe
+            ],
+        )
+
+        assert agent.metadata.get("supported_models") == [
+            "openai/gpt-4o-mini",
+            "anthropic/claude-sonnet-4",
+        ]
+        assert agent.metadata.get("preferred_model") == "openai/gpt-4o-mini"
+
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            supported_models=[],
+        )
+        assert "supported_models" not in (agent.metadata or {})
+
+    @pytest.mark.asyncio
     async def test_touch_alive_renews_redis_ttl_only(self, mock_agent_repository):
         """``touch_alive`` is the implicit-heartbeat fast path.
 

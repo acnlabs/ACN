@@ -4,6 +4,11 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `ACNClient.heartbeat(..., supported_models=[...])` — optional list stored on
+  `metadata.supported_models` (Interfaze composer dropdown; self-reported).
+
 ## [1.0.1] - 2026-08-12
 
 Coordinated patch with ACN server **1.0.1**.
