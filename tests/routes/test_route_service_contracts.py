@@ -469,6 +469,7 @@ class TestRegistryContract:
         stub_agent_service.update_heartbeat.assert_awaited_once_with(
             "agent-hb",
             preferred_model=None,
+            supported_models=None,
         )
 
 

@@ -4,6 +4,10 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-15
+
+CLI-only patch. Server / SDK / skill stay **1.0.1**.
+
 ### Added
 - **`acn heartbeat --supported-models` / `ACN_SUPPORTED_MODELS`** — declare
   Host Catalog model ids on heartbeat (`metadata.supported_models`) for

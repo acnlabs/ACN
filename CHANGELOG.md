@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-15
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.2`). Server / SDKs / skill stay **1.0.1**.
+
 ### Added
 
 - **Heartbeat `supported_models`** — optional JSON body on
