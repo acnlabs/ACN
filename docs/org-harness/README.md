@@ -27,6 +27,7 @@
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core 消费契约（外部 Pattern 用） |
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（`POST /orgs` + Org work；`task.*` 为 legacy） |
 | **[phase2-work-port-v0.md](./phase2-work-port-v0.md)** | **Phase 2 Work Port 短方案（默认 builtin_work · P2a/P2c 完成 · P2b 按需）** |
+| **[pattern-shelf-v0.md](./pattern-shelf-v0.md)** | **外部 Pattern 货架（目录不是商店；首批能跑货 + 社区自荐）** |
 | **[plugin-catalog-v0.md](./plugin-catalog-v0.md)** | **官方 Port 推荐短名单（冷启动：默认 + ≤2 候选 / 状态）** |
 | **[org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md)** | **Org 待办执行器（外部）— agent 自动跑命令 POC（C1–C2）** |
 | **[org-orchestrator-v0.md](./org-orchestrator-v0.md)** | **ACN Org 编排器产品定义（P0 Accepted；P2 侧车已落地）** |
@@ -77,6 +78,7 @@ L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 - **实验（C1–C2）：** [Org 待办执行器（外部）](./org-loop-spawn-sidecar-poc-v0.md) + [`examples/org-loop-spawn-sidecar/`](../../examples/org-loop-spawn-sidecar/)（C3 webhook 按需）。  
 - **Org 编排器：** [产品定义](./org-orchestrator-v0.md) P0 + [唤醒契约](./org-orchestrator-wake-contract-v0.md) P1 + [P2 侧车](../../examples/org-orchestrator/)；P3 催办/超时按需。  
 - **成员交班：** [契约](./org-work-handoff-contract-v0.md) + [`send_handoff`/`handle_handoff`](../../examples/org-orchestrator/) + [`smoke_org_work_handoff.sh`](../../scripts/smoke_org_work_handoff.sh)。  
+- **Pattern 货架：** [pattern-shelf-v0.md](./pattern-shelf-v0.md) — 已能跑的外部 Pattern 目录 + 社区自荐；不是进程内市场。  
 - **运转模式：** [org-runtime-modes-v0.md](./org-runtime-modes-v0.md) — **文档预设 + 自由组合**（v0 无 `mode=`；公司式仅为示例）；外部 Pattern 一等扩展；§6 挂卸；自动扇出非必经。  
 - **编排质量（M0 Accepted）：** [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md) + [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) + [`work_observe.py`](../../examples/org-orchestrator/work_observe.py) + [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh) + [`smoke_org_work_metadata_wave.sh`](../../scripts/smoke_org_work_metadata_wave.sh)（`metadata.wave` 狗粮）。  
 - **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（编排器可选后端，有需求再开）。  

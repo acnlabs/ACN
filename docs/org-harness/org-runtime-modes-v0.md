@@ -2,13 +2,14 @@
 
 **Status:** Accepted（叙事收口）· **Date:** 2026-08-15  
 **Audience:** 产品 / 编排器与外部 Pattern 维护者  
-**Depends on:** [design-v0.md](./design-v0.md) §0 · [plugin-catalog-v0.md](./plugin-catalog-v0.md) · [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md)
+**Depends on:** [design-v0.md](./design-v0.md) §0 · [plugin-catalog-v0.md](./plugin-catalog-v0.md) · [pattern-shelf-v0.md](./pattern-shelf-v0.md) · [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md)
 
 > **一句话（对齐 DeepSeek Harness 的用法，不是抄 L1）：** 官方给 **几套开箱文档预设**；用户 **自由组合** Pattern。  
 > **v0 尚无** `mode=` / 一键打包——预设是说明 + 狗粮链接。  
 > 预设 ≠ 组织形式穷尽表；**公司式只是示例之一**，组织形式不只有公司。  
 > **扩展正统 = 外部 Pattern / 社区适配**；进程内 `plugins.*` 只是默认电池。  
-> Wave 指标是 **旁路观测**；**真节拍在外部 Pattern**（`heartbeat` 只是薄 tick，见 §6）。
+> Wave 指标是 **旁路观测**；**真节拍在外部 Pattern**（`heartbeat` 只是薄 tick，见 §6）。  
+> 能跑的米 → **[pattern-shelf-v0.md](./pattern-shelf-v0.md)**。
 
 ---
 

@@ -7,6 +7,7 @@
 > **本文是冷启动短名单，不是扩展正统。**  
 > 扩展正统 = 外部 Pattern / 侧车（见 [design-v0](./design-v0.md) §0.1–0.3）；`plugins.*` Builtin = 默认电池。  
 > 每个 Port 给默认 + ≤2 个推荐方向，状态：`shipped` / `adapter-planned` / `community-welcome` / `deferred`。  
+> 已能跑的外部 Pattern 摆在 **[pattern-shelf-v0.md](./pattern-shelf-v0.md)**（目录，不是商店）。  
 > 完整 Pattern/插件宿主（发现、按 Org 启用、版本、失败隔离）→ 有多 Pattern 实需再开；**不**把第三方热加载进 ACN 进程。
 
 相关：[design-v0.md](./design-v0.md) **§0 架构导读** · §5.3 · [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) ·

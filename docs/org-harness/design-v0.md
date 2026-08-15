@@ -96,7 +96,7 @@ Work Graph（IWorkPattern Port）
 
 官方给 **几套开箱文档预设**（常用 Pattern 挂钩 + 狗粮）；用户 **自由组合**、可混合、可自研。  
 **公司式只是示例预设之一**，组织形式不只有公司。预设 ≠ Kernel 枚举，无 `plugins.mode=…`；**v0 尚无可执行 `mode=` / 一键打包**。  
-波次质量指标是旁路观测。全文与挂卸 → **[org-runtime-modes-v0.md](./org-runtime-modes-v0.md)**。
+波次质量指标是旁路观测。全文与挂卸 → **[org-runtime-modes-v0.md](./org-runtime-modes-v0.md)**。能跑的 Pattern → **[pattern-shelf-v0.md](./pattern-shelf-v0.md)**。
 
 ---
 
