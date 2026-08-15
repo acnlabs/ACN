@@ -1,13 +1,13 @@
 # Org Harness — Plugin catalog v0（官方推荐短名单）
 
 **Status:** Draft for operators · not a marketplace  
-**Last updated:** 2026-07-27  
+**Last updated:** 2026-08-15  
 **Audience:** Org 创建者、Pattern 作者、ACN 维护者
 
-> **官方先筛一波，不自研全家桶。**  
-> 每个 Port 给默认 + ≤2 个推荐方向，状态写清楚：  
-> `shipped` / `adapter-planned` / `community-welcome` / `deferred`。  
-> 完整插件宿主（发现、版本、热加载）→ Phase 3；本文只解决冷启动。
+> **本文是冷启动短名单，不是扩展正统。**  
+> 扩展正统 = 外部 Pattern / 侧车（见 [design-v0](./design-v0.md) §0.1–0.3）；`plugins.*` Builtin = 默认电池。  
+> 每个 Port 给默认 + ≤2 个推荐方向，状态：`shipped` / `adapter-planned` / `community-welcome` / `deferred`。  
+> 完整 Pattern/插件宿主（发现、按 Org 启用、版本、失败隔离）→ 有多 Pattern 实需再开；**不**把第三方热加载进 ACN 进程。
 
 相关：[design-v0.md](./design-v0.md) **§0 架构导读** · §5.3 · [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) ·
 [phase2-work-port-v0.md](./phase2-work-port-v0.md) · [ADR-0014](../adr/0014-org-harness-module.md)
@@ -27,6 +27,8 @@
 ```
 
 `POST /api/v1/orgs` 不传 `plugins` 时也会归一成上面这组。
+
+想少选一点、先跑通某种协作样子：看 **[org-runtime-modes-v0.md §2](./org-runtime-modes-v0.md#2-预设--自由组合)** 的 **文档预设**（ledger / corp-board / dispatch / peer-handoff）；再按需叠加外部 Pattern。预设 **不是** `plugins.*` 字段。
 
 | 你想要… | 现在怎么做 |
 |---|---|

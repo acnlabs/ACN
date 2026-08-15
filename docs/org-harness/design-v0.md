@@ -1,7 +1,7 @@
 # Org Harness 方案设计与架构 v0
 
 **Status:** Design v0 — mechanics decided in [ADR-0014](../adr/0014-org-harness-module.md)（Accepted）  
-**Date:** 2026-07-19 · **Narrative sync:** 2026-08-02（`heartbeat` vs 外部真节拍；Pattern 挂卸见 [org-runtime-modes-v0.md](./org-runtime-modes-v0.md) §6）  
+**Date:** 2026-07-19 · **Narrative sync:** 2026-08-15（薄 Kernel + 外部 Pattern 一等公民；有限预设 + 自由组合）  
 **Audience:** ACN / AgentPlanet 产品与工程  
 **Supersedes (naming & ownership):** 本文纠正早期「ACN = Pasture System」「Org 只活在 Paperclip」的表述；Network Core 契约仍见 [api-surface-tiers.md](./api-surface-tiers.md)。  
 **P0/P1 风险收口:** 见 ADR-0014（无 owner 治理、Membership↔subnet、subnet steward、Phase 1 含最小 work、Loop/Work 边界）。
@@ -21,7 +21,15 @@ L2  Org   = N × Agent + Org Harness（± 可选 Owner）
 ACN = Network Core（已有） + Org Harness Module（新）
 ```
 
-**Org Harness = 固定 Kernel（组织是谁）+ 可插拔 Ports（组织怎么转）。**
+**Org Harness = 薄 Kernel（组织是谁 / 网络侧契约）+ 任意可挂能力（组织怎么转）。**
+
+扩展哲学（对齐业界 L1「everything is a plugin」的**可组合**一面，不照搬进进程热加载）：
+
+| | 薄 Kernel（几乎不可换） | 扩展面（默认可换、可社区提供） |
+|---|---|---|
+| 内容 | Org 身份 · 成员 · 围栏绑定 · work/事件作 SoT（或等价契约） | 谁叫醒、怎么拆票、看板、记忆、知识、图编排、催办… |
+| 谁提供 | ACN | **外部 Pattern / 侧车 / 社区适配**（主路径）；进程内 Builtin 仅默认电池 |
+| 不是 | 「官方 Port 货架才算插拔」 | 等白名单才合法；把第三方引擎热加载进 ACN 进程 |
 
 ### 0.2 模块内三层（叠加，非二选一）
 
@@ -41,17 +49,17 @@ Work Graph（IWorkPattern Port）
 | 层 | 问题 | 归属 |
 |---|---|---|
 | Org Graph | 组织是谁 | Kernel |
-| Control Loop | 组织怎么打节拍 | `plugins.loop`（默认 `heartbeat`） |
-| Work Graph | 活长什么样 | `plugins.work`（默认 `builtin_work`） |
+| Control Loop | 组织怎么打节拍 | 进程内默认插座 `plugins.loop=heartbeat`；**产品节拍常在外部 Pattern**（编排器等） |
+| Work Graph | 活长什么样 | 进程内默认 `plugins.work=builtin_work`；看板/DAG 等策略多在**外部** |
 
-### 0.3 两种「插法」——勿混货架
+### 0.3 两种「插法」——外部 Pattern 是一等公民
 
 | 路径 | 含义 | v0 事实 |
 |---|---|---|
-| **`org.plugins.*`（进程内）** | ACN Builtin 白名单 | 今日仅 `builtin_work` / `heartbeat` / `noop` |
-| **外部 Pattern / 侧车** | 跑在 ACN **外面**，消费 Org API / `org.*` 事件 | **自定义主路径**；Paperclip、[Org 待办执行器](./org-loop-spawn-sidecar-poc-v0.md) 都走这里 |
+| **外部 Pattern / 侧车** | 跑在 ACN **外面**，消费 Org API / `org.*` 事件 | **扩展正统 / 自定义主路径**；Paperclip、编排器、记忆 Hub、[待办执行器](./org-loop-spawn-sidecar-poc-v0.md)… |
+| **`org.plugins.*`（进程内）** | ACN Builtin **默认电池**（白名单极窄） | 今日仅 `builtin_work` / `heartbeat` / `noop`；**不是**社区扩展入口 |
 
-硬约定见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)：想换运转方式 → 优先外部 Pattern；**不要**伪造 `plugins.loop=clawteam` / `plugins.work=paperclip`（今日会拒绝或语义错误）。
+硬约定见 [plugin-catalog-v0.md](./plugin-catalog-v0.md)：想换运转方式 → **挂外部 Pattern**；**不要**伪造 `plugins.loop=clawteam` / `plugins.work=paperclip`（今日会拒绝）。选型（Mem0 / 腾讯 Memory / LangGraph…）归部署方；Port 切分是默认建议，不是唯一正确模型。
 
 **`heartbeat` ≠ 产品上的「组织节拍」：**
 
@@ -84,11 +92,11 @@ Work Graph（IWorkPattern Port）
 | OpenHarness / Claude Code | **L1**，成员自带 | 不插进 Org Harness |
 | LangGraph / Swarm / CrewAI | 多挂 **Work 策略**或外部 Pattern | 不替代 Control Loop |
 
-### 0.5 运转模式按需选用（动态、可混合）
+### 0.5 预设 + 自由组合（非组织形式穷尽表）
 
-中心派工、成员自组织、graph、混合等 **都是 Pattern**，不是单一正统。Org 行为可以随时间切换。  
-波次质量指标是旁路观测，不绑定某一种模式。  
-**切换 / 卸 Pattern 时 work SoT 怎么办** → **[org-runtime-modes-v0.md](./org-runtime-modes-v0.md)** §6。
+官方给 **几套开箱文档预设**（常用 Pattern 挂钩 + 狗粮）；用户 **自由组合**、可混合、可自研。  
+**公司式只是示例预设之一**，组织形式不只有公司。预设 ≠ Kernel 枚举，无 `plugins.mode=…`；**v0 尚无可执行 `mode=` / 一键打包**。  
+波次质量指标是旁路观测。全文与挂卸 → **[org-runtime-modes-v0.md](./org-runtime-modes-v0.md)**。
 
 ---
 
