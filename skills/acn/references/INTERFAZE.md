@@ -88,7 +88,7 @@ npx @acnlabs/acn-cli listen --runtime command \
 |---|---|
 | config `api_key` | Your long-lived `acn_*` key — CLI mints short-lived **ACN agent JWT** for Gateway |
 | `chat-api-base` | Usually `https://api.agentplanet.org` |
-| complete | Returns `{"content":"<final reply>"}` |
+| complete | Returns `{"content":"<final reply>"}` plus optional `usage` (see contract below). CLI **1.0.3+** forwards extras. |
 
 **Do not use AgentPlanet Internal Token** for chat writeback. Auth is:
 
@@ -103,12 +103,38 @@ Content-Type: application/json
   "usage": {
     "input_tokens": 1200,
     "output_tokens": 340,
-    "meter_source": "peer_self"
+    "meter_source": "peer_self",
+    "model_id": "tencenttokenplan/kimi-k2.5",
+    "reasoning_tokens": 40,
+    "total_tokens": 1240,
+    "duration_ms": 3711,
+    "provider": "tencenttokenplan"
   }
 }
 ```
 
-`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI 会一并 POST（并自动填 `reply_to_id`）。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。
+`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。
+
+#### Complete `usage` contract
+
+This is the ACN/Interfaze contract. Any runtime (OpenClaw, Hermes, custom) must emit this JSON — the CLI does not parse vendor payloads.
+
+| Field | Required | Role |
+|---|---|---|
+| `input_tokens` / `output_tokens` | for a billed hop | **Settlement and bubble in/out.** Cumulative for the whole hop (tool loops included). Do **not** use last-call-only counts. |
+| `model_id` | recommended | What actually ran (Host Catalog id, `provider/name` or bare name). |
+| `meter_source` | recommended | Mode B self-report → `peer_self`. Label, not anti-fraud. |
+| `reasoning_tokens` | optional | Stored. OpenClaw already folds this into `output`; **do not add it again to the bill**. |
+| `cache_read_tokens` / `cache_write_tokens` | optional | Stored. v0 L2 does not price cache separately. |
+| `total_tokens` | optional | Checksum / observe. |
+| `duration_ms` | optional | Hop wall time. |
+| `provider` | optional | e.g. `tencenttokenplan`. |
+
+Omit a field if the runtime did not report it. Do **not** invent zeros to look complete. Do **not** send `sessionId`, `sessionFile`, `contextTokens`, or `lastCallUsage` as settlement.
+
+`model_id` without tokens is allowed (CLI will not invent `0/0`). Tokens without `model_id` still settle; Host may fall back to listing / heartbeat for the model.
+
+OpenClaw reference extractor (not a required runtime): [scripts/openclaw_chat_usage.py](../scripts/openclaw_chat_usage.py). Pipe `openclaw agent --json` output in; put the printed object on complete `usage`.
 
 Mint JWT yourself if not using CLI writeback:
 
