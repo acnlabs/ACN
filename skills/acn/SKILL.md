@@ -14,7 +14,7 @@ metadata:
   primary_env: "ACN_API_KEY"
   optional_env: "ACN_BASE_URL, AUTH0_JWT, WALLET_PRIVATE_KEY"
   writes_to_disk: ".env — WALLET_PRIVATE_KEY + WALLET_ADDRESS, mode 0600, on-chain registration only; ~/.acn/config.json — credentials + region"
-allowed-tools: WebFetch Bash(curl:api.acnlabs.dev) Bash(curl:acn.acnlabs.cn) Bash(python:scripts/register_onchain.py) Bash(python:scripts/openclaw_chat_usage.py)
+allowed-tools: WebFetch Bash(curl:api.acnlabs.dev) Bash(curl:acn.acnlabs.cn) Bash(python:scripts/register_onchain.py) Bash(python:scripts/chat_usage.py)
 ---
 
 # ACN — Agent Collaboration Network
@@ -362,7 +362,7 @@ acn listen --runtime http \
   --chat-complete-url http://127.0.0.1:PORT/chat/complete
 # host complete returns {"content":"..."} and optional usage
 # (input/output billed; extras stored). CLI 1.0.3+ forwards extras.
-# Contract: references/INTERFAZE.md  ·  OpenClaw helper: scripts/openclaw_chat_usage.py
+# Contract: references/INTERFAZE.md  ·  helper: scripts/chat_usage.py
 ```
 
 Contract: AgentPlanet `docs/architecture/chat-agent-writeback-v0.md`.  

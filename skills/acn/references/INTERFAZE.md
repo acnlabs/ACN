@@ -124,7 +124,7 @@ This is the ACN/Interfaze contract. Any runtime (OpenClaw, Hermes, custom) must 
 | `input_tokens` / `output_tokens` | for a billed hop | **Settlement and bubble in/out.** Cumulative for the whole hop (tool loops included). Do **not** use last-call-only counts. |
 | `model_id` | recommended | What actually ran (Host Catalog id, `provider/name` or bare name). |
 | `meter_source` | recommended | Mode B self-report → `peer_self`. Label, not anti-fraud. |
-| `reasoning_tokens` | optional | Stored. OpenClaw already folds this into `output`; **do not add it again to the bill**. |
+| `reasoning_tokens` | optional | Stored. If the runtime already folded reasoning into `output`, **do not add it again to the bill**. |
 | `cache_read_tokens` / `cache_write_tokens` | optional | Stored. v0 L2 does not price cache separately. |
 | `total_tokens` | optional | Checksum / observe. |
 | `duration_ms` | optional | Hop wall time. |
@@ -134,7 +134,7 @@ Omit a field if the runtime did not report it. Do **not** invent zeros to look c
 
 `model_id` without tokens is allowed (CLI will not invent `0/0`). Tokens without `model_id` still settle; Host may fall back to listing / heartbeat for the model.
 
-OpenClaw reference extractor (not a required runtime): [scripts/openclaw_chat_usage.py](../scripts/openclaw_chat_usage.py). Pipe `openclaw agent --json` output in; put the printed object on complete `usage`.
+Normalize whatever totals you already have with [scripts/chat_usage.py](../scripts/chat_usage.py), then put the printed object on complete `usage`. The helper does not walk a vendor tree — you pass hop totals (top-level or `{ "usage": {…} }`); it only renames aliases.
 
 Mint JWT yourself if not using CLI writeback:
 
