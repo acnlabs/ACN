@@ -129,6 +129,12 @@ export type ChatTokenUsage = {
   meter_source?: 'peer_self' | 'gateway' | 'runtime_attested' | 'protocol';
   /** Host Catalog id used for this hop — self-reported; soft mismatch vs listing. */
   model_id?: string;
+  reasoning_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  total_tokens?: number;
+  duration_ms?: number;
+  provider?: string;
 };
 
 export type ChatCompleteResult = {
@@ -194,10 +200,13 @@ export function extractUsage(payload: unknown): ChatTokenUsage | undefined {
   if (!rec) return undefined;
   const usageRec = asRecord(rec.usage) ?? rec;
   const input =
-    asNonNegInt(usageRec.input_tokens) ?? asNonNegInt(usageRec.prompt_tokens);
+    asNonNegInt(usageRec.input_tokens) ??
+    asNonNegInt(usageRec.prompt_tokens) ??
+    asNonNegInt(usageRec.input);
   const output =
     asNonNegInt(usageRec.output_tokens) ??
-    asNonNegInt(usageRec.completion_tokens);
+    asNonNegInt(usageRec.completion_tokens) ??
+    asNonNegInt(usageRec.output);
   if (input === null && output === null) return undefined;
   const out: ChatTokenUsage = {
     input_tokens: input ?? 0,
@@ -214,6 +223,28 @@ export function extractUsage(payload: unknown): ChatTokenUsage | undefined {
   }
   const modelId = extractModelId(payload);
   if (modelId) out.model_id = modelId;
+  const reasoning =
+    asNonNegInt(usageRec.reasoning_tokens) ?? asNonNegInt(usageRec.reasoningTokens);
+  const cacheRead =
+    asNonNegInt(usageRec.cache_read_tokens) ?? asNonNegInt(usageRec.cacheRead);
+  const cacheWrite =
+    asNonNegInt(usageRec.cache_write_tokens) ?? asNonNegInt(usageRec.cacheWrite);
+  const total = asNonNegInt(usageRec.total_tokens) ?? asNonNegInt(usageRec.total);
+  const duration =
+    asNonNegInt(usageRec.duration_ms) ??
+    asNonNegInt(usageRec.durationMs) ??
+    asNonNegInt(rec.duration_ms) ??
+    asNonNegInt(rec.durationMs);
+  const provider =
+    (typeof usageRec.provider === 'string' && usageRec.provider.trim()) ||
+    (typeof rec.provider === 'string' && rec.provider.trim()) ||
+    '';
+  if (reasoning !== null) out.reasoning_tokens = reasoning;
+  if (cacheRead !== null) out.cache_read_tokens = cacheRead;
+  if (cacheWrite !== null) out.cache_write_tokens = cacheWrite;
+  if (total !== null) out.total_tokens = total;
+  if (duration !== null) out.duration_ms = duration;
+  if (provider) out.provider = provider.slice(0, 80);
   return out;
 }
 
@@ -436,6 +467,24 @@ async function postWriteback(
     };
     if (complete.usage.model_id) {
       usageBody.model_id = complete.usage.model_id;
+    }
+    if (complete.usage.reasoning_tokens != null) {
+      usageBody.reasoning_tokens = complete.usage.reasoning_tokens;
+    }
+    if (complete.usage.cache_read_tokens != null) {
+      usageBody.cache_read_tokens = complete.usage.cache_read_tokens;
+    }
+    if (complete.usage.cache_write_tokens != null) {
+      usageBody.cache_write_tokens = complete.usage.cache_write_tokens;
+    }
+    if (complete.usage.total_tokens != null) {
+      usageBody.total_tokens = complete.usage.total_tokens;
+    }
+    if (complete.usage.duration_ms != null) {
+      usageBody.duration_ms = complete.usage.duration_ms;
+    }
+    if (complete.usage.provider) {
+      usageBody.provider = complete.usage.provider;
     }
     body.usage = usageBody;
   } else if (complete.modelId) {

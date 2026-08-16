@@ -213,6 +213,31 @@ describe('extractUsage', () => {
       'openai/gpt-4o-mini'
     );
     expect(extractUsage({ content: 'hi' })).toBeUndefined();
+    expect(
+      extractUsage({
+        usage: {
+          input: 10,
+          output: 2,
+          reasoningTokens: 3,
+          cacheRead: 4,
+          cacheWrite: 1,
+          total: 16,
+          duration_ms: 800,
+          provider: 'tencenttokenplan',
+          model_id: 'tencenttokenplan/kimi-k2.5',
+        },
+      })
+    ).toEqual({
+      input_tokens: 10,
+      output_tokens: 2,
+      model_id: 'tencenttokenplan/kimi-k2.5',
+      reasoning_tokens: 3,
+      cache_read_tokens: 4,
+      cache_write_tokens: 1,
+      total_tokens: 16,
+      duration_ms: 800,
+      provider: 'tencenttokenplan',
+    });
   });
 });
 
@@ -335,7 +360,17 @@ describe('handleChatWriteback', () => {
         return mockOkResponse(
           JSON.stringify({
             content: 'billed reply',
-            usage: { input_tokens: 12, output_tokens: 34 },
+            usage: {
+              input_tokens: 12,
+              output_tokens: 34,
+              reasoningTokens: 3,
+              cacheRead: 4,
+              cacheWrite: 1,
+              total: 50,
+              durationMs: 800,
+              provider: 'tencenttokenplan',
+              model_id: 'tencenttokenplan/kimi-k2.5',
+            },
           })
         );
       }
@@ -373,6 +408,13 @@ describe('handleChatWriteback', () => {
         input_tokens: 12,
         output_tokens: 34,
         meter_source: 'peer_self',
+        model_id: 'tencenttokenplan/kimi-k2.5',
+        reasoning_tokens: 3,
+        cache_read_tokens: 4,
+        cache_write_tokens: 1,
+        total_tokens: 50,
+        duration_ms: 800,
+        provider: 'tencenttokenplan',
       },
     });
     expect(event.chat?.gateway_message_id).toBe('user-msg-1');
