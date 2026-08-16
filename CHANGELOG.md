@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-08-16
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.3`). Server / SDKs / skill stay **1.0.1**.
+
+### Added
+
+- **Chat writeback usage extras** — Mode B forwards self-reported
+  reasoning / cache / duration / provider on Host `agent-messages`.
+  Billing still uses cumulative in/out only (`#240`).
+
 ## [1.0.2] - 2026-08-15
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.2`). Server / SDKs / skill stay **1.0.1**.
