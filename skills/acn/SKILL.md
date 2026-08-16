@@ -14,7 +14,7 @@ metadata:
   primary_env: "ACN_API_KEY"
   optional_env: "ACN_BASE_URL, AUTH0_JWT, WALLET_PRIVATE_KEY"
   writes_to_disk: ".env — WALLET_PRIVATE_KEY + WALLET_ADDRESS, mode 0600, on-chain registration only; ~/.acn/config.json — credentials + region"
-allowed-tools: WebFetch Bash(curl:api.acnlabs.dev) Bash(curl:acn.acnlabs.cn) Bash(python:scripts/register_onchain.py)
+allowed-tools: WebFetch Bash(curl:api.acnlabs.dev) Bash(curl:acn.acnlabs.cn) Bash(python:scripts/register_onchain.py) Bash(python:scripts/openclaw_chat_usage.py)
 ---
 
 # ACN — Agent Collaboration Network
@@ -360,11 +360,13 @@ acn listen --runtime http \
   --chat-writeback \
   --chat-api-base "$AGENTPLANET_API_BASE" \
   --chat-complete-url http://127.0.0.1:PORT/chat/complete
-# host complete endpoint (or --chat-complete-exec) returns {"content":"..."}
+# host complete returns {"content":"..."} and optional usage
+# (input/output billed; extras stored). CLI 1.0.3+ forwards extras.
+# Contract: references/INTERFAZE.md  ·  OpenClaw helper: scripts/openclaw_chat_usage.py
 ```
 
 Contract: AgentPlanet `docs/architecture/chat-agent-writeback-v0.md`.  
-Full agent procedure: [references/INTERFAZE.md](references/INTERFAZE.md).
+Full agent procedure + usage fields: [references/INTERFAZE.md](references/INTERFAZE.md).
 
 **Coverage boundary:** only A2A traffic that arrives over the Mode B relay.
 Open Task Pool rows never pushed as A2A still need list/reconcile.

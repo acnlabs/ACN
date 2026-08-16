@@ -8,8 +8,8 @@
  *   3) POSTs { content, reply_to_id?, usage? } to Chat Gateway agent-messages
  *      with Bearer JWT
  *
- * Hosts return {"content":"..."} and optionally
- * {"usage":{"input_tokens":N,"output_tokens":M}} for chat billing settle.
+ * Hosts return {"content":"..."} and optionally usage (in/out billed;
+ * extras stored). See skills/acn/references/INTERFAZE.md.
  * They do not call Gateway themselves.
  */
 
