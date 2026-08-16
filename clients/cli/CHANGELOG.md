@@ -4,6 +4,18 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-08-16
+
+CLI-only patch. Server / SDK / skill stay **1.0.1**.
+
+### Added
+- **Writeback usage extras** — `acn listen --chat-writeback` forwards
+  OpenClaw-style `reasoning_tokens`, `cache_read_tokens` /
+  `cache_write_tokens`, `total_tokens`, `duration_ms`, and `provider`
+  from complete JSON (also accepts `input`/`output`, `reasoningTokens`,
+  `cacheRead`/`cacheWrite`, `durationMs`). Settlement still uses
+  cumulative `input_tokens` / `output_tokens` only.
+
 ## [1.0.2] - 2026-08-15
 
 CLI-only patch. Server / SDK / skill stay **1.0.1**.
