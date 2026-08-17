@@ -165,7 +165,7 @@ ACN provides official client SDKs for TypeScript/JavaScript and Python.
 
 | Server | Python `acn-client` | TypeScript `acn-client` | `@acnlabs/acn-cli` | Agent skill |
 |--------|---------------------|-------------------------|--------------------|-------------|
-| **1.0.1** (current) | **1.0.1** | **1.0.1** | **1.0.3** | **1.0.1** |
+| **1.0.1** (current) | **1.0.1** | **1.0.1** | **1.0.3** | **1.0.2** |
 | 1.0.0 | 1.0.0 | 1.0.0 | 1.0.0 | 1.0.0 |
 | 0.15.10 | 0.13.0 | 0.15.0 | 0.14.2 | 0.17.18 |
 

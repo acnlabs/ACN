@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-08-17
+
+Skill-only patch (agent skill **1.0.2**). Server / SDKs stay **1.0.1**. CLI stays **1.0.3**.
+
+### Added
+
+- **Interfaze complete `usage` contract** — billed cumulative in/out;
+  optional extras stored not billed; helper `skills/acn/scripts/chat_usage.py`
+  normalizes aliases without walking a vendor tree (`#242`–`#245`).
+
 ## [1.0.3] - 2026-08-16
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.3`). Server / SDKs / skill stay **1.0.1**.
