@@ -77,29 +77,44 @@ def first_str(*vals: Any, limit: int = 200) -> str:
 def extract_usage(data: dict[str, Any]) -> dict[str, Any]:
     blob = data.get("usage") if isinstance(data.get("usage"), dict) else {}
 
-    def pick(*keys: str) -> Any:
+    def pick_int(*keys: str) -> int | None:
         for key in keys:
-            if key in blob:
-                return blob[key]
-            if key in data:
-                return data[key]
+            for src in (blob, data):
+                if key in src:
+                    n = as_int(src[key])
+                    if n is not None:
+                        return n
         return None
 
+    def pick_str(*keys: str, limit: int = 200) -> str:
+        for key in keys:
+            for src in (blob, data):
+                if key in src:
+                    s = first_str(src[key], limit=limit)
+                    if s:
+                        return s
+        return ""
+
     out: dict[str, Any] = {}
-    inp = first_int(pick("input_tokens", "input", "prompt_tokens"))
-    tok = first_int(pick("output_tokens", "output", "completion_tokens"))
+    inp = pick_int("input_tokens", "input", "prompt_tokens")
+    tok = pick_int("output_tokens", "output", "completion_tokens")
     if inp is not None or tok is not None:
         out["input_tokens"] = inp or 0
         out["output_tokens"] = tok or 0
 
-    ms = pick("meter_source")
-    if ms in ("peer_self", "gateway", "runtime_attested", "protocol"):
+    ms = None
+    for src in (blob, data):
+        raw_ms = src.get("meter_source")
+        if raw_ms in ("peer_self", "gateway", "runtime_attested", "protocol"):
+            ms = raw_ms
+            break
+    if ms:
         out["meter_source"] = ms
     elif "input_tokens" in out:
         out["meter_source"] = "peer_self"
 
-    provider = first_str(pick("provider"), limit=80)
-    raw_model = first_str(pick("model_id", "model"))
+    provider = pick_str("provider", limit=80)
+    raw_model = pick_str("model_id", "model")
     if provider and raw_model and "/" not in raw_model:
         out["model_id"] = f"{provider}/{raw_model}"[:200]
     elif raw_model:
@@ -107,11 +122,11 @@ def extract_usage(data: dict[str, Any]) -> dict[str, Any]:
     if provider:
         out["provider"] = provider
 
-    reason = first_int(pick("reasoning_tokens", "reasoningTokens"))
-    cache_r = first_int(pick("cache_read_tokens", "cacheRead", "cache_read"))
-    cache_w = first_int(pick("cache_write_tokens", "cacheWrite", "cache_write"))
-    total = first_int(pick("total_tokens", "total"))
-    duration = first_int(pick("duration_ms", "durationMs"))
+    reason = pick_int("reasoning_tokens", "reasoningTokens")
+    cache_r = pick_int("cache_read_tokens", "cacheRead", "cache_read")
+    cache_w = pick_int("cache_write_tokens", "cacheWrite", "cache_write")
+    total = pick_int("total_tokens", "total")
+    duration = pick_int("duration_ms", "durationMs")
     if reason is not None:
         out["reasoning_tokens"] = reason
     if cache_r is not None:
@@ -160,6 +175,22 @@ def _self_test() -> None:
         raise SystemExit(f"nested usage failed: {nested}")
     if extract_usage({"sessionId": "x", "lastCallUsage": {"input": 9}}) != {}:
         raise SystemExit("must ignore session / last-call blobs")
+    fallback = extract_usage(
+        {
+            "usage": {
+                "input_tokens": None,
+                "output_tokens": "x",
+                "input": 10,
+                "output": 2,
+                "model_id": "",
+                "model": "kimi-k2.5",
+            }
+        }
+    )
+    if fallback.get("input_tokens") != 10 or fallback.get("output_tokens") != 2:
+        raise SystemExit(f"alias fallback failed: {fallback}")
+    if fallback.get("model_id") != "kimi-k2.5":
+        raise SystemExit(f"model alias fallback failed: {fallback}")
     print("self-test OK", file=sys.stderr)
 
 
