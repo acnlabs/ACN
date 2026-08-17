@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "1.0.1"
+  version: "1.0.2"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
