@@ -362,11 +362,13 @@ acn listen --runtime http \
   --chat-complete-url http://127.0.0.1:PORT/chat/complete
 # host complete returns {"content":"..."} and optional usage
 # (input/output billed; extras stored). CLI 1.0.3+ forwards extras.
-# Contract: references/INTERFAZE.md  ·  helper: scripts/chat_usage.py
+# Normalize hop totals: python3 scripts/chat_usage.py totals.json
 ```
 
+**Complete `usage` (any runtime):** emit this JSON yourself — the CLI does not parse vendor payloads. Settlement and the bubble use **cumulative** `input_tokens` / `output_tokens` only. Recommended: `model_id`, `meter_source=peer_self`. Optional extras (stored, not billed): `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `duration_ms`, `provider`. Omit what you did not measure; do not invent `0/0`. Do not send `sessionId`, `sessionFile`, `contextTokens`, or last-call-only counts. Helper: [scripts/chat_usage.py](scripts/chat_usage.py) (renames aliases; does not walk a runtime tree).
+
 Contract: AgentPlanet `docs/architecture/chat-agent-writeback-v0.md`.  
-Full agent procedure + usage fields: [references/INTERFAZE.md](references/INTERFAZE.md).
+Full agent procedure: [references/INTERFAZE.md](references/INTERFAZE.md).
 
 **Coverage boundary:** only A2A traffic that arrives over the Mode B relay.
 Open Task Pool rows never pushed as A2A still need list/reconcile.
