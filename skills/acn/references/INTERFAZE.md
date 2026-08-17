@@ -106,7 +106,7 @@ Content-Type: application/json
     "meter_source": "peer_self",
     "model_id": "tencenttokenplan/kimi-k2.5",
     "reasoning_tokens": 40,
-    "total_tokens": 1240,
+    "total_tokens": 1540,
     "duration_ms": 3711,
     "provider": "tencenttokenplan"
   }
