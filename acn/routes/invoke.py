@@ -376,6 +376,10 @@ async def invoke(
                 }
             },
         }
+        raw_meta = body.message.get("metadata")
+        base_meta = raw_meta if isinstance(raw_meta, dict) else {}
+        raw_ap = base_meta.get("agentplanet")
+        ap_meta = raw_ap if isinstance(raw_ap, dict) else {}
         if isinstance(body.message.get("role"), str) and isinstance(
             body.message.get("parts"), list
         ):
@@ -386,9 +390,9 @@ async def invoke(
                     if k not in ("message_id", "messageId")
                 },
                 "metadata": {
-                    **(body.message.get("metadata") or {}),
+                    **base_meta,
                     "agentplanet": {
-                        **((body.message.get("metadata") or {}).get("agentplanet") or {}),
+                        **ap_meta,
                         "invoke": {
                             "request_id": request_id,
                             "hop_id": hop_id,
@@ -510,16 +514,14 @@ async def _forward_backend_complete(
         logger.warning("invoke_complete_unreachable", error=str(exc))
         raise HTTPException(status_code=503, detail="backend_unreachable") from exc
     if resp.status_code >= 400:
-        detail: dict[str, Any]
-        try:
-            payload = resp.json()
-            detail = payload if isinstance(payload, dict) else {"raw": payload}
-        except ValueError:
-            detail = {"raw": resp.text[:300]}
+        logger.warning(
+            "invoke_complete_host_failed",
+            status_code=resp.status_code,
+        )
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             resp.status_code if resp.status_code in (400, 402, 403, 404, 422) else 502,
-            details={"reason": "host_complete_failed", **detail},
+            details={"reason": "host_complete_failed"},
         )
     data = resp.json() if resp.content else {}
     return data if isinstance(data, dict) else {"status": "accepted"}
