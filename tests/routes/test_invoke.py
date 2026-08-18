@@ -514,6 +514,82 @@ def test_agent_slot_fallback_ignores_human_allowlist(
     assert stub_message_service.send_message.await_count == 2
 
 
+def test_host_allowlist_falls_back_to_closed_invitee(
+    stub_metrics, stub_message_service, stub_audit, monkeypatch
+):
+    monkeypatch.setattr(
+        "acn.routes.dependencies.settings.internal_api_token",
+        VALID_INTERNAL_TOKEN,
+    )
+    first = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    closed = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    agent_service = AsyncMock()
+    agent_service.get_agent = AsyncMock(
+        return_value=_slot_agent(first, slots=[{"id": "text.reply"}])
+    )
+    agent_service.search_agents = AsyncMock(
+        return_value=[
+            _slot_agent(first, slots=[{"id": "text.reply"}]),
+            _slot_agent(closed, slots=[{"id": "text.reply"}], mode="closed"),
+        ]
+    )
+    agent_service.batch_alive = AsyncMock(return_value={first, closed})
+    stub_message_service.send_message = AsyncMock(
+        side_effect=[
+            AgentNotFoundException("down"),
+            {"message_id": "msg-closed-fb", "status": "accepted"},
+        ]
+    )
+    _wire(stub_metrics, stub_message_service, stub_audit, agent_service)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/invoke",
+        headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+        json={
+            "to": first,
+            "slot": "text.reply",
+            "message": {"text": "hi"},
+            "request_id": "req-closed-fb",
+            "payer": {"kind": "human", "user_id": "auth0|alice"},
+            "allowed_callees": [first, closed],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["to"] == closed
+    assert body["fallback_from"] == first
+    assert stub_message_service.send_message.await_count == 2
+
+
+def test_host_allowlist_rejects_more_than_three(
+    stub_metrics, stub_message_service, stub_audit, monkeypatch
+):
+    monkeypatch.setattr(
+        "acn.routes.dependencies.settings.internal_api_token",
+        VALID_INTERNAL_TOKEN,
+    )
+    _wire(stub_metrics, stub_message_service, stub_audit)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/invoke",
+        headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+        json={
+            "to": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "slot": "text.reply",
+            "message": {"text": "hi"},
+            "payer": {"kind": "human", "user_id": "auth0|alice"},
+            "allowed_callees": [
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            ],
+        },
+    )
+    assert resp.status_code == 422
+    assert stub_message_service.send_message.await_count == 0
+
+
 def test_to_only_does_not_fallback(
     stub_metrics, stub_message_service, stub_audit, monkeypatch
 ):

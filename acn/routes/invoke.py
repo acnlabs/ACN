@@ -79,7 +79,7 @@ class InvokeRequest(BaseModel):
     message: dict[str, Any]
     request_id: str | None = Field(default=None, max_length=80)
     payer: InvokePayer | None = None
-    allowed_callees: list[str] | None = Field(default=None, max_length=8)
+    allowed_callees: list[str] | None = Field(default=None, max_length=3)
 
     @field_validator("allowed_callees")
     @classmethod
@@ -243,34 +243,34 @@ async def _resolve_candidates(
 
     pool = await agent_service.search_agents(status="all")
     alive_ids = await agent_service.batch_alive([a.agent_id for a in pool])
+    allow: set[str] | None = None
+    if caller_kind == "host" and allowed_callees:
+        allow = {_reject_local_or_system(item) for item in allowed_callees}
+        if preferred and preferred not in allow:
+            raise ACNHTTPError(
+                ErrorCode.AGENT_NOT_FOUND,
+                404,
+                details={"reason": "callee_not_allowed", "slot": slot_id},
+            )
     ordered = list_slot_candidates(
         pool,
         slot_id=slot_id,
         alive_ids=alive_ids,
         caller_kind=caller_kind,
         preferred=preferred,
+        allowed_ids=allow,
     )
     ids = [a.agent_id for a in ordered]
     if preferred and preferred not in ids:
         ids = [preferred, *ids]
-    if caller_kind == "host":
-        if allowed_callees:
-            allow = {_reject_local_or_system(item) for item in allowed_callees}
-            if preferred and preferred not in allow:
-                raise ACNHTTPError(
-                    ErrorCode.AGENT_NOT_FOUND,
-                    404,
-                    details={"reason": "callee_not_allowed", "slot": slot_id},
-                )
-            ids = [item for item in ids if item in allow]
-        elif slot_id is not None:
-            if preferred is None:
-                raise ACNHTTPError(
-                    ErrorCode.AGENT_NOT_FOUND,
-                    404,
-                    details={"reason": "no_slot_provider", "slot": slot_id},
-                )
-            ids = [preferred]
+    if caller_kind == "host" and not allowed_callees:
+        if preferred is None:
+            raise ACNHTTPError(
+                ErrorCode.AGENT_NOT_FOUND,
+                404,
+                details={"reason": "no_slot_provider", "slot": slot_id},
+            )
+        ids = [preferred]
     if not ids:
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,

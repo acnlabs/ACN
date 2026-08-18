@@ -136,14 +136,20 @@ def list_slot_candidates(
     alive_ids: set[str],
     caller_kind: str,
     preferred: str | None = None,
+    allowed_ids: set[str] | None = None,
 ) -> list[Any]:
     """Ordered same-slot candidates (D20/D26): online first, then agent_id.
 
-    Host path only auto-includes ``open``. Agent path skips ``closed``.
+    Host path without ``allowed_ids`` only auto-includes ``open``.
+    Host path with ``allowed_ids`` (D66) stays inside that set and does
+    **not** re-filter by ACN ``open`` — Host already did the human ACL.
+    Agent path skips ``closed``.
     ``preferred`` (when present and already in the list) is moved to the front.
     """
     declarers = [a for a in agents if agent_declares_slot(a, slot_id)]
-    if caller_kind == "host":
+    if allowed_ids is not None:
+        declarers = [a for a in declarers if _agent_id(a) in allowed_ids]
+    elif caller_kind == "host":
         declarers = [a for a in declarers if policy_mode(a) in ("open", "")]
     else:
         declarers = [a for a in declarers if policy_mode(a) != "closed"]
