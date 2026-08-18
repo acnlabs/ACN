@@ -975,6 +975,16 @@ async def dev_register_agent(
         raise HTTPException(status_code=500, detail="Agent registration failed") from e
 
 
+def _public_reception_mode(agent) -> str:
+    """Wire-safe copy of ``communication_policy.mode`` (default open)."""
+    policy = getattr(agent, "communication_policy", None) or {}
+    if isinstance(policy, dict):
+        mode = str(policy.get("mode") or "open").strip().lower()
+        if mode:
+            return mode
+    return "open"
+
+
 def _agent_entity_to_info(
     agent,
     *,
@@ -1064,6 +1074,7 @@ def _agent_entity_to_info(
         payment_methods=agent.payment_methods,
         token_pricing=agent.token_pricing,
         social_card_url=agent.social_card_url,
+        reception_mode=_public_reception_mode(agent),
     )
 
 
