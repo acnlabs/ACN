@@ -66,6 +66,19 @@ def test_pick_skips_closed_for_host():
     assert picked is opened
 
 
+def test_host_allowlist_keeps_closed_declarer():
+    closed = _Agent("aaa", slots=[{"id": "text.reply"}], mode="closed")
+    opened = _Agent("bbb", slots=[{"id": "text.reply"}], mode="open")
+    ordered = list_slot_candidates(
+        [closed, opened],
+        slot_id="text.reply",
+        alive_ids={"aaa", "bbb"},
+        caller_kind="host",
+        allowed_ids={"aaa", "bbb"},
+    )
+    assert [x.agent_id for x in ordered] == ["aaa", "bbb"]
+
+
 def test_list_candidates_preferred_first():
     a = _Agent("aaa", slots=[{"id": "text.reply"}])
     z = _Agent("zzz", slots=[{"id": "text.reply"}])
