@@ -312,6 +312,8 @@ async def complete_invoke(
             400,
             details={"reason": "request_id_required"},
         )
+    # D62: writeback only upgrades an existing hop. caller=callee is the
+    # signal that this is not the send-path notify (which creates the hop).
     settled = await _forward_backend_complete(
         request_id=request_id,
         callee=callee,
