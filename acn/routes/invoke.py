@@ -79,6 +79,24 @@ class InvokeRequest(BaseModel):
     message: dict[str, Any]
     request_id: str | None = Field(default=None, max_length=80)
     payer: InvokePayer | None = None
+    allowed_callees: list[str] | None = Field(default=None, max_length=8)
+
+    @field_validator("allowed_callees")
+    @classmethod
+    def _clean_allowed_callees(cls, v: list[str] | None) -> list[str] | None:
+        if not v:
+            return None
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in v:
+            if not isinstance(item, str):
+                continue
+            bare = item.strip()
+            if not bare or bare in seen:
+                continue
+            seen.add(bare)
+            out.append(bare)
+        return out or None
 
     @field_validator("to", "slot")
     @classmethod
@@ -195,6 +213,7 @@ async def _resolve_candidates(
     slot: str | None,
     caller_kind: str,
     agent_service: AgentServiceDep,
+    allowed_callees: list[str] | None = None,
 ) -> tuple[list[str], str | None]:
     """Return (callee_ids, slot_id). Slot requests may include fallbacks (D22–D26)."""
     slot_id: str | None = None
@@ -234,6 +253,24 @@ async def _resolve_candidates(
     ids = [a.agent_id for a in ordered]
     if preferred and preferred not in ids:
         ids = [preferred, *ids]
+    if caller_kind == "host":
+        if allowed_callees:
+            allow = {_reject_local_or_system(item) for item in allowed_callees}
+            if preferred and preferred not in allow:
+                raise ACNHTTPError(
+                    ErrorCode.AGENT_NOT_FOUND,
+                    404,
+                    details={"reason": "callee_not_allowed", "slot": slot_id},
+                )
+            ids = [item for item in ids if item in allow]
+        elif slot_id is not None:
+            if preferred is None:
+                raise ACNHTTPError(
+                    ErrorCode.AGENT_NOT_FOUND,
+                    404,
+                    details={"reason": "no_slot_provider", "slot": slot_id},
+                )
+            ids = [preferred]
     if not ids:
         raise ACNHTTPError(
             ErrorCode.AGENT_NOT_FOUND,
@@ -358,6 +395,7 @@ async def invoke(
         slot=body.slot,
         caller_kind=caller_kind,
         agent_service=agent_service,
+        allowed_callees=body.allowed_callees,
     )
     request_id = (body.request_id or "").strip() or str(uuid.uuid4())
     allow_fallback = slot_id is not None and len(candidates) > 1
