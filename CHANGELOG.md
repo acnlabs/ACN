@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-08-18
+
+Skill-only patch (agent skill **1.0.4**). CLI stays **1.0.5**. Server / SDKs stay **1.0.1**.
+
+### Added
+
+- **`scripts/official_hop.py`** — any Mode B complete honors Host
+  `inference_path` / `hop_id` / `host_inference_url` (same idea as
+  `requested_model` / `chat_usage.py`). `--door` exports a localhost
+  OpenAI door to Host; BYO is a no-op. Not agent-specific.
+
 ## [1.0.5] - 2026-08-18
 
 CLI + skill patch (`@acnlabs/acn-cli@1.0.5`, agent skill **1.0.3**).

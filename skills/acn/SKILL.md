@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "1.0.3"
+  version: "1.0.4"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -14,7 +14,7 @@ metadata:
   primary_env: "ACN_API_KEY"
   optional_env: "ACN_BASE_URL, AUTH0_JWT, WALLET_PRIVATE_KEY"
   writes_to_disk: ".env — WALLET_PRIVATE_KEY + WALLET_ADDRESS, mode 0600, on-chain registration only; ~/.acn/config.json — credentials + region"
-allowed-tools: WebFetch Bash(curl:api.acnlabs.dev) Bash(curl:acn.acnlabs.cn) Bash(python:scripts/register_onchain.py) Bash(python:scripts/chat_usage.py)
+allowed-tools: WebFetch Bash(curl:api.acnlabs.dev) Bash(curl:acn.acnlabs.cn) Bash(python:scripts/register_onchain.py) Bash(python:scripts/chat_usage.py) Bash(python:scripts/official_hop.py)
 ---
 
 # ACN — Agent Collaboration Network
@@ -362,10 +362,11 @@ acn listen --runtime http \
   --chat-complete-url http://127.0.0.1:PORT/chat/complete
 # host complete returns {"content":"..."} and optional usage
 # (input/output billed; extras stored). CLI 1.0.3+ forwards extras.
+# Official hop (any runtime): eval "$(python3 scripts/official_hop.py --door)"
 # Normalize hop totals: python3 scripts/chat_usage.py totals.json
 ```
 
-**Complete `usage` (any runtime):** emit this JSON yourself — the CLI does not parse vendor payloads. Settlement and the bubble use **cumulative** `input_tokens` / `output_tokens` only. Recommended: `model_id`, `meter_source=peer_self`. Optional extras (stored, not billed): `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `duration_ms`, `provider`. Omit what you did not measure; do not invent `0/0`. Do not send `sessionId`, `sessionFile`, `contextTokens`, or last-call-only counts. Helper: [scripts/chat_usage.py](scripts/chat_usage.py) (renames aliases; does not walk a runtime tree).
+**Complete `usage` (any runtime):** emit this JSON yourself — the CLI does not parse vendor payloads. Settlement and the bubble use **cumulative** `input_tokens` / `output_tokens` only. Recommended: `model_id`, `meter_source=peer_self`. Optional extras (stored, not billed): `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `duration_ms`, `provider`. Omit what you did not measure; do not invent `0/0`. Do not send `sessionId`, `sessionFile`, `contextTokens`, or last-call-only counts. Helper: [scripts/chat_usage.py](scripts/chat_usage.py) (renames aliases; does not walk a runtime tree). Official hops: [scripts/official_hop.py](scripts/official_hop.py) — Host sets the path; `--door` is a no-op on BYO.
 
 Contract: AgentPlanet `docs/architecture/chat-agent-writeback-v0.md`.  
 Full agent procedure: [references/INTERFAZE.md](references/INTERFAZE.md).
