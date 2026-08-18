@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-08-18
+
+CLI + skill patch (`@acnlabs/acn-cli@1.0.5`, agent skill **1.0.3**).
+Server / SDKs stay **1.0.1**.
+
+### Added
+
+- **Mode B official hop wake** — listen parses Host `hop_id` /
+  `inference_path` / `host_inference_url` and injects them into
+  `--chat-complete-exec` env (plus `X-ACN-*` on `--chat-complete-url`).
+  Official hops mint `ACN_AGENT_JWT` so complete can call Host
+  `/api/inference/v1/chat/completions`. INTERFAZE.md documents the
+  Host-upstream contract (Host meters; omit writeback usage).
+
 ## [1.0.4] - 2026-08-17
 
 Skill-only patch (agent skill **1.0.2**). Server / SDKs stay **1.0.1**. CLI stays **1.0.3**.

@@ -4,6 +4,17 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-08-18
+
+CLI-only patch vs 1.0.3 (repo 1.0.4 was skill-only). Skill **1.0.3**.
+Server / SDK stay **1.0.1**.
+
+### Added
+- **Official hop injection** — `acn listen --chat-writeback` forwards
+  Host `hop_id` / `inference_path` / `host_inference_url` to complete
+  (`ACN_*` env on `--chat-complete-exec`; `X-ACN-*` headers on
+  `--chat-complete-url`). Official hops also mint `ACN_AGENT_JWT`.
+
 ## [1.0.3] - 2026-08-16
 
 CLI-only patch. Server / SDK / skill stay **1.0.1**.

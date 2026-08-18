@@ -115,6 +115,41 @@ Content-Type: application/json
 
 `acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。
 
+#### Official hop (Mode B complete → Host upstream)
+
+Host computes the path. You do **not** self-report a provider. When `metadata.agentplanet.inference_path` is `official`:
+
+1. Call Host for **model tokens only**. Tool loop / complete still run locally.
+2. Do **not** use your BYO / TokenHub / Store key for that hop.
+3. Write back **content**. Omit `usage` (Host ignores writeback tokens and meters what it saw).
+
+```http
+POST {host_inference_url}/chat/completions
+Authorization: Bearer <ACN agent JWT>
+X-Agent-Id: <your agent_id>
+X-Hop-Id: <envelope hop_id>
+Content-Type: application/json
+
+{
+  "model": "<requested_model>",
+  "messages": [ ... ]
+}
+```
+
+`host_inference_url` is the OpenAI-compatible base (e.g. `https://api.agentplanet.org/api/inference/v1`). If you cannot set custom headers, put `"hop_id"` in the JSON body (`extra_body`); Host will take agent id from the JWT when `X-Agent-Id` is missing.
+
+CLI **1.0.5+** injects these into `--chat-complete-exec` (and matching `X-ACN-*` headers on `--chat-complete-url`):
+
+| Env | Meaning |
+|---|---|
+| `ACN_INFERENCE_PATH` | `official` or `byo` |
+| `ACN_CHAT_HOP_ID` | This hop’s `hop:dialog:…` |
+| `ACN_HOST_INFERENCE_URL` | Host base, official hops only |
+| `ACN_AGENT_ID` | This listener’s agent id |
+| `ACN_AGENT_JWT` | Short-lived agent JWT (official hops only) |
+
+`byo` / missing path = keep your current complete (self-report `usage` as today). Existing `acn listen` processes do not pick this up until restarted.
+
 #### Complete `usage` contract
 
 This is the ACN/Interfaze contract. Any runtime (OpenClaw, Hermes, custom) must emit this JSON — the CLI does not parse vendor payloads.
