@@ -350,6 +350,7 @@ class AgentService:
         name: str | None = None,
         description: str | None = None,
         tags: list[str] | None = None,
+        invoke_slots: list[dict] | None = None,
     ) -> Agent:
         """Partial update of an agent's editable metadata.
 
@@ -365,11 +366,17 @@ class AgentService:
         of update — there is no per-tag add/remove here); pass the full
         desired list. An empty list clears all tags.
 
+        ``invoke_slots`` is stored on ``metadata.invoke_slots`` (AgentRouter
+        P2). An empty list clears the declaration. Route layer already
+        normalized unknown ids away.
+
         Args:
             agent_id: Agent identifier.
             name: New display name, or ``None`` to leave unchanged.
             description: New description, or ``None`` to leave unchanged.
             tags: New full tag list, or ``None`` to leave unchanged.
+            invoke_slots: Platform-owned slot contracts, or ``None`` to
+                leave unchanged.
 
         Raises:
             AgentNotFoundException: If the agent does not exist.
@@ -381,6 +388,13 @@ class AgentService:
             agent.description = description
         if tags is not None:
             agent.tags = list(tags)
+        if invoke_slots is not None:
+            meta = dict(agent.metadata or {})
+            if invoke_slots:
+                meta["invoke_slots"] = list(invoke_slots)
+            else:
+                meta.pop("invoke_slots", None)
+            agent.metadata = meta
         await self.repository.save(agent)
         return agent
 
