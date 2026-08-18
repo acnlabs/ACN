@@ -495,3 +495,82 @@ def test_invoke_complete_rejects_other_agents_hop(
     assert resp.status_code == 403
     assert resp.json()["details"]["reason"] == "invoke_complete_forbidden"
     forwarded.assert_not_awaited()
+
+
+_SLOWAPI_WRAPPER_CODE_NAMES = {"async_wrapper", "sync_wrapper"}
+
+
+def _has_rate_limit(endpoint) -> bool:
+    fn = endpoint
+    seen: set[int] = set()
+    while fn is not None and id(fn) not in seen:
+        seen.add(id(fn))
+        code = getattr(fn, "__code__", None)
+        if code is not None and code.co_name in _SLOWAPI_WRAPPER_CODE_NAMES:
+            return True
+        fn = getattr(fn, "__wrapped__", None)
+    return False
+
+
+def test_invoke_write_routes_are_rate_limited():
+    from fastapi.routing import APIRoute
+
+    found: dict[str, object] = {}
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if route.path not in ("/api/v1/invoke", "/api/v1/invoke/complete"):
+            continue
+        if "POST" not in (route.methods or set()):
+            continue
+        found[route.path] = route.endpoint
+    assert found.keys() == {"/api/v1/invoke", "/api/v1/invoke/complete"}
+    for path, endpoint in found.items():
+        assert _has_rate_limit(endpoint), f"{path} missing @limiter.limit"
+
+
+@pytest.mark.asyncio
+async def test_host_invoke_rate_key_is_payer(monkeypatch):
+    from starlette.requests import Request
+
+    from acn.routes.invoke import InvokeRequest, _authenticate_invoke
+
+    monkeypatch.setattr(
+        "acn.routes.dependencies.settings.internal_api_token",
+        VALID_INTERNAL_TOKEN,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "headers": [(b"x-internal-token", VALID_INTERNAL_TOKEN.encode())],
+        }
+    )
+    body = InvokeRequest(
+        to="22222222-2222-2222-2222-222222222222",
+        message={"text": "x"},
+        payer={"kind": "human", "user_id": "auth0|alice"},
+    )
+    await _authenticate_invoke(request, body, AsyncMock())
+    assert request.state.rate_limit_key == "invoke:human:auth0|alice"
+
+
+@pytest.mark.asyncio
+async def test_agent_invoke_rate_key_is_agent(stub_agent_service):
+    from starlette.requests import Request
+
+    from acn.routes.invoke import InvokeRequest, _authenticate_invoke
+
+    request = Request(
+        {
+            "type": "http",
+            "headers": [(b"authorization", b"Bearer acn_test_key")],
+        }
+    )
+    body = InvokeRequest(
+        to="22222222-2222-2222-2222-222222222222",
+        message={"text": "x"},
+    )
+    await _authenticate_invoke(request, body, stub_agent_service)
+    assert request.state.rate_limit_key == (
+        "agent:11111111-1111-1111-1111-111111111111"
+    )

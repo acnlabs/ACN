@@ -8,11 +8,11 @@ Delivery reuses MessageService; no attention_fee.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..config import get_settings
@@ -35,6 +35,7 @@ from .dependencies import (
     AuditDep,
     MessageServiceDep,
     MetricsDep,
+    limiter,
     verify_agent_api_key,
     verify_internal_token,
 )
@@ -44,6 +45,7 @@ logger = structlog.get_logger()
 
 SYSTEM_FROM = "system:agent-router"
 _LOCAL_PREFIXES = ("local:", "sys:")
+INVOKE_RATE_LIMIT = "30/minute"
 
 
 class InvokePayer(BaseModel):
@@ -162,6 +164,7 @@ async def _authenticate_invoke(
                 400,
                 details={"reason": "host_invoke_requires_human_payer"},
             )
+        request.state.rate_limit_key = f"invoke:human:{body.payer.user_id}"
         return SYSTEM_FROM, "host", body.payer.user_id
     agent_info = await verify_agent_api_key(
         request,
@@ -171,6 +174,19 @@ async def _authenticate_invoke(
     )
     from_agent = agent_info["agent_id"]
     return from_agent, "agent", from_agent
+
+
+async def _authenticate_complete(
+    request: Request,
+    agent_service: AgentServiceDep,
+) -> dict[str, Any]:
+    """Callee key auth. Sets agent:{id} before the 30/min check (D65)."""
+    return await verify_agent_api_key(
+        request,
+        background_tasks=None,  # type: ignore[arg-type]
+        authorization=request.headers.get("Authorization") or "",
+        agent_service=agent_service,
+    )
 
 
 async def _resolve_candidates(
@@ -270,18 +286,13 @@ async def list_slot_providers(
 
 
 @router.post("/invoke/complete")
+@limiter.limit(INVOKE_RATE_LIMIT)
 async def complete_invoke(
     request: Request,
     body: InvokeCompleteRequest,
-    agent_service: AgentServiceDep,
+    agent_info: Annotated[dict[str, Any], Depends(_authenticate_complete)],
 ) -> dict[str, Any]:
     """Callee writeback for Mode B invoke usage (D40–D42)."""
-    agent_info = await verify_agent_api_key(
-        request,
-        background_tasks=None,  # type: ignore[arg-type]
-        authorization=request.headers.get("Authorization") or "",
-        agent_service=agent_service,
-    )
     callee = str(agent_info["agent_id"])
     request_id = body.request_id
     if body.hop_id:
@@ -330,6 +341,7 @@ async def complete_invoke(
 
 
 @router.post("/invoke")
+@limiter.limit(INVOKE_RATE_LIMIT)
 async def invoke(
     request: Request,
     body: InvokeRequest,
@@ -337,11 +349,10 @@ async def invoke(
     metrics: MetricsDep,
     audit: AuditDep,
     agent_service: AgentServiceDep,
+    caller: Annotated[tuple[str, str, str], Depends(_authenticate_invoke)],
 ) -> dict[str, Any]:
     """Specified-id or slot invoke. Host door uses internal token; agents use API key."""
-    from_agent, caller_kind, caller_id = await _authenticate_invoke(
-        request, body, agent_service
-    )
+    from_agent, caller_kind, caller_id = caller
     candidates, slot_id = await _resolve_candidates(
         to=body.to,
         slot=body.slot,
