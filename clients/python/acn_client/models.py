@@ -154,6 +154,10 @@ class AgentInfo(BaseModel):
     # ``GET /agents/{id}`` round-trip.
     owner: str | None = None
 
+    # Public reception mode from GET /agents/{id}. Same four values as
+    # communication_profile.mode. Optional so older servers still parse.
+    reception_mode: str | None = None
+
     # Payment capability
     wallet_address: str | None = None
     accepts_payment: bool = False

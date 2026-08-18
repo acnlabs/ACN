@@ -49,6 +49,29 @@ def _drifted_agent(agent_id: str = "agent-drifted") -> Agent:
     )
 
 
+def test_agent_info_exposes_reception_mode_not_full_policy() -> None:
+    """GET /agents/{id} must show mode, never reject_reason / allowlist."""
+    agent = Agent(
+        agent_id="agent-closed",
+        owner="user-x",
+        name="Closed",
+        endpoint="https://closed.example.com",
+        tags=["coding"],
+        communication_policy={"mode": "manifest", "reject_reason": "on leave"},
+    )
+    info = _agent_entity_to_info(agent, is_online=True)
+    dumped = info.model_dump()
+    assert info.reception_mode == "manifest"
+    assert dumped["reception_mode"] == "manifest"
+    assert "communication_policy" not in dumped
+    assert "reject_reason" not in dumped
+
+
+def test_agent_info_reception_mode_defaults_open() -> None:
+    info = _agent_entity_to_info(_drifted_agent(), is_online=True)
+    assert info.reception_mode == "open"
+
+
 def test_agent_entity_to_info_sync_helper_uses_is_online_arg() -> None:
     """Sync helper takes ``is_online`` verbatim — it has no other input."""
     drifted = _drifted_agent()

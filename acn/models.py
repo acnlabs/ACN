@@ -91,6 +91,18 @@ class AgentInfo(BaseModel):
             "API responses. ``None`` is treated as ``{'mode': 'open'}``."
         ),
     )
+    # Public projection of ``communication_policy.mode`` only. Callers that
+    # need to know whether anyone may contact this agent (Launch
+    # ``launch_discoverable``, senders choosing a hop) read this field on
+    # GET /agents/{id}. Same four values as GET /communication_profile.mode.
+    # Do not put reject_reason or allowlist here.
+    reception_mode: str = Field(
+        default="open",
+        description=(
+            "Public reception mode: open | manifest | allowlist | closed. "
+            "Same value as communication_policy.mode / communication_profile.mode."
+        ),
+    )
     metadata: dict = Field(default_factory=dict, description="Additional metadata")
     registered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     last_heartbeat: datetime | None = Field(None)
