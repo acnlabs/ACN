@@ -17,6 +17,11 @@ import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import type { NormalizedEvent } from './normalize-event.js';
 import { isAllowedChatReplyPath } from './normalize-event.js';
+import {
+  shouldOpenOfficialDoor,
+  startOfficialHopDoor,
+  type OfficialHopDoor,
+} from './official-hop-door.js';
 
 export interface ChatWritebackOptions {
   enabled: boolean;
@@ -326,7 +331,8 @@ export function clearAgentJwtCache(): void {
 export function completeInferenceEnv(
   event: NormalizedEvent,
   opts: Pick<ChatWritebackOptions, 'agentId'>,
-  jwt?: string | null
+  jwt?: string | null,
+  door?: Pick<OfficialHopDoor, 'baseUrl'> | null
 ): NodeJS.ProcessEnv {
   const extra: Record<string, string> = { ACN_AGENT_ID: opts.agentId };
   const chat = event.chat;
@@ -336,6 +342,10 @@ export function completeInferenceEnv(
     extra.ACN_HOST_INFERENCE_URL = chat.host_inference_url;
   }
   if (jwt) extra.ACN_AGENT_JWT = jwt;
+  if (door?.baseUrl && jwt) {
+    extra.OPENAI_BASE_URL = door.baseUrl;
+    extra.OPENAI_API_KEY = jwt;
+  }
   return { ...process.env, ...extra };
 }
 
@@ -396,11 +406,12 @@ async function completeViaHttp(
   }
 }
 
-function completeViaExec(
+function spawnCompleteExec(
   event: NormalizedEvent,
   opts: ChatWritebackOptions,
   deps: ChatWritebackDeps,
-  jwt?: string | null
+  jwt?: string | null,
+  door?: OfficialHopDoor | null
 ): Promise<
   { ok: true; result: ChatCompleteResult } | { ok: false; reason: string }
 > {
@@ -412,7 +423,7 @@ function completeViaExec(
     let settled = false;
     const child: ChildProcess = spawnFn(opts.completeExec!, {
       shell: true,
-      env: completeInferenceEnv(event, opts, jwt),
+      env: completeInferenceEnv(event, opts, jwt, door),
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -458,6 +469,54 @@ function completeViaExec(
 
     child.stdin?.end(body);
   });
+}
+
+async function completeViaExec(
+  event: NormalizedEvent,
+  opts: ChatWritebackOptions,
+  deps: ChatWritebackDeps,
+  jwt?: string | null
+): Promise<
+  { ok: true; result: ChatCompleteResult } | { ok: false; reason: string }
+> {
+  let door: OfficialHopDoor | null = null;
+  const logFn = deps.logFn ?? ((line: string) => console.error(line));
+  try {
+    if (
+      shouldOpenOfficialDoor({
+        inferencePath: event.chat?.inference_path,
+        hopId: event.chat?.hop_id,
+        hostInferenceUrl: event.chat?.host_inference_url,
+        jwt,
+      })
+    ) {
+      try {
+        door = await startOfficialHopDoor({
+          hostInferenceUrl: event.chat!.host_inference_url!,
+          hopId: event.chat!.hop_id!,
+          agentId: opts.agentId,
+          jwt: jwt!,
+          fetchFn: deps.fetchFn,
+        });
+      } catch {
+        door = null;
+      }
+      if (door) {
+        logFn(
+          `[acn listen] official_door chat_id=${event.chat!.chat_id} base=${door.baseUrl}`
+        );
+      } else {
+        logFn(
+          `[acn listen] official_door_skipped chat_id=${event.chat!.chat_id}`
+        );
+      }
+    }
+    return await spawnCompleteExec(event, opts, deps, jwt, door);
+  } finally {
+    if (door) {
+      await door.close().catch(() => undefined);
+    }
+  }
 }
 
 async function postWriteback(

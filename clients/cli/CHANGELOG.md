@@ -4,6 +4,18 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-08-18
+
+CLI-only feature vs 1.0.5 (repo 1.0.6 was skill-only). Skill **1.0.5**.
+Server / SDK stay **1.0.1**.
+
+### Added
+- **Official hop door** — on official hops, `acn listen --chat-complete-exec`
+  starts a localhost OpenAI door and injects `OPENAI_BASE_URL` /
+  `OPENAI_API_KEY` (plus the existing `ACN_*` env). Complete does not
+  need to copy `official_hop.py --door`. BYO hops are unchanged.
+  Existing `acn listen` processes need a restart to pick this up.
+
 ## [1.0.5] - 2026-08-18
 
 CLI-only patch vs 1.0.3 (repo 1.0.4 was skill-only). Skill **1.0.3**.
