@@ -322,6 +322,40 @@ export function clearAgentJwtCache(): void {
   cachedJwt = null;
 }
 
+/** Env injected into --chat-complete-exec for official / BYO hops. */
+export function completeInferenceEnv(
+  event: NormalizedEvent,
+  opts: Pick<ChatWritebackOptions, 'agentId'>,
+  jwt?: string | null
+): NodeJS.ProcessEnv {
+  const extra: Record<string, string> = { ACN_AGENT_ID: opts.agentId };
+  const chat = event.chat;
+  if (chat?.hop_id) extra.ACN_CHAT_HOP_ID = chat.hop_id;
+  if (chat?.inference_path) extra.ACN_INFERENCE_PATH = chat.inference_path;
+  if (chat?.host_inference_url) {
+    extra.ACN_HOST_INFERENCE_URL = chat.host_inference_url;
+  }
+  if (jwt) extra.ACN_AGENT_JWT = jwt;
+  return { ...process.env, ...extra };
+}
+
+function completeInferenceHeaders(
+  event: NormalizedEvent,
+  opts: Pick<ChatWritebackOptions, 'agentId'>
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+  };
+  if (opts.agentId) headers['X-ACN-Agent-Id'] = opts.agentId;
+  const chat = event.chat;
+  if (chat?.hop_id) headers['X-ACN-Hop-Id'] = chat.hop_id;
+  if (chat?.inference_path) headers['X-ACN-Inference-Path'] = chat.inference_path;
+  if (chat?.host_inference_url) {
+    headers['X-ACN-Host-Inference-Url'] = chat.host_inference_url;
+  }
+  return headers;
+}
+
 async function completeViaHttp(
   event: NormalizedEvent,
   opts: ChatWritebackOptions,
@@ -336,7 +370,7 @@ async function completeViaHttp(
   try {
     const res = await fetchFn(opts.completeUrl!, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: completeInferenceHeaders(event, opts),
       body: JSON.stringify(event),
       signal: controller.signal,
     });
@@ -365,7 +399,8 @@ async function completeViaHttp(
 function completeViaExec(
   event: NormalizedEvent,
   opts: ChatWritebackOptions,
-  deps: ChatWritebackDeps
+  deps: ChatWritebackDeps,
+  jwt?: string | null
 ): Promise<
   { ok: true; result: ChatCompleteResult } | { ok: false; reason: string }
 > {
@@ -375,7 +410,10 @@ function completeViaExec(
 
   return new Promise((resolve) => {
     let settled = false;
-    const child: ChildProcess = spawnFn(opts.completeExec!, { shell: true });
+    const child: ChildProcess = spawnFn(opts.completeExec!, {
+      shell: true,
+      env: completeInferenceEnv(event, opts, jwt),
+    });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
 
@@ -569,9 +607,15 @@ export async function handleChatWriteback(
   const logFn = deps.logFn ?? ((line: string) => console.error(line));
   if (!event.chat) return { ok: false, reason: 'no_chat_envelope' };
 
+  let jwt: string | null = null;
+  if (event.chat.inference_path === 'official' && opts.completeExec) {
+    const minted = await mintAgentJwt(opts, deps.fetchFn ?? fetch);
+    if (minted.ok) jwt = minted.token;
+  }
+
   const completed = opts.completeUrl
     ? await completeViaHttp(event, opts, deps)
-    : await completeViaExec(event, opts, deps);
+    : await completeViaExec(event, opts, deps, jwt);
 
   if (!completed.ok) {
     logFn(

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildChatWritebackOptions,
   clearAgentJwtCache,
+  completeInferenceEnv,
   DEFAULT_CHAT_JWT_AUDIENCE,
   extractContent,
   extractModelId,
@@ -18,6 +19,7 @@ import {
   dispatchLocalReceiverAndWaitWake,
 } from '../src/commands/local-receiver.js';
 import {
+  asHostInferenceUrl,
   DedupeStore,
   dedupeKey,
   extractChatEnvelope,
@@ -103,6 +105,9 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       user_text: 'hello from interfaze',
       requested_model: null,
       max_output_tokens: null,
+      hop_id: null,
+      inference_path: null,
+      host_inference_url: null,
     });
     const params = parsed.body.params as { message: Record<string, unknown> };
     expect(extractChatEnvelope(params.message)?.chat_id).toBe('chat-uuid');
@@ -122,6 +127,31 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       max_output_tokens: 2048,
     });
   });
+
+  it('extracts official hop wake fields and rejects arbitrary host URLs', () => {
+    expect(asHostInferenceUrl('https://evil.example/api/inference/v1')).toBeNull();
+    expect(asHostInferenceUrl('https://evil.example/steal')).toBeNull();
+    expect(asHostInferenceUrl('http://127.0.0.1:8000/api/inference/v1')).toBe(
+      'http://127.0.0.1:8000/api/inference/v1'
+    );
+    expect(asHostInferenceUrl('http://evil.example/api/inference/v1')).toBeNull();
+
+    const parsed = parseJsonRpcBody(
+      chatMessageBody({
+        hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+        inference_path: 'official',
+        host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+      })
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(normalizeEvent(parsed.body).chat).toMatchObject({
+      hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+      inference_path: 'official',
+      host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+    });
+  });
+
   it('returns null when chat_id or reply_path missing', () => {
     const parsed = parseJsonRpcBody(
       chatMessageBody({ chat_id: 'only-id', reply_path: undefined as unknown as string })
@@ -331,6 +361,7 @@ describe('handleChatWriteback', () => {
     expect(calls).toHaveLength(3);
     expect(calls[0].url).toContain('/complete');
     expect(JSON.parse(calls[0].body).chat.chat_id).toBe('chat-uuid');
+    expect(calls[0].headers).toMatchObject({ 'X-ACN-Agent-Id': 'agent-1' });
     expect(calls[1].url).toBe('https://api.acnlabs.dev/oauth/token');
     expect(JSON.parse(calls[1].body)).toMatchObject({
       grant_type: 'client_credentials',
@@ -348,6 +379,65 @@ describe('handleChatWriteback', () => {
     const hdrs = calls[2].headers as Record<string, string>;
     expect(hdrs['Authorization']).toBe('Bearer jwt-from-acn');
     expect(hdrs['X-Internal-Token']).toBeUndefined();
+  });
+
+  it('injects official hop env for complete-exec and headers for complete-url', async () => {
+    clearAgentJwtCache();
+    const event = normalizeEvent(
+      (
+        parseJsonRpcBody(
+          chatMessageBody({
+            hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+            inference_path: 'official',
+            host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+          })
+        ) as { ok: true; body: Record<string, unknown> }
+      ).body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+    const env = completeInferenceEnv(event, opts, 'jwt-official');
+    expect(env.ACN_AGENT_ID).toBe('agent-1');
+    expect(env.ACN_CHAT_HOP_ID).toBe('hop:dialog:chat-uuid:user-msg-1:agent-1');
+    expect(env.ACN_INFERENCE_PATH).toBe('official');
+    expect(env.ACN_HOST_INFERENCE_URL).toBe(
+      'https://api.agentplanet.org/api/inference/v1'
+    );
+    expect(env.ACN_AGENT_JWT).toBe('jwt-official');
+
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/complete')) {
+        return mockOkResponse(JSON.stringify({ content: 'official reply' }));
+      }
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const completeInit = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/complete')
+    )?.[1];
+    expect(completeInit?.headers).toMatchObject({
+      'X-ACN-Agent-Id': 'agent-1',
+      'X-ACN-Hop-Id': 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+      'X-ACN-Inference-Path': 'official',
+      'X-ACN-Host-Inference-Url':
+        'https://api.agentplanet.org/api/inference/v1',
+    });
   });
 
   it('forwards host usage + reply_to_id for billing settle', async () => {

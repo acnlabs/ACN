@@ -21,6 +21,12 @@ export interface ChatEnvelope {
   requested_model: string | null;
   /** Soft Host output cap when present. */
   max_output_tokens: number | null;
+  /** Dialog hop id for Host metering (`hop:dialog:…`). */
+  hop_id: string | null;
+  /** Host-computed path for this hop. Agent cannot self-report this. */
+  inference_path: 'official' | 'byo' | null;
+  /** OpenAI-compatible Host base (`…/api/inference/v1`) when official. */
+  host_inference_url: string | null;
 }
 
 export interface NormalizedEvent {
@@ -47,6 +53,38 @@ function asRecord(v: unknown): Record<string, unknown> | null {
 
 function asNonEmptyString(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+function asInferencePath(v: unknown): 'official' | 'byo' | null {
+  return v === 'official' || v === 'byo' ? v : null;
+}
+
+const HOST_INFERENCE_HOSTS = new Set([
+  'api.agentplanet.org',
+  'api.agenticplanet.space',
+]);
+
+/** Allow only known Host inference bases — no arbitrary wake URLs. */
+export function asHostInferenceUrl(v: unknown): string | null {
+  const raw = asNonEmptyString(v);
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    if (u.pathname.replace(/\/+$/, '') !== '/api/inference/v1') return null;
+    if (u.search || u.hash) return null;
+    const host = u.hostname.toLowerCase();
+    const loopback =
+      host === 'localhost' || host === '127.0.0.1' || host === '::1';
+    if (u.protocol === 'https:' && HOST_INFERENCE_HOSTS.has(host)) {
+      return `${u.origin}/api/inference/v1`;
+    }
+    if (u.protocol === 'http:' && loopback) {
+      return `${u.origin}/api/inference/v1`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** Parse UTF-8 request body into a JSON-RPC object (or a typed parse error). */
@@ -185,6 +223,9 @@ export function extractChatEnvelope(
     user_text: extractUserText(message),
     requested_model: requested ? requested.slice(0, 200) : null,
     max_output_tokens: maxOut,
+    hop_id: asNonEmptyString(ap.hop_id),
+    inference_path: asInferencePath(ap.inference_path),
+    host_inference_url: asHostInferenceUrl(ap.host_inference_url),
   };
 }
 
