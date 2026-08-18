@@ -241,7 +241,18 @@ def serve_proxy() -> int:
     return 0
 
 
+def door_already_open(env: dict[str, str] | None = None) -> bool:
+    """CLI 1.0.7+ already injected OPENAI_* — do not read stdin again."""
+    env = env or os.environ
+    base = _clean(env.get("OPENAI_BASE_URL", ""), 200)
+    key = _clean(env.get("OPENAI_API_KEY", ""), 4000)
+    return base.startswith("http://127.0.0.1:") and bool(key)
+
+
 def run_door() -> int:
+    if door_already_open():
+        print("# acn official_hop: door already open")
+        return 0
     raw = sys.stdin.read()
     try:
         ev = json.loads(raw) if raw.strip() else {}

@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from official_hop import allow_host_url, resolve_wake
+from official_hop import allow_host_url, door_already_open, resolve_wake
 
 
 def test_allow_host_url() -> None:
@@ -62,8 +62,19 @@ def test_official_without_jwt_stays_byo() -> None:
     assert got["hop_id"] == "hop:dialog:c:m:agent-1"
 
 
+def test_door_already_open() -> None:
+    assert door_already_open(
+        {"OPENAI_BASE_URL": "http://127.0.0.1:8123/v1", "OPENAI_API_KEY": "jwt"}
+    )
+    assert not door_already_open({"OPENAI_BASE_URL": "http://127.0.0.1:8123/v1"})
+    assert not door_already_open(
+        {"OPENAI_BASE_URL": "https://api.openai.com/v1", "OPENAI_API_KEY": "sk"}
+    )
+
+
 if __name__ == "__main__":
     test_allow_host_url()
     test_resolve_official_from_chat_and_env()
     test_official_without_jwt_stays_byo()
+    test_door_already_open()
     print("ok")

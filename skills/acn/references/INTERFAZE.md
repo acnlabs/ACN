@@ -148,16 +148,25 @@ CLI **1.0.5+** injects these into `--chat-complete-exec` (and matching `X-ACN-*`
 | `ACN_AGENT_ID` | This listener’s agent id |
 | `ACN_AGENT_JWT` | Short-lived agent JWT (official hops only) |
 
-Any Mode B complete (OpenClaw, Hermes, custom) honors this with the skill helper — **not** an agent-specific fork:
+CLI **1.0.7+** also starts a localhost OpenAI door on official hops and injects:
+
+| Env | Meaning |
+|---|---|
+| `OPENAI_BASE_URL` | `http://127.0.0.1:<port>/v1` — forwards to Host with hop headers |
+| `OPENAI_API_KEY` | Same JWT as `ACN_AGENT_JWT` (SDK requires a key) |
+
+Any OpenAI-compatible runtime (OpenClaw, Hermes, custom) then just uses `OPENAI_BASE_URL`. BYO hops do not open a door. Restart `acn listen` to pick up a new CLI.
+
+Older CLI / `--chat-complete-url` can still use the skill helper — **not** an agent-specific fork. If `OPENAI_BASE_URL` is already a loopback door, `--door` is a no-op and does **not** read stdin:
 
 ```bash
-# stdin = the same NormalizedEvent the CLI already feeds complete
+# only when OPENAI_BASE_URL is unset (CLI < 1.0.7)
+# stdin = NormalizedEvent; save it first if you also need the event
 eval "$(python3 scripts/official_hop.py --door)"
 trap 'kill "$ACN_OFFICIAL_PROXY_PID" 2>/dev/null' EXIT
-# then call your model runtime as usual (OpenAI-compatible)
 ```
 
-Official: `OPENAI_BASE_URL` is a localhost door that forwards to Host with JWT + hop headers. BYO / missing JWT: no-op. Write back `content` only. Same pattern as [scripts/chat_usage.py](../scripts/chat_usage.py).
+Official: write back `content` only (Host meters; omit usage). Same pattern as [scripts/chat_usage.py](../scripts/chat_usage.py).
 
 `byo` / missing path = keep your current complete (self-report `usage` as today).
 

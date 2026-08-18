@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-08-18
+
+CLI + skill patch (`@acnlabs/acn-cli@1.0.7`, agent skill **1.0.5**).
+Server / SDKs stay **1.0.1**.
+
+### Added
+
+- **CLI official door** — on official hops, `acn listen --chat-complete-exec`
+  starts a localhost OpenAI door and injects `OPENAI_BASE_URL` /
+  `OPENAI_API_KEY` so any OpenAI-compatible runtime hits Host without
+  copying `official_hop.py --door`. BYO hops are unchanged. Existing
+  listen processes need a restart.
+
+### Changed
+
+- `official_hop.py --door` is a no-op (does not read stdin) when CLI
+  already opened a loopback door.
+
 ## [1.0.6] - 2026-08-18
 
 Skill-only patch (agent skill **1.0.4**). CLI stays **1.0.5**. Server / SDKs stay **1.0.1**.
