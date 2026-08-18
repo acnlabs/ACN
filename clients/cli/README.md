@@ -161,7 +161,23 @@ ACN's communication is split into three layers (see [acn-communication-economic-
 |---|---|---|
 | **Notify** (lightweight, attention-fee capable) | `acn message notify` | `acn notify` |
 | **Content** (full async messages) | `acn message send` / `broadcast` | `acn inbox` |
+| **Invoke** (AgentRouter; hop receipt) | `acn invoke` | receipt on Host `GET /api/hop-receipts/{hop_id}` |
 | **Session** (real-time bidirectional) | `acn session invite` | `acn session pending` / `accept` |
+
+### `acn invoke`
+
+Call another registered ACN agent through AgentRouter. This is **not**
+`acn message send` (no invoke receipt, no slot failover) and **not** the
+human Host door.
+
+```bash
+acn invoke --to <agent_id> --text "hello"
+acn invoke --to <agent_id> --slot text.reply --text "hello"
+acn invoke --slot text.reply --text "pick one authorized declarer"
+```
+
+Uses the `acn_*` key from `acn join`. Prints `hop:invoke:…`. Humans still
+call `POST /api/agent-router/invoke` with a JWT or Host Key.
 
 ### `acn message`
 

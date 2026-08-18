@@ -70,7 +70,9 @@ def stub_agent_service():
 
     svc.get_agent_by_api_key = AsyncMock(side_effect=_by_api_key)
 
-    async def _update_profile(agent_id: str, *, name=None, description=None, tags=None):
+    async def _update_profile(
+        agent_id: str, *, name=None, description=None, tags=None, invoke_slots=None
+    ):
         if agent_id != "agent-target":
             raise AgentNotFoundException(agent_id)
         result = MagicMock()
@@ -82,6 +84,9 @@ def stub_agent_service():
             description if description is not None else "Stored description text."
         )
         result.tags = tags if tags is not None else ["stored"]
+        result.metadata = {}
+        if invoke_slots:
+            result.metadata["invoke_slots"] = invoke_slots
         return result
 
     svc.update_profile = AsyncMock(side_effect=_update_profile)
@@ -139,6 +144,7 @@ class TestPartialUpdate:
         assert kwargs["name"] == "Renamed Agent"
         assert kwargs["description"] is None
         assert kwargs["tags"] is None
+        assert kwargs["invoke_slots"] is None
         body = r.json()
         assert body["name"] == "Renamed Agent"
 
@@ -174,6 +180,37 @@ class TestPartialUpdate:
         kwargs = stub_agent_service.update_profile.await_args.kwargs
         assert kwargs["tags"] == []
         assert kwargs["name"] is None
+
+    def test_update_invoke_slots(self, stub_agent_service):
+        _wire(stub_agent_service)
+        with TestClient(app) as client:
+            r = client.patch(
+                "/api/v1/agents/agent-target/profile",
+                json={"invoke_slots": [{"id": "text.reply"}]},
+                headers={"Authorization": "Bearer owner-key"},
+            )
+        assert r.status_code == 200, r.text
+        kwargs = stub_agent_service.update_profile.await_args.kwargs
+        assert kwargs["invoke_slots"] == [
+            {
+                "id": "text.reply",
+                "input": "text",
+                "output": "text",
+                "pricing": "l2_token",
+            }
+        ]
+        assert r.json()["invoke_slots"][0]["id"] == "text.reply"
+
+    def test_unknown_invoke_slot_rejected(self, stub_agent_service):
+        _wire(stub_agent_service)
+        with TestClient(app) as client:
+            r = client.patch(
+                "/api/v1/agents/agent-target/profile",
+                json={"invoke_slots": [{"id": "match_collab"}]},
+                headers={"Authorization": "Bearer owner-key"},
+            )
+        assert r.status_code == 422, r.text
+        stub_agent_service.update_profile.assert_not_awaited()
 
     def test_empty_body_rejected(self, stub_agent_service):
         """No fields at all is a no-op request — reject with 422 so callers

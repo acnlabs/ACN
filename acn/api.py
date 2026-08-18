@@ -106,6 +106,7 @@ from .routes import (
     dependencies,
     follows,
     gateway_connect,
+    invoke,
     manifest,
     monitoring,
     oauth,
@@ -1390,6 +1391,7 @@ app.include_router(agent_subnets.router)
 app.include_router(registry.router)
 app.include_router(onchain.router)
 app.include_router(communication.router)
+app.include_router(invoke.router)
 # Phase 2 PR #1: manifest queue routes share the
 # /api/v1/communication prefix with the communication router so the
 # client surface looks unified (POST /communication/send and GET

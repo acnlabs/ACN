@@ -45,6 +45,11 @@ from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException, PolicyRejected
 from ..core.validators import check_dict_size_64k
 from ..identity import build_agent_urn
+from ..invoke_slots import (
+    SlotContractError,
+    normalize_invoke_slots,
+    parse_declared_slots,
+)
 from ..models import AgentInfo, AgentRegisterRequest, AgentRegisterResponse, AgentSearchResponse
 from ..monitoring import AuditEventType, AuditLevel, fire_and_forget_event, get_audit_singleton
 from ..security import SSRFViolation, safe_resolve_target, validate_endpoint_url
@@ -3424,11 +3429,12 @@ class ProfilePatchRequest(BaseModel):
     """PATCH body for ``/agents/{id}/profile``.
 
     Partial update of editable metadata: ``name`` / ``description`` /
-    ``tags``. Every field is optional — only those present are changed.
-    This is a PATCH (partial), not a PUT (replace): omitting a field
-    leaves it untouched; it is never blanked out. ``tags`` *is* replaced
-    wholesale when present (the list is the unit of update); pass the
-    full desired list, or ``[]`` to clear all tags.
+    ``tags`` / ``invoke_slots``. Every field is optional — only those
+    present are changed. This is a PATCH (partial), not a PUT (replace):
+    omitting a field leaves it untouched; it is never blanked out.
+    ``tags`` *is* replaced wholesale when present (the list is the unit
+    of update); pass the full desired list, or ``[]`` to clear all tags.
+    ``invoke_slots`` is the AgentRouter P2 declaration (not tags).
 
     The same validators that run at registration apply here so a value
     rejected on join can't slip in via edit.
@@ -3454,6 +3460,13 @@ class ProfilePatchRequest(BaseModel):
             "or omit to leave unchanged. Pass [] to clear all tags."
         ),
     )
+    invoke_slots: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "AgentRouter slot declarations (replaces the existing list). "
+            "Each item is {id}. Pass [] to clear. Unknown ids are rejected."
+        ),
+    )
 
     @field_validator("name")
     @classmethod
@@ -3462,11 +3475,29 @@ class ProfilePatchRequest(BaseModel):
             return None
         return _validate_agent_name(v)
 
+    @field_validator("invoke_slots")
+    @classmethod
+    def _validate_invoke_slots(
+        cls, v: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        if v is None:
+            return None
+        try:
+            return normalize_invoke_slots(v)
+        except SlotContractError as exc:
+            raise ValueError(str(exc)) from exc
+
     @model_validator(mode="after")
     def _require_at_least_one_field(self):
-        if self.name is None and self.description is None and self.tags is None:
+        if (
+            self.name is None
+            and self.description is None
+            and self.tags is None
+            and self.invoke_slots is None
+        ):
             raise ValueError(
-                "At least one of name, description, or tags must be provided."
+                "At least one of name, description, tags, or invoke_slots "
+                "must be provided."
             )
         return self
 
@@ -3484,7 +3515,7 @@ async def update_agent_profile(
     caller: OwnerOrInternalDep,
     agent_service: AgentServiceDep = None,
 ):
-    """Partial update of an agent's editable metadata (name/description/tags).
+    """Partial update of an agent's editable metadata (name/description/tags/slots).
 
     Closes the "agents can't edit their own basic info after registration"
     gap: previously ``name`` / ``description`` / ``tags`` were fixed at
@@ -3500,6 +3531,7 @@ async def update_agent_profile(
             name=body.name,
             description=body.description,
             tags=body.tags,
+            invoke_slots=body.invoke_slots,
         )
     except AgentNotFoundException as e:
         raise ACNHTTPError(
@@ -3524,6 +3556,7 @@ async def update_agent_profile(
                 ("name", body.name),
                 ("description", body.description),
                 ("tags", body.tags),
+                ("invoke_slots", body.invoke_slots),
             )
             if v is not None
         ],
@@ -3534,6 +3567,7 @@ async def update_agent_profile(
         "name": updated.name,
         "description": updated.description,
         "tags": updated.tags,
+        "invoke_slots": parse_declared_slots(updated.metadata),
     }
 
 
