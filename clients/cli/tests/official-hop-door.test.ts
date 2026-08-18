@@ -134,16 +134,19 @@ describe('startOfficialHopDoor', () => {
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ id: 'cmpl', choices: [] });
       expect(fetchFn).toHaveBeenCalledTimes(1);
-      const [url, init] = fetchFn.mock.calls[0];
-      expect(url).toBe(
+      const call = fetchFn.mock.calls[0] as unknown as [
+        string,
+        RequestInit | undefined,
+      ];
+      expect(call[0]).toBe(
         'https://api.agentplanet.org/api/inference/v1/chat/completions'
       );
-      expect(init?.headers).toMatchObject({
+      expect(call[1]?.headers).toMatchObject({
         authorization: 'Bearer jwt-official',
         'X-Hop-Id': 'hop:dialog:c:m:agent-1',
         'X-Agent-Id': 'agent-1',
       });
-      const forwarded = JSON.parse(String(init?.body ?? '{}'));
+      const forwarded = JSON.parse(String(call[1]?.body ?? '{}'));
       expect(forwarded.hop_id).toBe('hop:dialog:c:m:agent-1');
       expect(forwarded.agent_id).toBeUndefined();
       expect(forwarded.model).toBe('tencenttokenplan/kimi-k2.5');
