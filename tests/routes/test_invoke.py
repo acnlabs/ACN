@@ -472,6 +472,8 @@ def test_invoke_complete_forwards_when_key_is_callee(
     forwarded.assert_awaited()
     kwargs = forwarded.await_args.kwargs
     assert kwargs["callee"] == callee
+    assert kwargs["caller"] == callee
+    assert kwargs["delivery_status"] == "writeback"
     assert kwargs["usage"]["input_tokens"] == 10
 
 
