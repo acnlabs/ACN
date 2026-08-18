@@ -233,6 +233,7 @@ def test_slot_only_picks_declarer(
             "slot": "text.reply",
             "message": {"text": "hi"},
             "payer": {"kind": "human", "user_id": "auth0|alice"},
+            "allowed_callees": [b],
         },
     )
     assert resp.status_code == 200, resp.text
@@ -383,6 +384,7 @@ def test_slot_fallback_on_delivery_fail(
             "message": {"text": "hi"},
             "request_id": "req-fb-1",
             "payer": {"kind": "human", "user_id": "auth0|alice"},
+            "allowed_callees": [first, second],
         },
     )
     assert resp.status_code == 200, resp.text
@@ -390,6 +392,125 @@ def test_slot_fallback_on_delivery_fail(
     assert body["to"] == second
     assert body["fallback_from"] == first
     assert body["hop_id"] == f"hop:invoke:req-fb-1:{second}"
+    assert stub_message_service.send_message.await_count == 2
+
+
+def test_host_slot_without_allowlist_does_not_fallback(
+    stub_metrics, stub_message_service, stub_audit, monkeypatch
+):
+    monkeypatch.setattr(
+        "acn.routes.dependencies.settings.internal_api_token",
+        VALID_INTERNAL_TOKEN,
+    )
+    first = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    second = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    agent_service = AsyncMock()
+    agent_service.get_agent = AsyncMock(
+        return_value=_slot_agent(first, slots=[{"id": "text.reply"}])
+    )
+    agent_service.search_agents = AsyncMock(
+        return_value=[
+            _slot_agent(first, slots=[{"id": "text.reply"}]),
+            _slot_agent(second, slots=[{"id": "text.reply"}]),
+        ]
+    )
+    agent_service.batch_alive = AsyncMock(return_value={first, second})
+    stub_message_service.send_message = AsyncMock(
+        side_effect=AgentNotFoundException("down")
+    )
+    _wire(stub_metrics, stub_message_service, stub_audit, agent_service)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/invoke",
+        headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+        json={
+            "to": first,
+            "slot": "text.reply",
+            "message": {"text": "hi"},
+            "payer": {"kind": "human", "user_id": "auth0|alice"},
+        },
+    )
+    assert resp.status_code == 404
+    assert stub_message_service.send_message.await_count == 1
+
+
+def test_host_allowlist_excludes_stranger_fallback(
+    stub_metrics, stub_message_service, stub_audit, monkeypatch
+):
+    monkeypatch.setattr(
+        "acn.routes.dependencies.settings.internal_api_token",
+        VALID_INTERNAL_TOKEN,
+    )
+    first = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    stranger = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    agent_service = AsyncMock()
+    agent_service.get_agent = AsyncMock(
+        return_value=_slot_agent(first, slots=[{"id": "text.reply"}])
+    )
+    agent_service.search_agents = AsyncMock(
+        return_value=[
+            _slot_agent(first, slots=[{"id": "text.reply"}]),
+            _slot_agent(stranger, slots=[{"id": "text.reply"}]),
+        ]
+    )
+    agent_service.batch_alive = AsyncMock(return_value={first, stranger})
+    stub_message_service.send_message = AsyncMock(
+        side_effect=AgentNotFoundException("down")
+    )
+    _wire(stub_metrics, stub_message_service, stub_audit, agent_service)
+    client = TestClient(app)
+    resp = client.post(
+        "/api/v1/invoke",
+        headers={"X-Internal-Token": VALID_INTERNAL_TOKEN},
+        json={
+            "to": first,
+            "slot": "text.reply",
+            "message": {"text": "hi"},
+            "payer": {"kind": "human", "user_id": "auth0|alice"},
+            "allowed_callees": [first],
+        },
+    )
+    assert resp.status_code == 404
+    assert stub_message_service.send_message.await_count == 1
+
+
+def test_agent_slot_fallback_ignores_human_allowlist(
+    stub_metrics, stub_message_service, stub_audit, stub_agent_service
+):
+    first = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    second = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    stub_agent_service.get_agent = AsyncMock(
+        return_value=_slot_agent(first, slots=[{"id": "text.reply"}])
+    )
+    stub_agent_service.search_agents = AsyncMock(
+        return_value=[
+            _slot_agent(first, slots=[{"id": "text.reply"}]),
+            _slot_agent(second, slots=[{"id": "text.reply"}]),
+        ]
+    )
+    stub_agent_service.batch_alive = AsyncMock(return_value={first, second})
+    stub_message_service.send_message = AsyncMock(
+        side_effect=[
+            AgentNotFoundException("down"),
+            {"message_id": "msg-agent-fb", "status": "accepted"},
+        ]
+    )
+    _wire(stub_metrics, stub_message_service, stub_audit, stub_agent_service)
+    client = TestClient(app)
+    with patch("acn.routes.invoke._notify_backend_complete", new=AsyncMock()):
+        resp = client.post(
+            "/api/v1/invoke",
+            headers={"Authorization": "Bearer acn_test_key"},
+            json={
+                "to": first,
+                "slot": "text.reply",
+                "message": {"text": "hi"},
+                "request_id": "req-agent-fb",
+                "allowed_callees": [first],
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["to"] == second
     assert stub_message_service.send_message.await_count == 2
 
 
