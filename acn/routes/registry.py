@@ -256,6 +256,14 @@ class AgentJoinRequest(BaseModel):
         ),
     )
     referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
+    invite: str | None = Field(
+        None,
+        max_length=80,
+        description=(
+            "Host-issued human join invite (ji_…). Stored as metadata.join_invite only. "
+            "Not an owner sub; ACN does not resolve people."
+        ),
+    )
     agent_card: dict | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
     self_hosted: bool = Field(
         default=False,
@@ -373,6 +381,14 @@ class AgentJoinRequest(BaseModel):
             "{'mode': 'open' | 'closed' | 'manifest' | 'allowlist', "
             "'reject_reason'?: str}. "
             "Default: manifest (Phase 3+)."
+        ),
+    )
+    metadata: dict | None = Field(
+        default=None,
+        description=(
+            "Optional join metadata. Only chat invite keys are kept: "
+            "chat_invitees, chat_allowlist, chat_open. Host join invites "
+            "must use the invite field, not metadata."
         ),
     )
     # Optional SOCIAL.md pointer — see https://agentsocial.one. ACN stores
@@ -1905,6 +1921,19 @@ async def _park_in_inbox(*, agent_id: str, from_agent: str, body: bytes) -> None
     )
 
 
+_HOST_JOIN_INVITE_RE = re.compile(r"^ji_[A-Za-z0-9_-]{8,64}$")
+
+
+def _sanitize_host_join_invite(raw: str | None) -> str | None:
+    """Keep Host-issued ``ji_`` codes only. Ignore owner subs and junk."""
+    if not raw or not isinstance(raw, str):
+        return None
+    code = raw.strip()
+    if _HOST_JOIN_INVITE_RE.fullmatch(code):
+        return code
+    return None
+
+
 async def _join_agent_impl(
     body: AgentJoinRequest,
     background_tasks: BackgroundTasks,
@@ -1912,6 +1941,7 @@ async def _join_agent_impl(
     agent_service,
     *,
     default_metadata: dict | None = None,
+    invite: str | None = None,
 ) -> AgentJoinResponse:
     """Shared implementation for join_agent and join_agent_internal.
 
@@ -1966,6 +1996,15 @@ async def _join_agent_impl(
             a2a_handshake_ok = None
 
         join_metadata = dict(default_metadata) if default_metadata else {}
+        extra_meta = body.metadata if isinstance(body.metadata, dict) else {}
+        for key in ("chat_invitees", "chat_allowlist", "chat_open"):
+            if key in extra_meta:
+                join_metadata[key] = extra_meta[key]
+        invite_code = _sanitize_host_join_invite(invite) or _sanitize_host_join_invite(
+            getattr(body, "invite", None)
+        )
+        if invite_code:
+            join_metadata["join_invite"] = invite_code
         if body.self_hosted:
             # Marks the owner as the operator → rotate the key on ownership
             # change so a previous owner's extracted key is invalidated.
@@ -1990,7 +2029,12 @@ async def _join_agent_impl(
         )
 
         base_url = settings.gateway_base_url or f"http://localhost:{settings.port}"
-        frontend_url = (settings.frontend_base_url or base_url).rstrip("/")
+        # First-claim landing is Interfaze when INTERFAZE_BASE_URL is set;
+        # otherwise keep AgentPlanet / Labs (FRONTEND_BASE_URL). Confirm-delete
+        # still uses FRONTEND_BASE_URL only — do not point that at Interfaze.
+        claim_origin = (
+            settings.interfaze_base_url or settings.frontend_base_url or base_url
+        ).rstrip("/")
 
         logger.info("agent_joined", agent_id=agent.agent_id, name=agent.name, referrer_id=referrer_id)
         # System-level join event: always emit into the internal audit stream.
@@ -2024,12 +2068,10 @@ async def _join_agent_impl(
         # never embeds reserved characters, but go through ``quote`` anyway
         # — defensive against any future change to the token alphabet, and
         # documents the intent that this value lands in a URL query string.
-        # The route shape MUST match the frontend page
-        # (``agentplanet/frontend/src/app/claim/[id]/page.tsx`` reads
-        # ``searchParams.get("token")``). The earlier path-segment shape
-        # ``/claim/{id}/{token}`` only ever rendered the Next.js 404 page
-        # because the dynamic route has a single ``[id]`` segment.
-        claim_url = f"{frontend_url}/claim/{agent.agent_id}?token={quote(claim_token, safe='')}"
+        # The route shape MUST match Interfaze ``/claim/[id]`` (and the
+        # AgentPlanet 302 that forwards old links). ``searchParams.get("token")``.
+        # The earlier path-segment shape ``/claim/{id}/{token}`` 404s.
+        claim_url = f"{claim_origin}/claim/{agent.agent_id}?token={quote(claim_token, safe='')}"
         _mode = (agent.communication_policy or {}).get("mode", "manifest")
         _hint = _build_next_step_hint(
             mode=_mode,
@@ -2070,6 +2112,7 @@ async def join_agent_internal(
     body: AgentJoinRequest,
     background_tasks: BackgroundTasks,
     ref: str | None = Query(None),
+    invite: str | None = Query(None),
 ):
     """Internal join endpoint — no rate limit, requires X-Internal-Token."""
     token = request.headers.get("X-Internal-Token", "")
@@ -2098,6 +2141,7 @@ async def join_agent_internal(
         ref,
         agent_svc,
         default_metadata={"visibility": "test"},
+        invite=invite,
     )
 
 
@@ -2108,6 +2152,10 @@ async def join_agent(
     body: AgentJoinRequest,
     background_tasks: BackgroundTasks,
     ref: str | None = Query(None, description="Referrer agent ID (query param shortcut, body referrer_id takes priority)"),
+    invite: str | None = Query(
+        None,
+        description="Host-issued human join invite (ji_…). Not an agent ref; not an owner sub.",
+    ),
     agent_service: AgentServiceDep = None,
 ):
     """
@@ -2130,7 +2178,9 @@ async def join_agent(
             "endpoint": "https://my-agent.example.com/a2a"
         }
     """
-    return await _join_agent_impl(body, background_tasks, ref, agent_service)
+    return await _join_agent_impl(
+        body, background_tasks, ref, agent_service, invite=invite
+    )
 
 
 @router.post("/{agent_id}")

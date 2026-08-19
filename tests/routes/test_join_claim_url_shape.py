@@ -41,7 +41,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from acn.monitoring.audit import AuditEventType
-from acn.routes.registry import AgentJoinRequest, _join_agent_impl
+from acn.routes.registry import AgentJoinRequest, _agent_entity_to_info, _join_agent_impl
 
 
 @pytest.fixture
@@ -143,6 +143,135 @@ async def test_claim_url_url_encodes_reserved_characters(stub_join_service, fake
     # And the raw form must NOT appear — that would mean we forgot to
     # call quote() somewhere on the path.
     assert "with/slash&amp=eq?qmark#hash" not in resp.claim_url
+
+
+@pytest.mark.asyncio
+async def test_claim_url_uses_interfaze_origin_when_set(stub_join_service, fake_agent):
+    """``INTERFAZE_BASE_URL`` wins for claim_url; path stays ``/claim/<id>?token=``."""
+    from acn.routes import registry as registry_mod
+
+    previous = registry_mod.settings.interfaze_base_url
+    registry_mod.settings.interfaze_base_url = "https://interfaze.io"
+    try:
+        with patch(
+            "acn.routes.registry._resolve_registration_endpoint",
+            new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
+        ):
+            resp = await _join_agent_impl(
+                _make_body(),
+                BackgroundTasks(),
+                ref=None,
+                agent_service=stub_join_service,
+            )
+    finally:
+        registry_mod.settings.interfaze_base_url = previous
+
+    aid = fake_agent.agent_id
+    token = fake_agent.verification_code
+    assert resp.claim_url.startswith("https://interfaze.io/claim/")
+    assert f"/claim/{aid}?token={token}" in resp.claim_url
+
+
+@pytest.mark.asyncio
+async def test_claim_url_falls_back_without_interfaze_origin(stub_join_service, fake_agent):
+    """Unset Interfaze origin keeps AgentPlanet / Labs FRONTEND_BASE_URL."""
+    from acn.routes import registry as registry_mod
+
+    previous_iz = registry_mod.settings.interfaze_base_url
+    previous_fe = registry_mod.settings.frontend_base_url
+    registry_mod.settings.interfaze_base_url = None
+    registry_mod.settings.frontend_base_url = "https://agentplanet.example"
+    try:
+        with patch(
+            "acn.routes.registry._resolve_registration_endpoint",
+            new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
+        ):
+            resp = await _join_agent_impl(
+                _make_body(),
+                BackgroundTasks(),
+                ref=None,
+                agent_service=stub_join_service,
+            )
+    finally:
+        registry_mod.settings.interfaze_base_url = previous_iz
+        registry_mod.settings.frontend_base_url = previous_fe
+
+    assert resp.claim_url.startswith("https://agentplanet.example/claim/")
+
+
+@pytest.mark.asyncio
+async def test_join_stores_host_invite_code_only(stub_join_service, fake_agent):
+    """``invite=ji_…`` lands in metadata.join_invite; owner subs are dropped."""
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
+    ):
+        await _join_agent_impl(
+            _make_body(),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+            invite="ji_shareableCode_01",
+        )
+
+    kwargs = stub_join_service.join_agent.await_args.kwargs
+    assert kwargs["metadata"]["join_invite"] == "ji_shareableCode_01"
+
+
+@pytest.mark.asyncio
+async def test_join_ignores_owner_sub_disguised_as_invite(stub_join_service, fake_agent):
+    body = _make_body()
+    body.invite = "auth0|secret-owner"
+    body.metadata = {"join_invite": "auth0|from-metadata", "owner": "auth0|nope"}
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
+    ):
+        await _join_agent_impl(
+            body,
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+            invite="auth0|from-query",
+        )
+
+    kwargs = stub_join_service.join_agent.await_args.kwargs
+    meta = kwargs["metadata"] or {}
+    assert "join_invite" not in meta
+    assert "owner" not in meta
+    assert "auth0|secret-owner" not in str(meta)
+
+
+def test_public_agent_info_keeps_host_join_invite():
+    """Gateway attribution reads GET /agents/{id} metadata; join_invite must survive strip."""
+    from datetime import UTC, datetime
+
+    agent = MagicMock()
+    agent.agent_id = "agent-join-meta"
+    agent.owner = None
+    agent.name = "InviteProbe"
+    agent.description = "Public read must keep Host invite code"
+    agent.endpoint = "https://probe.example.com/a2a"
+    agent.tags = []
+    agent.subnet_ids = ["public"]
+    agent.agent_card = None
+    agent.metadata = {"join_invite": "ji_keepme_01", "visibility": "real"}
+    agent.claim_status = None
+    agent.referrer_id = None
+    agent.verification_code = "SECRET-CLAIM-TOKEN"
+    agent.registered_at = datetime.now(UTC)
+    agent.last_heartbeat = None
+    agent.wallet_address = None
+    agent.wallet_addresses = None
+    agent.accepts_payment = False
+    agent.payment_methods = []
+    agent.token_pricing = None
+    agent.social_card_url = None
+    agent.communication_policy = {"mode": "open"}
+
+    info = _agent_entity_to_info(agent, is_online=True, strip_sensitive=True)
+    assert info.metadata["join_invite"] == "ji_keepme_01"
+    assert "verification_code" not in info.metadata
 
 
 @pytest.mark.asyncio

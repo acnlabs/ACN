@@ -78,9 +78,16 @@ class Settings(BaseSettings):
     # when ACN is fronted by a branded domain whose ownership it can prove.
     ard_publisher_domain: str | None = None
 
-    # Frontend base URL — used for human-facing links (e.g. claim pages)
-    # Defaults to gateway_base_url if not set
+    # Frontend base URL — AgentPlanet / Labs human pages (confirm-delete, etc.)
+    # Defaults to gateway_base_url if not set. Not used for first-claim links
+    # when ``interfaze_base_url`` is set.
     frontend_base_url: str | None = None
+
+    # Interfaze origin for first-claim links: ``{origin}/claim/{id}?token=``.
+    # Unset → fall back to ``frontend_base_url`` (AgentPlanet). Set only after
+    # Interfaze ``/claim/[id]`` is live (global: https://interfaze.io,
+    # cn: https://interfaze.acnlabs.cn).
+    interfaze_base_url: str | None = None
 
     # P3 transfer invite: default TTL (7 days) and hard cap for owner-scoped invites
     transfer_invite_default_ttl_seconds: int = 7 * 24 * 3600
