@@ -222,6 +222,10 @@ class AgentJoinRequest(BaseModel):
     )
     agent_card: dict[str, Any] | None = Field(None, description="A2A Agent Card (protocol v0.3.0)")
     referrer_id: str | None = Field(None, description="Referrer agent ID")
+    invite: str | None = Field(
+        None,
+        description="Host-issued human join invite (ji_…). Not an owner sub.",
+    )
     communication_policy: dict[str, Any] | None = Field(
         default={"mode": "manifest"},
         description=(

@@ -40,6 +40,10 @@ export function joinCommand(): Command {
       '--base-url <url>',
       'Override ACN origin (no /api/v1). Overrides --region and ACN_BASE_URL for this join.',
     )
+    .option(
+      '--invite <code>',
+      'Host-issued human join invite (ji_…). Stored as metadata only — not an owner account.',
+    )
     .action(
       async (opts: {
         name: string;
@@ -49,6 +53,7 @@ export function joinCommand(): Command {
         relay?: boolean;
         region?: string;
         baseUrl?: string;
+        invite?: string;
       }) => {
       if (opts.region && opts.baseUrl) {
         console.error('Use either --region or --base-url, not both.');
@@ -84,6 +89,7 @@ export function joinCommand(): Command {
         ...(opts.relay
           ? { delivery: 'relay', communication_policy: { mode: 'open' } }
           : {}),
+        ...(opts.invite ? { invite: opts.invite.trim() } : {}),
       };
 
       try {

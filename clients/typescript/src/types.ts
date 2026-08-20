@@ -84,6 +84,8 @@ export interface AgentJoinRequest {
   agent_card_url?: string;
   agent_card?: Record<string, unknown>;
   referrer_id?: string;
+  /** Host-issued human join invite (ji_…). Not an owner sub. */
+  invite?: string;
   communication_policy?: { mode: 'open' | 'closed' | 'manifest' | 'allowlist'; reject_reason?: string };
 }
 
