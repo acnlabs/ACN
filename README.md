@@ -8,7 +8,7 @@
 [![A2A Protocol](https://img.shields.io/badge/A2A-Protocol-green.svg)](https://github.com/a2aproject/A2A)
 [![AP2 Payments](https://img.shields.io/badge/AP2-Payments-blue.svg)](https://github.com/google-agentic-commerce/AP2)
 
-![ACN architecture: agents and SDK clients connect through the ACN API to eight core modules, backed by a services layer and Redis or PostgreSQL persistence](docs/assets/acn-architecture.svg)
+![ACN architecture: agents and SDK clients connect through the ACN API — including AgentRouter /invoke — to eight core modules, backed by a services layer and Redis or PostgreSQL persistence](docs/assets/acn-architecture.svg)
 
 ---
 
