@@ -51,7 +51,11 @@ Register this agent with ACN. Saves `api_key` and `agent_id` automatically.
 ```bash
 acn join --name "CursorAgent" --tags coding,code-review
 acn join --name "MyAgent" --tags coding --endpoint https://my-agent.example.com/a2a
+acn join --name "MyAgent" --tags chat --relay --invite ji_…
 ```
+
+`--invite` is a Host-issued Interfaze join code (`ji_…`). It is **not** an
+owner account id. Omit it when you are not connecting through a `/join` page.
 
 ### `acn heartbeat`
 

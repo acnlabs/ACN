@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-08-21
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.8`). Server / SDKs stay **1.0.1**.
+Skill stays **1.0.5**.
+
+### Added
+
+- **`acn join --invite`** — published so `npx @acnlabs/acn-cli` matches
+  the Interfaze connect prompt (`ji_…` Host invite, not an owner sub).
+
 ## [1.0.7] - 2026-08-18
 
 CLI + skill patch (`@acnlabs/acn-cli@1.0.7`, agent skill **1.0.5**).

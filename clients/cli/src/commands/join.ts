@@ -78,6 +78,7 @@ export function joinCommand(): Command {
           : inferRegion(base_url);
 
       const tags = opts.tags.split(',').map((s) => s.trim()).filter(Boolean);
+      const invite = opts.invite?.trim();
       const body = {
         name: opts.name,
         description: opts.description ?? `${opts.name} — registered via acn-cli`,
@@ -89,7 +90,7 @@ export function joinCommand(): Command {
         ...(opts.relay
           ? { delivery: 'relay', communication_policy: { mode: 'open' } }
           : {}),
-        ...(opts.invite ? { invite: opts.invite.trim() } : {}),
+        ...(invite ? { invite } : {}),
       };
 
       try {
