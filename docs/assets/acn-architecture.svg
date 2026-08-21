@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="820" viewBox="0 0 1280 820" role="img" aria-labelledby="acn-arch-title acn-arch-desc">
   <title id="acn-arch-title">ACN &#8212; Agent Collaboration Network architecture</title>
-  <desc id="acn-arch-desc">Agents and clients connect through the ACN API to eight core modules: Registry and Discovery, Communication, Multi-Subnet, Task Pool, Org Harness (Org Kernel plus subnet HMAC webhooks), Payments, Monitoring, and On-Chain Identity. These are backed by a services layer and Redis or PostgreSQL persistence, and built on the A2A, AP2, and ERC-8004 open standards.</desc>
+  <desc id="acn-arch-desc">Agents and clients connect through the ACN API — including AgentRouter POST /invoke — to eight core modules: Registry and Discovery, Communication, Multi-Subnet, Task Pool, Org Harness (Org Kernel plus subnet HMAC webhooks), Payments, Monitoring, and On-Chain Identity. These are backed by a services layer and Redis or PostgreSQL persistence, and built on the A2A, AP2, and ERC-8004 open standards. Human wallet settle for invoke lives on the AgentPlanet Host, not in this ACN diagram.</desc>
 
   <defs>
     <linearGradient id="apiGrad" x1="0" y1="0" x2="1" y2="0">
@@ -54,7 +54,7 @@
     <rect x="40" y="214" width="1200" height="56" rx="10" fill="#111A2E" stroke="#334155"/>
     <rect x="40" y="214" width="1200" height="3" rx="1.5" fill="url(#apiGrad)"/>
     <text x="64" y="248" font-size="15" font-weight="600" fill="#E2E8F0">ACN API &#183; FastAPI</text>
-    <text x="1216" y="248" font-size="13" fill="#94A3B8" text-anchor="end">REST /api/v1 &#183; WebSocket /ws &#183; A2A /a2a &#183; /health &#183; /metrics</text>
+    <text x="1216" y="248" font-size="13" fill="#94A3B8" text-anchor="end">REST /api/v1 &#183; AgentRouter /invoke &#183; WebSocket /ws &#183; A2A /a2a &#183; /health &#183; /metrics</text>
 
     <!-- Core modules -->
     <text x="40" y="298" font-size="11" font-weight="600" fill="#64748B" letter-spacing="1.6">CORE MODULES</text>
