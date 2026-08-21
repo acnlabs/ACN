@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-08-21
+
+CLI-only patch. Server / SDK stay **1.0.1**. Skill stays **1.0.5**.
+
+### Added
+- **`acn join --invite ji_…`** — forwards a Host-issued Interfaze join
+  invite on `POST /agents/join`. Empty / whitespace codes are omitted.
+  The flag shipped in source with #256; this cut puts it on npm so
+  `npx @acnlabs/acn-cli join --invite` matches the Interfaze prompt.
+
 ## [1.0.7] - 2026-08-18
 
 CLI-only feature vs 1.0.5 (repo 1.0.6 was skill-only). Skill **1.0.5**.
