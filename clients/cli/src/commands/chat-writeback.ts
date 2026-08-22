@@ -3,7 +3,9 @@
  *
  * When a relayed A2A message carries metadata.agentplanet (chat_id + reply_path),
  * the CLI:
- *   1) asks the host for reply text (--chat-complete-url | --chat-complete-exec)
+ *   1) completes the hop:
+ *        official → POST Host /chat/completions (CLI-owned; omit usage)
+ *        byo      → --chat-complete-url | --chat-complete-exec
  *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
  *   3) POSTs { content, reply_to_id?, usage? } to Chat Gateway agent-messages
  *      with Bearer JWT
@@ -18,8 +20,7 @@ import type { ChildProcess } from 'child_process';
 import type { NormalizedEvent } from './normalize-event.js';
 import { isAllowedChatReplyPath } from './normalize-event.js';
 import {
-  shouldOpenOfficialDoor,
-  startOfficialHopDoor,
+  canCompleteOfficialHop,
   type OfficialHopDoor,
 } from './official-hop-door.js';
 
@@ -90,10 +91,10 @@ export function validateChatWritebackOptions(opts: {
   }
   const hasUrl = Boolean(opts.chatCompleteUrl?.trim());
   const hasExec = Boolean(opts.chatCompleteExec?.trim());
-  if (hasUrl === hasExec) {
+  if (hasUrl && hasExec) {
     return (
-      '--chat-writeback requires exactly one of --chat-complete-url or --chat-complete-exec ' +
-      '(host returns JSON {"content":"..."} and optional usage).'
+      '--chat-writeback: --chat-complete-url and --chat-complete-exec are mutually exclusive ' +
+      '(omit both for official-only; BYO hops need exactly one).'
     );
   }
   return null;
@@ -165,6 +166,33 @@ export function extractContent(payload: unknown): string | null {
     }
   }
   return null;
+}
+
+/**
+ * OpenAI-compatible Host /chat/completions → reply text.
+ * Official hops omit writeback usage; Host meters what it saw.
+ */
+export function extractChatCompletionContent(payload: unknown): string | null {
+  const rec = asRecord(payload);
+  if (!rec) return null;
+  const choices = rec.choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const first = asRecord(choices[0]);
+    if (first) {
+      const msg = asRecord(first.message);
+      const fromMsg = msg?.content;
+      if (typeof fromMsg === 'string' && fromMsg.trim()) {
+        const t = fromMsg.trim();
+        if (t.toLowerCase() !== 'accepted') return t;
+      }
+      const fromText = first.text;
+      if (typeof fromText === 'string' && fromText.trim()) {
+        const t = fromText.trim();
+        if (t.toLowerCase() !== 'accepted') return t;
+      }
+    }
+  }
+  return extractContent(payload);
 }
 
 function asNonNegInt(v: unknown): number | null {
@@ -471,6 +499,83 @@ function spawnCompleteExec(
   });
 }
 
+async function completeOfficialViaHost(
+  event: NormalizedEvent,
+  opts: ChatWritebackOptions,
+  deps: ChatWritebackDeps,
+  jwt: string
+): Promise<
+  { ok: true; result: ChatCompleteResult } | { ok: false; reason: string }
+> {
+  const chat = event.chat;
+  if (!chat) return { ok: false, reason: 'no_chat_envelope' };
+  if (
+    !canCompleteOfficialHop({
+      inferencePath: chat.inference_path,
+      hopId: chat.hop_id,
+      hostInferenceUrl: chat.host_inference_url,
+      jwt,
+    })
+  ) {
+    return { ok: false, reason: 'official_complete_skipped' };
+  }
+  const model = chat.requested_model?.trim();
+  const text = chat.user_text?.trim();
+  if (!model) return { ok: false, reason: 'official_complete_missing_model' };
+  if (!text) return { ok: false, reason: 'official_complete_missing_text' };
+
+  const logFn = deps.logFn ?? ((line: string) => console.error(line));
+  logFn(
+    `[acn listen] official_complete chat_id=${chat.chat_id} model=${model}`
+  );
+
+  const fetchFn = deps.fetchFn ?? fetch;
+  const timeoutMs = opts.completeTimeoutMs ?? DEFAULT_COMPLETE_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchFn(`${chat.host_inference_url}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${jwt}`,
+        'content-type': 'application/json',
+        'X-Hop-Id': chat.hop_id!,
+        'X-Agent-Id': opts.agentId,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: text }],
+        hop_id: chat.hop_id,
+        ...(chat.max_output_tokens && chat.max_output_tokens > 0
+          ? { max_tokens: chat.max_output_tokens }
+          : {}),
+      }),
+      signal: controller.signal,
+    });
+    const raw = await res.text();
+    if (res.status < 200 || res.status >= 300) {
+      return { ok: false, reason: `official_complete_http_${res.status}` };
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw) as unknown;
+    } catch {
+      return { ok: false, reason: 'official_complete_invalid_json' };
+    }
+    const content = extractChatCompletionContent(payload);
+    if (!content) return { ok: false, reason: 'official_complete_missing_content' };
+    return { ok: true, result: { content } };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (controller.signal.aborted || /abort|timeout/i.test(msg)) {
+      return { ok: false, reason: 'official_complete_timeout' };
+    }
+    return { ok: false, reason: msg.slice(0, 200) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function completeViaExec(
   event: NormalizedEvent,
   opts: ChatWritebackOptions,
@@ -479,44 +584,7 @@ async function completeViaExec(
 ): Promise<
   { ok: true; result: ChatCompleteResult } | { ok: false; reason: string }
 > {
-  let door: OfficialHopDoor | null = null;
-  const logFn = deps.logFn ?? ((line: string) => console.error(line));
-  try {
-    if (
-      shouldOpenOfficialDoor({
-        inferencePath: event.chat?.inference_path,
-        hopId: event.chat?.hop_id,
-        hostInferenceUrl: event.chat?.host_inference_url,
-        jwt,
-      })
-    ) {
-      try {
-        door = await startOfficialHopDoor({
-          hostInferenceUrl: event.chat!.host_inference_url!,
-          hopId: event.chat!.hop_id!,
-          agentId: opts.agentId,
-          jwt: jwt!,
-          fetchFn: deps.fetchFn,
-        });
-      } catch {
-        door = null;
-      }
-      if (door) {
-        logFn(
-          `[acn listen] official_door chat_id=${event.chat!.chat_id} base=${door.baseUrl}`
-        );
-      } else {
-        logFn(
-          `[acn listen] official_door_skipped chat_id=${event.chat!.chat_id}`
-        );
-      }
-    }
-    return await spawnCompleteExec(event, opts, deps, jwt, door);
-  } finally {
-    if (door) {
-      await door.close().catch(() => undefined);
-    }
-  }
+  return spawnCompleteExec(event, opts, deps, jwt);
 }
 
 async function postWriteback(
@@ -667,14 +735,30 @@ export async function handleChatWriteback(
   if (!event.chat) return { ok: false, reason: 'no_chat_envelope' };
 
   let jwt: string | null = null;
-  if (event.chat.inference_path === 'official' && opts.completeExec) {
+  if (event.chat.inference_path === 'official') {
     const minted = await mintAgentJwt(opts, deps.fetchFn ?? fetch);
-    if (minted.ok) jwt = minted.token;
+    if (!minted.ok) {
+      logFn(
+        `[acn listen] official_jwt_failed chat_id=${event.chat.chat_id} ` +
+          `reason=${minted.reason}`
+      );
+      return { ok: false, reason: minted.reason };
+    }
+    jwt = minted.token;
   }
 
-  const completed = opts.completeUrl
-    ? await completeViaHttp(event, opts, deps)
-    : await completeViaExec(event, opts, deps, jwt);
+  let completed:
+    | { ok: true; result: ChatCompleteResult }
+    | { ok: false; reason: string };
+  if (event.chat.inference_path === 'official') {
+    completed = await completeOfficialViaHost(event, opts, deps, jwt!);
+  } else if (opts.completeUrl) {
+    completed = await completeViaHttp(event, opts, deps);
+  } else if (opts.completeExec) {
+    completed = await completeViaExec(event, opts, deps, jwt);
+  } else {
+    completed = { ok: false, reason: 'byo_complete_missing' };
+  }
 
   if (!completed.ok) {
     logFn(

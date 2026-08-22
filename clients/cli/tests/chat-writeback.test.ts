@@ -9,6 +9,7 @@ import {
   clearAgentJwtCache,
   completeInferenceEnv,
   DEFAULT_CHAT_JWT_AUDIENCE,
+  extractChatCompletionContent,
   extractContent,
   extractModelId,
   extractUsage,
@@ -195,6 +196,10 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
 
 describe('extractContent', () => {
   it('reads content/reply/text only', () => {
+    expect(extractChatCompletionContent({
+      choices: [{ message: { content: 'official hi' } }],
+    })).toBe('official hi');
+    expect(extractChatCompletionContent({ content: 'plain' })).toBe('plain');
     expect(extractContent({ content: 'hi' })).toBe('hi');
     expect(extractContent({ reply: 'r' })).toBe('r');
     expect(extractContent({ text: 't' })).toBe('t');
@@ -276,7 +281,7 @@ describe('validateChatWritebackOptions', () => {
     expect(validateChatWritebackOptions({})).toBeNull();
   });
 
-  it('requires base, api key, and exactly one complete source', () => {
+  it('requires base and api key; complete is optional and mutually exclusive', () => {
     expect(
       validateChatWritebackOptions({
         chatWriteback: true,
@@ -284,7 +289,7 @@ describe('validateChatWritebackOptions', () => {
         apiKey: 'acn_key',
         chatApiBase: 'http://gw',
       })
-    ).toMatch(/exactly one/);
+    ).toBeNull();
 
     expect(
       validateChatWritebackOptions({
@@ -295,7 +300,7 @@ describe('validateChatWritebackOptions', () => {
         chatCompleteUrl: 'http://host/complete',
         chatCompleteExec: 'echo',
       })
-    ).toMatch(/exactly one/);
+    ).toMatch(/mutually exclusive/);
 
     expect(
       validateChatWritebackOptions({
@@ -390,6 +395,8 @@ describe('handleChatWriteback', () => {
             hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
             inference_path: 'official',
             host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+            requested_model: 'moonshotai/kimi-k2.5',
+            max_output_tokens: 2048,
           })
         ) as { ok: true; body: Record<string, unknown> }
       ).body
@@ -413,12 +420,16 @@ describe('handleChatWriteback', () => {
 
     const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
-      if (u.includes('/complete')) {
-        return mockOkResponse(JSON.stringify({ content: 'official reply' }));
-      }
       if (u.includes('/oauth/token')) {
         return mockOkResponse(
           JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      if (u.includes('/chat/completions')) {
+        return mockOkResponse(
+          JSON.stringify({
+            choices: [{ message: { content: 'official reply' } }],
+          })
         );
       }
       return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
@@ -428,16 +439,86 @@ describe('handleChatWriteback', () => {
       logFn: () => {},
     });
     expect(result).toEqual({ ok: true, httpStatus: 201 });
-    const completeInit = fetchFn.mock.calls.find((c) =>
-      String(c[0]).includes('/complete')
-    )?.[1];
-    expect(completeInit?.headers).toMatchObject({
-      'X-ACN-Agent-Id': 'agent-1',
-      'X-ACN-Hop-Id': 'hop:dialog:chat-uuid:user-msg-1:agent-1',
-      'X-ACN-Inference-Path': 'official',
-      'X-ACN-Host-Inference-Url':
-        'https://api.agentplanet.org/api/inference/v1',
+    const completeCall = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/chat/completions')
+    );
+    expect(completeCall?.[0]).toBe(
+      'https://api.agentplanet.org/api/inference/v1/chat/completions'
+    );
+    expect(completeCall?.[1]?.headers).toMatchObject({
+      authorization: 'Bearer jwt-from-acn',
+      'X-Hop-Id': 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+      'X-Agent-Id': 'agent-1',
     });
+    expect(JSON.parse(String(completeCall?.[1]?.body ?? '{}'))).toEqual({
+      model: 'moonshotai/kimi-k2.5',
+      messages: [{ role: 'user', content: 'hello from interfaze' }],
+      hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+      max_tokens: 2048,
+    });
+    expect(
+      fetchFn.mock.calls.some((c) => String(c[0]).includes('/complete'))
+    ).toBe(false);
+  });
+
+  it('completes official hops without --chat-complete-*', async () => {
+    clearAgentJwtCache();
+    const event = normalizeEvent(
+      (
+        parseJsonRpcBody(
+          chatMessageBody({
+            hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+            inference_path: 'official',
+            host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+            requested_model: 'moonshotai/kimi-k2.5',
+          })
+        ) as { ok: true; body: Record<string, unknown> }
+      ).body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      agentId: 'agent-1',
+    })!;
+    const fetchFn = vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      if (u.includes('/chat/completions')) {
+        return mockOkResponse(
+          JSON.stringify({
+            choices: [{ message: { content: 'official only' } }],
+          })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+  });
+
+  it('fails BYO hops when no complete source is configured', async () => {
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      agentId: 'agent-1',
+    })!;
+    const result = await handleChatWriteback(event, opts, { logFn: () => {} });
+    expect(result).toEqual({ ok: false, reason: 'byo_complete_missing' });
   });
 
   it('forwards host usage + reply_to_id for billing settle', async () => {

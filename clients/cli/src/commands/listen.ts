@@ -599,11 +599,11 @@ export function listenCommand(): Command {
     )
     .option(
       '--chat-complete-url <url>',
-      'POST NormalizedEvent → JSON {"content":"..."} (mutually exclusive with --chat-complete-exec)'
+      'BYO complete URL (optional if official-only; mutually exclusive with --chat-complete-exec)'
     )
     .option(
       '--chat-complete-exec <cmd>',
-      'Shell: event JSON on stdin → stdout JSON {"content":"..."}'
+      'BYO only (optional if official-only): stdin event → stdout {"content"}. Official hops complete via Host.'
     )
     .option(
       '--chat-complete-timeout <ms>',

@@ -4,6 +4,24 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-08-22
+
+CLI + skill patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.
+
+### Changed
+- **Official hops complete in the CLI** — when Host says `inference_path=official`,
+  `acn listen --chat-writeback` POSTs Host `/chat/completions` itself
+  (`requested_model` + `user_text`) and writebacks `{content}` (no usage).
+  `--chat-complete-exec` / `--chat-complete-url` are BYO only. Existing
+  runtimes do not need to honor `OPENAI_BASE_URL`. Restart `acn listen`.
+  Official v0 is a single completion (no local tool loop).
+- Skill `official_hop.py --complete` — older CLI / explicit wrapper:
+  official → Host; ` -- <byo cmd>` for BYO.
+- Official-only listen may omit `--chat-complete-*`. BYO hops without a
+  complete source fail `byo_complete_missing`.
+- Official Host POST forwards envelope `max_output_tokens` as `max_tokens`.
+- Skill `--complete` keeps full `user_text` (no 240-char hop-field cap).
+
 ## [1.0.8] - 2026-08-21
 
 CLI-only patch. Server / SDK stay **1.0.1**. Skill stays **1.0.5**.
