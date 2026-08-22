@@ -5,12 +5,16 @@ Same idea as requested_model / chat_usage.py: Host decides the path;
 this helper only honors it.
 
   python3 official_hop.py [--mint] < event.json     # JSON wake fields
+  python3 official_hop.py --complete [-- <byo>]     # official → Host
+                                                    # {"content"}; BYO → exec
   eval "$(python3 official_hop.py --door)"          # stdin = event; official
                                                     # exports OPENAI_BASE_URL
   python3 official_hop.py --proxy                   # local OpenAI door
 
-Official only when Host said so and hop + allowlisted URL + JWT are present.
-BYO / missing JWT = no-op. Do not invent a provider.
+CLI 1.0.9+ completes official hops itself. --complete is for older CLI
+or an explicit --chat-complete-exec wrapper. Official only when Host said
+so and hop + allowlisted URL + JWT are present. BYO / missing JWT = no-op
+unless a command follows `--`. Do not invent a provider.
 """
 
 from __future__ import annotations
@@ -148,6 +152,7 @@ def resolve_wake(
         "chat.requested_model",
         "raw.params.message.metadata.agentplanet.requested_model",
     )
+    user_text = _user_text(evd)
     agent_id = _clean(env.get("ACN_AGENT_ID") or "", 80)
     jwt = _clean(env.get("ACN_AGENT_JWT", ""), 4000)
     if mint and path == "official" and hop and url and not jwt:
@@ -158,9 +163,63 @@ def resolve_wake(
         "hop_id": hop,
         "host_inference_url": url if official else "",
         "requested_model": requested,
+        "user_text": user_text,
         "agent_id": agent_id,
         "jwt": jwt if official else "",
     }
+
+
+def _user_text(evd: dict[str, object]) -> str:
+    t = _dig(evd, "chat.user_text")
+    if t:
+        return t
+    for path in (
+        ("raw", "params", "message"),
+        ("params", "message"),
+        ("message",),
+    ):
+        cur: object = evd
+        ok = True
+        for key in path:
+            if not isinstance(cur, dict) or key not in cur:
+                ok = False
+                break
+            cur = cur[key]
+        if not ok or not isinstance(cur, dict):
+            continue
+        parts = cur.get("parts")
+        if not isinstance(parts, list):
+            continue
+        chunks: list[str] = []
+        for part in parts:
+            if not isinstance(part, dict) or part.get("kind") != "text":
+                continue
+            got = _clean(part.get("text"), 8000)
+            if got:
+                chunks.append(got)
+        if chunks:
+            return "\n".join(chunks)
+    return ""
+
+
+def extract_completion_content(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        msg = choices[0].get("message")
+        if isinstance(msg, dict):
+            got = _clean(msg.get("content"), 20000)
+            if got and got.lower() != "accepted":
+                return got
+        got = _clean(choices[0].get("text"), 20000)
+        if got and got.lower() != "accepted":
+            return got
+    for key in ("content", "reply", "text"):
+        got = _clean(payload.get(key), 20000)
+        if got and got.lower() != "accepted":
+            return got
+    return ""
 
 
 def serve_proxy() -> int:
@@ -290,11 +349,95 @@ def run_door() -> int:
     return 0
 
 
+def _byo_cmd(argv: list[str]) -> list[str]:
+    if "--" in argv:
+        return [a for a in argv[argv.index("--") + 1 :] if a]
+    return []
+
+
+def complete_official(wake: dict[str, str], text: str) -> int:
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    model = wake["requested_model"]
+    if not model or not text:
+        print("official_hop: missing_model_or_text", file=sys.stderr)
+        return 2
+    base = wake["host_inference_url"]
+    jwt = wake["jwt"]
+    hop = wake["hop_id"]
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": text}],
+            "hop_id": hop,
+        }
+    ).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {jwt}",
+        "Content-Type": "application/json",
+        "X-Hop-Id": hop,
+    }
+    if wake["agent_id"]:
+        headers["X-Agent-Id"] = wake["agent_id"]
+    req = Request(
+        f"{base}/chat/completions",
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=120) as resp:  # noqa: S310 — Host allowlisted
+            raw = resp.read()
+    except HTTPError as e:
+        print(f"official_hop: http_{e.code}", file=sys.stderr)
+        return 2
+    except URLError as e:
+        print(f"official_hop: upstream:{e.reason}", file=sys.stderr)
+        return 2
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        print("official_hop: invalid_json", file=sys.stderr)
+        return 2
+    content = extract_completion_content(payload)
+    if not content:
+        print("official_hop: missing_content", file=sys.stderr)
+        return 2
+    print(json.dumps({"content": content}, ensure_ascii=False))
+    return 0
+
+
+def run_complete() -> int:
+    raw = sys.stdin.read()
+    try:
+        ev = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError as e:
+        print(f"official_hop: invalid_json:{e}", file=sys.stderr)
+        return 2
+    wake = resolve_wake(ev, mint=True)
+    text = wake.get("user_text") or _user_text(ev if isinstance(ev, dict) else {})
+    if wake["inference_path"] == "official":
+        return complete_official(wake, text)
+    byo = _byo_cmd(sys.argv)
+    if not byo:
+        print("official_hop: byo_use_complete_exec", file=sys.stderr)
+        return 3
+    child = subprocess.run(  # noqa: S603
+        byo,
+        input=raw.encode("utf-8"),
+        check=False,
+    )
+    return child.returncode
+
+
 def main() -> int:
     if "--proxy" in sys.argv:
         return serve_proxy()
     if "--door" in sys.argv:
         return run_door()
+    if "--complete" in sys.argv:
+        return run_complete()
     raw = sys.stdin.read()
     try:
         ev = json.loads(raw) if raw.strip() else {}

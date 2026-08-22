@@ -603,7 +603,7 @@ export function listenCommand(): Command {
     )
     .option(
       '--chat-complete-exec <cmd>',
-      'Shell: event JSON on stdin → stdout JSON {"content":"..."}'
+      'BYO only (CLI 1.0.9+): stdin event → stdout {"content"}. Official hops complete via Host.'
     )
     .option(
       '--chat-complete-timeout <ms>',

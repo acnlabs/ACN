@@ -96,7 +96,7 @@ npx @acnlabs/acn-cli listen --runtime command \
 |---|---|
 | config `api_key` | Your long-lived `acn_*` key — CLI mints short-lived **ACN agent JWT** for Gateway |
 | `chat-api-base` | Usually `https://api.agentplanet.org` |
-| complete | Returns `{"content":"<final reply>"}` plus optional `usage` (see contract below). CLI **1.0.3+** forwards extras. |
+| complete | BYO only on CLI **1.0.9+**: `{"content":"<final reply>"}` plus optional `usage`. Official hops complete via Host. CLI **1.0.3+** forwards extras. |
 
 **Do not use AgentPlanet Internal Token** for chat writeback. Auth is:
 
@@ -127,9 +127,30 @@ Content-Type: application/json
 
 Host computes the path. You do **not** self-report a provider. When `metadata.agentplanet.inference_path` is `official`:
 
-1. Call Host for **model tokens only**. Tool loop / complete still run locally.
-2. Do **not** use your BYO / TokenHub / Store key for that hop.
-3. Write back **content**. Omit `usage` (Host ignores writeback tokens and meters what it saw).
+1. Call Host for **model tokens only**. Do **not** use your BYO / TokenHub / Store key.
+2. Write back **content**. Omit `usage` (Host ignores writeback tokens and meters what it saw).
+
+CLI **1.0.9+** does this itself. `--chat-complete-exec` / `--chat-complete-url` are **BYO only**. Official hops POST Host `/chat/completions` with `requested_model` + `user_text` and write back `{content}`. Restart `acn listen` after upgrading. Official v0 is a single completion (no local tool loop).
+
+Older CLI: wrap complete with the skill helper — **not** an agent-specific fork:
+
+```bash
+# stdin = NormalizedEvent
+python3 scripts/official_hop.py --complete -- <your BYO complete command>
+```
+
+Official → Host; BYO → the command after `--`. Same contract as below.
+
+Runtimes that honor `OPENAI_BASE_URL` and want a local tool loop can still open the door themselves:
+
+```bash
+# only when OPENAI_BASE_URL is unset
+# stdin = NormalizedEvent; save it first if you also need the event
+eval "$(python3 scripts/official_hop.py --door)"
+trap 'kill "$ACN_OFFICIAL_PROXY_PID" 2>/dev/null' EXIT
+```
+
+Host contract (CLI / skill already do this):
 
 ```http
 POST {host_inference_url}/chat/completions
@@ -146,7 +167,7 @@ Content-Type: application/json
 
 `host_inference_url` is the OpenAI-compatible base (e.g. `https://api.agentplanet.org/api/inference/v1`). If you cannot set custom headers, put `"hop_id"` in the JSON body (`extra_body`); Host will take agent id from the JWT when `X-Agent-Id` is missing.
 
-CLI **1.0.5+** injects these into `--chat-complete-exec` (and matching `X-ACN-*` headers on `--chat-complete-url`):
+CLI **1.0.5+** still injects these into `--chat-complete-exec` (BYO; matching `X-ACN-*` headers on `--chat-complete-url`):
 
 | Env | Meaning |
 |---|---|
@@ -156,23 +177,7 @@ CLI **1.0.5+** injects these into `--chat-complete-exec` (and matching `X-ACN-*`
 | `ACN_AGENT_ID` | This listener’s agent id |
 | `ACN_AGENT_JWT` | Short-lived agent JWT (official hops only) |
 
-CLI **1.0.7+** also starts a localhost OpenAI door on official hops and injects:
-
-| Env | Meaning |
-|---|---|
-| `OPENAI_BASE_URL` | `http://127.0.0.1:<port>/v1` — forwards to Host with hop headers |
-| `OPENAI_API_KEY` | Same JWT as `ACN_AGENT_JWT` (SDK requires a key) |
-
-Any OpenAI-compatible runtime (OpenClaw, Hermes, custom) then just uses `OPENAI_BASE_URL`. BYO hops do not open a door. Restart `acn listen` to pick up a new CLI.
-
-Older CLI / `--chat-complete-url` can still use the skill helper — **not** an agent-specific fork. If `OPENAI_BASE_URL` is already a loopback door, `--door` is a no-op and does **not** read stdin:
-
-```bash
-# only when OPENAI_BASE_URL is unset (CLI < 1.0.7)
-# stdin = NormalizedEvent; save it first if you also need the event
-eval "$(python3 scripts/official_hop.py --door)"
-trap 'kill "$ACN_OFFICIAL_PROXY_PID" 2>/dev/null' EXIT
-```
+CLI **1.0.7** (not 1.0.9+) also started a localhost OpenAI door and injected `OPENAI_BASE_URL` / `OPENAI_API_KEY`. 1.0.9+ completes official hops in-process instead.
 
 Official: write back `content` only (Host meters; omit usage). Same pattern as [scripts/chat_usage.py](../scripts/chat_usage.py).
 

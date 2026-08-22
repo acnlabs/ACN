@@ -1,9 +1,10 @@
 /**
  * Local OpenAI-compatible door for official Mode B hops.
  *
- * Standard OpenAI SDKs will not add X-Hop-Id / X-Agent-Id. Listen starts
- * this loopback server, injects OPENAI_BASE_URL / OPENAI_API_KEY into
- * --chat-complete-exec, and forwards POST /v1/chat/completions to Host.
+ * CLI 1.0.9+ completes official hops itself (Host /chat/completions).
+ * This door remains for skill `official_hop.py --door` and runtimes that
+ * honor OPENAI_BASE_URL for a local tool loop. Standard OpenAI SDKs will
+ * not add X-Hop-Id / X-Agent-Id; the door forwards those to Host.
  * BYO hops never open a door.
  */
 

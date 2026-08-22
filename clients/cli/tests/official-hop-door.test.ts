@@ -1,5 +1,3 @@
-import { EventEmitter } from 'node:events';
-import type { ChildProcess } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -47,6 +45,7 @@ function chatOfficialBody(): string {
             hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
             inference_path: 'official',
             host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+            requested_model: 'moonshotai/kimi-k2.5',
           },
         },
       },
@@ -173,7 +172,7 @@ describe('startOfficialHopDoor', () => {
   });
 });
 
-describe('complete-exec official door injection', () => {
+describe('official hop CLI complete', () => {
   it('injects OPENAI_* when a door URL is passed', () => {
     const event = officialEvent();
     const env = completeInferenceEnv(event, { agentId: 'agent-1' }, 'jwt-official', {
@@ -184,9 +183,10 @@ describe('complete-exec official door injection', () => {
     expect(env.ACN_AGENT_JWT).toBe('jwt-official');
   });
 
-  it('opens a door for official complete-exec and forwards through it', async () => {
+  it('completes official hops via Host and does not spawn complete-exec', async () => {
     clearAgentJwtCache();
     const upstream: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const writebacks: Array<Record<string, unknown>> = [];
     const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
       if (u.includes('/oauth/token')) {
@@ -199,40 +199,18 @@ describe('complete-exec official door injection', () => {
           url: u,
           body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
         });
-        return mockOkResponse(JSON.stringify({ id: 'cmpl' }));
+        return mockOkResponse(
+          JSON.stringify({
+            id: 'cmpl',
+            choices: [{ message: { role: 'assistant', content: 'official hi' } }],
+          })
+        );
       }
+      writebacks.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
       return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
     });
 
-    const spawnFn = vi.fn((_cmd: string, opts?: { env?: NodeJS.ProcessEnv }) => {
-      const env = opts?.env ?? {};
-      const child = new EventEmitter() as ChildProcess;
-      const stdout = new EventEmitter();
-      const stderr = new EventEmitter();
-      child.stdout = stdout as ChildProcess['stdout'];
-      child.stderr = stderr as ChildProcess['stderr'];
-      child.kill = () => true;
-      child.stdin = {
-        end: () => {
-          void (async () => {
-            expect(env.OPENAI_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
-            expect(env.OPENAI_API_KEY).toBe('jwt-door');
-            const res = await fetch(`${env.OPENAI_BASE_URL}/chat/completions`, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                model: 'tencenttokenplan/kimi-k2.5',
-                messages: [],
-              }),
-            });
-            expect(res.status).toBe(200);
-            stdout.emit('data', Buffer.from(JSON.stringify({ content: 'from exec' })));
-            child.emit('close', 0);
-          })();
-        },
-      } as ChildProcess['stdin'];
-      return child;
-    });
+    const spawnFn = vi.fn();
 
     const result = await handleChatWriteback(
       officialEvent(),
@@ -251,15 +229,19 @@ describe('complete-exec official door injection', () => {
       }
     );
     expect(result).toEqual({ ok: true, httpStatus: 201 });
+    expect(spawnFn).not.toHaveBeenCalled();
     expect(upstream).toEqual([
       {
         url: 'https://api.agentplanet.org/api/inference/v1/chat/completions',
         body: {
-          model: 'tencenttokenplan/kimi-k2.5',
-          messages: [],
+          model: 'moonshotai/kimi-k2.5',
+          messages: [{ role: 'user', content: 'hello' }],
           hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
         },
       },
+    ]);
+    expect(writebacks).toEqual([
+      { content: 'official hi', reply_to_id: 'user-msg-1' },
     ]);
   });
 });
