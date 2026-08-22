@@ -9,13 +9,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from official_hop import (
+    _byo_cmd,
+    _user_text,
     allow_host_url,
     complete_official,
     door_already_open,
     extract_completion_content,
     resolve_wake,
-    _byo_cmd,
-    _user_text,
 )
 
 
