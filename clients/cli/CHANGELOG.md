@@ -17,6 +17,10 @@ CLI + skill patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.
   Official v0 is a single completion (no local tool loop).
 - Skill `official_hop.py --complete` — older CLI / explicit wrapper:
   official → Host; ` -- <byo cmd>` for BYO.
+- Official-only listen may omit `--chat-complete-*`. BYO hops without a
+  complete source fail `byo_complete_missing`.
+- Official Host POST forwards envelope `max_output_tokens` as `max_tokens`.
+- Skill `--complete` keeps full `user_text` (no 240-char hop-field cap).
 
 ## [1.0.8] - 2026-08-21
 

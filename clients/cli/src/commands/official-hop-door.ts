@@ -18,7 +18,8 @@ export type OfficialHopDoor = {
   close: () => Promise<void>;
 };
 
-export function shouldOpenOfficialDoor(opts: {
+/** Official hop may hit Host: path + hop + allowlisted URL + JWT. */
+export function canCompleteOfficialHop(opts: {
   inferencePath?: string | null;
   hopId?: string | null;
   hostInferenceUrl?: string | null;

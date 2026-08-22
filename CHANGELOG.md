@@ -16,7 +16,9 @@ Server / SDKs stay **1.0.1**.
 
 - **Official Mode B complete is CLI-owned** — listen POSTs Host
   `/chat/completions` on official hops and writebacks content. Complete
-  exec/url stay BYO. Skill `official_hop.py --complete` covers older CLI.
+  exec/url stay BYO and may be omitted for official-only. Skill
+  `official_hop.py --complete` covers older CLI (full `user_text`;
+  forwards `max_output_tokens`).
 
 ## [1.0.8] - 2026-08-21
 

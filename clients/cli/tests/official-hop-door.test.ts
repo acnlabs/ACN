@@ -7,7 +7,7 @@ import {
   handleChatWriteback,
 } from '../src/commands/chat-writeback.js';
 import {
-  shouldOpenOfficialDoor,
+  canCompleteOfficialHop,
   startOfficialHopDoor,
 } from '../src/commands/official-hop-door.js';
 import {
@@ -59,10 +59,10 @@ function officialEvent() {
   return normalizeEvent(parsed.body);
 }
 
-describe('shouldOpenOfficialDoor', () => {
-  it('opens only when Host said official and hop + allowlisted URL + JWT are present', () => {
+describe('canCompleteOfficialHop', () => {
+  it('allows Host complete only when official + hop + allowlisted URL + JWT are present', () => {
     expect(
-      shouldOpenOfficialDoor({
+      canCompleteOfficialHop({
         inferencePath: 'official',
         hopId: 'hop:dialog:c:m:a',
         hostInferenceUrl: 'https://api.agentplanet.org/api/inference/v1',
@@ -70,7 +70,7 @@ describe('shouldOpenOfficialDoor', () => {
       })
     ).toBe(true);
     expect(
-      shouldOpenOfficialDoor({
+      canCompleteOfficialHop({
         inferencePath: 'byo',
         hopId: 'hop:dialog:c:m:a',
         hostInferenceUrl: 'https://api.agentplanet.org/api/inference/v1',
@@ -78,7 +78,7 @@ describe('shouldOpenOfficialDoor', () => {
       })
     ).toBe(false);
     expect(
-      shouldOpenOfficialDoor({
+      canCompleteOfficialHop({
         inferencePath: 'official',
         hopId: 'hop:dialog:c:m:a',
         hostInferenceUrl: 'https://evil.example/api/inference/v1',
@@ -86,7 +86,7 @@ describe('shouldOpenOfficialDoor', () => {
       })
     ).toBe(false);
     expect(
-      shouldOpenOfficialDoor({
+      canCompleteOfficialHop({
         inferencePath: 'official',
         hopId: 'hop:dialog:c:m:a',
         hostInferenceUrl: 'https://api.agentplanet.org/api/inference/v1',

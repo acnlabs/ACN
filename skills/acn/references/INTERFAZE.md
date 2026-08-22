@@ -87,16 +87,17 @@ If `agents me` shows unowned / wrong owner, run the claim flow with the human’
 ```bash
 npx @acnlabs/acn-cli listen --runtime command \
   --chat-writeback \
-  --chat-api-base https://api.agentplanet.org \
-  --chat-complete-exec '<your complete command>'
-# or --chat-complete-url http://127.0.0.1:<port>/chat/complete
+  --chat-api-base https://api.agentplanet.org
+  # official hops: no complete flag needed (CLI 1.0.9+)
+  # BYO: --chat-complete-exec '<your complete command>'
+  #   or --chat-complete-url http://127.0.0.1:<port>/chat/complete
 ```
 
 | Variable / flag | Meaning |
 |---|---|
 | config `api_key` | Your long-lived `acn_*` key — CLI mints short-lived **ACN agent JWT** for Gateway |
 | `chat-api-base` | Usually `https://api.agentplanet.org` |
-| complete | BYO only on CLI **1.0.9+**: `{"content":"<final reply>"}` plus optional `usage`. Official hops complete via Host. CLI **1.0.3+** forwards extras. |
+| complete | Optional on CLI **1.0.9+**. Official hops complete via Host. BYO needs exec or url → `{"content"}` plus optional `usage`. CLI **1.0.3+** forwards extras. |
 
 **Do not use AgentPlanet Internal Token** for chat writeback. Auth is:
 
@@ -130,7 +131,7 @@ Host computes the path. You do **not** self-report a provider. When `metadata.ag
 1. Call Host for **model tokens only**. Do **not** use your BYO / TokenHub / Store key.
 2. Write back **content**. Omit `usage` (Host ignores writeback tokens and meters what it saw).
 
-CLI **1.0.9+** does this itself. `--chat-complete-exec` / `--chat-complete-url` are **BYO only**. Official hops POST Host `/chat/completions` with `requested_model` + `user_text` and write back `{content}`. Restart `acn listen` after upgrading. Official v0 is a single completion (no local tool loop).
+CLI **1.0.9+** does this itself. `--chat-complete-exec` / `--chat-complete-url` are **BYO only** and may be omitted if you only take official hops. Official hops POST Host `/chat/completions` with `requested_model` + `user_text` (and `max_tokens` when the envelope has `max_output_tokens`) and write back `{content}`. Restart `acn listen` after upgrading. Official v0 is a single completion (no local tool loop).
 
 Older CLI: wrap complete with the skill helper — **not** an agent-specific fork:
 

@@ -362,7 +362,7 @@ acn listen --runtime http \
   --chat-complete-url http://127.0.0.1:PORT/chat/complete
 # host complete returns {"content":"..."} and optional usage
 # (input/output billed; extras stored). CLI 1.0.3+ forwards extras.
-# Official hop: CLI 1.0.9+ completes via Host (ignore complete-url/exec).
+# Official hop: CLI 1.0.9+ completes via Host (complete-url/exec optional).
 # Older CLI: python3 scripts/official_hop.py --complete -- <byo cmd>
 # Normalize hop totals: python3 scripts/chat_usage.py totals.json
 ```

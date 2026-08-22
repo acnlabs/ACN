@@ -113,7 +113,7 @@ acn listen --runtime http \
 `--chat-token` is deprecated/ignored. Task / Org wakes still use `--wake-url` /
 `--wake-exec`. Chat envelopes skip wake and use the complete → writeback path
 instead. CLI **1.0.9+** completes official hops via Host; `--chat-complete-*`
-is BYO only.
+is BYO only and may be omitted for official-only.
 
 **Coverage:** only traffic that arrives over the Mode B relay. Open Task Pool
 rows that were never pushed as A2A still need `acn tasks list` / reconcile.

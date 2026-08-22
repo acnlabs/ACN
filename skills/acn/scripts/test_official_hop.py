@@ -48,6 +48,7 @@ def test_resolve_official_from_chat_and_env() -> None:
     assert got["requested_model"] == "tencenttokenplan/kimi-k2.5"
     assert got["jwt"] == "jwt-1"
     assert got["user_text"] == ""
+    assert got["max_output_tokens"] == ""
 
 
 def test_official_without_jwt_stays_byo() -> None:
@@ -83,6 +84,11 @@ def test_door_already_open() -> None:
 
 def test_user_text_and_completion_content() -> None:
     assert _user_text({"chat": {"user_text": "hi there"}}) == "hi there"
+    long_text = "x" * 300
+    assert _user_text({"chat": {"user_text": long_text}}) == long_text
+    assert (
+        _user_text({"chat": {"user_text": "line1\nline2"}}) == "line1\nline2"
+    )
     assert (
         _user_text(
             {

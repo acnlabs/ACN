@@ -30,11 +30,24 @@ from urllib.parse import urlparse
 HOSTS = {"api.agentplanet.org", "api.agenticplanet.space"}
 
 
+USER_TEXT_MAX = 32_000
+
+
 def _clean(s: object, n: int = 240) -> str:
     if not isinstance(s, str):
         return ""
     t = "".join(ch if ch >= " " and ch != "\x7f" else " " for ch in s).strip()
     return t[:n]
+
+
+def _plain_text(s: object, n: int) -> str:
+    """User text: keep newlines; do not use _clean's 240-char hop-field cap."""
+    if not isinstance(s, str):
+        return ""
+    t = "".join(
+        ch if ch in "\n\t" or (ch >= " " and ch != "\x7f") else " " for ch in s
+    )
+    return t.strip()[:n]
 
 
 def _dig(obj: object, *paths: str) -> str:
@@ -153,6 +166,7 @@ def resolve_wake(
         "raw.params.message.metadata.agentplanet.requested_model",
     )
     user_text = _user_text(evd)
+    max_out = _max_output_tokens(evd)
     agent_id = _clean(env.get("ACN_AGENT_ID") or "", 80)
     jwt = _clean(env.get("ACN_AGENT_JWT", ""), 4000)
     if mint and path == "official" and hop and url and not jwt:
@@ -164,15 +178,18 @@ def resolve_wake(
         "host_inference_url": url if official else "",
         "requested_model": requested,
         "user_text": user_text,
+        "max_output_tokens": max_out,
         "agent_id": agent_id,
         "jwt": jwt if official else "",
     }
 
 
 def _user_text(evd: dict[str, object]) -> str:
-    t = _dig(evd, "chat.user_text")
-    if t:
-        return t
+    chat = evd.get("chat")
+    if isinstance(chat, dict):
+        t = _plain_text(chat.get("user_text"), USER_TEXT_MAX)
+        if t:
+            return t
     for path in (
         ("raw", "params", "message"),
         ("params", "message"),
@@ -194,11 +211,39 @@ def _user_text(evd: dict[str, object]) -> str:
         for part in parts:
             if not isinstance(part, dict) or part.get("kind") != "text":
                 continue
-            got = _clean(part.get("text"), 8000)
+            got = _plain_text(part.get("text"), USER_TEXT_MAX)
             if got:
                 chunks.append(got)
         if chunks:
             return "\n".join(chunks)
+    return ""
+
+
+def _max_output_tokens(evd: dict[str, object]) -> str:
+    for path in (
+        ("chat", "max_output_tokens"),
+        ("raw", "params", "message", "metadata", "agentplanet", "max_output_tokens"),
+    ):
+        cur: object = evd
+        ok = True
+        for key in path:
+            if not isinstance(cur, dict) or key not in cur:
+                ok = False
+                break
+            cur = cur[key]
+        if not ok:
+            continue
+        if isinstance(cur, bool):
+            continue
+        if isinstance(cur, int) and cur > 0:
+            return str(cur)
+        if isinstance(cur, str) and cur.strip():
+            try:
+                n = int(cur.strip())
+            except ValueError:
+                continue
+            if n > 0:
+                return str(n)
     return ""
 
 
@@ -366,13 +411,18 @@ def complete_official(wake: dict[str, str], text: str) -> int:
     base = wake["host_inference_url"]
     jwt = wake["jwt"]
     hop = wake["hop_id"]
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": text}],
-            "hop_id": hop,
-        }
-    ).encode("utf-8")
+    payload: dict[str, object] = {
+        "model": model,
+        "messages": [{"role": "user", "content": text}],
+        "hop_id": hop,
+    }
+    try:
+        max_tokens = int(wake.get("max_output_tokens") or "")
+    except ValueError:
+        max_tokens = 0
+    if max_tokens > 0:
+        payload["max_tokens"] = max_tokens
+    body = json.dumps(payload).encode("utf-8")
     headers = {
         "Authorization": f"Bearer {jwt}",
         "Content-Type": "application/json",

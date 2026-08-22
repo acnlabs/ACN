@@ -20,7 +20,7 @@ import type { ChildProcess } from 'child_process';
 import type { NormalizedEvent } from './normalize-event.js';
 import { isAllowedChatReplyPath } from './normalize-event.js';
 import {
-  shouldOpenOfficialDoor,
+  canCompleteOfficialHop,
   type OfficialHopDoor,
 } from './official-hop-door.js';
 
@@ -91,10 +91,10 @@ export function validateChatWritebackOptions(opts: {
   }
   const hasUrl = Boolean(opts.chatCompleteUrl?.trim());
   const hasExec = Boolean(opts.chatCompleteExec?.trim());
-  if (hasUrl === hasExec) {
+  if (hasUrl && hasExec) {
     return (
-      '--chat-writeback requires exactly one of --chat-complete-url or --chat-complete-exec ' +
-      '(host returns JSON {"content":"..."} and optional usage).'
+      '--chat-writeback: --chat-complete-url and --chat-complete-exec are mutually exclusive ' +
+      '(omit both for official-only; BYO hops need exactly one).'
     );
   }
   return null;
@@ -510,7 +510,7 @@ async function completeOfficialViaHost(
   const chat = event.chat;
   if (!chat) return { ok: false, reason: 'no_chat_envelope' };
   if (
-    !shouldOpenOfficialDoor({
+    !canCompleteOfficialHop({
       inferencePath: chat.inference_path,
       hopId: chat.hop_id,
       hostInferenceUrl: chat.host_inference_url,
@@ -546,6 +546,9 @@ async function completeOfficialViaHost(
         model,
         messages: [{ role: 'user', content: text }],
         hop_id: chat.hop_id,
+        ...(chat.max_output_tokens && chat.max_output_tokens > 0
+          ? { max_tokens: chat.max_output_tokens }
+          : {}),
       }),
       signal: controller.signal,
     });
@@ -744,12 +747,18 @@ export async function handleChatWriteback(
     jwt = minted.token;
   }
 
-  const completed =
-    event.chat.inference_path === 'official'
-      ? await completeOfficialViaHost(event, opts, deps, jwt!)
-      : opts.completeUrl
-        ? await completeViaHttp(event, opts, deps)
-        : await completeViaExec(event, opts, deps, jwt);
+  let completed:
+    | { ok: true; result: ChatCompleteResult }
+    | { ok: false; reason: string };
+  if (event.chat.inference_path === 'official') {
+    completed = await completeOfficialViaHost(event, opts, deps, jwt!);
+  } else if (opts.completeUrl) {
+    completed = await completeViaHttp(event, opts, deps);
+  } else if (opts.completeExec) {
+    completed = await completeViaExec(event, opts, deps, jwt);
+  } else {
+    completed = { ok: false, reason: 'byo_complete_missing' };
+  }
 
   if (!completed.ok) {
     logFn(
