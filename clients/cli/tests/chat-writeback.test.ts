@@ -589,7 +589,7 @@ describe('handleChatWriteback', () => {
       apiKey: 'acn_secret',
       agentId: 'agent-1',
     })!;
-    const fetchFn = vi.fn(async (url: string | URL) => {
+    const fetchFn = vi.fn(async (url: string | URL, _init?: RequestInit) => {
       const u = String(url);
       if (u.includes('/oauth/token')) {
         return mockOkResponse(
