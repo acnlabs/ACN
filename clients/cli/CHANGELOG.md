@@ -4,6 +4,19 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-08-23
+
+CLI-only patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.
+
+### Changed
+- Official v0 skips thinking/reasoning SKUs (`-think`, `:thinking`,
+  `reasoning`, OpenAI o1/o3/o4, DeepSeek R1) and does not POST Host for them.
+- Official complete default timeout is **28s** so the error bubble lands
+  before Interfaze's 40s spinner. `--chat-complete-timeout` still overrides.
+- Official complete or JWT-mint failures write back one error bubble
+  instead of staying silent. JWT mint retries three times. Restart
+  `acn listen` after upgrading.
+
 ## [1.0.9] - 2026-08-22
 
 CLI + skill patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.

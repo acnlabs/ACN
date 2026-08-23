@@ -14,6 +14,8 @@ import {
   extractModelId,
   extractUsage,
   handleChatWriteback,
+  officialCompleteFailureContent,
+  officialV0SupportsModel,
   validateChatWritebackOptions,
 } from '../src/commands/chat-writeback.js';
 import {
@@ -191,6 +193,22 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
     if (!parsed.ok) return;
     const event = normalizeEvent(parsed.body);
     expect(dedupeKey(event)).toBe('chat:chat-uuid:user-msg-1');
+  });
+});
+
+describe('official v0 model support', () => {
+  it('rejects thinking and reasoning SKUs', () => {
+    expect(officialV0SupportsModel('moonshotai/kimi-k2.5')).toBe(true);
+    expect(officialV0SupportsModel('amazon/nova-lite-v1')).toBe(true);
+    expect(officialV0SupportsModel('openai/gpt-4o')).toBe(true);
+    expect(officialV0SupportsModel('allenai/olmo-3-32b-think')).toBe(false);
+    expect(officialV0SupportsModel('openai/o1-reasoning')).toBe(false);
+    expect(officialV0SupportsModel('openai/o1')).toBe(false);
+    expect(officialV0SupportsModel('openai/o3-mini')).toBe(false);
+    expect(officialV0SupportsModel('deepseek/deepseek-r1')).toBe(false);
+    expect(officialCompleteFailureContent('official_complete_unsupported_model', 'allenai/olmo-3-32b-think')).toContain(
+      'thinking/reasoning'
+    );
   });
 });
 
@@ -503,6 +521,155 @@ describe('handleChatWriteback', () => {
       logFn: () => {},
     });
     expect(result).toEqual({ ok: true, httpStatus: 201 });
+  });
+
+  it('skips thinking models on official v0 and still writebacks', async () => {
+    clearAgentJwtCache();
+    const event = normalizeEvent(
+      (
+        parseJsonRpcBody(
+          chatMessageBody({
+            hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+            inference_path: 'official',
+            host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+            requested_model: 'allenai/olmo-3-32b-think',
+          })
+        ) as { ok: true; body: Record<string, unknown> }
+      ).body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      agentId: 'agent-1',
+    })!;
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      if (u.includes('/chat/completions')) {
+        return mockOkResponse(JSON.stringify({ error: 'should not call host' }), 500);
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    expect(
+      fetchFn.mock.calls.some((c) => String(c[0]).includes('/chat/completions'))
+    ).toBe(false);
+    const writeback = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/agent-messages')
+    );
+    expect(JSON.parse(String(writeback?.[1]?.body ?? '{}')).content).toContain(
+      'thinking/reasoning'
+    );
+  });
+
+  it('writebacks an error when official Host complete fails', async () => {
+    clearAgentJwtCache();
+    const event = normalizeEvent(
+      (
+        parseJsonRpcBody(
+          chatMessageBody({
+            hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+            inference_path: 'official',
+            host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+            requested_model: 'moonshotai/kimi-k2.5',
+          })
+        ) as { ok: true; body: Record<string, unknown> }
+      ).body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      agentId: 'agent-1',
+    })!;
+    const fetchFn = vi.fn(async (url: string | URL, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      if (u.includes('/chat/completions')) {
+        return mockOkResponse(JSON.stringify({ error: 'upstream down' }), 503);
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const writeback = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/agent-messages')
+    );
+    expect(JSON.parse(String(writeback?.[1]?.body ?? '{}')).content).toContain(
+      'Official hop failed'
+    );
+  });
+
+  it('writebacks when official JWT mint fails after retries', async () => {
+    clearAgentJwtCache();
+    const event = normalizeEvent(
+      (
+        parseJsonRpcBody(
+          chatMessageBody({
+            hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+            inference_path: 'official',
+            host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+            requested_model: 'moonshotai/kimi-k2.5',
+          })
+        ) as { ok: true; body: Record<string, unknown> }
+      ).body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      agentId: 'agent-1',
+    })!;
+    let oauthCalls = 0;
+    const fetchFn = vi.fn(async (url: string | URL, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/oauth/token')) {
+        oauthCalls += 1;
+        if (oauthCalls <= 3) {
+          return mockOkResponse(JSON.stringify({ error: 'mint down' }), 503);
+        }
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      if (u.includes('/chat/completions')) {
+        return mockOkResponse(JSON.stringify({ error: 'should not call host' }), 500);
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    expect(
+      fetchFn.mock.calls.some((c) => String(c[0]).includes('/chat/completions'))
+    ).toBe(false);
+    const writeback = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/agent-messages')
+    );
+    expect(JSON.parse(String(writeback?.[1]?.body ?? '{}')).content).toContain(
+      'Official hop failed'
+    );
   });
 
   it('fails BYO hops when no complete source is configured', async () => {
