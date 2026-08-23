@@ -499,6 +499,27 @@ function spawnCompleteExec(
   });
 }
 
+export function officialV0SupportsModel(modelId?: string | null): boolean {
+  const id = (modelId || '').toLowerCase();
+  if (!id) return true;
+  if (id.includes('-think') || id.includes(':thinking')) return false;
+  return !id.includes('reasoning');
+}
+
+export function officialCompleteFailureContent(
+  reason: string,
+  model?: string | null
+): string {
+  const mid = (model || '').trim();
+  if (mid && !officialV0SupportsModel(mid)) {
+    return (
+      `Official v0 is a single completion and cannot run thinking/reasoning models (${mid}). ` +
+      'Switch to a chat model such as kimi-k2.5.'
+    );
+  }
+  return `Official hop failed (${reason}). Try kimi or another chat model.`;
+}
+
 async function completeOfficialViaHost(
   event: NormalizedEvent,
   opts: ChatWritebackOptions,
@@ -522,6 +543,9 @@ async function completeOfficialViaHost(
   const model = chat.requested_model?.trim();
   const text = chat.user_text?.trim();
   if (!model) return { ok: false, reason: 'official_complete_missing_model' };
+  if (!officialV0SupportsModel(model)) {
+    return { ok: false, reason: 'official_complete_unsupported_model' };
+  }
   if (!text) return { ok: false, reason: 'official_complete_missing_text' };
 
   const logFn = deps.logFn ?? ((line: string) => console.error(line));
@@ -765,6 +789,21 @@ export async function handleChatWriteback(
       `[acn listen] chat_complete_failed chat_id=${event.chat.chat_id} ` +
         `message_id=${event.message_id} reason=${completed.reason}`
     );
+    if (event.chat.inference_path === 'official') {
+      const written = await postWriteback(
+        event,
+        { content: officialCompleteFailureContent(completed.reason, event.chat.requested_model) },
+        opts,
+        deps
+      );
+      if (written.ok) {
+        logFn(
+          `[acn listen] official_fail_writeback_ok chat_id=${event.chat.chat_id} ` +
+            `message_id=${event.message_id} reason=${completed.reason}`
+        );
+        return written;
+      }
+    }
     return { ok: false, reason: completed.reason };
   }
 

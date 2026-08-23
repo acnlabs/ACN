@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-08-23
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.10`). Server / SDKs stay **1.0.1**.
+Skill stays **1.0.6**.
+
+### Changed
+
+- Official v0 does not complete thinking/reasoning models. Host complete
+  failures write back an error so Interfaze is not left waiting.
+
 ## [1.0.9] - 2026-08-22
 
 CLI + skill patch (`@acnlabs/acn-cli@1.0.9`, agent skill **1.0.6**).

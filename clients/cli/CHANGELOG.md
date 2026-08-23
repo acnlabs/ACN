@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-08-23
+
+CLI-only patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.
+
+### Changed
+- Official v0 skips thinking/reasoning SKUs (`-think`, `:thinking`, `reasoning`)
+  and does not POST Host for them.
+- Official complete failures write back one error bubble instead of staying
+  silent until Interfaze times out. Restart `acn listen` after upgrading.
+
 ## [1.0.9] - 2026-08-22
 
 CLI + skill patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.
