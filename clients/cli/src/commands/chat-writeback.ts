@@ -56,6 +56,9 @@ export interface ChatWritebackDeps {
 }
 
 const DEFAULT_COMPLETE_TIMEOUT_MS = 120_000;
+/** Beat Interfaze's 20×2s reply poll so an official hang writebacks before the spinner dies. */
+const DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS = 28_000;
+const JWT_MINT_ATTEMPTS = 3;
 const DEFAULT_WRITEBACK_TIMEOUT_MS = 30_000;
 /** Must match AgentPlanet ``ACN_JWT_AUDIENCE`` (not the chat-api-base host). */
 export const DEFAULT_CHAT_JWT_AUDIENCE = 'https://api.agentplanet.org';
@@ -309,45 +312,54 @@ export async function mintAgentJwt(
   }
 
   const url = `${opts.acnBaseUrl.replace(/\/+$/, '')}/oauth/token`;
-  try {
-    const res = await fetchFn(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'client_credentials',
-        client_id: opts.agentId,
-        client_secret: opts.apiKey,
-        audience: opts.audience,
-      }),
-    });
-    const text = await res.text();
-    if (res.status < 200 || res.status >= 300) {
-      return { ok: false, reason: `oauth_http_${res.status}` };
-    }
-    let parsed: unknown;
+  let lastReason = 'oauth_failed';
+  for (let attempt = 1; attempt <= JWT_MINT_ATTEMPTS; attempt++) {
     try {
-      parsed = JSON.parse(text);
-    } catch {
-      return { ok: false, reason: 'oauth_invalid_json' };
+      const res = await fetchFn(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'client_credentials',
+          client_id: opts.agentId,
+          client_secret: opts.apiKey,
+          audience: opts.audience,
+        }),
+      });
+      const text = await res.text();
+      if (res.status < 200 || res.status >= 300) {
+        lastReason = `oauth_http_${res.status}`;
+      } else {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          lastReason = 'oauth_invalid_json';
+          continue;
+        }
+        const rec = asRecord(parsed);
+        const token =
+          typeof rec?.access_token === 'string' ? rec.access_token.trim() : '';
+        if (!token) {
+          lastReason = 'oauth_missing_access_token';
+          continue;
+        }
+        const expiresIn =
+          typeof rec?.expires_in === 'number' && rec.expires_in > 0
+            ? rec.expires_in
+            : 1800;
+        cachedJwt = {
+          token,
+          agentId: opts.agentId,
+          expEpochSec: now + expiresIn,
+        };
+        return { ok: true, token };
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastReason = msg.slice(0, 200);
     }
-    const rec = asRecord(parsed);
-    const token =
-      typeof rec?.access_token === 'string' ? rec.access_token.trim() : '';
-    if (!token) return { ok: false, reason: 'oauth_missing_access_token' };
-    const expiresIn =
-      typeof rec?.expires_in === 'number' && rec.expires_in > 0
-        ? rec.expires_in
-        : 1800;
-    cachedJwt = {
-      token,
-      agentId: opts.agentId,
-      expEpochSec: now + expiresIn,
-    };
-    return { ok: true, token };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, reason: msg.slice(0, 200) };
   }
+  return { ok: false, reason: lastReason };
 }
 
 /** Test helper: clear process-local JWT cache. */
@@ -499,11 +511,17 @@ function spawnCompleteExec(
   });
 }
 
+/** Keep in lockstep with backend official_v0_supports_model and Interfaze. */
+const OFFICIAL_V0_O_SERIES = /(^|\/)o[134](?:$|[-/:])/;
+
 export function officialV0SupportsModel(modelId?: string | null): boolean {
-  const id = (modelId || '').toLowerCase();
+  const id = (modelId || '').trim().toLowerCase();
   if (!id) return true;
-  if (id.includes('-think') || id.includes(':thinking')) return false;
-  return !id.includes('reasoning');
+  if (id.includes('-think') || id.includes(':thinking') || id.includes('reasoning')) {
+    return false;
+  }
+  if (id.includes('deepseek-r1')) return false;
+  return !OFFICIAL_V0_O_SERIES.test(id);
 }
 
 export function officialCompleteFailureContent(
@@ -554,7 +572,7 @@ async function completeOfficialViaHost(
   );
 
   const fetchFn = deps.fetchFn ?? fetch;
-  const timeoutMs = opts.completeTimeoutMs ?? DEFAULT_COMPLETE_TIMEOUT_MS;
+  const timeoutMs = opts.completeTimeoutMs ?? DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -766,6 +784,19 @@ export async function handleChatWriteback(
         `[acn listen] official_jwt_failed chat_id=${event.chat.chat_id} ` +
           `reason=${minted.reason}`
       );
+      const written = await postWriteback(
+        event,
+        { content: officialCompleteFailureContent(minted.reason, event.chat.requested_model) },
+        opts,
+        deps
+      );
+      if (written.ok) {
+        logFn(
+          `[acn listen] official_fail_writeback_ok chat_id=${event.chat.chat_id} ` +
+            `message_id=${event.message_id} reason=${minted.reason}`
+        );
+        return written;
+      }
       return { ok: false, reason: minted.reason };
     }
     jwt = minted.token;
@@ -827,4 +858,8 @@ export async function handleChatWriteback(
   return written;
 }
 
-export { DEFAULT_COMPLETE_TIMEOUT_MS, DEFAULT_WRITEBACK_TIMEOUT_MS };
+export {
+  DEFAULT_COMPLETE_TIMEOUT_MS,
+  DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS,
+  DEFAULT_WRITEBACK_TIMEOUT_MS,
+};

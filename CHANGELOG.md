@@ -14,8 +14,10 @@ Skill stays **1.0.6**.
 
 ### Changed
 
-- Official v0 does not complete thinking/reasoning models. Host complete
-  failures write back an error so Interfaze is not left waiting.
+- Official v0 does not complete thinking/reasoning models (including o1/o3/o4
+  and DeepSeek R1). Official complete defaults to 28s and writebacks an
+  error — including after JWT mint retries fail — so Interfaze is not left
+  waiting.
 
 ## [1.0.9] - 2026-08-22
 

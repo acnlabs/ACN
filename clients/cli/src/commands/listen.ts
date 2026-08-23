@@ -6,6 +6,7 @@ import { loadConfig } from '../config.js';
 import {
   buildChatWritebackOptions,
   DEFAULT_COMPLETE_TIMEOUT_MS,
+  DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS,
   validateChatWritebackOptions,
   type ChatWritebackOptions,
 } from './chat-writeback.js';
@@ -607,8 +608,7 @@ export function listenCommand(): Command {
     )
     .option(
       '--chat-complete-timeout <ms>',
-      `Host complete timeout in ms (default ${DEFAULT_COMPLETE_TIMEOUT_MS})`,
-      String(DEFAULT_COMPLETE_TIMEOUT_MS)
+      `Complete timeout in ms (official default ${DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS}; BYO default ${DEFAULT_COMPLETE_TIMEOUT_MS})`
     )
     .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
     .option(
@@ -727,10 +727,10 @@ export function listenCommand(): Command {
 
         const wakeTimeoutMs = Number.parseInt(opts.wakeTimeout ?? '', 10);
         const dedupeTtlSec = Number.parseInt(opts.dedupeTtl ?? '', 10);
-        const chatCompleteTimeoutMs = Number.parseInt(
-          opts.chatCompleteTimeout ?? '',
-          10
-        );
+        const rawCompleteTimeout = opts.chatCompleteTimeout?.trim();
+        const chatCompleteTimeoutMs = rawCompleteTimeout
+          ? Number.parseInt(rawCompleteTimeout, 10)
+          : undefined;
         if (opts.runtime && (!Number.isFinite(wakeTimeoutMs) || wakeTimeoutMs <= 0)) {
           console.error('--wake-timeout must be a positive integer (ms).');
           process.exit(1);
@@ -741,7 +741,8 @@ export function listenCommand(): Command {
         }
         if (
           opts.chatWriteback &&
-          (!Number.isFinite(chatCompleteTimeoutMs) || chatCompleteTimeoutMs <= 0)
+          rawCompleteTimeout &&
+          (!Number.isFinite(chatCompleteTimeoutMs) || (chatCompleteTimeoutMs ?? 0) <= 0)
         ) {
           console.error('--chat-complete-timeout must be a positive integer (ms).');
           process.exit(1);
