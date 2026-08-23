@@ -324,13 +324,26 @@ def serve_proxy() -> int:
                 method="POST",
             )
             try:
-                with urlopen(req, timeout=120) as resp:  # noqa: S310 — Host allowlisted
+                stream_req = payload.get("stream") is True
+                timeout = 180 if stream_req else 120
+                with urlopen(req, timeout=timeout) as resp:  # noqa: S310 — Host allowlisted
+                    ct = resp.headers.get("Content-Type") or "application/json"
+                    if stream_req or "text/event-stream" in ct.lower():
+                        self.send_response(resp.status)
+                        self.send_header("Content-Type", ct)
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "keep-alive")
+                        self.send_header("X-Accel-Buffering", "no")
+                        self.end_headers()
+                        while True:
+                            chunk = resp.read(4096)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                        return
                     out = resp.read()
-                    self._send(
-                        resp.status,
-                        out,
-                        resp.headers.get("Content-Type") or "application/json",
-                    )
+                    self._send(resp.status, out, ct)
             except HTTPError as e:
                 self._send(e.code, e.read() or b'{"error":"upstream"}')
             except URLError as e:
