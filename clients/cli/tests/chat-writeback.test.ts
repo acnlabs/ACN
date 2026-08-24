@@ -443,11 +443,16 @@ describe('handleChatWriteback', () => {
           JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
         );
       }
+      if (u.includes('/hops/')) {
+        return mockOkResponse(JSON.stringify({ seen: true, call_count: 1 }));
+      }
+      if (u.includes('/complete')) {
+        return mockOkResponse(JSON.stringify({ content: 'agent via door' }));
+      }
       if (u.includes('/chat/completions')) {
         return mockOkResponse(
-          JSON.stringify({
-            choices: [{ message: { content: 'official reply' } }],
-          })
+          JSON.stringify({ error: 'cli must not complete official hops itself' }),
+          500
         );
       }
       return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
@@ -458,25 +463,82 @@ describe('handleChatWriteback', () => {
     });
     expect(result).toEqual({ ok: true, httpStatus: 201 });
     const completeCall = fetchFn.mock.calls.find((c) =>
-      String(c[0]).includes('/chat/completions')
+      String(c[0]).includes('/complete')
     );
-    expect(completeCall?.[0]).toBe(
-      'https://api.agentplanet.org/api/inference/v1/chat/completions'
-    );
+    expect(completeCall?.[0]).toBe('http://127.0.0.1:9/complete');
     expect(completeCall?.[1]?.headers).toMatchObject({
-      authorization: 'Bearer jwt-from-acn',
-      'X-Hop-Id': 'hop:dialog:chat-uuid:user-msg-1:agent-1',
-      'X-Agent-Id': 'agent-1',
+      'X-ACN-Hop-Id': 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+      'X-ACN-Inference-Path': 'official',
+      'X-ACN-Agent-Jwt': 'jwt-from-acn',
     });
-    expect(JSON.parse(String(completeCall?.[1]?.body ?? '{}'))).toEqual({
-      model: 'moonshotai/kimi-k2.5',
-      messages: [{ role: 'user', content: 'hello from interfaze' }],
-      hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
-      max_tokens: 2048,
-    });
+    expect(String((completeCall?.[1]?.headers as Record<string, string>)?.[
+      'X-ACN-OpenAI-Base-Url'
+    ] ?? '')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
     expect(
-      fetchFn.mock.calls.some((c) => String(c[0]).includes('/complete'))
+      fetchFn.mock.calls.some((c) => String(c[0]).includes('/chat/completions'))
     ).toBe(false);
+    expect(fetchFn.mock.calls.some((c) => String(c[0]).includes('/hops/'))).toBe(
+      true
+    );
+    const writeback = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/agent-messages')
+    );
+    expect(JSON.parse(String(writeback?.[1]?.body ?? '{}'))).toEqual({
+      content: 'agent via door',
+      reply_to_id: 'user-msg-1',
+    });
+  });
+
+  it('fails official exec/url hops when Host never saw the hop', async () => {
+    clearAgentJwtCache();
+    const event = normalizeEvent(
+      (
+        parseJsonRpcBody(
+          chatMessageBody({
+            hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+            inference_path: 'official',
+            host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+            requested_model: 'moonshotai/kimi-k2.5',
+          })
+        ) as { ok: true; body: Record<string, unknown> }
+      ).body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+    const fetchFn = vi.fn(async (url: string | URL, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      if (u.includes('/complete')) {
+        return mockOkResponse(JSON.stringify({ content: 'tokenhub leak' }));
+      }
+      if (u.includes('/hops/')) {
+        return mockOkResponse(JSON.stringify({ seen: false, call_count: 0 }));
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const writeback = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/agent-messages')
+    );
+    const body = JSON.parse(String(writeback?.[1]?.body ?? '{}')) as {
+      content?: string;
+    };
+    expect(body.content).toContain('Host did not see');
+    expect(body.content).not.toContain('tokenhub leak');
   });
 
   it('completes official hops without --chat-complete-*', async () => {
