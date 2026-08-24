@@ -211,6 +211,46 @@ describe('startOfficialHopDoor', () => {
     }
   });
 
+  it('keeps JSON errors when stream is requested', async () => {
+    const arrayBuffer = vi.fn(async () =>
+      Buffer.from(JSON.stringify({ error: 'official_model_unsupported' }))
+    );
+    const fetchFn = vi.fn(async () => ({
+      status: 400,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      body: new ReadableStream<Uint8Array>(),
+      arrayBuffer,
+    }));
+    const door = await startOfficialHopDoor({
+      hostInferenceUrl: 'https://api.agentplanet.org/api/inference/v1',
+      hopId: 'hop:dialog:c:m:agent-1',
+      agentId: 'agent-1',
+      jwt: 'jwt-official',
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    expect(door).not.toBeNull();
+    try {
+      const res = await fetch(`${door!.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'allenai/olmo-3-32b-think',
+          stream: true,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(res.headers.get('content-type')).toContain('application/json');
+      expect(await res.json()).toEqual({ error: 'official_model_unsupported' });
+      expect(arrayBuffer).toHaveBeenCalled();
+    } finally {
+      await door!.close();
+    }
+  });
+
   it('404s unknown paths', async () => {
     const door = await startOfficialHopDoor({
       hostInferenceUrl: 'http://127.0.0.1:9/api/inference/v1',

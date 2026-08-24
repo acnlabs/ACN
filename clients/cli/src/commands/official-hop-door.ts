@@ -137,9 +137,12 @@ async function handleDoorRequest(
       body: JSON.stringify(body),
     });
     const ct = upstream.headers.get('content-type') || 'application/json';
-    const stream =
-      (body.stream === true || isSseContentType(ct)) && upstream.body != null;
-    if (stream) {
+    const sse = isSseContentType(ct) && upstream.body != null;
+    const streamOk =
+      body.stream === true &&
+      upstream.body != null &&
+      upstream.status < 400;
+    if (sse || streamOk) {
       res.writeHead(upstream.status, {
         'content-type': isSseContentType(ct) ? ct : 'text/event-stream',
         'cache-control': 'no-cache',
