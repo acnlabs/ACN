@@ -5,7 +5,7 @@
  * This door remains for skill `official_hop.py --door` and runtimes that
  * honor OPENAI_BASE_URL for a local tool loop. Standard OpenAI SDKs will
  * not add X-Hop-Id / X-Agent-Id; the door forwards those to Host.
- * BYO hops never open a door.
+ * Host may stream SSE; the door pipes it (1.0.11+). BYO hops never open a door.
  */
 
 import http from 'node:http';
@@ -53,6 +53,37 @@ function send(
     'content-length': String(body.length),
   });
   res.end(body);
+}
+
+function isSseContentType(contentType: string): boolean {
+  return contentType.toLowerCase().includes('text/event-stream');
+}
+
+async function pipeWebStream(
+  body: ReadableStream<Uint8Array>,
+  res: ServerResponse
+): Promise<void> {
+  const reader = body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.length) continue;
+      const ok = res.write(Buffer.from(value));
+      if (!ok) {
+        await new Promise<void>((resolve) => res.once('drain', resolve));
+      }
+    }
+    res.end();
+  } catch (err) {
+    if (!res.writableEnded) res.destroy(err instanceof Error ? err : undefined);
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* already released */
+    }
+  }
 }
 
 async function handleDoorRequest(
@@ -105,8 +136,23 @@ async function handleDoorRequest(
       headers,
       body: JSON.stringify(body),
     });
-    const out = Buffer.from(await upstream.arrayBuffer());
     const ct = upstream.headers.get('content-type') || 'application/json';
+    const sse = isSseContentType(ct) && upstream.body != null;
+    const streamOk =
+      body.stream === true &&
+      upstream.body != null &&
+      upstream.status < 400;
+    if (sse || streamOk) {
+      res.writeHead(upstream.status, {
+        'content-type': isSseContentType(ct) ? ct : 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      });
+      await pipeWebStream(upstream.body, res);
+      return;
+    }
+    const out = Buffer.from(await upstream.arrayBuffer());
     send(res, upstream.status, out, ct);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

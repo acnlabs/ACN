@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-08-23
+
+CLI-only patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.
+
+### Changed
+- Official hop door pipes Host SSE when the request sets `stream: true`
+  or the upstream `content-type` is `text/event-stream`, instead of
+  buffering with `arrayBuffer`. CLI in-process official complete stays
+  non-stream. Restart `acn listen` after upgrading if you use the door.
+
 ## [1.0.10] - 2026-08-23
 
 CLI-only patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.

@@ -154,6 +154,103 @@ describe('startOfficialHopDoor', () => {
     }
   });
 
+  it('pipes SSE and does not buffer with arrayBuffer', async () => {
+    const arrayBuffer = vi.fn(async () => {
+      throw new Error('stream must not call arrayBuffer');
+    });
+    const encoder = new TextEncoder();
+    const chunks = [
+      'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    let i = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (i < chunks.length) {
+          controller.enqueue(encoder.encode(chunks[i++]));
+        } else {
+          controller.close();
+        }
+      },
+    });
+    const fetchFn = vi.fn(async () => ({
+      status: 200,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'text/event-stream' : null,
+      },
+      body,
+      arrayBuffer,
+    }));
+    const door = await startOfficialHopDoor({
+      hostInferenceUrl: 'https://api.agentplanet.org/api/inference/v1',
+      hopId: 'hop:dialog:c:m:agent-1',
+      agentId: 'agent-1',
+      jwt: 'jwt-official',
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    expect(door).not.toBeNull();
+    try {
+      const res = await fetch(`${door!.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'tencenttokenplan/kimi-k2.5',
+          stream: true,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/event-stream');
+      const text = await res.text();
+      expect(text).toContain('data:');
+      expect(text).toContain('[DONE]');
+      expect(arrayBuffer).not.toHaveBeenCalled();
+    } finally {
+      await door!.close();
+    }
+  });
+
+  it('keeps JSON errors when stream is requested', async () => {
+    const arrayBuffer = vi.fn(async () =>
+      Buffer.from(JSON.stringify({ error: 'official_model_unsupported' }))
+    );
+    const fetchFn = vi.fn(async () => ({
+      status: 400,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      body: new ReadableStream<Uint8Array>(),
+      arrayBuffer,
+    }));
+    const door = await startOfficialHopDoor({
+      hostInferenceUrl: 'https://api.agentplanet.org/api/inference/v1',
+      hopId: 'hop:dialog:c:m:agent-1',
+      agentId: 'agent-1',
+      jwt: 'jwt-official',
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    expect(door).not.toBeNull();
+    try {
+      const res = await fetch(`${door!.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'allenai/olmo-3-32b-think',
+          stream: true,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(res.headers.get('content-type')).toContain('application/json');
+      expect(await res.json()).toEqual({ error: 'official_model_unsupported' });
+      expect(arrayBuffer).toHaveBeenCalled();
+    } finally {
+      await door!.close();
+    }
+  });
+
   it('404s unknown paths', async () => {
     const door = await startOfficialHopDoor({
       hostInferenceUrl: 'http://127.0.0.1:9/api/inference/v1',
