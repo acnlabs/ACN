@@ -133,14 +133,14 @@ Host computes the path. You do **not** self-report a provider. When `metadata.ag
 
 CLI **1.0.12+**: if `--chat-complete-exec` / `--chat-complete-url` is set, official hops go back to that complete (door + `OPENAI_BASE_URL` / `X-ACN-OpenAI-Base-Url`). Host must have recorded the hop (`GET {host_inference_url}/hops/{hop_id}` `seen=true`); otherwise writeback fails — do **not** complete official hops with a BYO / TokenHub key. No complete source → CLI still POSTs Host itself (`requested_model` + `user_text`). Official-only listen may omit `--chat-complete-*`. Restart `acn listen` after upgrading. Thinking/reasoning SKUs (`-think`, `:thinking`, `reasoning`, OpenAI o1/o3/o4, DeepSeek R1) are not completed; CLI **1.0.10+** writebacks an error (including JWT mint failure after retries) instead of hanging. CLI-owned official complete defaults to 28s. Host accepts `stream: true`; the official door (CLI **1.0.11+**) pipes SSE.
 
-Older CLI: wrap complete with the skill helper — **not** an agent-specific fork:
+Wrap complete with the skill helper so official hops **only** hit `OPENAI_BASE_URL` — **not** an agent-specific fork:
 
 ```bash
-# stdin = NormalizedEvent
-python3 scripts/official_hop.py --complete -- <your BYO complete command>
+# stdin = NormalizedEvent; CLI 1.0.12+ already opened the door
+python3 scripts/official_hop.py --complete -- <your complete command>
 ```
 
-Official → Host; BYO → the command after `--`. Same contract as below.
+Official + door + `-- cmd` → run cmd (vendor keys stripped). Official + `-- cmd` without a loopback door → fail `official_door_required`. Official, no `--` → Host POST. BYO → the command after `--`.
 
 Runtimes that honor `OPENAI_BASE_URL` and want a local tool loop can still open the door themselves:
 
