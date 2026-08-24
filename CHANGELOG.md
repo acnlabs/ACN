@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-08-24
+
+Skill-only patch (agent skill **1.0.7**). CLI stays **1.0.12**. Server / SDKs stay **1.0.1**.
+
+### Changed
+
+- `official_hop.py --complete -- <runtime>` on an official hop runs that
+  runtime only when the Host door is open (`OPENAI_BASE_URL` loopback)
+  and strips vendor keys so the hop cannot fall back to BYO / OpenRouter.
+  Official + command without a door fails `official_door_required`.
+  Official without `--` still POSTs Host.
+
 ## [1.0.12] - 2026-08-24
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.12`). Server / SDKs stay **1.0.1**.

@@ -5,16 +5,20 @@ Same idea as requested_model / chat_usage.py: Host decides the path;
 this helper only honors it.
 
   python3 official_hop.py [--mint] < event.json     # JSON wake fields
-  python3 official_hop.py --complete [-- <byo>]     # official → Host
-                                                    # {"content"}; BYO → exec
+  python3 official_hop.py --complete [-- <cmd>]     # official + door + cmd
+                                                    # → exec (OPENAI_BASE_URL
+                                                    # only). official, no cmd
+                                                    # → Host POST. BYO → exec
   eval "$(python3 official_hop.py --door)"          # stdin = event; official
                                                     # exports OPENAI_BASE_URL
   python3 official_hop.py --proxy                   # local OpenAI door
 
-CLI 1.0.9+ completes official hops itself. --complete is for older CLI
-or an explicit --chat-complete-exec wrapper. Official only when Host said
-so and hop + allowlisted URL + JWT are present. BYO / missing JWT = no-op
-unless a command follows `--`. Do not invent a provider.
+CLI 1.0.12+ with --chat-complete-exec opens the door first. --complete
+then runs the command after `--` against that door and strips vendor
+keys so the runtime cannot fall back to TokenHub / OpenRouter / etc.
+Official + command but no loopback OPENAI_BASE_URL fails
+(official_door_required). Official without `--` still POSTs Host
+(older CLI / official-only). Do not invent a provider.
 """
 
 from __future__ import annotations
@@ -28,6 +32,30 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 HOSTS = {"api.agentplanet.org", "api.agenticplanet.space"}
+
+# Generic vendor keys that would send an official hop off the Host door.
+# Not an agent-specific list. OPENAI_API_KEY stays (CLI sets it to the JWT).
+BYO_LEAK_ENV = (
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "GROQ_API_KEY",
+    "TOGETHER_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "MOONSHOT_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "XAI_API_KEY",
+    "MISTRAL_API_KEY",
+    "FIREWORKS_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "LITELLM_API_KEY",
+    "LITELLM_PROXY_API_KEY",
+)
 
 
 USER_TEXT_MAX = 32_000
@@ -413,6 +441,28 @@ def _byo_cmd(argv: list[str]) -> list[str]:
     return []
 
 
+def official_runtime_env(env: dict[str, str] | None = None) -> dict[str, str] | None:
+    """Env for official agent complete. None unless the Host door is open."""
+    out = dict(env if env is not None else os.environ)
+    if not door_already_open(out):
+        return None
+    for key in BYO_LEAK_ENV:
+        out.pop(key, None)
+    out["OPENAI_API_BASE"] = out["OPENAI_BASE_URL"]
+    out["ACN_INFERENCE_PATH"] = "official"
+    return out
+
+
+def exec_complete(cmd: list[str], raw: str, env: dict[str, str] | None = None) -> int:
+    child = subprocess.run(  # noqa: S603
+        cmd,
+        input=raw.encode("utf-8"),
+        check=False,
+        env=env,
+    )
+    return child.returncode
+
+
 def complete_official(wake: dict[str, str], text: str) -> int:
     from urllib.error import HTTPError, URLError
     from urllib.request import Request, urlopen
@@ -480,18 +530,19 @@ def run_complete() -> int:
         return 2
     wake = resolve_wake(ev, mint=True)
     text = wake.get("user_text") or _user_text(ev if isinstance(ev, dict) else {})
+    cmd = _byo_cmd(sys.argv)
     if wake["inference_path"] == "official":
+        if cmd:
+            guarded = official_runtime_env()
+            if guarded is None:
+                print("official_hop: official_door_required", file=sys.stderr)
+                return 2
+            return exec_complete(cmd, raw, guarded)
         return complete_official(wake, text)
-    byo = _byo_cmd(sys.argv)
-    if not byo:
+    if not cmd:
         print("official_hop: byo_use_complete_exec", file=sys.stderr)
         return 3
-    child = subprocess.run(  # noqa: S603
-        byo,
-        input=raw.encode("utf-8"),
-        check=False,
-    )
-    return child.returncode
+    return exec_complete(cmd, raw)
 
 
 def main() -> int:

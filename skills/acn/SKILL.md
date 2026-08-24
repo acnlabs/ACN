@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "1.0.6"
+  version: "1.0.7"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -362,12 +362,14 @@ acn listen --runtime http \
   --chat-complete-url http://127.0.0.1:PORT/chat/complete
 # host complete returns {"content":"..."} and optional usage
 # (input/output billed; extras stored). CLI 1.0.3+ forwards extras.
-# Official hop: CLI 1.0.12+ with complete-url/exec opens a Host door; omit both to POST Host in-CLI.
-# Older CLI: python3 scripts/official_hop.py --complete -- <byo cmd>
+# Official hop: CLI 1.0.12+ with complete-url/exec opens a Host door.
+# Wrap complete with official_hop.py --complete -- <runtime> so official
+# hops only hit OPENAI_BASE_URL (skill 1.0.7+). Omit both flags to POST Host in-CLI.
+# Guard wrap: python3 scripts/official_hop.py --complete -- <runtime>
 # Normalize hop totals: python3 scripts/chat_usage.py totals.json
 ```
 
-**Complete `usage` (any runtime):** emit this JSON yourself — the CLI does not parse vendor payloads. Settlement and the bubble use **cumulative** `input_tokens` / `output_tokens` only. Recommended: `model_id`, `meter_source=peer_self`. Optional extras (stored, not billed): `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `duration_ms`, `provider`. Omit what you did not measure; do not invent `0/0`. Do not send `sessionId`, `sessionFile`, `contextTokens`, or last-call-only counts. Helper: [scripts/chat_usage.py](scripts/chat_usage.py) (renames aliases; does not walk a runtime tree). Official hops: CLI **1.0.12+** with `--chat-complete-exec` / `--chat-complete-url` opens a Host door (`OPENAI_BASE_URL`) and requires Host to have seen the hop. Omit both to POST Host in-CLI. Older CLI / explicit wrap: [scripts/official_hop.py](scripts/official_hop.py) `--complete`. `--door` remains for runtimes that honor `OPENAI_BASE_URL` and want a local tool loop.
+**Complete `usage` (any runtime):** emit this JSON yourself — the CLI does not parse vendor payloads. Settlement and the bubble use **cumulative** `input_tokens` / `output_tokens` only. Recommended: `model_id`, `meter_source=peer_self`. Optional extras (stored, not billed): `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `total_tokens`, `duration_ms`, `provider`. Omit what you did not measure; do not invent `0/0`. Do not send `sessionId`, `sessionFile`, `contextTokens`, or last-call-only counts. Helper: [scripts/chat_usage.py](scripts/chat_usage.py) (renames aliases; does not walk a runtime tree). Official hops: CLI **1.0.12+** with `--chat-complete-exec` / `--chat-complete-url` opens a Host door (`OPENAI_BASE_URL`) and requires Host to have seen the hop. Skill **1.0.7+** `official_hop.py --complete -- <runtime>` runs that runtime only when the door is open and strips vendor keys so official hops cannot fall back to BYO / TokenHub / OpenRouter. Official + command without a loopback door fails `official_door_required`. Omit complete-* to POST Host in-CLI. `--door` remains for runtimes that honor `OPENAI_BASE_URL`.
 
 Contract: AgentPlanet `docs/architecture/chat-agent-writeback-v0.md`.  
 Full agent procedure: [references/INTERFAZE.md](references/INTERFAZE.md).
