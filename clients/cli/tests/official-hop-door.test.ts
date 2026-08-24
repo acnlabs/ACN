@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -280,10 +282,10 @@ describe('official hop CLI complete', () => {
     expect(env.ACN_AGENT_JWT).toBe('jwt-official');
   });
 
-  it('completes official hops via Host and does not spawn complete-exec', async () => {
+  it('official + complete-exec opens a door, spawns exec, and requires a Host invoice', async () => {
     clearAgentJwtCache();
-    const upstream: Array<{ url: string; body: Record<string, unknown> }> = [];
     const writebacks: Array<Record<string, unknown>> = [];
+    let spawnedEnv: NodeJS.ProcessEnv | undefined;
     const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
       if (u.includes('/oauth/token')) {
@@ -291,23 +293,40 @@ describe('official hop CLI complete', () => {
           JSON.stringify({ access_token: 'jwt-door', expires_in: 1800 })
         );
       }
+      if (u.includes('/hops/')) {
+        return mockOkResponse(JSON.stringify({ seen: true, call_count: 1 }));
+      }
       if (u.includes('/chat/completions')) {
-        upstream.push({
-          url: u,
-          body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
-        });
         return mockOkResponse(
-          JSON.stringify({
-            id: 'cmpl',
-            choices: [{ message: { role: 'assistant', content: 'official hi' } }],
-          })
+          JSON.stringify({ error: 'cli must not complete official hops itself' }),
+          500
         );
       }
       writebacks.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
       return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
     });
 
-    const spawnFn = vi.fn();
+    const spawnFn = vi.fn((_cmd: string, opts?: { env?: NodeJS.ProcessEnv }) => {
+      spawnedEnv = opts?.env;
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        stdin: { end: () => void };
+        kill: () => void;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      child.stdin = {
+        end: () => {
+          queueMicrotask(() => {
+            child.stdout.emit('data', Buffer.from('{"content":"from agent"}'));
+            child.emit('close', 0);
+          });
+        },
+      };
+      return child;
+    });
 
     const result = await handleChatWriteback(
       officialEvent(),
@@ -326,19 +345,18 @@ describe('official hop CLI complete', () => {
       }
     );
     expect(result).toEqual({ ok: true, httpStatus: 201 });
-    expect(spawnFn).not.toHaveBeenCalled();
-    expect(upstream).toEqual([
-      {
-        url: 'https://api.agentplanet.org/api/inference/v1/chat/completions',
-        body: {
-          model: 'moonshotai/kimi-k2.5',
-          messages: [{ role: 'user', content: 'hello' }],
-          hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
-        },
-      },
-    ]);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(spawnedEnv?.OPENAI_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+    expect(spawnedEnv?.OPENAI_API_KEY).toBe('jwt-door');
+    expect(spawnedEnv?.ACN_INFERENCE_PATH).toBe('official');
+    expect(
+      fetchFn.mock.calls.some((c) => String(c[0]).includes('/chat/completions'))
+    ).toBe(false);
+    expect(fetchFn.mock.calls.some((c) => String(c[0]).includes('/hops/'))).toBe(
+      true
+    );
     expect(writebacks).toEqual([
-      { content: 'official hi', reply_to_id: 'user-msg-1' },
+      { content: 'from agent', reply_to_id: 'user-msg-1' },
     ]);
   });
 });

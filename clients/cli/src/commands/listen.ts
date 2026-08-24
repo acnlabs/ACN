@@ -600,15 +600,15 @@ export function listenCommand(): Command {
     )
     .option(
       '--chat-complete-url <url>',
-      'BYO complete URL (optional if official-only; mutually exclusive with --chat-complete-exec)'
+      'Complete URL (optional if official-only; mutually exclusive with --chat-complete-exec). Official hops open a Host door and require a Host invoice.'
     )
     .option(
       '--chat-complete-exec <cmd>',
-      'BYO only (optional if official-only): stdin event → stdout {"content"}. Official hops complete via Host.'
+      'Complete exec (optional if official-only): stdin event → stdout {"content"}. Official hops with this flag open a Host door and require a Host invoice.'
     )
     .option(
       '--chat-complete-timeout <ms>',
-      `Complete timeout in ms (official default ${DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS}; BYO default ${DEFAULT_COMPLETE_TIMEOUT_MS})`
+      `Complete timeout in ms (CLI-owned official default ${DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS}; agent/BYO default ${DEFAULT_COMPLETE_TIMEOUT_MS})`
     )
     .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
     .option(

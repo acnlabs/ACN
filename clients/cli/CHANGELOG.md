@@ -4,6 +4,18 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-08-24
+
+CLI-only patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.
+
+### Changed
+- Official hops with `--chat-complete-exec` / `--chat-complete-url`
+  spawn that complete and inject a Host door (`OPENAI_BASE_URL` /
+  `X-ACN-OpenAI-Base-Url`). After complete, Host `GET /hops/{hop_id}`
+  must report `seen=true` or the hop fails (no TokenHub silent
+  settle). Omit both flags to keep the CLI-owned Host POST.
+  Restart `acn listen` after upgrading.
+
 ## [1.0.11] - 2026-08-23
 
 CLI-only patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.
