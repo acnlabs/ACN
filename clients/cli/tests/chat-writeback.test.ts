@@ -511,7 +511,7 @@ describe('handleChatWriteback', () => {
       chatCompleteUrl: 'http://127.0.0.1:9/complete',
       agentId: 'agent-1',
     })!;
-    const fetchFn = vi.fn(async (url: string | URL) => {
+    const fetchFn = vi.fn(async (url: string | URL, _init?: RequestInit) => {
       const u = String(url);
       if (u.includes('/oauth/token')) {
         return mockOkResponse(
