@@ -216,6 +216,19 @@ class TestPartialUpdate:
         assert kwargs["chat_invitees"] == ["wechat|alice", "wechat|bob"]
         assert r.json()["chat_invitees"] == ["wechat|alice", "wechat|bob"]
 
+    def test_clear_chat_invitees_with_empty_list(self, stub_agent_service):
+        _wire(stub_agent_service)
+        with TestClient(app) as client:
+            r = client.patch(
+                "/api/v1/agents/agent-target/profile",
+                json={"chat_invitees": []},
+                headers={"Authorization": "Bearer owner-key"},
+            )
+        assert r.status_code == 200, r.text
+        kwargs = stub_agent_service.update_profile.await_args.kwargs
+        assert kwargs["chat_invitees"] == []
+        assert r.json()["chat_invitees"] == []
+
     def test_unknown_invoke_slot_rejected(self, stub_agent_service):
         _wire(stub_agent_service)
         with TestClient(app) as client:

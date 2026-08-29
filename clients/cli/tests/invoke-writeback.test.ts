@@ -81,4 +81,31 @@ describe('invoke writeback', () => {
     expect(body.usage.input_tokens).toBe(12);
     expect(body.usage.meter_source).toBe('peer_self');
   });
+
+  it('times out /invoke/complete and does not hang', async () => {
+    const fetchFn = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          });
+        })
+    );
+    const result = await handleInvokeWriteback(
+      invokeEvent(),
+      {
+        enabled: true,
+        apiBase: 'https://api.example',
+        acnBaseUrl: 'https://acn.example',
+        apiKey: 'acn_TEST',
+        agentId: 'agent-b',
+        audience: 'https://api.agentplanet.org',
+        completeUrl: 'http://127.0.0.1:9/complete',
+        writebackTimeoutMs: 20,
+      },
+      { fetchFn: fetchFn as never, logFn: () => undefined }
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('writeback_timeout');
+  });
 });

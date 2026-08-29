@@ -53,22 +53,19 @@ def _headers(token: str = VALID_INTERNAL_TOKEN) -> dict[str, str]:
     return {"X-Internal-Token": token}
 
 
-def test_claim_internal_missing_token_401(stub_agent_service):
+def test_claim_internal_missing_token_422(stub_agent_service):
     client = TestClient(app)
     r = client.post(
         PATH,
         json={"owner_sub": "auth0|buyer", "verification_code": "job-code"},
     )
-    assert r.status_code == 401
-    body = r.json()
-    _assert_flat_shape(body)
-    assert body["error_code"] == "internal_token_invalid"
+    assert r.status_code == 422, r.text
     stub_agent_service[0].claim_agent.assert_not_awaited()
 
 
-def test_claim_internal_wrong_token_401(stub_agent_service):
+def test_claim_internal_wrong_token_403(stub_agent_service):
     with patch(
-        "acn.routes.registry.settings.internal_api_token",
+        "acn.routes.dependencies.settings.internal_api_token",
         VALID_INTERNAL_TOKEN,
     ):
         client = TestClient(app)
@@ -77,15 +74,17 @@ def test_claim_internal_wrong_token_401(stub_agent_service):
             headers=_headers("wrong-token-but-long-enough-padding"),
             json={"owner_sub": "auth0|buyer", "verification_code": "job-code"},
         )
-    assert r.status_code == 401
-    assert r.json()["error_code"] == "internal_token_invalid"
+    assert r.status_code == 403
+    body = r.json()
+    _assert_flat_shape(body)
+    assert body["error_code"] == "internal_token_invalid"
     stub_agent_service[0].claim_agent.assert_not_awaited()
 
 
 def test_claim_internal_binds_with_code(stub_agent_service):
     svc, target = stub_agent_service
     with patch(
-        "acn.routes.registry.settings.internal_api_token",
+        "acn.routes.dependencies.settings.internal_api_token",
         VALID_INTERNAL_TOKEN,
     ), patch("acn.routes.registry._grant_claim_reward"):
         client = TestClient(app)
@@ -108,7 +107,7 @@ def test_claim_internal_binds_with_code(stub_agent_service):
 
 def test_claim_internal_wrong_code_400(stub_agent_service):
     with patch(
-        "acn.routes.registry.settings.internal_api_token",
+        "acn.routes.dependencies.settings.internal_api_token",
         VALID_INTERNAL_TOKEN,
     ):
         client = TestClient(app)
@@ -129,7 +128,7 @@ def test_claim_internal_same_owner_idempotent(stub_agent_service):
     target.owner = "auth0|buyer"
     target.claim_status = ClaimStatus.CLAIMED
     with patch(
-        "acn.routes.registry.settings.internal_api_token",
+        "acn.routes.dependencies.settings.internal_api_token",
         VALID_INTERNAL_TOKEN,
     ):
         client = TestClient(app)
@@ -148,7 +147,7 @@ def test_claim_internal_other_owner_409(stub_agent_service):
     target.owner = "auth0|other"
     target.claim_status = ClaimStatus.CLAIMED
     with patch(
-        "acn.routes.registry.settings.internal_api_token",
+        "acn.routes.dependencies.settings.internal_api_token",
         VALID_INTERNAL_TOKEN,
     ):
         client = TestClient(app)

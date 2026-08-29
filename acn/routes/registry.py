@@ -4285,20 +4285,6 @@ async def _increment_referral_count(referrer_id: str, agent_service) -> None:
         logger.error("referral_count_error", referrer_id=referrer_id, error=str(e))
 
 
-def _require_internal_token(request: Request) -> None:
-    token = request.headers.get("X-Internal-Token", "")
-    if (
-        not token
-        or not settings.internal_api_token
-        or not secrets.compare_digest(token, settings.internal_api_token)
-    ):
-        raise ACNHTTPError(
-            ErrorCode.INTERNAL_TOKEN_INVALID,
-            401,
-            message="The X-Internal-Token header is missing or does not match.",
-        )
-
-
 def _claim_status_value(agent: Any) -> str:
     raw = getattr(agent, "claim_status", None)
     if raw is None:
@@ -4308,18 +4294,19 @@ def _claim_status_value(agent: Any) -> str:
 
 @router.post("/{agent_id}/claim/internal", response_model=AgentClaimResponse, include_in_schema=False)
 async def claim_agent_internal(
-    request: Request,
     agent_id: AgentIdPath,
     body: AgentClaimInternalRequest,
     background_tasks: BackgroundTasks,
+    _: InternalTokenDep,
     agent_service: AgentServiceDep = None,
 ):
     """Bind an unclaimed agent to ``owner_sub`` using Internal Token + claim code.
 
     Same-owner repeats are idempotent. Missing/wrong code cannot bind.
-    Host must not call this with only ``agent_id``.
+    Host must not call this with only ``agent_id``. After a successful
+    claim the one-time code is burned, so a same-owner retry cannot
+    re-check it.
     """
-    _require_internal_token(request)
     owner_sub = body.owner_sub.strip()
     if not owner_sub or not body.verification_code.strip():
         raise ACNHTTPError(

@@ -1,8 +1,10 @@
 /**
  * Mode B invoke usage writeback (AgentRouter D40–D44).
  *
- * Same host complete JSON as chat. Posts usage to ACN /invoke/complete
- * with the listener's acn_* key. Does not call Chat Gateway.
+ * Same host complete JSON as chat (content is required, not posted as a
+ * bubble). Posts usage to ACN /invoke/complete with the listener's acn_*
+ * key. Does not call Chat Gateway. Official Host door is chat-only —
+ * invoke envelopes have no inference_path.
  */
 
 import type { NormalizedEvent } from './normalize-event.js';
@@ -35,6 +37,9 @@ export async function handleInvokeWriteback(
   const usage = completed.result.usage
     ? { ...completed.result.usage, meter_source: 'peer_self' }
     : undefined;
+  const timeoutMs = opts.writebackTimeoutMs ?? 30_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetchFn(url, {
       method: 'POST',
@@ -47,6 +52,7 @@ export async function handleInvokeWriteback(
         hop_id: event.invoke.hop_id,
         usage,
       }),
+      signal: controller.signal,
     });
     if (res.status < 200 || res.status >= 300) {
       const reason = `invoke_complete_http_${res.status}`;
@@ -65,10 +71,16 @@ export async function handleInvokeWriteback(
     return { ok: true, httpStatus: res.status };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const reason =
+      controller.signal.aborted || /abort|timeout/i.test(msg)
+        ? 'writeback_timeout'
+        : msg.slice(0, 200);
     logFn(
       `[acn listen] invoke_writeback_failed hop_id=${event.invoke.hop_id} ` +
-        `reason=${msg.slice(0, 200)}`
+        `reason=${reason}`
     );
-    return { ok: false, reason: msg.slice(0, 200) };
+    return { ok: false, reason };
+  } finally {
+    clearTimeout(timer);
   }
 }
