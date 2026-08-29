@@ -4,6 +4,8 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-30
+
 ### Added
 
 - Execution Workspace: `create_workspace` / `get_workspace` / `close_workspace`

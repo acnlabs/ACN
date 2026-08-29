@@ -4,6 +4,8 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-30
+
 ### Added
 
 - Execution Workspace: `createWorkspace` / `getWorkspace` / `closeWorkspace`
