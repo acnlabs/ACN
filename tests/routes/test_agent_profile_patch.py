@@ -71,7 +71,7 @@ def stub_agent_service():
     svc.get_agent_by_api_key = AsyncMock(side_effect=_by_api_key)
 
     async def _update_profile(
-        agent_id: str, *, name=None, description=None, tags=None, invoke_slots=None
+        agent_id: str, *, name=None, description=None, tags=None, invoke_slots=None, chat_invitees=None
     ):
         if agent_id != "agent-target":
             raise AgentNotFoundException(agent_id)
@@ -87,6 +87,8 @@ def stub_agent_service():
         result.metadata = {}
         if invoke_slots:
             result.metadata["invoke_slots"] = invoke_slots
+        if chat_invitees:
+            result.metadata["chat_invitees"] = chat_invitees
         return result
 
     svc.update_profile = AsyncMock(side_effect=_update_profile)
@@ -200,6 +202,19 @@ class TestPartialUpdate:
             }
         ]
         assert r.json()["invoke_slots"][0]["id"] == "text.reply"
+
+    def test_update_chat_invitees(self, stub_agent_service):
+        _wire(stub_agent_service)
+        with TestClient(app) as client:
+            r = client.patch(
+                "/api/v1/agents/agent-target/profile",
+                json={"chat_invitees": [" wechat|alice ", "wechat|alice", "wechat|bob"]},
+                headers={"Authorization": "Bearer owner-key"},
+            )
+        assert r.status_code == 200, r.text
+        kwargs = stub_agent_service.update_profile.await_args.kwargs
+        assert kwargs["chat_invitees"] == ["wechat|alice", "wechat|bob"]
+        assert r.json()["chat_invitees"] == ["wechat|alice", "wechat|bob"]
 
     def test_unknown_invoke_slot_rejected(self, stub_agent_service):
         _wire(stub_agent_service)

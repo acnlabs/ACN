@@ -42,7 +42,8 @@ from urllib.parse import urlparse
 # included in the structured log so operators don't have to grep code.
 _EXTERNAL_HTTPS_REQUIRED: tuple[tuple[str, str], ...] = (
     ("gateway_base_url", "external base URL embedded in agent-card responses"),
-    ("frontend_base_url", "human-facing claim / referral links"),
+    ("frontend_base_url", "AgentPlanet human pages (confirm-delete, etc.)"),
+    ("interfaze_base_url", "Interfaze first-claim links"),
     ("webhook_url", "outbound webhook target"),
     ("billing_webhook_url", "outbound billing webhook target"),
     ("backend_url", "service-to-service backend (carries internal token)"),

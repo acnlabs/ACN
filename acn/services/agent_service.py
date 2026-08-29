@@ -351,6 +351,7 @@ class AgentService:
         description: str | None = None,
         tags: list[str] | None = None,
         invoke_slots: list[dict] | None = None,
+        chat_invitees: list[str] | None = None,
     ) -> Agent:
         """Partial update of an agent's editable metadata.
 
@@ -377,6 +378,8 @@ class AgentService:
             tags: New full tag list, or ``None`` to leave unchanged.
             invoke_slots: Platform-owned slot contracts, or ``None`` to
                 leave unchanged.
+            chat_invitees: Human user ids allowed to invoke (AgentRouter
+                P9). Empty list clears. ``None`` leaves unchanged.
 
         Raises:
             AgentNotFoundException: If the agent does not exist.
@@ -388,12 +391,18 @@ class AgentService:
             agent.description = description
         if tags is not None:
             agent.tags = list(tags)
-        if invoke_slots is not None:
+        if invoke_slots is not None or chat_invitees is not None:
             meta = dict(agent.metadata or {})
-            if invoke_slots:
-                meta["invoke_slots"] = list(invoke_slots)
-            else:
-                meta.pop("invoke_slots", None)
+            if invoke_slots is not None:
+                if invoke_slots:
+                    meta["invoke_slots"] = list(invoke_slots)
+                else:
+                    meta.pop("invoke_slots", None)
+            if chat_invitees is not None:
+                if chat_invitees:
+                    meta["chat_invitees"] = list(chat_invitees)
+                else:
+                    meta.pop("chat_invitees", None)
             agent.metadata = meta
         await self.repository.save(agent)
         return agent
