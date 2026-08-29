@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-08-30
+
+Client cut (`@acnlabs/acn-cli@1.0.13`, Python/TS `acn-client` **1.0.2**, skill **1.0.8**). Server stays **1.0.1**.
+
 ### Added
 
 - Execution Workspace product door: CLI `acn workspace attest`; Python/TS SDK
