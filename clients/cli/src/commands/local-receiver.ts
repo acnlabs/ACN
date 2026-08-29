@@ -16,6 +16,7 @@ import {
   type ChatWritebackDeps,
   type ChatWritebackOptions,
 } from './chat-writeback.js';
+import { handleInvokeWriteback } from './invoke-writeback.js';
 import {
   wakeRuntime,
   type RuntimeWakeOptions,
@@ -216,6 +217,22 @@ export function dispatchLocalReceiver(
     return;
   }
 
+  if (event.invoke && opts.chatWriteback?.enabled) {
+    void handleInvokeWriteback(event, opts.chatWriteback, deps)
+      .then((written) => {
+        if (!written.ok && key) dedupeStore.forget(key);
+      })
+      .catch((err: unknown) => {
+        if (key) dedupeStore.forget(key);
+        const msg = err instanceof Error ? err.message : String(err);
+        logFn(
+          `[acn listen] invoke_writeback_failed hop_id=${event.invoke?.hop_id} ` +
+            `reason=${msg.slice(0, 200)}`
+        );
+      });
+    return;
+  }
+
   void wakeRuntime(event, opts, deps)
     .then((wake) => {
       if (!wake.ok) {
@@ -274,6 +291,26 @@ export async function dispatchLocalReceiverAndWaitWake(
       const msg = err instanceof Error ? err.message : String(err);
       logFn(
         `[acn listen] chat_writeback_failed message_id=${result.event.message_id} ` +
+          `reason=${msg.slice(0, 200)}`
+      );
+      return { dedupeHit: false, woke: false };
+    }
+  }
+
+  if (result.event.invoke && opts.chatWriteback?.enabled) {
+    try {
+      const written = await handleInvokeWriteback(
+        result.event,
+        opts.chatWriteback,
+        deps
+      );
+      if (!written.ok && key) dedupeStore.forget(key);
+      return { dedupeHit: false, woke: written.ok };
+    } catch (err) {
+      if (key) dedupeStore.forget(key);
+      const msg = err instanceof Error ? err.message : String(err);
+      logFn(
+        `[acn listen] invoke_writeback_failed hop_id=${result.event.invoke.hop_id} ` +
           `reason=${msg.slice(0, 200)}`
       );
       return { dedupeHit: false, woke: false };

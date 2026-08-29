@@ -29,6 +29,12 @@ export interface ChatEnvelope {
   host_inference_url: string | null;
 }
 
+export interface InvokeEnvelope {
+  request_id: string;
+  hop_id: string;
+  slot: string | null;
+}
+
 export interface NormalizedEvent {
   event_type: 'a2a_message';
   task_id: string | null;
@@ -37,6 +43,8 @@ export interface NormalizedEvent {
   from_agent: string | null;
   /** Present when Chat Gateway attached a writeback contract. */
   chat: ChatEnvelope | null;
+  /** Present when AgentRouter attached an invoke hop (no chat bubble). */
+  invoke?: InvokeEnvelope | null;
   received_at: string;
   raw: Record<string, unknown>;
 }
@@ -229,6 +237,24 @@ export function extractChatEnvelope(
   };
 }
 
+export function extractInvokeEnvelope(
+  message: Record<string, unknown>
+): InvokeEnvelope | null {
+  const metadata = asRecord(message.metadata);
+  const ap = asRecord(metadata?.agentplanet);
+  const invoke = asRecord(ap?.invoke);
+  if (!invoke) return null;
+  const requestId = asNonEmptyString(invoke.request_id);
+  const hopId = asNonEmptyString(invoke.hop_id);
+  if (!requestId || !hopId) return null;
+  if (!hopId.startsWith('hop:invoke:')) return null;
+  return {
+    request_id: requestId,
+    hop_id: hopId,
+    slot: asNonEmptyString(invoke.slot),
+  };
+}
+
 /**
  * Build a normalized wake event from a valid JSON-RPC body.
  * Call only after parseJsonRpcBody succeeds for message/send|stream.
@@ -249,6 +275,7 @@ export function normalizeEvent(
     context_id: extractContextId(message),
     from_agent: extractFromAgent(message),
     chat: extractChatEnvelope(message),
+    invoke: extractInvokeEnvelope(message),
     received_at: now().toISOString(),
     raw: body,
   };
@@ -258,6 +285,9 @@ export function dedupeKey(event: NormalizedEvent): string {
   if (event.chat) {
     const mid = event.chat.gateway_message_id ?? event.message_id;
     return `chat:${event.chat.chat_id}:${mid}`;
+  }
+  if (event.invoke) {
+    return `invoke:${event.invoke.hop_id}`;
   }
   return event.task_id ?? event.message_id;
 }

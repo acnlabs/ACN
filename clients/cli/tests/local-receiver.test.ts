@@ -353,6 +353,7 @@ describe('wakeRuntime + dispatch order', () => {
         context_id: null,
         from_agent: null,
         chat: null,
+        invoke: null,
         received_at: new Date().toISOString(),
         raw: {},
       },

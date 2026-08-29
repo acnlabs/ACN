@@ -874,6 +874,26 @@ async function postWriteback(
 }
 
 /**
+ * BYO host complete (url/exec). Invoke writeback uses this; chat official
+ * hops keep their own door/Host path.
+ */
+export async function completeHostReply(
+  event: NormalizedEvent,
+  opts: ChatWritebackOptions,
+  deps: ChatWritebackDeps = {}
+): Promise<
+  { ok: true; result: ChatCompleteResult } | { ok: false; reason: string }
+> {
+  if (opts.completeUrl) {
+    return completeViaHttp(event, opts, deps);
+  }
+  if (opts.completeExec) {
+    return completeViaExec(event, opts, deps);
+  }
+  return { ok: false, reason: 'byo_complete_missing' };
+}
+
+/**
  * Complete host reply + Gateway writeback. Never throws.
  * Only call when event.chat is present and opts.enabled.
  */
