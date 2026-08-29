@@ -75,6 +75,10 @@ import type {
   OrgWorkItem,
   OrgWorkListResponse,
   OrgWorkUpdateRequest,
+  Workspace,
+  WorkspaceAttestation,
+  WorkspaceAttestationCreateRequest,
+  WorkspaceCreateRequest,
 } from './types';
 import { normalizeBaseUrl, resolveHostedBaseUrl } from './regions';
 
@@ -1694,6 +1698,49 @@ export class ACNClient {
     return this.post(
       `/api/v1/orgs/${encodeURIComponent(orgId)}/loop/tick`,
       {},
+    );
+  }
+
+  // ============================================
+  // Execution Workspace (doorplate; not a sandbox)
+  // ============================================
+
+  /** POST /api/v1/workspaces */
+  async createWorkspace(request: WorkspaceCreateRequest): Promise<Workspace> {
+    return this.post('/api/v1/workspaces', request);
+  }
+
+  /** GET /api/v1/workspaces/{workspaceId} */
+  async getWorkspace(workspaceId: string): Promise<Workspace> {
+    return this.get(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}`);
+  }
+
+  /** POST /api/v1/workspaces/{workspaceId}/close */
+  async closeWorkspace(workspaceId: string): Promise<Workspace> {
+    return this.post(
+      `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/close`,
+      {},
+    );
+  }
+
+  /** POST owner slip. Does not set meter_source=runtime_attested. */
+  async createWorkspaceAttestation(
+    workspaceId: string,
+    request: WorkspaceAttestationCreateRequest,
+  ): Promise<WorkspaceAttestation> {
+    return this.post(
+      `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/attestations`,
+      request,
+    );
+  }
+
+  /** GET /api/v1/workspaces/{id}/attestations/{attestationId} */
+  async getWorkspaceAttestation(
+    workspaceId: string,
+    attestationId: string,
+  ): Promise<WorkspaceAttestation> {
+    return this.get(
+      `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/attestations/${encodeURIComponent(attestationId)}`,
     );
   }
 }

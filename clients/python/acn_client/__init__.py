@@ -51,6 +51,10 @@ from .models import (
     TaskInfo,
     TaskReviewRequest,
     TaskSubmitRequest,
+    Workspace,
+    WorkspaceAttestation,
+    WorkspaceAttestationCreateRequest,
+    WorkspaceCreateRequest,
     org_subnet_id,
 )
 from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState
@@ -139,4 +143,8 @@ __all__ = [
     "OrgWorkListResponse",
     "OrgWorkUpdateRequest",
     "org_subnet_id",
+    "Workspace",
+    "WorkspaceAttestation",
+    "WorkspaceAttestationCreateRequest",
+    "WorkspaceCreateRequest",
 ]

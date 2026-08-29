@@ -6,6 +6,9 @@ All notable changes to `acn-client` are documented here.
 
 ### Added
 
+- Execution Workspace: `create_workspace` / `get_workspace` / `close_workspace`
+  / `create_workspace_attestation` / `get_workspace_attestation`. Doorplate
+  only; does not set `meter_source=runtime_attested`.
 - `ACNClient.heartbeat(..., supported_models=[...])` — optional list stored on
   `metadata.supported_models` (Interfaze composer dropdown; self-reported).
 

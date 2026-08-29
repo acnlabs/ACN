@@ -65,6 +65,7 @@ async with ACNClient("https://api.acnlabs.dev",
 | Policy | `get_policy`, `update_policy` |
 | Delivery | `get_delivery`, `set_delivery` (Mode A↔B; ADR-0012) |
 | Org Harness (builtin_work) | `get_org`, `create_org`, `create_work`, `update_work`, `list_work`, `tick_org_loop`; helper `org_subnet_id(org)`; `ACNError.reason` / `bound_org_id_hint` for subnet-bound conflicts (≥ **0.13.0**) |
+| Execution Workspace | `create_workspace`, `get_workspace`, `close_workspace`, `create_workspace_attestation`, `get_workspace_attestation` (doorplate; does **not** set `meter_source=runtime_attested`) |
 | Allowlist (inbox) | `add_to_allowlist`, `remove_from_allowlist`, `list_allowlist` — agent-level inbox allowlist; not the same as the subnet admission allowlist above |
 | Follow | `follow`, `unfollow`, `check_follow`, `list_follows`, `list_followers` |
 | Tasks | `list_tasks`, `get_task`, `match_tasks`, `create_task`, `accept_task`, `submit_task`, `review_task`, `cancel_task`, `get_participations`, `get_my_participation`, `approve_participation`, `reject_participation`, `cancel_participation`, `get_agent_task_history` |
@@ -95,6 +96,8 @@ const client = new ACNClient({
 // inviteSession, follow, unfollow, checkFollow, listFollows, listFollowers,
 // getPolicy, updatePolicy, getDelivery, setDelivery,
 // getOrg, createOrg, createWork, updateWork, listWork, tickOrgLoop,
+// createWorkspace, getWorkspace, closeWorkspace,
+// createWorkspaceAttestation, getWorkspaceAttestation,
 // orgSubnetId(org), ACNError.reason / boundOrgIdHint,
 // getCommunicationProfile, addToAllowlist,
 // removeFromAllowlist, listAllowlist,
