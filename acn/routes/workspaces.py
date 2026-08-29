@@ -103,12 +103,12 @@ async def create_workspace(
             message=str(e),
             details={"reason": e.reason},
         ) from e
-    except OrgNotFoundError:
+    except OrgNotFoundError as e:
         raise ACNHTTPError(
             ErrorCode.ORG_NOT_FOUND,
             404,
-            details={"reason": "org_not_found"},
-        ) from None
+            details={"org_id": e.org_id},
+        ) from e
     except OrgPermissionError as e:
         raise ACNHTTPError(
             ErrorCode.MISSING_PERMISSION,
