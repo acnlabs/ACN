@@ -803,6 +803,13 @@ class AgentClaimRequest(BaseModel):
     verification_code: str = Field(..., max_length=128, description="One-time claim token (returned at registration)")
 
 
+class AgentClaimInternalRequest(BaseModel):
+    """Host-only claim: bind ``owner_sub`` with this job's verification_code."""
+
+    owner_sub: str = Field(..., min_length=1, max_length=256, description="Human owner sub to bind")
+    verification_code: str = Field(..., min_length=1, max_length=128, description="One-time claim token from AM fulfillment")
+
+
 class AgentClaimResponse(BaseModel):
     """Response after claiming an agent"""
 
@@ -3479,12 +3486,13 @@ class ProfilePatchRequest(BaseModel):
     """PATCH body for ``/agents/{id}/profile``.
 
     Partial update of editable metadata: ``name`` / ``description`` /
-    ``tags`` / ``invoke_slots``. Every field is optional — only those
-    present are changed. This is a PATCH (partial), not a PUT (replace):
-    omitting a field leaves it untouched; it is never blanked out.
+    ``tags`` / ``invoke_slots`` / ``chat_invitees``. Every field is optional
+    — only those present are changed. This is a PATCH (partial), not a PUT
+    (replace): omitting a field leaves it untouched; it is never blanked out.
     ``tags`` *is* replaced wholesale when present (the list is the unit
     of update); pass the full desired list, or ``[]`` to clear all tags.
     ``invoke_slots`` is the AgentRouter P2 declaration (not tags).
+    ``chat_invitees`` is AgentRouter P9 (human user ids allowed to invoke).
 
     The same validators that run at registration apply here so a value
     rejected on join can't slip in via edit.
@@ -3517,6 +3525,13 @@ class ProfilePatchRequest(BaseModel):
             "Each item is {id}. Pass [] to clear. Unknown ids are rejected."
         ),
     )
+    chat_invitees: list[str] | None = Field(
+        default=None,
+        description=(
+            "Human user ids allowed to invoke this agent (replaces the list). "
+            "Pass [] to clear."
+        ),
+    )
 
     @field_validator("name")
     @classmethod
@@ -3537,6 +3552,25 @@ class ProfilePatchRequest(BaseModel):
         except SlotContractError as exc:
             raise ValueError(str(exc)) from exc
 
+    @field_validator("chat_invitees")
+    @classmethod
+    def _validate_chat_invitees(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in v:
+            if not isinstance(raw, str):
+                continue
+            uid = raw.strip()[:128]
+            if not uid or uid in seen:
+                continue
+            seen.add(uid)
+            out.append(uid)
+            if len(out) >= 50:
+                break
+        return out
+
     @model_validator(mode="after")
     def _require_at_least_one_field(self):
         if (
@@ -3544,10 +3578,11 @@ class ProfilePatchRequest(BaseModel):
             and self.description is None
             and self.tags is None
             and self.invoke_slots is None
+            and self.chat_invitees is None
         ):
             raise ValueError(
-                "At least one of name, description, tags, or invoke_slots "
-                "must be provided."
+                "At least one of name, description, tags, invoke_slots, "
+                "or chat_invitees must be provided."
             )
         return self
 
@@ -3582,6 +3617,7 @@ async def update_agent_profile(
             description=body.description,
             tags=body.tags,
             invoke_slots=body.invoke_slots,
+            chat_invitees=body.chat_invitees,
         )
     except AgentNotFoundException as e:
         raise ACNHTTPError(
@@ -3607,17 +3643,26 @@ async def update_agent_profile(
                 ("description", body.description),
                 ("tags", body.tags),
                 ("invoke_slots", body.invoke_slots),
+                ("chat_invitees", body.chat_invitees),
             )
             if v is not None
         ],
     )
 
+    meta = updated.metadata if isinstance(updated.metadata, dict) else {}
+    raw_invitees = meta.get("chat_invitees")
+    invitees = (
+        [str(x) for x in raw_invitees if isinstance(x, str)]
+        if isinstance(raw_invitees, list)
+        else []
+    )
     return {
         "agent_id": agent_id,
         "name": updated.name,
         "description": updated.description,
         "tags": updated.tags,
         "invoke_slots": parse_declared_slots(updated.metadata),
+        "chat_invitees": invitees,
     }
 
 
@@ -4243,6 +4288,96 @@ async def _increment_referral_count(referrer_id: str, agent_service) -> None:
             )
     except Exception as e:
         logger.error("referral_count_error", referrer_id=referrer_id, error=str(e))
+
+
+def _claim_status_value(agent: Any) -> str:
+    raw = getattr(agent, "claim_status", None)
+    if raw is None:
+        return ""
+    return str(getattr(raw, "value", raw) or "").strip().lower()
+
+
+@router.post("/{agent_id}/claim/internal", response_model=AgentClaimResponse, include_in_schema=False)
+async def claim_agent_internal(
+    agent_id: AgentIdPath,
+    body: AgentClaimInternalRequest,
+    background_tasks: BackgroundTasks,
+    _: InternalTokenDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Bind an unclaimed agent to ``owner_sub`` using Internal Token + claim code.
+
+    Same-owner repeats are idempotent. Missing/wrong code cannot bind.
+    Host must not call this with only ``agent_id``. After a successful
+    claim the one-time code is burned, so a same-owner retry cannot
+    re-check it.
+    """
+    owner_sub = body.owner_sub.strip()
+    if not owner_sub or not body.verification_code.strip():
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"agent_id": agent_id, "reason": "verification_code_required"},
+        )
+
+    try:
+        existing = await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    if _claim_status_value(existing) == "claimed":
+        if existing.owner == owner_sub:
+            return AgentClaimResponse(
+                success=True,
+                agent_id=existing.agent_id,
+                owner=existing.owner,
+                message=f"Agent '{existing.name}' already claimed",
+            )
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            409,
+            details={"agent_id": agent_id, "reason": "already_claimed"},
+        )
+
+    try:
+        agent = await agent_service.claim_agent(
+            agent_id=agent_id,
+            owner=owner_sub,
+            verification_code=body.verification_code,
+        )
+        logger.info("agent_claimed_internal", agent_id=agent_id, owner=owner_sub)
+        if agent.rotated_api_key or agent.key_invalidated:
+            evict_agent_from_cache(agent_id)
+            await _force_disconnect_agent_sessions(agent_id, reason="ownership_transfer")
+        background_tasks.add_task(
+            _grant_claim_reward,
+            agent_id=agent_id,
+            user_id=owner_sub,
+        )
+        return AgentClaimResponse(
+            success=True,
+            agent_id=agent.agent_id,
+            owner=agent.owner,
+            message=f"Agent '{agent.name}' successfully claimed",
+            api_key=agent.rotated_api_key,
+        )
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+    except ValueError as e:
+        logger.warning("claim_agent_internal_invalid", agent_id=agent_id, error=str(e))
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"agent_id": agent_id, "reason": "invalid_request"},
+        ) from e
 
 
 @router.post("/{agent_id}/claim", response_model=AgentClaimResponse)
