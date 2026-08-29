@@ -36,10 +36,6 @@ from .models import (
     OrgWorkItem,
     OrgWorkListResponse,
     OrgWorkUpdateRequest,
-    Workspace,
-    WorkspaceAttestation,
-    WorkspaceAttestationCreateRequest,
-    WorkspaceCreateRequest,
     ParticipationInfo,
     PaymentCapability,
     PaymentMethod,
@@ -55,6 +51,10 @@ from .models import (
     TaskInfo,
     TaskReviewRequest,
     TaskSubmitRequest,
+    Workspace,
+    WorkspaceAttestation,
+    WorkspaceAttestationCreateRequest,
+    WorkspaceCreateRequest,
     org_subnet_id,
 )
 from .realtime import ACNRealtime, ACNRealtimeOptions, AuthMode, WSState

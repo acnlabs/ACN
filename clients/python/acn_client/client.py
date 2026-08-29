@@ -28,10 +28,6 @@ from .models import (
     OrgWorkItem,
     OrgWorkListResponse,
     OrgWorkUpdateRequest,
-    Workspace,
-    WorkspaceAttestation,
-    WorkspaceAttestationCreateRequest,
-    WorkspaceCreateRequest,
     ParticipationInfo,
     PaymentCapability,
     PaymentStats,
@@ -42,6 +38,10 @@ from .models import (
     TaskAcceptResponse,
     TaskCreateRequest,
     TaskInfo,
+    Workspace,
+    WorkspaceAttestation,
+    WorkspaceAttestationCreateRequest,
+    WorkspaceCreateRequest,
 )
 
 
