@@ -1137,6 +1137,7 @@ export interface Org {
   charter?: Record<string, unknown>;
   owner?: Record<string, unknown>;
   created_by?: Record<string, unknown>;
+  execution_env?: { kind?: string; uri?: string; hint?: string; workspace_id?: string };
   created_at?: string;
   updated_at?: string;
 }
@@ -1151,6 +1152,7 @@ export interface OrgCreateRequest {
   plugins?: Record<string, string>;
   harness_url?: string;
   harness_secret?: string;
+  execution_env?: { kind?: string; uri?: string; hint?: string; workspace_id?: string };
 }
 
 export interface OrgWorkItem {

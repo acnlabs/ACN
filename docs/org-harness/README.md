@@ -1,7 +1,7 @@
 # Org Harness
 
 **Status:** Design v0 + [ADR-0014](../adr/0014-org-harness-module.md) Accepted；**Phase 1 Kernel + Phase 2a/P2c 已落地**（`/api/v1/orgs*` · Work Port `builtin_work` · Paperclip Org path）  
-**Last updated:** 2026-08-01
+**Last updated:** 2026-08-28
 
 > **Org Harness** 是 ACN 的**新模块**：给「一群 agent 组成的 Org」提供组织层挽具。  
 > **ACN** 仍叫 ACN（智能体协作网络），不是 Pasture。  
@@ -24,6 +24,7 @@
 | **[design-v0.md](./design-v0.md)** | **方案设计与架构（综合定调，以此为准；先读 §0）** |
 | **[../adr/0014-org-harness-module.md](../adr/0014-org-harness-module.md)** | **P0/P1 机制 ADR（已 Accepted）** |
 | [org-model-v0.md](./org-model-v0.md) | Org / Membership 数据模型 |
+| **[exec-workspace-v0.md](./exec-workspace-v0.md)** | **ACN Workspace（Network Core；可登记干活处。薄 Kernel 已落地；不是协作入场券，≠ Host Workspace）** |
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core 消费契约（外部 Pattern 用） |
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（`POST /orgs` + Org work；`task.*` 为 legacy） |
 | **[phase2-work-port-v0.md](./phase2-work-port-v0.md)** | **Phase 2 Work Port 短方案（默认 builtin_work · P2a/P2c 完成 · P2b 按需）** |
@@ -82,4 +83,5 @@ L1 harness（含会话级 fan-out）: 成员自带，不进 Org Harness Kernel
 - **运转模式：** [org-runtime-modes-v0.md](./org-runtime-modes-v0.md) — **文档预设 + 自由组合**（v0 无 `mode=`；公司式仅为示例）；外部 Pattern 一等扩展；§6 挂卸；自动扇出非必经。  
 - **编排质量（M0 Accepted）：** [org-swarm-metrics-v0.md](./org-swarm-metrics-v0.md) + [`swarm_metrics.py`](../../examples/org-orchestrator/swarm_metrics.py) + [`work_observe.py`](../../examples/org-orchestrator/work_observe.py) + [`smoke_org_swarm_metrics.sh`](../../scripts/smoke_org_swarm_metrics.sh) + [`smoke_org_work_metadata_wave.sh`](../../scripts/smoke_org_work_metadata_wave.sh)（`metadata.wave` 狗粮）。  
 - **选型（未实现）：** [ClawTeam ↔ Org Loop 适配器](./clawteam-org-loop-adapter-v0.md)（编排器可选后端，有需求再开）。  
-- **其后：** Phase 3 增强 Port / Plugin 宿主。
+- **其后：** Phase 3 增强 Port / Plugin 宿主。  
+- **Execution Workspace（薄 Kernel 已落地）：** [exec-workspace-v0.md](./exec-workspace-v0.md) — 协作默认不强制；需要共享场地时 steward 登记一次。狗粮 [`smoke_exec_workspace.sh`](../../scripts/smoke_exec_workspace.sh)。

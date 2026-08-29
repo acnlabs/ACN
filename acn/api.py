@@ -66,6 +66,9 @@ from .infrastructure.persistence.postgres import (
     get_engine,
     get_session_factory,
 )
+from .infrastructure.persistence.postgres.workspace_repository import (
+    PostgresWorkspaceRepository,
+)
 from .infrastructure.persistence.redis import (
     RedisAgentRepository,
     RedisAllowlistRepository,
@@ -84,6 +87,9 @@ from .infrastructure.persistence.redis.subnet_join_request_repository import (
     RedisSubnetJoinRequestRepository,
 )
 from .infrastructure.persistence.redis.task_repository import RedisTaskRepository
+from .infrastructure.persistence.redis.workspace_repository import (
+    RedisWorkspaceRepository,
+)
 from .infrastructure.task_pool import TaskPool
 from .middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .monitoring import Analytics, AuditLogger, MetricsCollector
@@ -119,6 +125,7 @@ from .routes import (
     subnets,
     tasks,
     websocket,
+    workspaces,
 )
 from .routes.dependencies import limiter
 from .security import check_tls_config
@@ -145,6 +152,7 @@ from .services.settlement_worker import SettlementWorker
 from .services.webhook_join_flow_event_publisher import (
     WebhookJoinFlowEventPublisher,
 )
+from .services.workspace_service import WorkspaceService
 
 # Settings
 settings = get_settings()
@@ -306,6 +314,7 @@ async def lifespan(app: FastAPI):
         subnet_repository = PostgresSubnetRepository(_pg_session)
         task_repository = PostgresTaskRepository(_pg_session, redis_client)
         org_repository = PostgresOrgRepository(_pg_session)
+        workspace_repository = PostgresWorkspaceRepository(_pg_session)
         _billing_repository = PostgresBillingRepository(_pg_session)
         _activity_repository = PostgresActivityRepository(_pg_session)
         _settlement_outbox_repository = PostgresSettlementOutboxRepository(_pg_session)
@@ -317,6 +326,7 @@ async def lifespan(app: FastAPI):
         subnet_repository = RedisSubnetRepository(redis_client)
         task_repository = RedisTaskRepository(redis_client)
         org_repository = RedisOrgRepository(redis_client)
+        workspace_repository = RedisWorkspaceRepository(redis_client)
 
     agent_service_instance = AgentService(agent_repository)
     # ADR-0003: SubnetService now takes an optional task_repository
@@ -570,6 +580,13 @@ async def lifespan(app: FastAPI):
         agent_service=agent_service_instance,
         webhook_service=webhook_service_instance,
         task_repository=task_repository,
+        workspace_repository=workspace_repository,
+    )
+    workspace_service_instance = WorkspaceService(
+        workspace_repository=workspace_repository,
+        agent_service=agent_service_instance,
+        org_service=org_service_instance,
+        task_repository=task_repository,
     )
 
     payment_discovery_instance = PaymentDiscoveryService(redis_client)
@@ -655,6 +672,7 @@ async def lifespan(app: FastAPI):
         message_service=message_service_instance,
         # Best-effort metadata.performance denorm after task settle
         agent_service=agent_service_instance,
+        workspace_service=workspace_service_instance,
         # Settlement saga v0.1 — both are None in Redis-only mode,
         # which forces ``complete_task`` onto its legacy non-atomic
         # path (existing pre-v0.1 behavior). In PG mode the saga
@@ -717,6 +735,7 @@ async def lifespan(app: FastAPI):
         reputation_query_service=reputation_query_service_instance,
         join_flow_service=join_flow_service_instance,
         org_service=org_service_instance,
+        workspace_service=workspace_service_instance,
     )
 
     # Phase 1 wiring guard
@@ -1409,6 +1428,7 @@ app.include_router(analytics.router)
 app.include_router(payments.router)
 app.include_router(tasks.router)  # Task Pool API
 app.include_router(orgs.router)  # Org Harness Kernel (ADR-0014)
+app.include_router(workspaces.router)  # Execution Workspace (Network Core)
 app.include_router(websocket.router)
 # ADR-0007: agent JWT issuance (OAuth2 client_credentials) + JWKS / OIDC
 # discovery. ACN mints short-lived agent JWTs that resource servers

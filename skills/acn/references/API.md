@@ -134,6 +134,22 @@ applicant / invitee).
 
 ---
 
+## Execution Workspace
+
+Doorplate only — ACN does **not** run POSIX or a sandbox. Spec: `docs/org-harness/exec-workspace-v0.md`.
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| POST | `/workspaces` | API Key | Register a workplace pointer (`execution_env` git/url + admit). One active workspace per org/task |
+| GET | `/workspaces/{id}` | API Key / JWT | Show workspace (404 if you cannot enter) |
+| POST | `/workspaces/{id}/attestations` | Owner API key | `workspace_owner` attestation. Does **not** set `meter_source=runtime_attested` |
+| GET | `/workspaces/{id}/attestations/{attestation_id}` | API Key / JWT | Show attestation (same admit as GET workspace) |
+| POST | `/workspaces/{id}/close` | Owner API key | Close workspace (GET still works for the owner) |
+
+Task submit may include optional `attestation_id` (looked up in ACN). True stamp only on task submit.
+
+---
+
 ## Org Harness
 
 Org module (ADR-0014). Default Work Port is `builtin_work`. External Patterns
@@ -144,7 +160,7 @@ Task Pool mode. See [`docs/org-harness/`](../../../docs/org-harness/README.md).
 |---|---|---|---|
 | POST | `/orgs` | API Key / JWT (`acn:write`) | Create Org (optional `subnet_id`, `join_policy`, `harness_url`) |
 | GET | `/orgs/{id}` | None / API Key | Show Org (private-fence redaction for unentitled readers) |
-| PATCH | `/orgs/{id}` | API Key / JWT | Update display_name / charter / plugins |
+| PATCH | `/orgs/{id}` | API Key / JWT | Update display_name / charter / plugins / execution_env |
 | POST | `/orgs/{id}/claim` | API Key / JWT | Claim unclaimed Org |
 | POST | `/orgs/{id}/transfer` | API Key / JWT | Transfer ownership |
 | POST | `/orgs/{id}/release` | API Key / JWT | Release ownership → none |

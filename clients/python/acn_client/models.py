@@ -742,6 +742,7 @@ class TaskSubmitRequest(BaseModel):
     submission: str = Field(..., min_length=5, description="Task result/deliverable")
     artifacts: list[dict] = Field(default_factory=list)
     participation_id: str | None = Field(None, description="Required for multi-participant tasks")
+    attestation_id: str | None = Field(None, description="Optional workspace-owner attestation_id")
 
 
 class TaskReviewRequest(BaseModel):
@@ -809,6 +810,7 @@ class Org(BaseModel):
     charter: dict[str, Any] | None = None
     owner: dict[str, Any] | None = None
     created_by: dict[str, Any] | None = None
+    execution_env: dict[str, Any] | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -825,6 +827,7 @@ class OrgCreateRequest(BaseModel):
     plugins: dict[str, str] | None = None
     harness_url: str | None = None
     harness_secret: str | None = None
+    execution_env: dict[str, Any] | None = None
 
 
 class OrgWorkItem(BaseModel):

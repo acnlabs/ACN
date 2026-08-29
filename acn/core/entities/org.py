@@ -22,6 +22,8 @@ _MEMBERSHIP_STATUSES = frozenset({"active", "inactive"})
 _ORG_STATUSES = frozenset({"active", "dissolved", "fence_missing", "frozen"})
 _WORK_STATUSES = frozenset({"todo", "in_progress", "done", "cancelled"})
 _DEFAULT_ROLES = ("manager", "worker", "reviewer")
+_EXECUTION_ENV_KINDS = frozenset({"none", "git", "url"})
+_EXECUTION_ENV_URI_PREFIXES = ("https://", "http://", "git@", "ssh://", "git://")
 
 
 @dataclass
@@ -94,6 +96,7 @@ class Org:
     roles: list[str] = field(default_factory=lambda: list(_DEFAULT_ROLES))
     status: OrgStatus = "active"
     steward_agent_id: str = ""
+    execution_env: dict[str, Any] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -108,6 +111,7 @@ class Org:
             raise ValueError(f"invalid org status: {self.status!r}")
         if not self.steward_agent_id:
             raise ValueError("steward_agent_id cannot be empty")
+        self.execution_env = normalize_execution_env(self.execution_env)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,6 +125,7 @@ class Org:
             "plugins": self.plugins,
             "roles": list(self.roles),
             "status": self.status,
+            "execution_env": self.execution_env or {"kind": "none"},
             "steward_agent_id": self.steward_agent_id,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
@@ -154,6 +159,7 @@ class Org:
             roles=list(data.get("roles") or _DEFAULT_ROLES),
             status=data.get("status") or "active",
             steward_agent_id=data.get("steward_agent_id") or "",
+            execution_env=data.get("execution_env"),
             created_at=created_at or datetime.now(UTC),
             updated_at=updated_at or datetime.now(UTC),
         )
@@ -203,6 +209,54 @@ class OrgMembership:
             status=data.get("status") or "active",
             joined_at=joined_at or datetime.now(UTC),
         )
+
+
+def normalize_execution_env(raw: Any) -> dict[str, Any] | None:
+    """Org-level shared workplace pointer. Kernel stores; does not run it.
+
+    ``None`` / ``{kind: none}`` means members use their own L1. ``git`` and
+    ``url`` are pointers the member follows (clone a repo, call a runner).
+    ACN does not provision the environment.
+    """
+    from ..validators import check_dict_size_64k
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("execution_env must be a JSON object or null")
+    check_dict_size_64k("execution_env", raw)
+    kind = raw.get("kind") or "none"
+    if kind not in _EXECUTION_ENV_KINDS:
+        raise ValueError(f"invalid execution_env.kind: {kind!r}")
+    if kind == "none":
+        return None
+    uri = raw.get("uri")
+    if not isinstance(uri, str) or not uri.strip():
+        raise ValueError("execution_env.uri is required when kind is not none")
+    uri = uri.strip()
+    if len(uri) > 2048:
+        raise ValueError("execution_env.uri is too long")
+    if not any(uri.startswith(prefix) for prefix in _EXECUTION_ENV_URI_PREFIXES):
+        raise ValueError("execution_env.uri must be http(s), git, or ssh")
+    out: dict[str, Any] = {"kind": kind, "uri": uri}
+    hint = raw.get("hint")
+    if hint is not None:
+        if not isinstance(hint, str):
+            raise ValueError("execution_env.hint must be a string")
+        hint = hint.strip()
+        if len(hint) > 500:
+            raise ValueError("execution_env.hint is too long")
+        if hint:
+            out["hint"] = hint
+    workspace_id = raw.get("workspace_id")
+    if workspace_id is not None:
+        if not isinstance(workspace_id, str) or not workspace_id.startswith("ws_"):
+            raise ValueError("execution_env.workspace_id must start with ws_")
+        workspace_id = workspace_id.strip()
+        if not workspace_id or len(workspace_id) > 128:
+            raise ValueError("execution_env.workspace_id is invalid")
+        out["workspace_id"] = workspace_id
+    return out
 
 
 def normalize_work_metadata(raw: Any) -> dict[str, Any] | None:

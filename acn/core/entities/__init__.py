@@ -15,6 +15,7 @@ from .task import (
     Task,
     TaskStatus,
 )
+from .workspace import Workspace, WorkspaceAttestation
 
 # Note: ``AgentStatus`` is intentionally no longer re-exported. It used
 # to live on the ``Agent`` entity, but online-ness is now derived from
@@ -31,6 +32,8 @@ __all__ = [
     "OrgOwner",
     "OrgPrincipal",
     "OrgWorkItem",
+    "Workspace",
+    "WorkspaceAttestation",
     "Participation",
     "ParticipationStatus",
     "Subnet",

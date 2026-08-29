@@ -90,6 +90,7 @@ class TaskService:
         org_service: Any | None = None,
         message_service: MessageService | None = None,
         agent_service: AgentService | None = None,
+        workspace_service: Any | None = None,
         # Settlement saga v0.1 — keyword-only, all three OPTIONAL so
         # Redis-only / in-memory deployments and legacy test fixtures
         # constructed without saga wiring keep working unchanged. The
@@ -128,6 +129,9 @@ class TaskService:
                 updates the whitelist — matches pre-push behavior.
             agent_service: AgentService for best-effort
                 ``metadata.performance`` refresh after settle (optional).
+            workspace_service: WorkspaceService for optional
+                ``attestation_id`` on submit (exec-workspace-v0). Optional;
+                when None, passing attestation_id is rejected.
             settlement_outbox: Outbox repository for the settlement saga
                 (v0.1). When None, ``complete_task`` uses its legacy
                 non-atomic path — see docstring there.
@@ -151,6 +155,7 @@ class TaskService:
         self.org_service = org_service
         self.message_service = message_service
         self.agent_service = agent_service
+        self.workspace_service = workspace_service
         # Saga wiring — see attribute docstrings on each, and the
         # decision matrix on ``_saga_enabled`` below.
         self.settlement_outbox = settlement_outbox
@@ -782,6 +787,81 @@ class TaskService:
         await self._notify_webhook(WebhookEventType.TASK_ACCEPTED, task)
         return task, pid
 
+    async def _artifacts_with_attestation(
+        self,
+        *,
+        attestation_id: str | None,
+        agent_id: str,
+        task_id: str,
+        artifacts: list[dict] | None,
+    ) -> tuple[list[dict], dict[str, Any] | None]:
+        """Attach a stored workspace_owner slip. Does not prove the run.
+
+        The slip must be for this submitter **and** this task: either the
+        workspace is ``admit=task`` for ``task_id``, or the slip itself
+        names ``task_id``. A bare org/allowlist slip cannot be reused
+        across tasks.
+        """
+        arts = list(artifacts or [])
+        if not attestation_id:
+            return arts, None
+        if self.workspace_service is None:
+            raise ValueError("attestation_id is not supported in this deployment")
+        att = await self.workspace_service.repository.find_attestation(attestation_id)
+        if att is None:
+            raise ValueError(f"attestation not found: {attestation_id}")
+        if att.agent_id != agent_id:
+            raise PermissionError("attestation.agent_id must match the submitter")
+        if att.task_id and att.task_id != task_id:
+            raise ValueError("attestation.task_id does not match this task")
+        workspace = await self.workspace_service.repository.find_workspace(
+            att.workspace_id
+        )
+        if workspace is None:
+            raise ValueError("attestation workspace not found")
+        if workspace.admit == "task":
+            if workspace.task_id != task_id:
+                raise ValueError(
+                    "attestation workspace is bound to a different task"
+                )
+        elif not att.task_id:
+            raise ValueError(
+                "attestation must include task_id unless hung on this task's workspace"
+            )
+        blob = {
+            "kind": "workspace_attestation",
+            "attestation_id": att.attestation_id,
+            "workspace_id": att.workspace_id,
+        }
+        arts.append(blob)
+        return arts, blob
+
+    def _hang_attestation_metadata(
+        self,
+        task: Task,
+        att_blob: dict[str, Any],
+        *,
+        agent_id: str,
+        participation_id: str | None = None,
+    ) -> None:
+        meta = dict(task.metadata or {})
+        meta["attestation_id"] = att_blob["attestation_id"]
+        meta["workspace_id"] = att_blob["workspace_id"]
+        if participation_id:
+            entry = {
+                **att_blob,
+                "agent_id": agent_id,
+                "participation_id": participation_id,
+            }
+            slips = [
+                s
+                for s in (meta.get("attestations") or [])
+                if isinstance(s, dict) and s.get("agent_id") != agent_id
+            ]
+            slips.append(entry)
+            meta["attestations"] = slips
+        task.metadata = meta
+
     async def submit_task(
         self,
         task_id: str,
@@ -789,6 +869,7 @@ class TaskService:
         submission: str,
         artifacts: list[dict] | None = None,
         participation_id: str | None = None,
+        attestation_id: str | None = None,
     ) -> Task:
         """
         Submit task result.
@@ -798,8 +879,15 @@ class TaskService:
 
         Args:
             participation_id: Optional — required for multi-participant, auto-found if omitted
+            attestation_id: Optional workspace-owner slip (does not replace review)
         """
         task = await self.get_task(task_id)
+        artifacts, att_blob = await self._artifacts_with_attestation(
+            attestation_id=attestation_id,
+            agent_id=agent_id,
+            task_id=task_id,
+            artifacts=artifacts,
+        )
 
         # ---- Multi-participant path ----
         if task._is_multi():
@@ -816,6 +904,15 @@ class TaskService:
             else:
                 p.submit(submission, artifacts)
             await self.repository.save_participation(p)
+
+            if att_blob:
+                self._hang_attestation_metadata(
+                    task,
+                    att_blob,
+                    agent_id=agent_id,
+                    participation_id=p.participation_id,
+                )
+                await self.repository.save(task)
 
             if self.activity:
                 await self.activity.record_task_submitted(
@@ -842,6 +939,9 @@ class TaskService:
         # ---- Single-participant path (original) ----
         if task.assignee_id != agent_id:
             raise PermissionError("Only the assigned solver can submit")
+
+        if att_blob:
+            self._hang_attestation_metadata(task, att_blob, agent_id=agent_id)
 
         # Snapshot the pre-transition status for the CAS below.
         # Two concurrent submits can both pass the assignee check, both call

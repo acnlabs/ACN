@@ -413,3 +413,241 @@ class TestResolveParticipation:
 
         with pytest.raises(PermissionError, match="belongs to another"):
             await service._resolve_participation("task-001", "agent-001", "part-001")
+
+
+class TestSubmitAttestation:
+    async def test_submit_hangs_workspace_owner_slip(
+        self, mock_repo, mock_task_pool
+    ):
+        from types import SimpleNamespace
+
+        ws = AsyncMock()
+        ws.repository.find_attestation = AsyncMock(
+            return_value=SimpleNamespace(
+                attestation_id="att_1",
+                workspace_id="ws_1",
+                agent_id="agent-001",
+                task_id="task-001",
+            )
+        )
+        ws.repository.find_workspace = AsyncMock(
+            return_value=SimpleNamespace(admit="org", task_id=None)
+        )
+        svc = TaskService(
+            repository=mock_repo,
+            task_pool=mock_task_pool,
+            payment_manager=None,
+            webhook_service=None,
+            activity_service=None,
+            escrow_client=None,
+            workspace_service=ws,
+        )
+        task = _make_task(
+            max_participants=1,
+            assignee_id="agent-001",
+            status=TaskStatus.IN_PROGRESS,
+        )
+        mock_repo.find_by_id.return_value = task
+        mock_repo.compare_and_save.return_value = True
+
+        result = await svc.submit_task(
+            task_id="task-001",
+            agent_id="agent-001",
+            submission="Here is my work",
+            attestation_id="att_1",
+        )
+        assert result.metadata["attestation_id"] == "att_1"
+        assert result.submission_artifacts[-1]["kind"] == "workspace_attestation"
+        assert result.submission_artifacts[-1]["attestation_id"] == "att_1"
+
+    async def test_submit_rejects_wrong_worker(self, mock_repo, mock_task_pool):
+        from types import SimpleNamespace
+
+        ws = AsyncMock()
+        ws.repository.find_attestation = AsyncMock(
+            return_value=SimpleNamespace(
+                attestation_id="att_1",
+                workspace_id="ws_1",
+                agent_id="agent-other",
+                task_id="task-001",
+            )
+        )
+        svc = TaskService(
+            repository=mock_repo,
+            task_pool=mock_task_pool,
+            workspace_service=ws,
+        )
+        task = _make_task(
+            max_participants=1,
+            assignee_id="agent-001",
+            status=TaskStatus.IN_PROGRESS,
+        )
+        mock_repo.find_by_id.return_value = task
+        with pytest.raises(PermissionError, match="attestation.agent_id"):
+            await svc.submit_task(
+                task_id="task-001",
+                agent_id="agent-001",
+                submission="Here is my work",
+                attestation_id="att_1",
+            )
+
+    async def test_submit_rejects_unscoped_org_slip(
+        self, mock_repo, mock_task_pool
+    ):
+        from types import SimpleNamespace
+
+        ws = AsyncMock()
+        ws.repository.find_attestation = AsyncMock(
+            return_value=SimpleNamespace(
+                attestation_id="att_1",
+                workspace_id="ws_1",
+                agent_id="agent-001",
+                task_id=None,
+            )
+        )
+        ws.repository.find_workspace = AsyncMock(
+            return_value=SimpleNamespace(admit="org", task_id=None)
+        )
+        svc = TaskService(
+            repository=mock_repo,
+            task_pool=mock_task_pool,
+            workspace_service=ws,
+        )
+        task = _make_task(
+            max_participants=1,
+            assignee_id="agent-001",
+            status=TaskStatus.IN_PROGRESS,
+        )
+        mock_repo.find_by_id.return_value = task
+        with pytest.raises(ValueError, match="task_id"):
+            await svc.submit_task(
+                task_id="task-001",
+                agent_id="agent-001",
+                submission="Here is my work",
+                attestation_id="att_1",
+            )
+
+    async def test_submit_task_workspace_without_slip_task_id(
+        self, mock_repo, mock_task_pool
+    ):
+        from types import SimpleNamespace
+
+        ws = AsyncMock()
+        ws.repository.find_attestation = AsyncMock(
+            return_value=SimpleNamespace(
+                attestation_id="att_1",
+                workspace_id="ws_1",
+                agent_id="agent-001",
+                task_id=None,
+            )
+        )
+        ws.repository.find_workspace = AsyncMock(
+            return_value=SimpleNamespace(admit="task", task_id="task-001")
+        )
+        svc = TaskService(
+            repository=mock_repo,
+            task_pool=mock_task_pool,
+            payment_manager=None,
+            webhook_service=None,
+            activity_service=None,
+            escrow_client=None,
+            workspace_service=ws,
+        )
+        task = _make_task(
+            max_participants=1,
+            assignee_id="agent-001",
+            status=TaskStatus.IN_PROGRESS,
+        )
+        mock_repo.find_by_id.return_value = task
+        mock_repo.compare_and_save.return_value = True
+        result = await svc.submit_task(
+            task_id="task-001",
+            agent_id="agent-001",
+            submission="Here is my work",
+            attestation_id="att_1",
+        )
+        assert result.metadata["attestation_id"] == "att_1"
+
+    async def test_multi_submit_hangs_slip_on_task_metadata(
+        self, mock_repo, mock_task_pool
+    ):
+        from types import SimpleNamespace
+
+        ws = AsyncMock()
+        ws.repository.find_attestation = AsyncMock(
+            return_value=SimpleNamespace(
+                attestation_id="att_1",
+                workspace_id="ws_1",
+                agent_id="agent-001",
+                task_id="task-001",
+            )
+        )
+        ws.repository.find_workspace = AsyncMock(
+            return_value=SimpleNamespace(admit="org", task_id=None)
+        )
+        svc = TaskService(
+            repository=mock_repo,
+            task_pool=mock_task_pool,
+            payment_manager=None,
+            webhook_service=None,
+            activity_service=None,
+            escrow_client=None,
+            workspace_service=ws,
+        )
+        task = _make_task(auto_approve=False)
+        p = _make_participation()
+        mock_repo.find_by_id.return_value = task
+        mock_task_pool.get_user_participation.return_value = p
+
+        result = await svc.submit_task(
+            task_id="task-001",
+            agent_id="agent-001",
+            submission="Here is my work",
+            attestation_id="att_1",
+        )
+        assert result.metadata["attestation_id"] == "att_1"
+        assert result.metadata["workspace_id"] == "ws_1"
+        slips = result.metadata["attestations"]
+        assert len(slips) == 1
+        assert slips[0]["agent_id"] == "agent-001"
+        assert slips[0]["participation_id"] == "part-001"
+        assert slips[0]["attestation_id"] == "att_1"
+        mock_repo.save.assert_awaited()
+        mock_repo.save_participation.assert_awaited_once_with(p)
+        assert p.submission_artifacts[-1]["attestation_id"] == "att_1"
+
+    async def test_submit_rejects_other_task_workspace(
+        self, mock_repo, mock_task_pool
+    ):
+        from types import SimpleNamespace
+
+        ws = AsyncMock()
+        ws.repository.find_attestation = AsyncMock(
+            return_value=SimpleNamespace(
+                attestation_id="att_1",
+                workspace_id="ws_1",
+                agent_id="agent-001",
+                task_id=None,
+            )
+        )
+        ws.repository.find_workspace = AsyncMock(
+            return_value=SimpleNamespace(admit="task", task_id="task-other")
+        )
+        svc = TaskService(
+            repository=mock_repo,
+            task_pool=mock_task_pool,
+            workspace_service=ws,
+        )
+        task = _make_task(
+            max_participants=1,
+            assignee_id="agent-001",
+            status=TaskStatus.IN_PROGRESS,
+        )
+        mock_repo.find_by_id.return_value = task
+        with pytest.raises(ValueError, match="different task"):
+            await svc.submit_task(
+                task_id="task-001",
+                agent_id="agent-001",
+                submission="Here is my work",
+                attestation_id="att_1",
+            )

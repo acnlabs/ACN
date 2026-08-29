@@ -86,6 +86,35 @@ async def test_jwt_write_accepted_by_org_auth():
     assert payload["type"] == "human"
 
 
+@pytest.mark.asyncio
+async def test_jwt_without_write_accepted_when_require_write_false():
+    """Workspace GET: Labs / human JWT need not carry acn:write."""
+    checker = require_org_auth(require_write=False)
+    request = MagicMock(spec=Request)
+    request.state = MagicMock()
+    request.headers = Headers({})
+    credentials = MagicMock()
+    credentials.credentials = "jwt-token"
+    agent_service = AsyncMock()
+
+    async def fake_verify(req, creds):
+        return {"sub": "auth0|owner", "permissions": [], "type": "user"}
+
+    with patch("acn.routes.orgs.verify_token", new=fake_verify), patch(
+        "acn.routes.orgs.get_settings"
+    ) as gs:
+        gs.return_value = MagicMock(dev_mode=False, internal_api_token="tok")
+        payload = await checker(
+            request=request,
+            background_tasks=BackgroundTasks(),
+            credentials=credentials,
+            x_internal_token=None,
+            agent_service=agent_service,
+        )
+    assert payload["sub"] == "auth0|owner"
+    assert payload["type"] == "human"
+
+
 # ---------------------------------------------------------------------------
 # Optional reader dependency (private-Org read ACL) — never 401s;
 # anonymous / invalid credentials resolve to None.

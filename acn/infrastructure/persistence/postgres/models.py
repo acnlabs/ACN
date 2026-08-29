@@ -772,6 +772,7 @@ class OrgModel(Base):
     plugins: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     roles: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    execution_env: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
@@ -814,5 +815,66 @@ class OrgWorkItemModel(Base):
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+
+class ExecWorkspaceModel(Base):
+    """ACN Execution Workspace (Network Core). Not Host/Ranch workspaces."""
+
+    __tablename__ = "exec_workspaces"
+
+    workspace_id: Mapped[str] = mapped_column(String, primary_key=True)
+    owner_agent_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    execution_env: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    admit: Mapped[str] = mapped_column(String(16), nullable=False)
+    org_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    task_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    allowlist: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (
+        # D15: one active workspace per task / per org. Closed rows stay
+        # for audit and do not occupy the slot. allowlist is unrestricted.
+        Index(
+            "uq_exec_workspaces_active_task",
+            "task_id",
+            unique=True,
+            postgresql_where=text("status = 'active' AND task_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_exec_workspaces_active_org",
+            "org_id",
+            unique=True,
+            postgresql_where=text(
+                "status = 'active' AND org_id IS NOT NULL AND admit = 'org'"
+            ),
+        ),
+    )
+
+
+class ExecWorkspaceAttestationModel(Base):
+    __tablename__ = "exec_workspace_attestations"
+
+    attestation_id: Mapped[str] = mapped_column(String, primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="workspace_owner"
+    )
+    agent_id: Mapped[str] = mapped_column(String, nullable=False)
+    run_id: Mapped[str] = mapped_column(String, nullable=False)
+    work_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    hop_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    artifact: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    usage: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

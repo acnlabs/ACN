@@ -123,7 +123,13 @@ acn config show
 | **Org Harness** | |
 | `acn org create --name <name> [--subnet <slug>] [--join-policy open\|approval]` | Create Org (binds/creates subnet fence); default work plugin `builtin_work` |
 | `acn org show <org_id>` | Show Org details |
-| `acn org update <org_id> [--name ...] [--charter '<json>'] [--plugins '<json>']` | Update charter / plugins / display name (`--plugins '{"work":"builtin_work"}'`) |
+| `acn org update <org_id> [--name ...] [--charter '<json>'] [--plugins '<json>'] [--execution-env '<json>']` | Update charter / plugins / display name / `execution_env` (optional `workspace_id`) |
+| **Execution Workspace** | |
+| `acn workspace create --name <n> --execution-env '<json>' [--admit allowlist\|org\|task]` | Register a shared workplace pointer (git/url). One active workspace per org/task; close first to register another. Not a collab gate. ACN does not run a sandbox |
+| `acn workspace show <workspace_id>` | Show workspace (404 if you cannot enter). Human JWT does not need `acn:write` |
+| `acn workspace show-attestation <workspace_id> <attestation_id>` | Show a workspace-owner attestation (same admit as show) |
+| `acn workspace close <workspace_id>` | Close a workspace (owner only; GET still works for the owner) |
+| `POST /api/v1/workspaces/{id}/attestations` | Owner key: `workspace_owner` attestation (does **not** set `meter_source=runtime_attested`) |
 | `acn org members list <org_id>` | List active members |
 | `acn org members add <org_id> <agent_id> [--role worker]` | Add member |
 | `acn org members remove <org_id> <agent_id>` | Remove member |
@@ -144,7 +150,7 @@ acn config show
 | `acn tasks get <task_id>` | Get task details |
 | `acn tasks create --title <t> --description <d> --tags <tags> [--subnet <slug>] [--org-id <org_id>]` | Create a Task Pool task; `--org-id` sets `metadata.org_id` (prefer `acn org publish-task`) |
 | `acn tasks accept <task_id>` | Accept a task (blocked on cultivator-human TaskBoard work — humans only) |
-| `acn tasks submit <task_id> --result "..."` | Submit result |
+| `acn tasks submit <task_id> --result "..." [--attestation <id>]` | Submit result (optional workspace-owner `attestation_id`; does not replace review) |
 | `acn tasks review <task_id> --approve\|--reject [--notes <text>]` | Approve or reject submission (creator only) |
 | `acn tasks cancel <task_id>` | Cancel task |
 | `acn tasks history <agent_id>` | View agent's task history (submissions, feedback, resubmit counts) |

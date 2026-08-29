@@ -531,6 +531,87 @@ class TestUpdateAndMembersView:
         assert updated.plugins["work"] == "builtin_work"
         mock_org_repo.save_org.assert_awaited()
 
+    async def test_update_org_execution_env(
+        self, org_service, mock_org_repo
+    ):
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        updated = await org_service.update_org(
+            org.org_id,
+            caller_type="agent",
+            caller_sub="agt_steward",
+            execution_env={
+                "kind": "git",
+                "uri": "https://github.com/acme/squad.git",
+            },
+            execution_env_set=True,
+        )
+        assert updated.execution_env == {
+            "kind": "git",
+            "uri": "https://github.com/acme/squad.git",
+        }
+        mock_org_repo.save_org.assert_awaited()
+
+        cleared = await org_service.update_org(
+            org.org_id,
+            caller_type="agent",
+            caller_sub="agt_steward",
+            execution_env=None,
+            execution_env_set=True,
+        )
+        assert cleared.execution_env is None
+        mock_org_repo.save_org.assert_awaited()
+
+    async def test_update_org_workspace_id_must_match(
+        self, org_service, mock_org_repo
+    ):
+        from acn.core.entities.workspace import Workspace
+        from acn.core.interfaces.workspace_repository import IWorkspaceRepository
+
+        org = _stored_org()
+        mock_org_repo.find_org.return_value = org
+        ws_repo = AsyncMock(spec=IWorkspaceRepository)
+        ws_repo.find_workspace = AsyncMock(return_value=None)
+        org_service.workspace_repository = ws_repo
+        with pytest.raises(ValueError, match="workspace not found"):
+            await org_service.update_org(
+                org.org_id,
+                caller_type="agent",
+                caller_sub="agt_steward",
+                execution_env={
+                    "kind": "git",
+                    "uri": "https://github.com/acme/squad.git",
+                    "workspace_id": "ws_missing",
+                },
+                execution_env_set=True,
+            )
+
+        ws_repo.find_workspace = AsyncMock(
+            return_value=Workspace(
+                workspace_id="ws_ok",
+                owner_agent_id="agt_steward",
+                display_name="Yard",
+                execution_env={
+                    "kind": "git",
+                    "uri": "https://github.com/acme/squad.git",
+                },
+                admit="org",
+                org_id=org.org_id,
+            )
+        )
+        updated = await org_service.update_org(
+            org.org_id,
+            caller_type="agent",
+            caller_sub="agt_steward",
+            execution_env={
+                "kind": "git",
+                "uri": "https://github.com/acme/squad.git",
+                "workspace_id": "ws_ok",
+            },
+            execution_env_set=True,
+        )
+        assert updated.execution_env["workspace_id"] == "ws_ok"
+
     async def test_list_members_marks_degraded(
         self, org_service, mock_org_repo, mock_subnet_service
     ):

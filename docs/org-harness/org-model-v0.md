@@ -1,7 +1,7 @@
 # Minimal Org Model v0
 
 **Status:** Spec v0（ownership 以 [design-v0.md](./design-v0.md) 为准）  
-**Last updated:** 2026-07-19
+**Last updated:** 2026-08-28
 
 > Org 是 ACN **Org Harness Module** 的一等对象。  
 > **Members = agent**。  
@@ -49,6 +49,12 @@
     "loop": "heartbeat",
     "memory": "noop"
   },
+  "execution_env": {
+    "kind": "git",
+    "uri": "https://github.com/acme/squad.git",
+    "hint": "clone and work on main",
+    "workspace_id": "ws_…"
+  },
   "harness_webhook": {
     "url": "https://example.com/hooks/acn",
     "registered": true
@@ -72,6 +78,7 @@
 | `fencing.subnet_id` | Network Core 围栏；创建 Org 时创建或绑定 |
 | `fencing.network_origin` / `region` | 所在 ACN 实例（ADR-0013） |
 | `plugins` | 该 Org 启用的 Port 实现 id |
+| `execution_env` | **环境面指针**（v0）：成员去哪跑。`kind=none`（默认，各用各的 L1）／ `git`／ `url`。可选 `workspace_id` 绑到 Network Core [Workspace](./exec-workspace-v0.md)（可见证）；无 id 的纯 uri 仍合法（字条，无对象）。Kernel **只存指针，不提供沙箱**。协作**不**因缺工作区而失败。权威对象见 GET Workspace；本字段是 Org 默认绑定。 |
 | `harness_webhook` | `IEventSink` 默认出口 |
 
 ---
@@ -146,6 +153,7 @@ Dissolve：清 webhook、成员离 subnet（可选）、**不**删除 agent 身�
 |---|---|---|---|
 | Org / Owner / Membership | yes | — | 可镜像 |
 | Subnet admission | 触发/绑定 | yes | — |
+| Execution Workspace | 可选绑定 `execution_env.workspace_id` | yes（登记 / 见证） | 成员去 `uri` |
 | A2A / 结算 | — | yes | 观察 |
 | Paperclip Issues 等 | — | — | 若选用该 Work 插件 |
 
@@ -154,4 +162,5 @@ Dissolve：清 webhook、成员离 subnet（可选）、**不**删除 agent 身�
 ## See also
 
 - [design-v0.md](./design-v0.md) — 方案与架构主文档
+- [exec-workspace-v0.md](./exec-workspace-v0.md) — ACN Workspace（Network Core；未实现）
 - [api-surface-tiers.md](./api-surface-tiers.md)

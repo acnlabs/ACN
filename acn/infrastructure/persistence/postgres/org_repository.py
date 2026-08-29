@@ -43,6 +43,7 @@ class PostgresOrgRepository(IOrgRepository):
             },
             roles=list(row.roles or ["manager", "worker", "reviewer"]),
             status=row.status,  # type: ignore[arg-type]
+            execution_env=row.execution_env,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -61,6 +62,7 @@ class PostgresOrgRepository(IOrgRepository):
             "plugins": org.plugins or None,
             "roles": list(org.roles) if org.roles else None,
             "status": org.status,
+            "execution_env": org.execution_env,
             "created_at": org.created_at,
             "updated_at": org.updated_at,
         }
