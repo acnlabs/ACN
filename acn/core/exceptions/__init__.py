@@ -44,6 +44,34 @@ class OrgSubnetBindingConflictError(ACNException):
         )
 
 
+class WorkspaceAlreadyActiveError(ACNException):
+    """One active Execution Workspace per task / per org (D15).
+
+    Raised by ``IWorkspaceRepository.save_workspace`` implementations when
+    a second ``status=active`` row would occupy the same task or org slot:
+
+    - Postgres: mapped from the ``uq_exec_workspaces_active_task`` /
+      ``uq_exec_workspaces_active_org`` unique partial indexes.
+    - Redis: raised when the ``acn:exec_workspace:by_task:{id}`` /
+      ``acn:exec_workspace:by_org:{id}`` pointer ``SET NX`` loses to a
+      concurrent create whose workspace is still active.
+
+    Closed rows do not occupy the slot. ``admit=allowlist`` is unrestricted.
+    """
+
+    def __init__(
+        self, bind_kind: str, bind_id: str, existing_workspace_id: str
+    ) -> None:
+        self.bind_kind = bind_kind
+        self.bind_id = bind_id
+        self.existing_workspace_id = existing_workspace_id
+        label = "task" if bind_kind == "task" else "org"
+        super().__init__(
+            f"{label} '{bind_id}' already has active workspace "
+            f"{existing_workspace_id}"
+        )
+
+
 class OrgConflictError(ACNException):
     """Org-domain conflict (ownership, membership, plugin resolve, …).
 

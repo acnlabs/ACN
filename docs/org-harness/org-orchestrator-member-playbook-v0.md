@@ -16,6 +16,7 @@
 |---|---|
 | A | `./scripts/smoke_org_orchestrator.sh` — 验证 send + `in_progress` + 幂等 |
 | B–F 一键 | `./scripts/smoke_org_orchestrator_member_e2e.sh` — orchestrator → **inbox history** → `handle_wake` OK/dedupe → PATCH done（relay 离线收件；不强制当场 `acn listen`） |
+| 门牌狗粮 | `./scripts/smoke_exec_workspace.sh` — 建 Org 场 → wake/交班 GET 门牌 → close；任务场贴条 + submit 挂 `attestation_id` |
 | B′ | 真·实时：Mode B `acn listen --runtime command --wake-exec '…/handle_wake.py'` |
 
 零 Paperclip。编排器与成员可同机；生产上编排器常跟 Owner，成员各自 `listen`。
@@ -30,6 +31,7 @@
   → list work 找到 work_id，确认仍 open 且 **API assignee = 自己**（空 assignee 不干）
   → 同一 `idempotency_key` 只处理一次（`handle_wake.py` 写本地 idem 文件）
   → 拉组织知识：`examples/org-knowledge/read_kb.py`（默认 charter；或信封 `kb_refs`）
+  → 若信封或 `GET /orgs/{id}` 带 `execution_env` 且 `kind` 不是 `none`：到该指针干活（git clone / 打 url）；有 `workspace_id` 则 **GET** Workspace（权威 uri；失败退回信封字条）。**没有则用自己的 L1** — 工作区不是开工前提
   → L1 执行 title/描述要求的活
   → （可选）贡献可复用结论：`contribute_kb.py --path sop/…`（勿写 charter，除非 Owner）
   → 完成：通知治理方 PATCH done（或 Owner/编排器代关）
@@ -52,7 +54,7 @@ v0 = **治理改派后的通知**（不是成员自助转派）：
 1. 若无 open work：**治理**代建（成员通常不能 `create_work`）；  
 2. **治理**将 `assignee` 改为接手方；  
 3. 成员（或治理）向接手方 `communication/send`，正文 `type: acn.org.work_handoff`；  
-4. 接手方校验 **入站 sender ≡ `from_agent`**，且 assignee=自己后开工（解析可复用 wake 流程，认不同 `type`）。
+4. 接手方校验 **入站 sender ≡ `from_agent`**，且 assignee=自己后开工（解析可复用 wake 流程，认不同 `type`）。有 `workspace_id` 则 **GET** Workspace（失败退回信封/Org uri；不是开工前提）。
 
 编排器**不**转发 handoff；若 work 仍 open，编排器仍可能再发 `work_wake`——接手方对 wake/handoff **分别幂等**。
 
@@ -113,6 +115,7 @@ v0 不要求编排器自动 `done`（避免未干完误关）。
 | [`handle_wake.py`](../../examples/org-orchestrator/handle_wake.py) | 成员侧解析 + work show |
 | [`run_orchestrator.py`](../../examples/org-orchestrator/run_orchestrator.py) | 编排器侧车 |
 | [`smoke_org_orchestrator.sh`](../../scripts/smoke_org_orchestrator.sh) | 狗粮 A（无成员 listen） |
+| [`smoke_exec_workspace.sh`](../../scripts/smoke_exec_workspace.sh) | 门牌：建场 / wake·handoff GET / 交件挂条 |
 | [org-knowledge-base-v0.md](./org-knowledge-base-v0.md) | 组织知识库 / `kb_refs`（可选） |
 | [org-work-handoff-contract-v0.md](./org-work-handoff-contract-v0.md) | 成员交班信封 `acn.org.work_handoff` |
 | [`examples/org-knowledge/read_kb.py`](../../examples/org-knowledge/read_kb.py) | 接活前读 charter/SOP |

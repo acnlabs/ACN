@@ -19,6 +19,7 @@ interface OrgInfo {
   status?: string;
   plugins?: Record<string, string>;
   harness_webhook?: { url?: string | null; registered?: boolean };
+  execution_env?: { kind?: string; uri?: string; hint?: string; workspace_id?: string };
 }
 
 interface MemberInfo {
@@ -63,6 +64,12 @@ function formatOrg(o: OrgInfo): string {
   if (o.harness_webhook?.registered) {
     lines.push(`  Harness  : ${o.harness_webhook.url ?? '(registered)'}`);
   }
+  const env = o.execution_env;
+  if (env?.kind && env.kind !== 'none') {
+    lines.push(`  Exec env : ${env.kind} ${env.uri ?? ''}`.trim());
+    if (env.workspace_id) lines.push(`             workspace ${env.workspace_id}`);
+    if (env.hint) lines.push(`             ${env.hint}`);
+  }
   return lines.join('\n');
 }
 
@@ -79,6 +86,10 @@ export function orgCommand(): Command {
     .option('--private', 'Private subnet fence', false)
     .option('--harness-url <url>', 'Register Org Harness webhook on the fence subnet')
     .option('--harness-secret <secret>', 'HMAC secret for harness webhook')
+    .option(
+      '--execution-env <json>',
+      'Shared workplace pointer JSON, e.g. {"kind":"git","uri":"https://…"}',
+    )
     .action(
       async (opts: {
         name: string;
@@ -88,6 +99,7 @@ export function orgCommand(): Command {
         private?: boolean;
         harnessUrl?: string;
         harnessSecret?: string;
+        executionEnv?: string;
       }) => {
         try {
           const body: Record<string, unknown> = {
@@ -99,6 +111,9 @@ export function orgCommand(): Command {
           if (opts.subnet) body.subnet_id = opts.subnet;
           if (opts.harnessUrl) body.harness_url = opts.harnessUrl;
           if (opts.harnessSecret) body.harness_secret = opts.harnessSecret;
+          if (opts.executionEnv) {
+            body.execution_env = JSON.parse(opts.executionEnv) as unknown;
+          }
           const org = await acnPost<OrgInfo>('/orgs', body);
           output(org, formatOrg(org));
         } catch (err) {
@@ -121,20 +136,27 @@ export function orgCommand(): Command {
 
   cmd
     .command('update <orgId>')
-    .description('Update Org charter / plugins / display name')
+    .description('Update Org charter / plugins / display name / execution env')
     .option('--name <name>', 'New display name')
     .option('--charter <json>', 'Charter JSON object')
     .option('--plugins <json>', 'Plugins JSON object (merged)')
+    .option(
+      '--execution-env <json>',
+      'Shared workplace pointer JSON, e.g. {"kind":"git","uri":"https://…"} or {"kind":"none"}',
+    )
     .action(
       async (
         orgId: string,
-        opts: { name?: string; charter?: string; plugins?: string },
+        opts: { name?: string; charter?: string; plugins?: string; executionEnv?: string },
       ) => {
         try {
           const body: Record<string, unknown> = {};
           if (opts.name) body.display_name = opts.name;
           if (opts.charter) body.charter = JSON.parse(opts.charter) as unknown;
           if (opts.plugins) body.plugins = JSON.parse(opts.plugins) as unknown;
+          if (opts.executionEnv) {
+            body.execution_env = JSON.parse(opts.executionEnv) as unknown;
+          }
           const org = await acnPatch<OrgInfo>(`/orgs/${orgId}`, body);
           output(org, formatOrg(org));
         } catch (err) {

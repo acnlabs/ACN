@@ -55,7 +55,16 @@ OrgIdPath = Annotated[
 # ---------------------------------------------------------------------------
 
 
-def require_org_auth():
+def require_org_auth(*, require_write: bool = True):
+    """Agent API key, internal token, or human JWT.
+
+    ``require_write=True`` (Org mutations, workspace create/attest/close)
+    matches task-write auth: JWT must carry ``acn:write``.
+
+    ``require_write=False`` (workspace GET) still authenticates, but a
+    Labs / human JWT with only ``openid profile email`` is enough;
+    admit is decided in the service (outsiders 404).
+    """
     async def checker(
         request: Request,
         background_tasks: BackgroundTasks,
@@ -118,7 +127,9 @@ def require_org_auth():
         payload = await verify_token(request, credentials)
         perms: list[str] = payload.get("permissions", [])
         # Align with task write auth: Org mutations require acn:write.
-        if "acn:write" not in perms:
+        # Workspace GET uses require_write=False so a human owner JWT
+        # without that permission can still enter (admit is not a write).
+        if require_write and "acn:write" not in perms:
             raise ACNHTTPError(
                 ErrorCode.MISSING_PERMISSION,
                 403,
@@ -135,6 +146,7 @@ def require_org_auth():
 
 
 OrgAuthDep = Depends(require_org_auth())
+OrgAuthReadDep = Depends(require_org_auth(require_write=False))
 
 
 # ---------------------------------------------------------------------------
@@ -268,12 +280,38 @@ class OrgCreateRequest(BaseModel):
             "Legacy aliases minimal→builtin_work, thin→heartbeat."
         ),
     )
+    execution_env: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Shared workplace pointer for member agents: "
+            '{kind: none|git|url, uri?, hint?}. Kernel stores only.'
+        ),
+    )
+
+    @field_validator("execution_env")
+    @classmethod
+    def _execution_env_shape(
+        cls, v: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        from ..core.entities.org import normalize_execution_env
+
+        return normalize_execution_env(v)
 
 
 class OrgUpdateRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     charter: dict[str, Any] | None = None
     plugins: dict[str, str] | None = None
+    execution_env: dict[str, Any] | None = None
+
+    @field_validator("execution_env")
+    @classmethod
+    def _execution_env_shape(
+        cls, v: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        from ..core.entities.org import normalize_execution_env
+
+        return normalize_execution_env(v)
 
 
 class OrgClaimRequest(BaseModel):
@@ -433,6 +471,7 @@ async def create_org(
             plugins=body.plugins,
             harness_url=body.harness_url,
             harness_secret=body.harness_secret,
+            execution_env=body.execution_env,
         )
         # Creator is trivially entitled to the full view of its new Org.
         return await org_service.get_org_view(
@@ -487,7 +526,12 @@ async def update_org(
     payload: dict = OrgAuthDep,
     org_service: OrgService = Depends(get_org_service),
 ):
-    if body.display_name is None and body.charter is None and body.plugins is None:
+    if (
+        body.display_name is None
+        and body.charter is None
+        and body.plugins is None
+        and "execution_env" not in body.model_fields_set
+    ):
         raise ACNHTTPError(
             ErrorCode.INVALID_REQUEST,
             400,
@@ -502,6 +546,8 @@ async def update_org(
             display_name=body.display_name,
             charter=body.charter,
             plugins=body.plugins,
+            execution_env=body.execution_env,
+            execution_env_set="execution_env" in body.model_fields_set,
         )
         # update_org already enforced governance; return the full view.
         return await org_service.get_org_view(

@@ -51,6 +51,7 @@ from ..services.join_flow_service import JoinFlowService
 from ..services.org_service import OrgService
 from ..services.reputation_query_service import ReputationQueryService
 from ..services.reputation_service import ReputationService
+from ..services.workspace_service import WorkspaceService
 
 settings = get_settings()
 
@@ -341,6 +342,7 @@ _reputation_query_service: ReputationQueryService | None = None
 # fixtures that don't exercise admission can still bring the app up.
 _join_flow_service: JoinFlowService | None = None
 _org_service: OrgService | None = None
+_workspace_service: WorkspaceService | None = None
 
 
 def init_services(
@@ -369,6 +371,7 @@ def init_services(
     reputation_query_service: ReputationQueryService | None = None,
     join_flow_service: JoinFlowService | None = None,
     org_service: OrgService | None = None,
+    workspace_service: WorkspaceService | None = None,
 ) -> None:
     """Initialize global service instances (called from lifespan)"""
     global \
@@ -386,6 +389,7 @@ def init_services(
     global _reputation_service, _reputation_query_service
     global _join_flow_service
     global _org_service
+    global _workspace_service
 
     _agent_service = agent_service
     _message_service = message_service
@@ -413,6 +417,7 @@ def init_services(
     _reputation_query_service = reputation_query_service
     _join_flow_service = join_flow_service
     _org_service = org_service
+    _workspace_service = workspace_service
 
 
 # Dependency functions
@@ -660,6 +665,13 @@ def get_org_service() -> OrgService:
     return _org_service
 
 
+def get_workspace_service() -> WorkspaceService:
+    """Get WorkspaceService instance (Execution Workspace)."""
+    if _workspace_service is None:
+        raise RuntimeError("WorkspaceService not initialized")
+    return _workspace_service
+
+
 def get_join_flow_service() -> JoinFlowService:
     """Get the JoinFlowService instance.
 
@@ -719,6 +731,7 @@ ReputationQueryServiceDep = Annotated[
 ]
 JoinFlowServiceDep = Annotated[JoinFlowService, Depends(get_join_flow_service)]
 OrgServiceDep = Annotated[OrgService, Depends(get_org_service)]
+WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
 
 # Auth dependencies
 SubjectDep = Annotated[str, Depends(get_subject)]

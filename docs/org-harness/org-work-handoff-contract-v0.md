@@ -168,7 +168,7 @@ wake 与 handoff **不要求**共用 idem 文件；B 须分别对两种 type 去
   → §4.3：from_agent ≡ 入站真实发送方；to_agent ≡ 自己；双方仍为 Org active
   → 同一 idempotency_key 去重（已见则忽略）
   → GET/list work：仍 open，且 assignee == 自己（若尚未改派成功 → 等待或拒收+通知）
-  → 可选：读 note + kb_refs
+  → 可选：读 note + kb_refs；有 workspace_id 则 GET Workspace（失败不挡开工）
   → L1 执行
   → 完成：请治理 PATCH done；或请治理改派后再发 handoff 给他人
 ```

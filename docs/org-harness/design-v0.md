@@ -342,9 +342,10 @@ Org Harness **消费** Core，不重新实现：
 |---|---|
 | Agent 注册 / JWT / Agent Card | Network Core |
 | Subnet admission / allowlist / invite | Network Core（围栏） |
+| Execution Workspace（登记 / 见证；[exec-workspace-v0.md](./exec-workspace-v0.md)，未实现） | Network Core |
 | A2A 消息 / Mode B | Network Core |
 | 结算读 / payment webhook | Network Core |
-| Org 对象 / 可选 Owner / 角色成员 | **Org Harness Kernel** |
+| Org 对象 / 可选 Owner / 角色成员 | **Org Harness Kernel**（可绑默认 `execution_env.workspace_id`） |
 | 组织 Loop / Work 插件 | **Org Harness Ports** |
 
 外部 Pattern 若只做适配、不使用 Builtin TaskPool：应遵守 [api-surface-tiers.md](./api-surface-tiers.md)——**不绑死** `/api/v1/tasks/*`（除非选用 TaskPool Pattern）。
@@ -473,6 +474,7 @@ Org Memory 深度、知识库进程内多后端、跨 org 信誉、Dispute、Fed
 | [../adr/0014-org-harness-module.md](../adr/0014-org-harness-module.md) | **P0/P1 决策 ADR（Accepted）** |
 | [api-surface-tiers.md](./api-surface-tiers.md) | Network Core / Pattern 消费契约 |
 | [org-model-v0.md](./org-model-v0.md) | 数据模型（随本文修订 ownership） |
+| [exec-workspace-v0.md](./exec-workspace-v0.md) | ACN Workspace（Network Core；Spec v0 未实现） |
 | [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md) | 外部 Pattern 适配（`POST /orgs` + Org work；`task.*` legacy）；以本文 + ADR-0014 为准 |
 | [org-loop-spawn-sidecar-poc-v0.md](./org-loop-spawn-sidecar-poc-v0.md) | Org 待办执行器（外部）POC——**不是** Loop Builtin |
 | [org-orchestrator-v0.md](./org-orchestrator-v0.md) | ACN Org 编排器产品定义（P0 Accepted） |

@@ -66,7 +66,13 @@
   "hint": "Fetch work with acn org work show; complete then ask governance to mark done.",
   "kb_refs": [
     { "uri": "orgkb://org_…/charter.md", "title": "charter.md" }
-  ]
+  ],
+  "execution_env": {
+    "kind": "git",
+    "uri": "https://github.com/acme/squad.git",
+    "hint": "clone and work on main",
+    "workspace_id": "ws_…"
+  }
 }
 ```
 
@@ -80,6 +86,7 @@
 | `status` / `assignee` | 建议 | 发送时快照 |
 | `hint` | 否 | 给人/agent 的操作提示 |
 | `kb_refs` | 否 | 组织知识指针（**不塞全文**）；见 [org-knowledge-base-v0.md](./org-knowledge-base-v0.md)。成员用 sidecar 解析 `orgkb://` |
+| `execution_env` | 否 | Org 配置的环境面指针（`kind`+`uri`，可选 `workspace_id`）。权威仍以 `GET /orgs/{id}` 及（若有 id）`GET /workspaces/{id}` 为准；无配置则省略。**缺工作区不挡开工**（用自身 L1）。契约：[exec-workspace-v0.md](./exec-workspace-v0.md) |
 
 成员侧：**以 `work_id` 再拉一次 Org API 为准**，勿盲信快照字段。  
 `kb_refs` 的 org_id 须与信封 `org_id` 一致；全文由 [`examples/org-knowledge/`](../../examples/org-knowledge/) 拉取（`handle_wake.py` 已接）。
@@ -125,7 +132,7 @@
 1. 解析 `type == acn.org.work_wake`。  
 1b. （可选）按 `kb_refs` 或默认 `charter.md` 只读拉组织知识，再开工。  
 2. `acn org work list` / 等价 list API 找到该 `work_id`，确认仍 open 且自己是 assignee（v0 **无** `GET /work/{id}`）。  
-3. 用自身 L1 执行。  
+3. 用自身 L1 执行。若信封或 Org 带 `execution_env` 且 `kind` 不是 `none`：到该指针干活（git clone / 打 url）；有 `workspace_id` 时 **GET** `/workspaces/{id}`（权威 `execution_env`）。GET 失败或外人 404 **不挡开工**，退回信封/Org 上的 uri。**没有工作区照常干。**  
 4. 完成：经治理路径 `PATCH` → `done`（成员 key 若无治理权，则回报 Owner/编排器代关，或人工/脚本）。  
 5. 放弃：治理 `cancelled`。
 

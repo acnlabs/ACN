@@ -78,6 +78,14 @@ def fetch_members(base: str, org_id: str, api_key: str) -> dict[str, Any]:
     return _request("GET", f"{base}/orgs/{org_id}/members", api_key)
 
 
+def fetch_org(base: str, org_id: str, api_key: str) -> dict[str, Any]:
+    return _request("GET", f"{base}/orgs/{org_id}", api_key)
+
+
+def fetch_workspace(base: str, workspace_id: str, api_key: str) -> dict[str, Any]:
+    return _request("GET", f"{base}/workspaces/{workspace_id}", api_key)
+
+
 class WorkNotFoundError(LookupError):
     """Raised when list-work does not contain the requested work_id."""
 

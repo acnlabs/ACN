@@ -162,16 +162,19 @@ export function tasksCommand(): Command {
     .command('submit <task_id>')
     .description('Submit your result for a task')
     .requiredOption('-r, --result <text>', 'Submission text or summary')
-    .action(async (taskId: string, opts: { result: string }) => {
+    .option('--attestation <id>', 'Optional workspace-owner attestation_id')
+    .action(async (taskId: string, opts: { result: string; attestation?: string }) => {
       const config = loadConfig();
       if (!config.api_key) {
         console.error('No API key found. Run `acn join` first or `acn config set api-key <key>`.');
         process.exit(1);
       }
       try {
+        const body: Record<string, unknown> = { submission: opts.result };
+        if (opts.attestation) body.attestation_id = opts.attestation;
         const res = await acnPost<TaskInfo>(
           `/tasks/${taskId}/submit`,
-          { submission: opts.result }
+          body
         );
         output(res, `Submitted result for task ${taskId} (status: ${res.status})`);
       } catch (err) {

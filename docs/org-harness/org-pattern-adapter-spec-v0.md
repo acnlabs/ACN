@@ -25,7 +25,7 @@
 
 | Role | Responsibility |
 |---|---|
-| **ACN Network Core** | Identity, fencing, A2A, settlement-read, harness webhook delivery |
+| **ACN Network Core** | Identity, fencing, A2A, settlement-read, harness webhook delivery; Execution Workspace registry ([exec-workspace-v0.md](./exec-workspace-v0.md)) |
 | **ACN Org Harness** | Org graph, membership, Work/Loop ports, `org.*` events |
 | **Org Pattern (Paperclip)** | Company, org chart, issues, budgets, heartbeat wakeups, approvals UI |
 | **L1 Agent** | Executes work when woken; speaks ACN with its own key |
