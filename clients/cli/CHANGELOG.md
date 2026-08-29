@@ -4,6 +4,10 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+### Added
+- `acn workspace attest <id> --agent --run-id [--task] [--artifact]` —
+  owner `workspace_owner` slip. Does not set `meter_source=runtime_attested`.
+
 ## [1.0.12] - 2026-08-24
 
 CLI-only patch. Server / SDK stay **1.0.1**. Skill **1.0.6**.

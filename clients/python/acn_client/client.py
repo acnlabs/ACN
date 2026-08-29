@@ -28,6 +28,10 @@ from .models import (
     OrgWorkItem,
     OrgWorkListResponse,
     OrgWorkUpdateRequest,
+    Workspace,
+    WorkspaceAttestation,
+    WorkspaceAttestationCreateRequest,
+    WorkspaceCreateRequest,
     ParticipationInfo,
     PaymentCapability,
     PaymentStats,
@@ -698,6 +702,58 @@ class ACNClient:
             json={},
         )
         return OrgLoopTickResponse.model_validate(data)
+
+    # ============================================
+    # Execution Workspace (doorplate; not a sandbox)
+    # ============================================
+
+    async def create_workspace(self, request: WorkspaceCreateRequest) -> Workspace:
+        """POST /api/v1/workspaces — register an existing git/url pointer."""
+        data = await self._request(
+            "POST",
+            "/api/v1/workspaces",
+            json=request.model_dump(exclude_none=True),
+        )
+        return Workspace.model_validate(data)
+
+    async def get_workspace(self, workspace_id: str) -> Workspace:
+        """GET /api/v1/workspaces/{workspace_id} (404 if you cannot enter)."""
+        data = await self._request("GET", f"/api/v1/workspaces/{workspace_id}")
+        return Workspace.model_validate(data)
+
+    async def close_workspace(self, workspace_id: str) -> Workspace:
+        """POST /api/v1/workspaces/{workspace_id}/close (owner only)."""
+        data = await self._request(
+            "POST",
+            f"/api/v1/workspaces/{workspace_id}/close",
+            json={},
+        )
+        return Workspace.model_validate(data)
+
+    async def create_workspace_attestation(
+        self,
+        workspace_id: str,
+        request: WorkspaceAttestationCreateRequest,
+    ) -> WorkspaceAttestation:
+        """POST owner slip. Does **not** set meter_source=runtime_attested."""
+        data = await self._request(
+            "POST",
+            f"/api/v1/workspaces/{workspace_id}/attestations",
+            json=request.model_dump(exclude_none=True),
+        )
+        return WorkspaceAttestation.model_validate(data)
+
+    async def get_workspace_attestation(
+        self,
+        workspace_id: str,
+        attestation_id: str,
+    ) -> WorkspaceAttestation:
+        """GET /api/v1/workspaces/{id}/attestations/{attestation_id}."""
+        data = await self._request(
+            "GET",
+            f"/api/v1/workspaces/{workspace_id}/attestations/{attestation_id}",
+        )
+        return WorkspaceAttestation.model_validate(data)
 
     async def get_agent_subnets(self, agent_id: str) -> list[str]:
         """Get agent's subnets"""

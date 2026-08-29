@@ -108,6 +108,60 @@ export function workspaceCommand(): Command {
     });
 
   cmd
+    .command('attest <workspaceId>')
+    .description(
+      'Owner: post a workspace_owner slip (does not set meter_source=runtime_attested)',
+    )
+    .requiredOption('--agent <agentId>', 'Worker agent id the slip is about')
+    .requiredOption('--run-id <runId>', 'Owner-side run id')
+    .option('--task <taskId>', 'Task id (needed to hang the slip on Task Pool submit)')
+    .option('--work <workId>', 'Org work id')
+    .option('--hop <hopId>', 'Hop id (v0 usually omit; invoke/chat hops stay empty)')
+    .option('--artifact <json>', 'JSON object, e.g. {"git_sha":"..."} (git kind)')
+    .option('--usage <json>', 'JSON object; git kind rejects this with 400')
+    .action(
+      async (
+        workspaceId: string,
+        opts: {
+          agent: string;
+          runId: string;
+          task?: string;
+          work?: string;
+          hop?: string;
+          artifact?: string;
+          usage?: string;
+        },
+      ) => {
+        try {
+          const body: Record<string, unknown> = {
+            agent_id: opts.agent,
+            run_id: opts.runId,
+          };
+          if (opts.task) body.task_id = opts.task;
+          if (opts.work) body.work_id = opts.work;
+          if (opts.hop) body.hop_id = opts.hop;
+          if (opts.artifact) {
+            body.artifact = JSON.parse(opts.artifact) as unknown;
+          }
+          if (opts.usage) {
+            body.usage = JSON.parse(opts.usage) as unknown;
+          }
+          const att = await acnPost<Record<string, unknown>>(
+            `/workspaces/${workspaceId}/attestations`,
+            body,
+          );
+          const attId = String(att.attestation_id ?? '');
+          output(
+            att,
+            `  Attestation : ${attId}\n  Kind        : ${String(att.kind ?? 'workspace_owner')}\n  Workspace   : ${workspaceId}`,
+          );
+        } catch (err) {
+          handleError(err);
+        }
+      },
+    );
+
+  cmd
     .command('close <workspaceId>')
     .description('Close a workspace (owner only; GET still works for the owner)')
     .action(async (workspaceId: string) => {

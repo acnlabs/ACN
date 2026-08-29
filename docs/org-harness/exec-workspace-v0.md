@@ -167,7 +167,7 @@ POST  /api/v1/workspaces/{workspace_id}/close
 | POST attestation | **仅 owner** | 写入 attestation；陌生人 404（同 GET）；成员非场主 403；不改 hop `meter_source` |
 | POST close | **仅 owner** | `status=closed`；成员再 GET 404，owner 仍可读。`admit=org` 且 Org 指针仍指向本场时摘掉 `execution_env.workspace_id`（uri 字条留下） |
 
-CLI：`acn workspace create|show|show-attestation|close`。Org 绑定继续走现有 `org update --execution-env`（加 `workspace_id`）；PATCH 会校验工作区存在、`admit=org`、且 `org_id` 对得上。
+CLI：`acn workspace create|show|show-attestation|attest|close`。Org 绑定继续走现有 `org update --execution-env`（加 `workspace_id`）；PATCH 会校验工作区存在、`admit=org`、且 `org_id` 对得上。
 
 适配器可调用这些路径。任务 submit 可选 `attestation_id`（查库后挂在 artifacts / metadata 上，不替代验收）。条必须对上这单：`admit=task` 的场，或条上写了这个 `task_id`。invoke/聊天 hop-receipt 的 `attestation` **v0 留空**；信封仍预留格子，贴条也不升 `runtime_attested`。
 

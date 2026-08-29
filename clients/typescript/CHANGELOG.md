@@ -6,6 +6,9 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ### Added
 
+- Execution Workspace: `createWorkspace` / `getWorkspace` / `closeWorkspace`
+  / `createWorkspaceAttestation` / `getWorkspaceAttestation`. Doorplate only;
+  does not set `meter_source=runtime_attested`.
 - `ACNClient.heartbeat(agentId, { preferredModel, supportedModels })` —
   optional `supportedModels` → `metadata.supported_models` (Interfaze
   composer dropdown; self-reported).

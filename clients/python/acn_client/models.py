@@ -869,6 +869,64 @@ class OrgWorkListResponse(BaseModel):
     work: list[OrgWorkItem] = Field(default_factory=list)
 
 
+class Workspace(BaseModel):
+    """GET/POST /api/v1/workspaces — doorplate, not a sandbox."""
+
+    model_config = ConfigDict(extra="allow")
+
+    workspace_id: str
+    owner_agent_id: str
+    display_name: str
+    execution_env: dict[str, Any] | None = None
+    admit: str | None = None
+    org_id: str | None = None
+    task_id: str | None = None
+    allowlist: list[str] | None = None
+    status: str | None = None
+    created_at: str | None = None
+
+
+class WorkspaceCreateRequest(BaseModel):
+    """POST /api/v1/workspaces body."""
+
+    display_name: str
+    execution_env: dict[str, Any]
+    admit: str
+    org_id: str | None = None
+    task_id: str | None = None
+    allowlist: list[str] | None = None
+
+
+class WorkspaceAttestation(BaseModel):
+    """workspace_owner slip. Does not set meter_source=runtime_attested."""
+
+    model_config = ConfigDict(extra="allow")
+
+    attestation_id: str
+    kind: str = "workspace_owner"
+    workspace_id: str
+    run_id: str | None = None
+    agent_id: str | None = None
+    work_id: str | None = None
+    task_id: str | None = None
+    hop_id: str | None = None
+    artifact: dict[str, Any] | None = None
+    usage: dict[str, Any] | None = None
+    issued_at: str | None = None
+
+
+class WorkspaceAttestationCreateRequest(BaseModel):
+    """POST /api/v1/workspaces/{id}/attestations body."""
+
+    agent_id: str
+    run_id: str
+    work_id: str | None = None
+    task_id: str | None = None
+    hop_id: str | None = None
+    artifact: dict[str, Any] | None = None
+    usage: dict[str, Any] | None = None
+
+
 class OrgLoopTickResponse(BaseModel):
     """POST /api/v1/orgs/{org_id}/loop/tick response."""
 

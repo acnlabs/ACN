@@ -1195,6 +1195,54 @@ export function orgSubnetId(org: Org): string | undefined {
   return org.fencing?.subnet_id || org.subnet_id || undefined;
 }
 
+/** GET/POST /api/v1/workspaces — doorplate, not a sandbox. */
+export interface Workspace {
+  workspace_id: string;
+  owner_agent_id: string;
+  display_name: string;
+  execution_env?: { kind?: string; uri?: string; hint?: string };
+  admit?: 'org' | 'task' | 'allowlist' | string;
+  org_id?: string | null;
+  task_id?: string | null;
+  allowlist?: string[];
+  status?: 'active' | 'closed' | string;
+  created_at?: string;
+}
+
+export interface WorkspaceCreateRequest {
+  display_name: string;
+  execution_env: { kind: 'git' | 'url' | string; uri: string; hint?: string };
+  admit: 'org' | 'task' | 'allowlist';
+  org_id?: string;
+  task_id?: string;
+  allowlist?: string[];
+}
+
+/** workspace_owner slip. Does not set meter_source=runtime_attested. */
+export interface WorkspaceAttestation {
+  attestation_id: string;
+  kind?: string;
+  workspace_id: string;
+  run_id?: string;
+  agent_id?: string;
+  work_id?: string | null;
+  task_id?: string | null;
+  hop_id?: string | null;
+  artifact?: Record<string, unknown> | null;
+  usage?: Record<string, unknown> | null;
+  issued_at?: string;
+}
+
+export interface WorkspaceAttestationCreateRequest {
+  agent_id: string;
+  run_id: string;
+  work_id?: string;
+  task_id?: string;
+  hop_id?: string;
+  artifact?: Record<string, unknown>;
+  usage?: Record<string, unknown>;
+}
+
 
 
 

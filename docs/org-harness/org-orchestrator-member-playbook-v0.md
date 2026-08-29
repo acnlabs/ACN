@@ -16,7 +16,7 @@
 |---|---|
 | A | `./scripts/smoke_org_orchestrator.sh` — 验证 send + `in_progress` + 幂等 |
 | B–F 一键 | `./scripts/smoke_org_orchestrator_member_e2e.sh` — orchestrator → **inbox history** → `handle_wake` OK/dedupe → PATCH done（relay 离线收件；不强制当场 `acn listen`） |
-| 门牌狗粮 | `./scripts/smoke_exec_workspace.sh` — 建 Org 场 → wake/交班 GET 门牌 → close；任务场贴条 + submit 挂 `attestation_id` |
+| 门牌狗粮 | `./scripts/smoke_exec_workspace.sh` — 建 Org 场 → wake/交班 GET 门牌 → close；任务场贴条 + submit 挂 `attestation_id`。产品门：`acn workspace create|show|attest|close`；交件 `acn tasks submit … --attestation` |
 | B′ | 真·实时：Mode B `acn listen --runtime command --wake-exec '…/handle_wake.py'` |
 
 零 Paperclip。编排器与成员可同机；生产上编排器常跟 Owner，成员各自 `listen`。

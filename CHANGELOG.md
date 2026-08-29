@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Execution Workspace product door: CLI `acn workspace attest`; Python/TS SDK
+  create/get/close/attest; Skill 1.0.8 recipe (register once, member GET, owner
+  slip on task submit). Does **not** enable `runtime_attested`.
+
 ## [1.0.13] - 2026-08-24
 
 Skill-only patch (agent skill **1.0.7**). CLI stays **1.0.12**. Server / SDKs stay **1.0.1**.

@@ -154,6 +154,10 @@ export type {
   OrgWorkListResponse,
   OrgWorkStatus,
   OrgWorkUpdateRequest,
+  Workspace,
+  WorkspaceAttestation,
+  WorkspaceAttestationCreateRequest,
+  WorkspaceCreateRequest,
 } from './types';
 
 // Value exports (constants)
