@@ -102,6 +102,26 @@ def test_build_envelope_idem_key() -> None:
     assert resolve_idempotency_key(env) == env["idempotency_key"]
 
 
+def test_build_envelope_copies_workspace_id() -> None:
+    env = build_envelope(
+        org_id="org_1",
+        work_id="work_1",
+        from_agent="agt_a",
+        to_agent="agt_b",
+        title="t",
+        note="",
+        generation=1,
+        kb_refs=None,
+        execution_env={
+            "kind": "git",
+            "uri": "https://github.com/acme/squad.git",
+            "workspace_id": "ws_abc",
+        },
+    )
+    assert env["workspace_id"] == "ws_abc"
+    assert env["execution_env"]["workspace_id"] == "ws_abc"
+
+
 def test_parse_embedded_in_history_shape() -> None:
     env = build_envelope(
         org_id="org_1",

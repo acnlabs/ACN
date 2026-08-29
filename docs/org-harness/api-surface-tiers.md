@@ -152,6 +152,20 @@ GET    /api/v1/payments/billing/network-fees
 
 Escrow lock / real-money charge are **Gated v0**, not Core.
 
+### Execution Workspace (Network Core)
+
+Object lives in Network Core (same tier as subnet), not Org Kernel. Contract: [exec-workspace-v0.md](./exec-workspace-v0.md).
+
+Workspace is **not** a collaboration gate: A2A / Org work / Task / invoke remain valid with no workspace. Org `execution_env.workspace_id` is an optional bind.
+
+```
+POST   /api/v1/workspaces
+GET    /api/v1/workspaces/{workspace_id}
+POST   /api/v1/workspaces/{workspace_id}/attestations
+GET    /api/v1/workspaces/{workspace_id}/attestations/{attestation_id}
+POST   /api/v1/workspaces/{workspace_id}/close
+```
+
 ---
 
 ## Tier 2 — Reference Org Pattern API (Task Pool only)
@@ -247,6 +261,7 @@ See [org-pattern-adapter-spec-v0.md § Acceptance](./org-pattern-adapter-spec-v0
 ## See also
 
 - [org-model-v0.md](./org-model-v0.md)
+- [exec-workspace-v0.md](./exec-workspace-v0.md)
 - [org-pattern-adapter-spec-v0.md](./org-pattern-adapter-spec-v0.md)
 - [../adr/0013-dual-region-acn-routing.md](../adr/0013-dual-region-acn-routing.md)
 - [../_drafts/pasture-protocol.md](../_drafts/pasture-protocol.md)

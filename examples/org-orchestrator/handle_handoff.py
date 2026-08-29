@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from acn_client_min import WorkNotFoundError, agents_me, get_work, normalize_base
-from handle_wake import assignee_matches_me, load_knowledge_bundle
+from handle_wake import assignee_matches_me, enrich_execution_env, load_knowledge_bundle
 from idempotency import IdempotencyStore
 
 HANDOFF_TYPE = "acn.org.work_handoff"
@@ -344,6 +344,14 @@ def main() -> int:
     print(
         "[handle_handoff] OK — run your L1; ask governance to PATCH done|cancelled.",
         flush=True,
+    )
+    handoff = enrich_execution_env(
+        handoff,
+        base=base,
+        api_key=api_key,
+        org_id=org_id,
+        skip_fetch=skip_fetch,
+        log_prefix="[handle_handoff]",
     )
     if str(_KB_DIR) not in sys.path:
         sys.path.insert(0, str(_KB_DIR))

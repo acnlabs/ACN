@@ -6,6 +6,7 @@ These represent the core business concepts of ACN.
 
 from .agent import Agent, ClaimStatus
 from .org import Org, OrgMembership, OrgOwner, OrgPrincipal, OrgWorkItem
+from .workspace import Workspace, WorkspaceAttestation
 from .subnet import Subnet
 from .subnet_allowlist import SubnetAllowlist
 from .subnet_join_request import SYSTEM_ALLOWLIST_ACTOR, SubnetJoinRequest
@@ -31,6 +32,8 @@ __all__ = [
     "OrgOwner",
     "OrgPrincipal",
     "OrgWorkItem",
+    "Workspace",
+    "WorkspaceAttestation",
     "Participation",
     "ParticipationStatus",
     "Subnet",

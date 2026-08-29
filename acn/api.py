@@ -66,6 +66,9 @@ from .infrastructure.persistence.postgres import (
     get_engine,
     get_session_factory,
 )
+from .infrastructure.persistence.postgres.workspace_repository import (
+    PostgresWorkspaceRepository,
+)
 from .infrastructure.persistence.redis import (
     RedisAgentRepository,
     RedisAllowlistRepository,
@@ -73,6 +76,9 @@ from .infrastructure.persistence.redis import (
     RedisSubnetRepository,
 )
 from .infrastructure.persistence.redis.org_repository import RedisOrgRepository
+from .infrastructure.persistence.redis.workspace_repository import (
+    RedisWorkspaceRepository,
+)
 
 # See note in acn/infrastructure/persistence/redis/__init__.py — these
 # two are imported via their submodules to keep the package-level
@@ -119,6 +125,7 @@ from .routes import (
     subnets,
     tasks,
     websocket,
+    workspaces,
 )
 from .routes.dependencies import limiter
 from .security import check_tls_config
@@ -139,6 +146,7 @@ from .services.erc8004_client import ERC8004Client
 from .services.escrow_client import AgentPlanetEscrowProvider
 from .services.join_flow_service import JoinFlowService
 from .services.org_service import OrgService
+from .services.workspace_service import WorkspaceService
 from .services.reputation_query_service import ReputationQueryService
 from .services.reputation_service import ReputationService
 from .services.settlement_worker import SettlementWorker
@@ -306,6 +314,7 @@ async def lifespan(app: FastAPI):
         subnet_repository = PostgresSubnetRepository(_pg_session)
         task_repository = PostgresTaskRepository(_pg_session, redis_client)
         org_repository = PostgresOrgRepository(_pg_session)
+        workspace_repository = PostgresWorkspaceRepository(_pg_session)
         _billing_repository = PostgresBillingRepository(_pg_session)
         _activity_repository = PostgresActivityRepository(_pg_session)
         _settlement_outbox_repository = PostgresSettlementOutboxRepository(_pg_session)
@@ -317,6 +326,7 @@ async def lifespan(app: FastAPI):
         subnet_repository = RedisSubnetRepository(redis_client)
         task_repository = RedisTaskRepository(redis_client)
         org_repository = RedisOrgRepository(redis_client)
+        workspace_repository = RedisWorkspaceRepository(redis_client)
 
     agent_service_instance = AgentService(agent_repository)
     # ADR-0003: SubnetService now takes an optional task_repository
@@ -570,6 +580,13 @@ async def lifespan(app: FastAPI):
         agent_service=agent_service_instance,
         webhook_service=webhook_service_instance,
         task_repository=task_repository,
+        workspace_repository=workspace_repository,
+    )
+    workspace_service_instance = WorkspaceService(
+        workspace_repository=workspace_repository,
+        agent_service=agent_service_instance,
+        org_service=org_service_instance,
+        task_repository=task_repository,
     )
 
     payment_discovery_instance = PaymentDiscoveryService(redis_client)
@@ -655,6 +672,7 @@ async def lifespan(app: FastAPI):
         message_service=message_service_instance,
         # Best-effort metadata.performance denorm after task settle
         agent_service=agent_service_instance,
+        workspace_service=workspace_service_instance,
         # Settlement saga v0.1 — both are None in Redis-only mode,
         # which forces ``complete_task`` onto its legacy non-atomic
         # path (existing pre-v0.1 behavior). In PG mode the saga
@@ -717,6 +735,7 @@ async def lifespan(app: FastAPI):
         reputation_query_service=reputation_query_service_instance,
         join_flow_service=join_flow_service_instance,
         org_service=org_service_instance,
+        workspace_service=workspace_service_instance,
     )
 
     # Phase 1 wiring guard
@@ -1409,6 +1428,7 @@ app.include_router(analytics.router)
 app.include_router(payments.router)
 app.include_router(tasks.router)  # Task Pool API
 app.include_router(orgs.router)  # Org Harness Kernel (ADR-0014)
+app.include_router(workspaces.router)  # Execution Workspace (Network Core)
 app.include_router(websocket.router)
 # ADR-0007: agent JWT issuance (OAuth2 client_credentials) + JWKS / OIDC
 # discovery. ACN mints short-lived agent JWTs that resource servers

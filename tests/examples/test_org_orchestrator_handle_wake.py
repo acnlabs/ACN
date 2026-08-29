@@ -13,6 +13,7 @@ KB_DATA = Path(__file__).resolve().parents[2] / "examples" / "org-knowledge" / "
 sys.path.insert(0, str(EXAMPLES))
 
 from handle_wake import (  # noqa: E402
+    apply_workspace_authority,
     assignee_matches_me,
     load_knowledge_bundle,
     parse_wake,
@@ -129,6 +130,159 @@ def test_build_envelope_attach_defaults(monkeypatch: pytest.MonkeyPatch) -> None
         },
     )
     assert env["kb_refs"][0]["uri"] == "orgkb://org_demo/charter.md"
+
+
+def test_build_envelope_includes_execution_env() -> None:
+    env = build_envelope(
+        "org_1",
+        {
+            "work_id": "work_1",
+            "assignee_agent_id": "agt_a",
+            "title": "t",
+            "status": "todo",
+        },
+        execution_env={
+            "kind": "git",
+            "uri": "https://github.com/acme/squad.git",
+            "workspace_id": "ws_abc",
+        },
+    )
+    assert env["execution_env"]["uri"] == "https://github.com/acme/squad.git"
+    assert env["workspace_id"] == "ws_abc"
+
+
+def test_apply_workspace_authority_prefers_get_uri() -> None:
+    env = {
+        "kind": "git",
+        "uri": "https://github.com/acme/stale.git",
+        "workspace_id": "ws_abc",
+    }
+    merged = apply_workspace_authority(
+        env,
+        {
+            "workspace_id": "ws_abc",
+            "status": "active",
+            "execution_env": {
+                "kind": "git",
+                "uri": "https://github.com/acme/squad.git",
+                "hint": "main",
+            },
+        },
+    )
+    assert merged["uri"] == "https://github.com/acme/squad.git"
+    assert merged["hint"] == "main"
+    assert merged["workspace_id"] == "ws_abc"
+    assert "workspace_status" not in merged
+
+
+def test_apply_workspace_authority_none_keeps_envelope() -> None:
+    env = {
+        "kind": "git",
+        "uri": "https://github.com/acme/s.git",
+        "workspace_id": "ws_1",
+    }
+    assert apply_workspace_authority(env, None) == env
+
+
+def test_resolve_workspace_env_404_keeps_envelope(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import urllib.error
+
+    from handle_wake import resolve_workspace_env
+
+    def boom(*_a, **_k):
+        raise urllib.error.HTTPError("http://x/workspaces/ws_1", 404, "no", None, None)
+
+    monkeypatch.setattr("handle_wake.fetch_workspace", boom)
+    env = {
+        "kind": "git",
+        "uri": "https://github.com/acme/s.git",
+        "workspace_id": "ws_1",
+    }
+    out = resolve_workspace_env(
+        env, base="http://x/api/v1", api_key="k", wake={}
+    )
+    assert out["uri"] == env["uri"]
+    assert "work continues" in capsys.readouterr().out
+
+
+def test_enrich_execution_env_get_merges(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from handle_wake import enrich_execution_env
+
+    monkeypatch.setattr(
+        "handle_wake.fetch_workspace",
+        lambda *_a, **_k: {
+            "workspace_id": "ws_1",
+            "status": "active",
+            "execution_env": {
+                "kind": "git",
+                "uri": "https://github.com/acme/fresh.git",
+            },
+        },
+    )
+    out = enrich_execution_env(
+        {
+            "type": "acn.org.work_handoff",
+            "org_id": "org_1",
+            "execution_env": {
+                "kind": "git",
+                "uri": "https://github.com/acme/stale.git",
+                "workspace_id": "ws_1",
+            },
+        },
+        base="http://x/api/v1",
+        api_key="k",
+        org_id="org_1",
+        skip_fetch=False,
+        log_prefix="[handle_handoff]",
+    )
+    assert out["execution_env"]["uri"] == "https://github.com/acme/fresh.git"
+    logged = capsys.readouterr().out
+    assert "[handle_handoff]" in logged
+    assert "status='active'" in logged
+
+
+def test_enrich_execution_env_skip_fetch_does_not_get(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from handle_wake import enrich_execution_env
+
+    def boom(*_a, **_k):
+        raise AssertionError("should not GET")
+
+    monkeypatch.setattr("handle_wake.fetch_workspace", boom)
+    monkeypatch.setattr("handle_wake.fetch_org", boom)
+    env = {
+        "kind": "git",
+        "uri": "https://github.com/acme/s.git",
+        "workspace_id": "ws_1",
+    }
+    out = enrich_execution_env(
+        {"execution_env": env},
+        base="http://x/api/v1",
+        api_key="k",
+        org_id="org_1",
+        skip_fetch=True,
+        log_prefix="[handle_handoff]",
+    )
+    assert out["execution_env"]["uri"] == env["uri"]
+
+
+def test_build_envelope_omits_none_execution_env() -> None:
+    env = build_envelope(
+        "org_1",
+        {
+            "work_id": "work_1",
+            "assignee_agent_id": "agt_a",
+            "title": "t",
+            "status": "todo",
+        },
+        execution_env={"kind": "none"},
+    )
+    assert "execution_env" not in env
 
 
 def test_load_knowledge_bundle(monkeypatch: pytest.MonkeyPatch) -> None:

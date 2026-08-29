@@ -1885,6 +1885,7 @@ class ACNClient:
         participation_id: str | None = None,
         artifacts: list[dict] | None = None,
         agent_id: str | None = None,
+        attestation_id: str | None = None,
     ) -> TaskInfo:
         """Submit task result. Requires bearer_token (or dev mode with agent_id header)."""
         headers: dict[str, str] = {}
@@ -1894,6 +1895,8 @@ class ACNClient:
         body: dict[str, Any] = {"submission": submission, "artifacts": artifacts or []}
         if participation_id:
             body["participation_id"] = participation_id
+        if attestation_id:
+            body["attestation_id"] = attestation_id
 
         response = await self._client.post(
             f"/api/v1/tasks/{task_id}/submit",

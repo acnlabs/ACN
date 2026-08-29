@@ -17,6 +17,7 @@ from acn_client_min import (
     fetch_all_work,
     fetch_members,
     fetch_open_work,
+    fetch_org,
     normalize_base,
     patch_work_status,
     send_message,
@@ -76,7 +77,11 @@ def _kb_refs_for_item(org_id: str, item: dict) -> list[dict]:
     return []
 
 
-def build_envelope(org_id: str, item: dict) -> dict:
+def build_envelope(
+    org_id: str,
+    item: dict,
+    execution_env: dict | None = None,
+) -> dict:
     wid = work_id(item)
     assignee = assignee_id(item)
     envelope = {
@@ -95,6 +100,13 @@ def build_envelope(org_id: str, item: dict) -> dict:
     kb_refs = _kb_refs_for_item(org_id, item)
     if kb_refs:
         envelope["kb_refs"] = kb_refs
+    env = execution_env if isinstance(execution_env, dict) else None
+    kind = (env or {}).get("kind")
+    if env and kind and kind != "none":
+        envelope["execution_env"] = env
+        ws_id = env.get("workspace_id")
+        if isinstance(ws_id, str) and ws_id:
+            envelope["workspace_id"] = ws_id
     return envelope
 
 
@@ -109,6 +121,7 @@ def process_item(
     store: IdempotencyStore,
     dry_run: bool,
     mark_in_progress: bool,
+    execution_env: dict | None = None,
 ) -> None:
     wid = work_id(item)
     if not wid:
@@ -127,7 +140,7 @@ def process_item(
         return
 
     key = wake_key(org_id, wid, assignee)
-    envelope = build_envelope(org_id, item)
+    envelope = build_envelope(org_id, item, execution_env)
     text = json.dumps(envelope, ensure_ascii=False)
     title = item.get("title") or ""
 
@@ -256,6 +269,16 @@ def main() -> int:
     while True:
         try:
             members = active_member_ids(fetch_members(base, org_id, api_key))
+            try:
+                org_view = fetch_org(base, org_id, api_key)
+                execution_env = org_view.get("execution_env")
+            except urllib.error.HTTPError as org_err:
+                print(
+                    f"[org-orchestrator] GET org failed HTTP {org_err.code}: "
+                    f"{org_err.reason} — waking without execution_env",
+                    file=sys.stderr,
+                )
+                execution_env = None
             payload = fetch_open_work(base, org_id, api_key)
             items = payload.get("work") or []
             print(
@@ -288,6 +311,7 @@ def main() -> int:
                     store=store,
                     dry_run=args.dry_run,
                     mark_in_progress=mark_in_progress,
+                    execution_env=execution_env if isinstance(execution_env, dict) else None,
                 )
         except urllib.error.HTTPError as e:
             print(f"[org-orchestrator] HTTP {e.code}: {e.reason}", file=sys.stderr)

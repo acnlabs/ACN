@@ -13,7 +13,7 @@ import json
 import os
 import sys
 
-from acn_client_min import agents_me, normalize_base, send_message
+from acn_client_min import agents_me, fetch_org, normalize_base, send_message
 
 HANDOFF_TYPE = "acn.org.work_handoff"
 
@@ -28,6 +28,7 @@ def build_envelope(
     note: str,
     generation: int,
     kb_refs: list | None,
+    execution_env: dict | None = None,
 ) -> dict:
     gen = max(1, int(generation))
     env: dict = {
@@ -45,6 +46,11 @@ def build_envelope(
         env["note"] = note
     if kb_refs:
         env["kb_refs"] = kb_refs
+    if isinstance(execution_env, dict) and execution_env.get("kind") not in (None, "none"):
+        env["execution_env"] = execution_env
+        ws_id = execution_env.get("workspace_id")
+        if isinstance(ws_id, str) and ws_id:
+            env["workspace_id"] = ws_id
     return env
 
 
@@ -81,6 +87,15 @@ def main(argv: list[str] | None = None) -> int:
     ):
         kb_refs = [{"uri": f"orgkb://{org_id}/charter.md", "title": "charter.md"}]
 
+    execution_env = None
+    try:
+        org_view = fetch_org(base, org_id, api_key)
+        fetched = org_view.get("execution_env")
+        if isinstance(fetched, dict):
+            execution_env = fetched
+    except Exception as e:
+        print(f"GET org failed ({e}); sending handoff without execution_env", file=sys.stderr)
+
     env = build_envelope(
         org_id=org_id,
         work_id=args.work.strip(),
@@ -90,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         note=args.note,
         generation=args.generation,
         kb_refs=kb_refs,
+        execution_env=execution_env,
     )
     text = json.dumps(env, ensure_ascii=False)
     if args.dry_run:

@@ -143,6 +143,7 @@ class ErrorCode(StrEnum):
     # ===== Org Harness routes (ADR-0014) =====
     ORG_NOT_FOUND = "org_not_found"
     ORG_WORK_NOT_FOUND = "org_work_not_found"
+    WORKSPACE_NOT_FOUND = "workspace_not_found"
 
     # ===== Follows routes (sprint row #6) =====
     # ``AGENT_NOT_FOUND`` (×1 — followee lookup miss) and
@@ -384,6 +385,7 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.ORG_WORK_NOT_FOUND: (
         "The requested organisation work item could not be found."
     ),
+    ErrorCode.WORKSPACE_NOT_FOUND: "The requested workspace could not be found.",
     ErrorCode.FOLLOW_LIMIT_EXCEEDED: (
         "The follower has reached the per-agent follow ceiling. "
         "Unfollow some agents first."

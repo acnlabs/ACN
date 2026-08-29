@@ -25,11 +25,121 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
-from acn_client_min import WorkNotFoundError, agents_me, get_work, normalize_base
+from acn_client_min import (
+    WorkNotFoundError,
+    agents_me,
+    fetch_org,
+    fetch_workspace,
+    get_work,
+    normalize_base,
+)
 from idempotency import IdempotencyStore
 
 WAKE_TYPE = "acn.org.work_wake"
 _KB_DIR = Path(__file__).resolve().parent.parent / "org-knowledge"
+
+
+def apply_workspace_authority(
+    env: dict[str, Any],
+    workspace: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Prefer GET Workspace execution_env; keep the id. Missing GET is not a gate."""
+    if not workspace:
+        return dict(env)
+    ws_env = workspace.get("execution_env")
+    merged = dict(env)
+    if isinstance(ws_env, dict):
+        for key, value in ws_env.items():
+            if value is not None:
+                merged[key] = value
+    ws_id = workspace.get("workspace_id") or env.get("workspace_id")
+    if isinstance(ws_id, str) and ws_id.strip():
+        merged["workspace_id"] = ws_id.strip()
+    return merged
+
+
+def resolve_workspace_env(
+    env: dict[str, Any],
+    *,
+    base: str,
+    api_key: str,
+    wake: dict[str, Any],
+    log_prefix: str = "[handle_wake]",
+) -> dict[str, Any]:
+    """GET /workspaces/{id} when present. 404/error → envelope/Org uri still used."""
+    raw_id = env.get("workspace_id") or wake.get("workspace_id")
+    if not isinstance(raw_id, str) or not raw_id.strip():
+        return env
+    ws_id = raw_id.strip()
+    try:
+        workspace = fetch_workspace(base, ws_id, api_key)
+    except urllib.error.HTTPError as e:
+        print(
+            f"{log_prefix} GET workspace {ws_id} failed HTTP {e.code} "
+            "— using envelope uri; work continues",
+            flush=True,
+        )
+        return env
+    except OSError as e:
+        print(
+            f"{log_prefix} GET workspace {ws_id} failed: {e} "
+            "— using envelope uri; work continues",
+            flush=True,
+        )
+        return env
+    merged = apply_workspace_authority(env, workspace)
+    print(
+        f"{log_prefix} workspace {ws_id} status={workspace.get('status')!r}",
+        flush=True,
+    )
+    return merged
+
+
+def enrich_execution_env(
+    envelope: dict[str, Any],
+    *,
+    base: str,
+    api_key: str,
+    org_id: str,
+    skip_fetch: bool,
+    log_prefix: str = "[handle_wake]",
+) -> dict[str, Any]:
+    """Attach Org/workspace pointer. GET Workspace when id present; miss is not a gate."""
+    env = (
+        envelope.get("execution_env")
+        if isinstance(envelope.get("execution_env"), dict)
+        else None
+    )
+    if (not env or env.get("kind") in (None, "none")) and not skip_fetch:
+        try:
+            org_view = fetch_org(base, org_id, api_key)
+            fetched = org_view.get("execution_env")
+            if isinstance(fetched, dict):
+                env = fetched
+        except urllib.error.HTTPError:
+            pass
+    if isinstance(env, dict) and env.get("kind") not in (None, "none"):
+        if not skip_fetch:
+            env = resolve_workspace_env(
+                env,
+                base=base,
+                api_key=api_key,
+                wake=envelope,
+                log_prefix=log_prefix,
+            )
+        print(
+            f"{log_prefix} execution_env kind={env.get('kind')} uri={env.get('uri')}",
+            flush=True,
+        )
+        if env.get("hint"):
+            print(f"{log_prefix} execution_env hint: {env['hint']}", flush=True)
+        if env.get("workspace_id"):
+            print(
+                f"{log_prefix} workspace_id={env.get('workspace_id')}",
+                flush=True,
+            )
+        return {**envelope, "execution_env": env}
+    return envelope
 
 
 def _load_stdin() -> Any:
@@ -313,6 +423,14 @@ def main() -> int:
         "[handle_wake] OK — run your L1 on this work; "
         "ask governance to PATCH done|cancelled when finished.",
         flush=True,
+    )
+    wake = enrich_execution_env(
+        wake,
+        base=base,
+        api_key=api_key,
+        org_id=org_id,
+        skip_fetch=skip_fetch,
+        log_prefix="[handle_wake]",
     )
     kb_bundle = None
     if not skip_kb:

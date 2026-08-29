@@ -17,6 +17,7 @@ from ..core.entities.org import (
     OrgPrincipal,
     OrgWorkItem,
     WorkStatus,
+    normalize_execution_env,
 )
 from ..core.entities.subnet import Subnet
 from ..core.exceptions import (
@@ -27,6 +28,7 @@ from ..core.exceptions import (
 )
 from ..core.interfaces.org_repository import IOrgRepository
 from ..core.interfaces.task_repository import ITaskRepository
+from ..core.interfaces.workspace_repository import IWorkspaceRepository
 from ..core.interfaces.work_pattern import METADATA_UNSET
 from ..protocols.ap2 import WebhookEventType
 from ..protocols.ap2.webhook import WebhookService
@@ -85,12 +87,14 @@ class OrgService:
         agent_service: AgentService,
         webhook_service: WebhookService | None = None,
         task_repository: ITaskRepository | None = None,
+        workspace_repository: IWorkspaceRepository | None = None,
     ) -> None:
         self.repository = org_repository
         self.subnet_service = subnet_service
         self.agent_service = agent_service
         self.webhook_service = webhook_service
         self.task_repository = task_repository
+        self.workspace_repository = workspace_repository
 
     def _work_pattern_for(self, org: Org):
         """Resolve ``IWorkPattern`` from ``org.plugins.work`` (aliases allowed)."""
@@ -283,6 +287,7 @@ class OrgService:
         plugins: dict[str, str] | None = None,
         harness_url: str | None = None,
         harness_secret: str | None = None,
+        execution_env: dict[str, Any] | None = None,
     ) -> Org:
         if caller_type == "agent":
             steward = caller_sub
@@ -355,6 +360,7 @@ class OrgService:
             owner=OrgOwner(kind="none"),
             charter=charter or {},
             plugins=resolved_plugins,
+            execution_env=execution_env,
             created_at=now,
             updated_at=now,
         )
@@ -605,6 +611,8 @@ class OrgService:
         display_name: str | None = None,
         charter: dict[str, Any] | None = None,
         plugins: dict[str, str] | None = None,
+        execution_env: dict[str, Any] | None = None,
+        execution_env_set: bool = False,
     ) -> Org:
         org = await self.get_org(org_id)
         self._require_governance(org, caller_type, caller_sub)
@@ -618,9 +626,30 @@ class OrgService:
             merged = normalize_org_plugins({**org.plugins, **plugins})
             validate_org_plugins(merged)
             org.plugins = merged
+        if execution_env_set:
+            env = normalize_execution_env(execution_env)
+            await self._assert_workspace_bind(org, env)
+            org.execution_env = env
         org.updated_at = datetime.now(UTC)
         await self.repository.save_org(org)
         return org
+
+    async def _assert_workspace_bind(
+        self, org: Org, env: dict[str, Any] | None
+    ) -> None:
+        """Org may only pin an active admit=org workspace of this org."""
+        if not env:
+            return
+        workspace_id = env.get("workspace_id")
+        if not workspace_id:
+            return
+        if self.workspace_repository is None:
+            return
+        workspace = await self.workspace_repository.find_workspace(workspace_id)
+        if workspace is None or workspace.status != "active":
+            raise ValueError(f"workspace not found: {workspace_id}")
+        if workspace.admit != "org" or workspace.org_id != org.org_id:
+            raise ValueError("workspace is not bound to this org")
 
     # ------------------------------------------------------------------
     # Membership

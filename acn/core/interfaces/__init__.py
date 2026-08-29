@@ -31,6 +31,7 @@ from .subnet_repository import ISubnetRepository
 from .task_repository import ITaskRepository
 from .unit_of_work import IUnitOfWork
 from .work_pattern import IWorkPattern
+from .workspace_repository import IWorkspaceRepository
 
 # IActivityRepository and IBillingRepository are imported directly from their
 # modules to avoid circular imports (they reference service-layer types).
@@ -53,6 +54,7 @@ __all__ = [
     "ITaskRepository",
     "IUnitOfWork",
     "IWorkPattern",
+    "IWorkspaceRepository",
     "IEscrowProvider",
     "ReleaseResult",
     "EscrowResult",

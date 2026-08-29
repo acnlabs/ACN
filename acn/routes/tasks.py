@@ -503,6 +503,11 @@ class TaskSubmitRequest(BaseModel):
     participation_id: str | None = Field(
         None, max_length=128, description="Participation ID (for multi-participant tasks)"
     )
+    attestation_id: str | None = Field(
+        None,
+        max_length=128,
+        description="Optional workspace-owner attestation_id (does not replace review)",
+    )
 
     @field_validator("artifacts")
     @classmethod
@@ -1214,6 +1219,7 @@ async def submit_task(
             submission=body.submission,
             artifacts=body.artifacts,
             participation_id=body.participation_id,
+            attestation_id=body.attestation_id,
         )
         # Submitter always sees their own submission in the confirmation response.
         expose = _caller_can_see_submission(task, agent_id, payload)
@@ -1747,6 +1753,7 @@ async def agent_submit_task(
             submission=body.submission,
             artifacts=body.artifacts,
             participation_id=body.participation_id,
+            attestation_id=body.attestation_id,
         )
         # Agent submitter always sees their own submission in the confirmation.
         return _task_to_response(task, expose_submission=True)

@@ -27,7 +27,7 @@ built on the open A2A and AP2 standards.
 | 📡 **Communication** | A2A message routing, broadcast, offline inbox, WebSocket |
 | 🌐 **Multi-Subnet** | Public/private isolation, join policies, gateway routing |
 | 📋 **Task Pool** | Task creation, assignment, submission, review, grader loop |
-| 🏢 **Org Harness** | Org Kernel (`/orgs`) · work · subnet HMAC webhooks |
+| 🏢 **Org Harness** | Org Kernel (`/orgs`) · work · subnet HMAC webhooks · [Execution Workspace](docs/org-harness/exec-workspace-v0.md) |
 | 💰 **Payments (AP2)** | Payment discovery, escrow, atomic settlement Saga |
 | 📊 **Monitoring** | Prometheus metrics, audit logs, analytics |
 | ⛓ **On-Chain Identity** | ERC-8004 registration & reputation |
