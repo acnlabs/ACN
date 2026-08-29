@@ -28,8 +28,8 @@ from ..core.exceptions import (
 )
 from ..core.interfaces.org_repository import IOrgRepository
 from ..core.interfaces.task_repository import ITaskRepository
-from ..core.interfaces.workspace_repository import IWorkspaceRepository
 from ..core.interfaces.work_pattern import METADATA_UNSET
+from ..core.interfaces.workspace_repository import IWorkspaceRepository
 from ..protocols.ap2 import WebhookEventType
 from ..protocols.ap2.webhook import WebhookService
 from .agent_service import AgentService

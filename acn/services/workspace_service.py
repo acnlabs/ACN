@@ -7,6 +7,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ..core.entities.org import normalize_execution_env
+from ..core.entities.task import ParticipationStatus, TaskStatus
 from ..core.entities.workspace import (
     Workspace,
     WorkspaceAttestation,
@@ -15,7 +16,6 @@ from ..core.entities.workspace import (
 from ..core.exceptions import AgentNotFoundException, WorkspaceAlreadyActiveError
 from ..core.interfaces.task_repository import ITaskRepository
 from ..core.interfaces.workspace_repository import IWorkspaceRepository
-from ..core.entities.task import ParticipationStatus, TaskStatus
 from .agent_service import AgentService
 from .org_service import (
     CallerType,

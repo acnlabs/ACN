@@ -49,9 +49,9 @@ from ..services.activity_service import ActivityService
 from ..services.agent_service import hash_api_key
 from ..services.join_flow_service import JoinFlowService
 from ..services.org_service import OrgService
-from ..services.workspace_service import WorkspaceService
 from ..services.reputation_query_service import ReputationQueryService
 from ..services.reputation_service import ReputationService
+from ..services.workspace_service import WorkspaceService
 
 settings = get_settings()
 

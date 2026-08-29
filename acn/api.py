@@ -76,9 +76,6 @@ from .infrastructure.persistence.redis import (
     RedisSubnetRepository,
 )
 from .infrastructure.persistence.redis.org_repository import RedisOrgRepository
-from .infrastructure.persistence.redis.workspace_repository import (
-    RedisWorkspaceRepository,
-)
 
 # See note in acn/infrastructure/persistence/redis/__init__.py — these
 # two are imported via their submodules to keep the package-level
@@ -90,6 +87,9 @@ from .infrastructure.persistence.redis.subnet_join_request_repository import (
     RedisSubnetJoinRequestRepository,
 )
 from .infrastructure.persistence.redis.task_repository import RedisTaskRepository
+from .infrastructure.persistence.redis.workspace_repository import (
+    RedisWorkspaceRepository,
+)
 from .infrastructure.task_pool import TaskPool
 from .middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .monitoring import Analytics, AuditLogger, MetricsCollector
@@ -146,13 +146,13 @@ from .services.erc8004_client import ERC8004Client
 from .services.escrow_client import AgentPlanetEscrowProvider
 from .services.join_flow_service import JoinFlowService
 from .services.org_service import OrgService
-from .services.workspace_service import WorkspaceService
 from .services.reputation_query_service import ReputationQueryService
 from .services.reputation_service import ReputationService
 from .services.settlement_worker import SettlementWorker
 from .services.webhook_join_flow_event_publisher import (
     WebhookJoinFlowEventPublisher,
 )
+from .services.workspace_service import WorkspaceService
 
 # Settings
 settings = get_settings()
