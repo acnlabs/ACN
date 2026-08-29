@@ -3650,14 +3650,19 @@ async def update_agent_profile(
     )
 
     meta = updated.metadata if isinstance(updated.metadata, dict) else {}
-    invitees = meta.get("chat_invitees") if isinstance(meta.get("chat_invitees"), list) else []
+    raw_invitees = meta.get("chat_invitees")
+    invitees = (
+        [str(x) for x in raw_invitees if isinstance(x, str)]
+        if isinstance(raw_invitees, list)
+        else []
+    )
     return {
         "agent_id": agent_id,
         "name": updated.name,
         "description": updated.description,
         "tags": updated.tags,
         "invoke_slots": parse_declared_slots(updated.metadata),
-        "chat_invitees": [str(x) for x in invitees if isinstance(x, str)],
+        "chat_invitees": invitees,
     }
 
 

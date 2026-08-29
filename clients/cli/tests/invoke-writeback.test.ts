@@ -53,7 +53,7 @@ describe('invoke writeback', () => {
   });
 
   it('POSTs /invoke/complete with acn_* and does not call chat', async () => {
-    const fetchFn = vi.fn(async (url: string) => {
+    const fetchFn = vi.fn(async (url: string, _init?: RequestInit) => {
       expect(String(url)).toContain('/api/v1/invoke/complete');
       expect(String(url)).not.toContain('/api/chats/');
       return { status: 200, text: async () => '{}' } as Response;
@@ -73,7 +73,10 @@ describe('invoke writeback', () => {
     );
     expect(result.ok).toBe(true);
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    const init = fetchFn.mock.calls[0]?.[1] as RequestInit;
+    const init = fetchFn.mock.calls[0]?.[1];
+    if (!init) {
+      throw new Error('expected fetch init');
+    }
     const headers = init.headers as Record<string, string>;
     expect(headers.authorization).toBe('Bearer acn_TEST');
     const body = JSON.parse(String(init.body));
