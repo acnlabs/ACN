@@ -4,6 +4,17 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-09-01
+
+CLI + skill patch. Server stays **1.0.1**. Skill **1.0.9**. Python/TS SDKs **1.0.2**.
+
+### Added
+- Owner runtime apply on Mode A: `handleRuntimeApplyHttp` verifies a
+  short Host JWT (`sub=acn`) then applies preferred model. Listen also
+  intercepts `POST /acn/v1/runtime` (old `/acn/v1/preferred-model` still
+  works) and reapplies leftover `desired_preferred_model` from heartbeat.
+  Restart `acn listen` after upgrading; ship with ACN 1.0.15.
+
 ## [1.0.13] - 2026-08-30
 
 CLI patch. Server stays **1.0.1**. Skill **1.0.8**. Python/TS SDKs **1.0.2**.

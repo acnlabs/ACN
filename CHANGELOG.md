@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.15] - 2026-09-01
+
+CLI + skill cut (`@acnlabs/acn-cli@1.0.14`, skill **1.0.9**). Python/TS
+`acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
+### Added
+
+- Owner default-model apply for agents that only have a public URL (no
+  listen). ACN POSTs `{origin}/acn/v1/runtime` with a short Host JWT.
+  Listen still uses the WS control channel. The public A2A proxy rejects
+  the path. Failed apply still clears desired. Ship this CLI with the
+  ACN that sends `/runtime` — older listen would `--forward` that path.
+
 ## [1.0.14] - 2026-08-30
 
 Client cut (`@acnlabs/acn-cli@1.0.13`, Python/TS `acn-client` **1.0.2**, skill **1.0.8**). Server stays **1.0.1**.
