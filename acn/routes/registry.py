@@ -1462,7 +1462,10 @@ def _reject_public_preferred_model_apply() -> None:
     raise ACNHTTPError(
         ErrorCode.COMMUNICATION_REJECTED,
         403,
-        details={"reason": "preferred_model_owner_only"},
+        details={
+            "reason": "preferred_model_owner_only",
+            "reject_reason": "preferred_model_owner_only",
+        },
     )
 
 
