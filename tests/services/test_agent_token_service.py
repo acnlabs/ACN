@@ -10,6 +10,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jose import jwt
+from jose.exceptions import JWTError
 
 from acn.services.agent_token_service import AgentTokenIssuer
 
@@ -81,7 +82,41 @@ def test_jwks_shape():
     assert key["n"] and key["e"]
 
 
-def test_disabled_without_key():
+def test_mint_runtime_command_is_not_an_agent_token():
+    iss = _issuer()
+    patch = {"preferred_model": "minimax/minimax-m2.5"}
+    token = iss.mint_runtime_command("agent-123", patch)
+    claims = jwt.get_unverified_claims(token)
+    assert claims["sub"] == "acn"
+    assert claims["aud"] == "agent-123"
+    assert claims["acn_action"] == "runtime"
+    assert claims["acn_principal"] == "host"
+    assert claims["runtime"] == patch
+    assert claims["exp"] - claims["iat"] == 60
+    roundtrip = iss.verify_runtime_command(token, agent_id="agent-123", patch=patch)
+    assert roundtrip["sub"] == "acn"
+
+
+def test_agent_jwt_cannot_verify_as_runtime_command():
+    iss = _issuer()
+    agent_tok = iss.mint("agent-123")["access_token"]
+    with pytest.raises(JWTError):
+        iss.verify_runtime_command(
+            agent_tok,
+            agent_id="agent-123",
+            patch={"preferred_model": "x"},
+        )
+
+
+def test_runtime_jwt_body_mismatch_is_rejected():
+    iss = _issuer()
+    token = iss.mint_runtime_command("agent-123", {"preferred_model": "a/b"})
+    with pytest.raises(ValueError, match="runtime_jwt_body_mismatch"):
+        iss.verify_runtime_command(
+            token,
+            agent_id="agent-123",
+            patch={"preferred_model": "c/d"},
+        )
     iss = _issuer(private_key_pem=None)
     assert iss.enabled is False
     assert iss.jwks() == {"keys": []}

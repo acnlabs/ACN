@@ -217,6 +217,69 @@ class TestAgentService:
         assert "supported_models" not in (agent.metadata or {})
 
     @pytest.mark.asyncio
+    async def test_update_heartbeat_clears_desired_preferred_when_matched(
+        self, mock_agent_repository, sample_agent
+    ):
+        sample_agent.metadata = {
+            "preferred_model": "old/model",
+            "desired_preferred_model": "minimax/minimax-m2.5",
+        }
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            preferred_model="minimax/minimax-m2.5",
+        )
+
+        assert agent.metadata.get("preferred_model") == "minimax/minimax-m2.5"
+        assert "desired_preferred_model" not in (agent.metadata or {})
+
+    @pytest.mark.asyncio
+    async def test_update_heartbeat_keeps_desired_when_preferred_differs(
+        self, mock_agent_repository, sample_agent
+    ):
+        sample_agent.metadata = {
+            "preferred_model": "old/model",
+            "desired_preferred_model": "minimax/minimax-m2.5",
+        }
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            preferred_model="tencenttokenplan/kimi-k2.5",
+        )
+
+        assert agent.metadata.get("preferred_model") == "tencenttokenplan/kimi-k2.5"
+        assert agent.metadata.get("desired_preferred_model") == "minimax/minimax-m2.5"
+
+    @pytest.mark.asyncio
+    async def test_set_desired_preferred_model(self, mock_agent_repository, sample_agent):
+        sample_agent.metadata = {"preferred_model": "old/model"}
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.set_desired_preferred_model(
+            sample_agent.agent_id, "  minimax/minimax-m2.5  "
+        )
+        assert agent.metadata.get("desired_preferred_model") == "minimax/minimax-m2.5"
+        mock_agent_repository.save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_clear_desired_preferred_model(self, mock_agent_repository, sample_agent):
+        sample_agent.metadata = {
+            "preferred_model": "old/model",
+            "desired_preferred_model": "minimax/minimax-m2.5",
+        }
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.clear_desired_preferred_model(sample_agent.agent_id)
+        assert "desired_preferred_model" not in (agent.metadata or {})
+        mock_agent_repository.save.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_touch_alive_renews_redis_ttl_only(self, mock_agent_repository):
         """``touch_alive`` is the implicit-heartbeat fast path.
 

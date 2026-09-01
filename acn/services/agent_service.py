@@ -819,6 +819,9 @@ class AgentService:
             mid = preferred_model.strip()[:200]
             if mid:
                 meta["preferred_model"] = mid
+                desired = str(meta.get("desired_preferred_model") or "").strip()
+                if desired and desired.lower() == mid.lower():
+                    meta.pop("desired_preferred_model", None)
             else:
                 meta.pop("preferred_model", None)
             meta_dirty = True
@@ -833,6 +836,29 @@ class AgentService:
             agent.metadata = meta
         await self.repository.save(agent)
         await self.repository.set_alive(agent_id, ALIVE_RENEW_TTL)
+        return agent
+
+    async def set_desired_preferred_model(self, agent_id: str, model_id: str) -> Agent:
+        """Owner-requested default. Cleared when heartbeat preferred matches."""
+        agent = await self.get_agent(agent_id)
+        mid = (model_id or "").strip()[:200]
+        if not mid:
+            raise ValueError("preferred_model_required")
+        meta = dict(agent.metadata or {})
+        meta["desired_preferred_model"] = mid
+        agent.metadata = meta
+        await self.repository.save(agent)
+        return agent
+
+    async def clear_desired_preferred_model(self, agent_id: str) -> Agent:
+        """Drop a pending Owner default after apply failed (offline / timeout / reject)."""
+        agent = await self.get_agent(agent_id)
+        meta = dict(agent.metadata or {})
+        if "desired_preferred_model" not in meta:
+            return agent
+        meta.pop("desired_preferred_model", None)
+        agent.metadata = meta
+        await self.repository.save(agent)
         return agent
 
     async def touch_alive(self, agent_id: str) -> None:
