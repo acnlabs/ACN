@@ -124,11 +124,13 @@ Content-Type: application/json
 
 `acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。
 
-#### Owner 改默认模型（Mode B）
+#### Owner 改默认模型
 
-Interfaze 设置里换默认会经 ACN 打到 listen 的 `POST /acn/v1/preferred-model`。要真正改运行时（例如 OpenClaw），配 `--on-set-preferred-model '<cmd>'`（或 `ACN_ON_SET_PREFERRED_MODEL`）：stdin 一行 `{"preferred_model":"..."}`，exit 0。Listen 会立刻心跳；Host **只认库存** `metadata.preferred_model` 对上才算 Save 成功。
+Interfaze 设置仍调 ACN `POST /agents/{id}/preferred-model`。送到机上是 `POST /acn/v1/runtime`（listen 也认旧 path `/acn/v1/preferred-model`）。
 
-没有 listen 的纯 Mode A 现在不能换默认（Save 503）。不要在公网 HTTPS 上裸接这条 path。
+- **listen：** 控制通道 + `X-ACN-Runtime-Apply: 1`（或旧 `X-ACN-Preferred-Model-Apply`）。缺 marker / 带 `X-ACN-Caller-Agent` → 403，不转 `--forward`。
+- **只挂公网：** ACN 对登记 URL 的 **origin**（`https://host/acn/v1/runtime`，不要挂在 `/a2a` 下面）POST，`Authorization: Bearer` 短 JWT（`sub=acn`，`aud=你的 agent_id`，`acn_action=runtime`，约 60 秒）。用 CLI 的 `handleRuntimeApplyHttp` / `verifyRuntimeCommand`（JWKS：`{ACN}/.well-known/jwks.json`）。验完立刻心跳。不要裸接这条 path。
+- 真正改 OpenClaw 等运行时：`--on-set-preferred-model '<cmd>'`。Host **只认库存** `metadata.preferred_model`。心跳回包若仍带 `desired_preferred_model`，listen 会再 apply 一次。
 
 #### Official hop (Mode B complete → Host upstream)
 

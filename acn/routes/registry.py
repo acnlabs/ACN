@@ -1431,19 +1431,19 @@ async def get_agent(
         ) from e
 
 
-# Owner-only default-model apply. Public A2A proxy must never relay this
-# path: listen intercepts it on the control channel, so an ``open`` peer
-# could otherwise POST /{victim}/acn/v1/preferred-model and change someone
-# else's default. Dedicated ``POST /{id}/preferred-model`` (OwnerOrInternal)
-# is the only caller that may WS-relay this path. Mode A has no shared
-# secret with ACN, so Host default-model apply is Mode B listen only.
+# Owner-only production-runtime apply. Public A2A proxy must never relay
+# these paths. Host ``POST /{id}/preferred-model`` is the only caller that
+# may WS-relay or signed-HTTP this path.
+RUNTIME_APPLY_PATH = "/acn/v1/runtime"
+RUNTIME_APPLY_HEADER = "x-acn-runtime-apply"
 PREFERRED_MODEL_APPLY_PATH = "/acn/v1/preferred-model"
 PREFERRED_MODEL_APPLY_HEADER = "x-acn-preferred-model-apply"
-_PREFERRED_MODEL_APPLY_HEADERS = {
+_RUNTIME_APPLY_HEADERS = {
     "content-type": "application/json",
-    PREFERRED_MODEL_APPLY_HEADER: "1",
+    RUNTIME_APPLY_HEADER: "1",
 }
 _PREFERRED_MODEL_RELAY_TIMEOUT_SECONDS: float = 30.0
+_HOST_RUNTIME_APPLY_PATHS = frozenset({RUNTIME_APPLY_PATH, PREFERRED_MODEL_APPLY_PATH})
 
 
 def _normalize_agent_rest_path(rest_path: str | None) -> str:
@@ -1454,19 +1454,33 @@ def _normalize_agent_rest_path(rest_path: str | None) -> str:
     return p
 
 
-def _is_host_preferred_model_apply_path(rest_path: str | None) -> bool:
-    return _normalize_agent_rest_path(rest_path) == PREFERRED_MODEL_APPLY_PATH
+def _is_host_runtime_apply_path(rest_path: str | None) -> bool:
+    return _normalize_agent_rest_path(rest_path) in _HOST_RUNTIME_APPLY_PATHS
 
 
-def _reject_public_preferred_model_apply() -> None:
+_is_host_preferred_model_apply_path = _is_host_runtime_apply_path
+
+
+def _reject_public_runtime_apply() -> None:
     raise ACNHTTPError(
         ErrorCode.COMMUNICATION_REJECTED,
         403,
         details={
-            "reason": "preferred_model_owner_only",
-            "reject_reason": "preferred_model_owner_only",
+            "reason": "runtime_owner_only",
+            "reject_reason": "runtime_owner_only",
         },
     )
+
+
+_reject_public_preferred_model_apply = _reject_public_runtime_apply
+
+
+def _runtime_apply_url(endpoint: str | None) -> str | None:
+    """Origin of the registered A2A URL + /acn/v1/runtime. Never suffix /a2a."""
+    parsed = urlparse((endpoint or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}{RUNTIME_APPLY_PATH}"
 
 
 _PROXY_HOP_BY_HOP_HEADERS = frozenset(
@@ -1484,6 +1498,7 @@ _PROXY_HOP_BY_HOP_HEADERS = frozenset(
         # Owner-only apply marker must never be client-supplied on the
         # public A2A proxy. Listen requires this header; stripping it here
         # means a leaked path cannot carry a forged Owner apply.
+        RUNTIME_APPLY_HEADER,
         PREFERRED_MODEL_APPLY_HEADER,
     }
 )
@@ -1525,8 +1540,8 @@ async def _proxy_to_agent(
             404,
             details={"agent_id": agent_id},
         ) from e
-    if _is_host_preferred_model_apply_path(rest_path):
-        _reject_public_preferred_model_apply()
+    if _is_host_runtime_apply_path(rest_path):
+        _reject_public_runtime_apply()
 
     # Gateway-level access control. Mirrors MessageRouter.route() — same
     # service, same exemption rules, same error shape — so a client that
@@ -1833,8 +1848,8 @@ async def _relay_or_inbox(
     ``GET /communication/inbox``) and answered ``202``; any other method
     returns ``503`` (no real-time peer, and nothing meaningful to queue).
     """
-    if _is_host_preferred_model_apply_path(rest_path):
-        _reject_public_preferred_model_apply()
+    if _is_host_runtime_apply_path(rest_path):
+        _reject_public_runtime_apply()
     body = await request.body()
     forward_headers = {
         k: v
@@ -2633,7 +2648,7 @@ async def _clear_desired_preferred_model_best_effort(agent_service, agent_id: st
 
 def _raise_preferred_model_apply_status(relayed: dict[str, Any]) -> None:
     status_code = int(relayed.get("status", 200))
-    if status_code in (404, 405, 501):
+    if status_code in (401, 403, 404, 405, 501):
         raise HTTPException(status_code=503, detail="Agent is not connected.")
     if status_code >= 500:
         raise HTTPException(
@@ -2653,6 +2668,36 @@ def _raise_preferred_model_apply_status(relayed: dict[str, Any]) -> None:
         )
 
 
+async def _http_apply_runtime(
+    agent_id: str,
+    endpoint: str,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    """Signed POST {origin}/acn/v1/runtime. JWT is the only Mode A auth."""
+    from .oauth import get_token_issuer
+
+    target_url = _runtime_apply_url(endpoint)
+    if not target_url:
+        raise HTTPException(status_code=503, detail="Agent is not connected.")
+    issuer = get_token_issuer()
+    if not issuer.enabled:
+        logger.warning("runtime_apply_jwt_disabled", agent_id=agent_id)
+        raise HTTPException(status_code=503, detail="Agent is not connected.")
+    token = issuer.mint_runtime_command(agent_id, patch)
+    await safe_resolve_target(target_url, allow_loopback=settings.dev_mode)
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {token}",
+        RUNTIME_APPLY_HEADER: "1",
+    }
+    async with httpx.AsyncClient(
+        timeout=_PREFERRED_MODEL_RELAY_TIMEOUT_SECONDS,
+        follow_redirects=False,
+    ) as client:
+        resp = await client.post(target_url, json=patch, headers=headers)
+        return {"status": resp.status_code, "body": resp.text or ""}
+
+
 async def relay_and_confirm_preferred_model(
     agent_id: str,
     mid: str,
@@ -2660,13 +2705,15 @@ async def relay_and_confirm_preferred_model(
     *,
     ws_manager=None,
 ) -> dict[str, object]:
-    """WS-relay POST /acn/v1/preferred-model and confirm heartbeat preferred.
+    """Deliver POST /acn/v1/runtime then confirm stored heartbeat preferred.
 
     Confirmation is stored ``metadata.preferred_model`` only — listen body
     cannot stand in for a heartbeat. Failed apply clears ``desired_preferred_model``.
-    Mode A (public HTTP, no listen) is 503: ACN has no shared secret to
-    authenticate ``POST {endpoint}/acn/v1/preferred-model``.
+
+    Mode B: WS relay with Owner apply marker. Timeout is 504 — no HTTP fallback.
+    Mode A (no listen, public endpoint): signed POST to origin + /acn/v1/runtime.
     """
+    patch = {"preferred_model": mid}
     try:
         await agent_service.set_desired_preferred_model(agent_id, mid)
     except AgentNotFoundException as e:
@@ -2697,9 +2744,9 @@ async def relay_and_confirm_preferred_model(
                 relayed = await ws_manager.relay_request_to_agent(
                     agent_id,
                     method="POST",
-                    path=PREFERRED_MODEL_APPLY_PATH,
-                    headers=dict(_PREFERRED_MODEL_APPLY_HEADERS),
-                    body=json.dumps({"preferred_model": mid}),
+                    path=RUNTIME_APPLY_PATH,
+                    headers=dict(_RUNTIME_APPLY_HEADERS),
+                    body=json.dumps(patch),
                     timeout=_PREFERRED_MODEL_RELAY_TIMEOUT_SECONDS,
                 )
             except TimeoutError:
@@ -2710,7 +2757,48 @@ async def relay_and_confirm_preferred_model(
                 ) from None
 
         if relayed is None:
-            raise HTTPException(status_code=503, detail="Agent is not connected.")
+            try:
+                live = await agent_service.get_agent(agent_id)
+            except AgentNotFoundException as e:
+                raise ACNHTTPError(
+                    ErrorCode.AGENT_NOT_FOUND,
+                    404,
+                    details={"agent_id": agent_id},
+                ) from e
+            endpoint = str(getattr(live, "endpoint", None) or "").strip()
+            if not _runtime_apply_url(endpoint):
+                raise HTTPException(status_code=503, detail="Agent is not connected.")
+            try:
+                relayed = await _http_apply_runtime(agent_id, endpoint, patch)
+            except SSRFViolation as e:
+                logger.warning(
+                    "runtime_apply_http_ssrf_blocked",
+                    agent_id=agent_id,
+                    reason=str(e),
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="Agent endpoint is not reachable.",
+                ) from e
+            except httpx.TimeoutException:
+                logger.warning("runtime_apply_http_timeout", agent_id=agent_id)
+                raise HTTPException(
+                    status_code=504,
+                    detail="Agent is connected but did not confirm the new default.",
+                ) from None
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(
+                    "runtime_apply_http_unreachable",
+                    agent_id=agent_id,
+                    error=str(e),
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Agent is not connected.",
+                ) from e
+
         _raise_preferred_model_apply_status(relayed)
 
         try:
@@ -2750,11 +2838,11 @@ async def set_agent_preferred_model(
     caller: OwnerOrInternalDep,
     agent_service: AgentServiceDep = None,
 ):
-    """Push a new default model to a live Mode B listener, then confirm heartbeat.
+    """Push a new default model onto the agent runtime, then confirm heartbeat.
 
-    Auth: ``OwnerOrInternalDep``. Offline / Mode A (no listen) → 503.
-    Relay timeout → 504. Listen 4xx → 4xx.
-    Listing is not written here. Public A2A proxy cannot hit this path.
+    Auth: ``OwnerOrInternalDep``. Delivery is ``POST /acn/v1/runtime``
+    (listen WS, or signed HTTP to the endpoint origin). Offline → 503.
+    Relay timeout → 504. Listing is not written here.
     """
     mid = body.preferred_model
     logger.info(

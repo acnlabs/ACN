@@ -32,6 +32,11 @@ from jose import jwt
 
 logger = structlog.get_logger()
 
+RUNTIME_COMMAND_SUB = "acn"
+RUNTIME_COMMAND_ACTION = "runtime"
+RUNTIME_COMMAND_PRINCIPAL = "host"
+RUNTIME_COMMAND_TTL_SECONDS = 60
+
 
 def _b64url_uint(val: int) -> str:
     """Base64url-encode a big-endian unsigned int with no padding (RFC 7518)."""
@@ -170,3 +175,90 @@ class AgentTokenIssuer:
             "expires_in": self._ttl,
             "scope": scp,
         }
+
+    def _rsa_key_for_kid(self, kid: str | None) -> dict:
+        keys = self.jwks()["keys"]
+        if not keys:
+            raise RuntimeError("Agent JWT issuer is not configured (no signing key)")
+        if kid:
+            for key in keys:
+                if key.get("kid") == kid:
+                    return {
+                        "kty": key["kty"],
+                        "kid": key["kid"],
+                        "use": key["use"],
+                        "n": key["n"],
+                        "e": key["e"],
+                    }
+        key = keys[0]
+        return {
+            "kty": key["kty"],
+            "kid": key["kid"],
+            "use": key["use"],
+            "n": key["n"],
+            "e": key["e"],
+        }
+
+    def mint_runtime_command(
+        self,
+        agent_id: str,
+        patch: dict,
+        *,
+        ttl_seconds: int = RUNTIME_COMMAND_TTL_SECONDS,
+    ) -> str:
+        """Mint a short Host→agent runtime JWT. ``aud`` is the target agent."""
+        if not self.enabled:
+            raise RuntimeError("Agent JWT issuer is not configured (no signing key)")
+        aid = (agent_id or "").strip()
+        if not aid:
+            raise ValueError("agent_id is required")
+        if not isinstance(patch, dict) or not patch:
+            raise ValueError("runtime patch is required")
+        now = int(time.time())
+        claims = {
+            "iss": self._issuer,
+            "sub": RUNTIME_COMMAND_SUB,
+            "aud": aid,
+            "acn_principal": RUNTIME_COMMAND_PRINCIPAL,
+            "acn_action": RUNTIME_COMMAND_ACTION,
+            "runtime": patch,
+            "iat": now,
+            "nbf": now,
+            "exp": now + max(1, int(ttl_seconds)),
+            "jti": str(uuid.uuid4()),
+        }
+        return jwt.encode(
+            claims,
+            self._private_key_pem,
+            algorithm="RS256",
+            headers={"kid": self._kid},
+        )
+
+    def verify_runtime_command(
+        self,
+        token: str,
+        *,
+        agent_id: str,
+        patch: dict,
+    ) -> dict:
+        """Verify a Host runtime JWT. Rejects agent→Backend tokens."""
+        if not self.enabled:
+            raise ValueError("runtime_jwt_issuer_disabled")
+        header = jwt.get_unverified_header(token)
+        key = self._rsa_key_for_kid(header.get("kid"))
+        claims = jwt.decode(
+            token,
+            key,
+            algorithms=["RS256"],
+            audience=agent_id,
+            issuer=self._issuer,
+        )
+        if claims.get("sub") != RUNTIME_COMMAND_SUB:
+            raise ValueError("runtime_jwt_sub")
+        if claims.get("acn_principal") != RUNTIME_COMMAND_PRINCIPAL:
+            raise ValueError("runtime_jwt_principal")
+        if claims.get("acn_action") != RUNTIME_COMMAND_ACTION:
+            raise ValueError("runtime_jwt_action")
+        if claims.get("runtime") != patch:
+            raise ValueError("runtime_jwt_body_mismatch")
+        return claims

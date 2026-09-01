@@ -357,6 +357,38 @@ describe('preferred-model apply intercept', () => {
     else process.env.ACN_PREFERRED_MODEL = prev;
   });
 
+  it('intercepts POST /acn/v1/runtime with the runtime marker', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ status: 'ok' }),
+    } as unknown as Response);
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        path: '/acn/v1/runtime',
+        body: JSON.stringify({ preferred_model: 'minimax/minimax-m2.5' }),
+        headers: {
+          'content-type': 'application/json',
+          'x-acn-runtime-apply': '1',
+        },
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+        preferredModel: 'old/model',
+      },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
+    expect(fetchFn.mock.calls.some((c) => String(c[0]).includes('/heartbeat'))).toBe(
+      true
+    );
+  });
+
   it('rejects a model not on supported_models', async () => {
     const fetchFn = vi.fn();
     const frames: OutboundFrame[] = [];
@@ -431,7 +463,7 @@ describe('preferred-model apply intercept', () => {
     );
     expect(frames[0]).toMatchObject({
       status: 403,
-      body: expect.stringContaining('preferred_model_owner_only'),
+      body: expect.stringContaining('runtime_owner_only'),
     });
     expect(fetchFn).not.toHaveBeenCalled();
   });

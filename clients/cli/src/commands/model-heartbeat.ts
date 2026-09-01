@@ -58,6 +58,7 @@ export async function postAgentHeartbeat(opts: {
       ok: true;
       preferred_model?: string | null;
       supported_models?: string[] | null;
+      desired_preferred_model?: string | null;
     }
   | { ok: false; reason: string }
 > {
@@ -83,18 +84,27 @@ export async function postAgentHeartbeat(opts: {
     }
     let preferred: string | null | undefined;
     let supported: string[] | null | undefined;
+    let desired: string | null | undefined;
     try {
       const json = (await res.json()) as {
         preferred_model?: string | null;
         supported_models?: string[] | null;
+        desired_preferred_model?: string | null;
       };
       preferred = json.preferred_model;
       supported = json.supported_models;
+      desired = json.desired_preferred_model;
     } catch {
       preferred = opts.preferredModel ?? null;
       supported = opts.supportedModels ?? null;
+      desired = undefined;
     }
-    return { ok: true, preferred_model: preferred, supported_models: supported };
+    return {
+      ok: true,
+      preferred_model: preferred,
+      supported_models: supported,
+      desired_preferred_model: desired,
+    };
   } catch (err) {
     return {
       ok: false,

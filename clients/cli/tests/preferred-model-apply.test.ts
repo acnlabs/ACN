@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 
 import {
+  handleRuntimeApplyHttp,
   isOwnerPreferredModelApplyFrame,
   isPreferredModelApplyPath,
   modelAllowedBySupported,
   parsePreferredModelApplyBody,
+  verifyRuntimeCommand,
 } from '../src/commands/preferred-model-apply.js';
 
 describe('isPreferredModelApplyPath', () => {
@@ -13,6 +16,7 @@ describe('isPreferredModelApplyPath', () => {
     expect(isPreferredModelApplyPath('/acn/v1/preferred-model/')).toBe(true);
     expect(isPreferredModelApplyPath('/acn/v1/preferred-model?x=1')).toBe(true);
     expect(isPreferredModelApplyPath('acn/v1/preferred-model')).toBe(true);
+    expect(isPreferredModelApplyPath('/acn/v1/runtime')).toBe(true);
     expect(isPreferredModelApplyPath('/a2a')).toBe(false);
   });
 
@@ -32,6 +36,13 @@ describe('isOwnerPreferredModelApplyFrame', () => {
         path: '/acn/v1/preferred-model',
         method: 'POST',
         headers,
+      })
+    ).toBe(true);
+    expect(
+      isOwnerPreferredModelApplyFrame({
+        path: '/acn/v1/runtime',
+        method: 'POST',
+        headers: { 'x-acn-runtime-apply': '1' },
       })
     ).toBe(true);
   });
@@ -81,5 +92,103 @@ describe('modelAllowedBySupported', () => {
   it('is case-insensitive against the reported list', () => {
     expect(modelAllowedBySupported('A/B', ['a/b', 'c/d'])).toBe(true);
     expect(modelAllowedBySupported('x/y', ['a/b'])).toBe(false);
+  });
+});
+
+describe('verifyRuntimeCommand / handleRuntimeApplyHttp', () => {
+  async function hostKeys() {
+    const { publicKey, privateKey } = await generateKeyPair('RS256', {
+      extractable: true,
+    });
+    const jwk = await exportJWK(publicKey);
+    jwk.kid = 'test-runtime';
+    jwk.use = 'sig';
+    jwk.alg = 'RS256';
+    return { privateKey, jwks: { keys: [jwk] } };
+  }
+
+  it('accepts a host runtime JWT and rejects an agent-shaped JWT', async () => {
+    const { privateKey, jwks } = await hostKeys();
+    const patch = { preferred_model: 'minimax/minimax-m2.5' };
+    const token = await new SignJWT({
+      acn_principal: 'host',
+      acn_action: 'runtime',
+      runtime: patch,
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-runtime' })
+      .setIssuer('https://acn.test')
+      .setSubject('acn')
+      .setAudience('agent-1')
+      .setIssuedAt()
+      .setExpirationTime('60s')
+      .sign(privateKey);
+    expect(
+      await verifyRuntimeCommand({
+        token,
+        agentId: 'agent-1',
+        issuer: 'https://acn.test',
+        patch,
+        jwks,
+      })
+    ).toEqual({ ok: true });
+
+    const agentTok = await new SignJWT({ acn_principal: 'agent' })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-runtime' })
+      .setIssuer('https://acn.test')
+      .setSubject('agent-1')
+      .setAudience('https://api.test')
+      .setIssuedAt()
+      .setExpirationTime('60s')
+      .sign(privateKey);
+    const rejected = await verifyRuntimeCommand({
+      token: agentTok,
+      agentId: 'agent-1',
+      issuer: 'https://acn.test',
+      patch,
+      jwks,
+    });
+    expect(rejected.ok).toBe(false);
+  });
+
+  it('applies after JWT verify and heartbeats', async () => {
+    const { privateKey, jwks } = await hostKeys();
+    const patch = { preferred_model: 'minimax/minimax-m2.5' };
+    const token = await new SignJWT({
+      acn_principal: 'host',
+      acn_action: 'runtime',
+      runtime: patch,
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-runtime' })
+      .setIssuer('https://acn.test')
+      .setSubject('acn')
+      .setAudience('agent-1')
+      .setIssuedAt()
+      .setExpirationTime('60s')
+      .sign(privateKey);
+    const heartbeatFn = async () => ({ ok: true as const });
+    const out = await handleRuntimeApplyHttp({
+      authorization: `Bearer ${token}`,
+      body: JSON.stringify(patch),
+      agentId: 'agent-1',
+      issuer: 'https://acn.test',
+      jwks,
+      apiKey: 'k',
+      baseUrl: 'https://acn.test',
+      heartbeatFn,
+    });
+    expect(out.status).toBe(200);
+    expect(JSON.parse(out.body).preferred_model).toBe(patch.preferred_model);
+  });
+
+  it('401s without a bearer token', async () => {
+    const out = await handleRuntimeApplyHttp({
+      body: '{"preferred_model":"a/b"}',
+      agentId: 'agent-1',
+      issuer: 'https://acn.test',
+      jwks: { keys: [] },
+      apiKey: 'k',
+      baseUrl: 'https://acn.test',
+    });
+    expect(out.status).toBe(401);
   });
 });

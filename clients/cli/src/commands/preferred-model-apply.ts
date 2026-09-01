@@ -1,18 +1,21 @@
 /**
- * Host → listen default-model apply (Interfaze Settings round-trip).
+ * Host → agent runtime apply (Interfaze Settings default-model round-trip).
  *
- * ACN relays POST /acn/v1/preferred-model over the Mode B control channel.
+ * ACN delivers POST /acn/v1/runtime (listen also accepts /acn/v1/preferred-model).
  * Listen updates the reported preferred model, optional runtime hook, then
  * heartbeats so Interfaze can confirm success.
  */
 
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
+import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
 
 import { postAgentHeartbeat } from './model-heartbeat.js';
 
+export const RUNTIME_APPLY_PATH = '/acn/v1/runtime';
 export const PREFERRED_MODEL_APPLY_PATH = '/acn/v1/preferred-model';
-/** Set only by Owner/Internal relay. Not a secret — also reject public caller header. */
+export const RUNTIME_APPLY_HEADER = 'x-acn-runtime-apply';
+/** Alias for older ACN builds. Not a secret. */
 export const PREFERRED_MODEL_APPLY_HEADER = 'x-acn-preferred-model-apply';
 
 const HOOK_TIMEOUT_MS = 15_000;
@@ -25,7 +28,8 @@ export function normalizePreferredModelApplyPath(path?: string): string {
 }
 
 export function isPreferredModelApplyPath(path?: string): boolean {
-  return normalizePreferredModelApplyPath(path) === PREFERRED_MODEL_APPLY_PATH;
+  const n = normalizePreferredModelApplyPath(path);
+  return n === PREFERRED_MODEL_APPLY_PATH || n === RUNTIME_APPLY_PATH;
 }
 
 function headerValue(
@@ -53,7 +57,10 @@ export function isOwnerPreferredModelApplyFrame(frame: {
   if (!isPreferredModelApplyPath(frame.path)) return false;
   if ((frame.method || 'GET').toUpperCase() !== 'POST') return false;
   if (headerValue(frame.headers, 'x-acn-caller-agent')) return false;
-  return headerValue(frame.headers, PREFERRED_MODEL_APPLY_HEADER) === '1';
+  return (
+    headerValue(frame.headers, PREFERRED_MODEL_APPLY_HEADER) === '1' ||
+    headerValue(frame.headers, RUNTIME_APPLY_HEADER) === '1'
+  );
 }
 
 export function parsePreferredModelApplyBody(
@@ -169,4 +176,106 @@ export async function applyPreferredModelOnListen(opts: {
       (opts.onSetPreferredModel ? ' hook=yes' : ' hook=no')
   );
   return { ok: true, preferred_model: mid };
+}
+
+export const isRuntimeApplyPath = isPreferredModelApplyPath;
+export const isOwnerRuntimeApplyFrame = isOwnerPreferredModelApplyFrame;
+
+function runtimePatchesEqual(a: unknown, b: unknown): boolean {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+export async function verifyRuntimeCommand(opts: {
+  token: string;
+  agentId: string;
+  issuer: string;
+  patch: Record<string, unknown>;
+  jwks: JSONWebKeySet | URL;
+}): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const getKey =
+    opts.jwks instanceof URL
+      ? createRemoteJWKSet(opts.jwks)
+      : createLocalJWKSet(opts.jwks);
+  try {
+    const { payload } = await jwtVerify(opts.token, getKey, {
+      issuer: opts.issuer,
+      audience: opts.agentId,
+      algorithms: ['RS256'],
+    });
+    if (payload.sub !== 'acn') return { ok: false, reason: 'runtime_jwt_sub' };
+    if (payload.acn_principal !== 'host') {
+      return { ok: false, reason: 'runtime_jwt_principal' };
+    }
+    if (payload.acn_action !== 'runtime') {
+      return { ok: false, reason: 'runtime_jwt_action' };
+    }
+    if (!runtimePatchesEqual(payload.runtime, opts.patch)) {
+      return { ok: false, reason: 'runtime_jwt_body_mismatch' };
+    }
+    return { ok: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message.slice(0, 80) : 'runtime_jwt_invalid';
+    return { ok: false, reason: msg };
+  }
+}
+
+/** Mode A reference: verify Host JWT, apply preferred_model, heartbeat. */
+export async function handleRuntimeApplyHttp(opts: {
+  authorization?: string;
+  body: string;
+  agentId: string;
+  issuer: string;
+  jwks: JSONWebKeySet | URL;
+  apiKey: string;
+  baseUrl: string;
+  supportedModels?: string[];
+  onSetPreferredModel?: string;
+  spawnFn?: typeof spawn;
+  heartbeatFn?: typeof postAgentHeartbeat;
+  logFn?: (line: string) => void;
+}): Promise<{ status: number; body: string }> {
+  const token = (opts.authorization || '').replace(/^Bearer\s+/i, '').trim();
+  if (!token) {
+    return { status: 401, body: JSON.stringify({ error: 'runtime_jwt_required' }) };
+  }
+  const parsed = parsePreferredModelApplyBody(opts.body);
+  if (!parsed.ok) {
+    return { status: 400, body: JSON.stringify({ error: parsed.reason }) };
+  }
+  const patch = { preferred_model: parsed.preferred_model };
+  const verified = await verifyRuntimeCommand({
+    token,
+    agentId: opts.agentId,
+    issuer: opts.issuer,
+    patch,
+    jwks: opts.jwks,
+  });
+  if (!verified.ok) {
+    return { status: 401, body: JSON.stringify({ error: verified.reason }) };
+  }
+  const applied = await applyPreferredModelOnListen({
+    modelId: parsed.preferred_model,
+    agentId: opts.agentId,
+    apiKey: opts.apiKey,
+    baseUrl: opts.baseUrl,
+    supportedModels: opts.supportedModels,
+    onSetPreferredModel: opts.onSetPreferredModel,
+    spawnFn: opts.spawnFn,
+    heartbeatFn: opts.heartbeatFn,
+    logFn: opts.logFn,
+  });
+  if (!applied.ok) {
+    return {
+      status: applied.status,
+      body: JSON.stringify({ error: applied.reason }),
+    };
+  }
+  return {
+    status: 200,
+    body: JSON.stringify({ ok: true, preferred_model: applied.preferred_model }),
+  };
 }

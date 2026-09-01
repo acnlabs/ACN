@@ -126,7 +126,7 @@ export interface HandlerOptions {
   forward?: string;
   exec?: string;
   runtime?: RuntimeHandlerOptions;
-  /** Mutated when Host applies a new default via /acn/v1/preferred-model. */
+  /** Mutated when Host applies a new default via /acn/v1/runtime. */
   preferredModel?: string;
   supportedModels?: string[];
   onSetPreferredModel?: string;
@@ -245,7 +245,7 @@ export async function dispatchA2aRequest(
   try {
     if (isPreferredModelApplyPath(frame.path)) {
       if (!isOwnerPreferredModelApplyFrame(frame)) {
-        send(errorResponse(frame.id, 403, 'preferred_model_owner_only'));
+        send(errorResponse(frame.id, 403, 'runtime_owner_only'));
         return;
       }
       send(await handlePreferredModelApply(frame, opts, bodyBuf, deps));
@@ -478,18 +478,33 @@ function runListener(cfg: ListenerConfig): void {
 
     const sendModelHeartbeat = (): void => {
       if (stopped) return;
-      // ``[]`` is a deliberate clear — still heartbeat.
-      if (!cfg.preferredModel && cfg.supportedModels === undefined) return;
       void postAgentHeartbeat({
         baseUrl: cfg.baseUrl,
         agentId: cfg.agentId,
         apiKey: cfg.apiKey,
         preferredModel: cfg.preferredModel,
         supportedModels: cfg.supportedModels,
-      }).then((r) => {
+      }).then(async (r) => {
         if (!r.ok) {
           console.error(`[acn listen] model heartbeat failed: ${r.reason}`);
           return;
+        }
+        const desired = String(r.desired_preferred_model || '').trim();
+        const local = String(cfg.preferredModel || '').trim();
+        if (desired && desired.toLowerCase() !== local.toLowerCase()) {
+          const applied = await applyPreferredModelOnListen({
+            modelId: desired,
+            agentId: cfg.agentId,
+            apiKey: cfg.apiKey,
+            baseUrl: cfg.baseUrl,
+            supportedModels: cfg.supportedModels,
+            onSetPreferredModel: cfg.onSetPreferredModel,
+          });
+          if (applied.ok) {
+            cfg.preferredModel = applied.preferred_model;
+          } else {
+            console.error(`[acn listen] desired apply failed: ${applied.reason}`);
+          }
         }
         const note = formatModelHeartbeatLog({
           preferred: r.preferred_model ?? cfg.preferredModel,
