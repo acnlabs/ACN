@@ -1431,6 +1431,41 @@ async def get_agent(
         ) from e
 
 
+# Owner-only default-model apply. Public A2A proxy must never relay this
+# path: listen intercepts it on the control channel, so an ``open`` peer
+# could otherwise POST /{victim}/acn/v1/preferred-model and change someone
+# else's default. Dedicated ``POST /{id}/preferred-model`` (OwnerOrInternal)
+# is the only caller that may WS-relay this path. Mode A has no shared
+# secret with ACN, so Host default-model apply is Mode B listen only.
+PREFERRED_MODEL_APPLY_PATH = "/acn/v1/preferred-model"
+PREFERRED_MODEL_APPLY_HEADER = "x-acn-preferred-model-apply"
+_PREFERRED_MODEL_APPLY_HEADERS = {
+    "content-type": "application/json",
+    PREFERRED_MODEL_APPLY_HEADER: "1",
+}
+_PREFERRED_MODEL_RELAY_TIMEOUT_SECONDS: float = 30.0
+
+
+def _normalize_agent_rest_path(rest_path: str | None) -> str:
+    raw = (rest_path or "").split("?", 1)[0].strip()
+    p = raw.rstrip("/") or "/"
+    if not p.startswith("/"):
+        p = f"/{p}"
+    return p
+
+
+def _is_host_preferred_model_apply_path(rest_path: str | None) -> bool:
+    return _normalize_agent_rest_path(rest_path) == PREFERRED_MODEL_APPLY_PATH
+
+
+def _reject_public_preferred_model_apply() -> None:
+    raise ACNHTTPError(
+        ErrorCode.COMMUNICATION_REJECTED,
+        403,
+        details={"reason": "preferred_model_owner_only"},
+    )
+
+
 _PROXY_HOP_BY_HOP_HEADERS = frozenset(
     {
         "host",
@@ -1443,6 +1478,10 @@ _PROXY_HOP_BY_HOP_HEADERS = frozenset(
         # agent and that header is conceptually theirs.
         "x-acn-authorization",
         "x-internal-token",
+        # Owner-only apply marker must never be client-supplied on the
+        # public A2A proxy. Listen requires this header; stripping it here
+        # means a leaked path cannot carry a forged Owner apply.
+        PREFERRED_MODEL_APPLY_HEADER,
     }
 )
 
@@ -1483,6 +1522,8 @@ async def _proxy_to_agent(
             404,
             details={"agent_id": agent_id},
         ) from e
+    if _is_host_preferred_model_apply_path(rest_path):
+        _reject_public_preferred_model_apply()
 
     # Gateway-level access control. Mirrors MessageRouter.route() — same
     # service, same exemption rules, same error shape — so a client that
@@ -1789,6 +1830,8 @@ async def _relay_or_inbox(
     ``GET /communication/inbox``) and answered ``202``; any other method
     returns ``503`` (no real-time peer, and nothing meaningful to queue).
     """
+    if _is_host_preferred_model_apply_path(rest_path):
+        _reject_public_preferred_model_apply()
     body = await request.body()
     forward_headers = {
         k: v
@@ -2499,18 +2542,26 @@ async def agent_heartbeat(
             },
         )
     try:
-        await agent_service.update_heartbeat(
+        agent = await agent_service.update_heartbeat(
             agent_id,
             preferred_model=body.preferred_model,
             supported_models=body.supported_models,
         )
+        meta = (
+            agent.metadata
+            if isinstance(getattr(agent, "metadata", None), dict)
+            else {}
+        )
         payload: dict[str, object] = {
             "status": "ok",
             "agent_id": agent_id,
-            "preferred_model": body.preferred_model,
+            "preferred_model": meta.get("preferred_model") or body.preferred_model,
         }
         if body.supported_models is not None:
-            payload["supported_models"] = body.supported_models
+            payload["supported_models"] = meta.get("supported_models") or body.supported_models
+        desired = meta.get("desired_preferred_model")
+        if isinstance(desired, str) and desired.strip():
+            payload["desired_preferred_model"] = desired.strip()
         return payload
     except AgentNotFoundException as e:
         raise ACNHTTPError(
@@ -2518,6 +2569,197 @@ async def agent_heartbeat(
             404,
             details={"agent_id": agent_id},
         ) from e
+
+
+class PreferredModelBody(BaseModel):
+    """Owner-requested default model. Listen must apply + heartbeat before success."""
+
+    preferred_model: str = Field(..., min_length=1, max_length=200)
+
+    @field_validator("preferred_model")
+    @classmethod
+    def _preferred_model(cls, v: str) -> str:
+        s = (v or "").strip()[:200]
+        if not s:
+            raise ValueError("preferred_model_required")
+        return s
+
+
+def _relayed_preferred_model(relayed: dict[str, Any]) -> str:
+    raw_body = relayed.get("body") or ""
+    if relayed.get("body_encoding") == "base64":
+        try:
+            raw_body = base64.b64decode(raw_body).decode("utf-8")
+        except Exception:
+            return ""
+    if not isinstance(raw_body, str) or not raw_body.strip():
+        return ""
+    try:
+        parsed = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    return str(parsed.get("preferred_model") or "").strip()[:200]
+
+
+def _relayed_error_detail(relayed: dict[str, Any]) -> str:
+    raw_body = relayed.get("body") or ""
+    if relayed.get("body_encoding") == "base64":
+        try:
+            raw_body = base64.b64decode(raw_body).decode("utf-8")
+        except Exception:
+            raw_body = ""
+    if not isinstance(raw_body, str) or not raw_body.strip():
+        return ""
+    try:
+        parsed = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return str(parsed.get("error"))[:80]
+    return ""
+
+
+async def _clear_desired_preferred_model_best_effort(agent_service, agent_id: str) -> None:
+    try:
+        await agent_service.clear_desired_preferred_model(agent_id)
+    except Exception:  # noqa: BLE001 — rollback must not mask the apply error
+        logger.warning("preferred_model_clear_desired_failed", agent_id=agent_id)
+
+
+def _raise_preferred_model_apply_status(relayed: dict[str, Any]) -> None:
+    status_code = int(relayed.get("status", 200))
+    if status_code in (404, 405, 501):
+        raise HTTPException(status_code=503, detail="Agent is not connected.")
+    if status_code >= 500:
+        raise HTTPException(
+            status_code=502,
+            detail="Agent failed to apply the new default.",
+        )
+    if status_code >= 400:
+        reason = _relayed_error_detail(relayed) or _relayed_preferred_model(relayed)
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400 if status_code < 409 else 409,
+            details={
+                "reason": "preferred_model_apply_failed",
+                "status": status_code,
+                "detail": reason or None,
+            },
+        )
+
+
+async def relay_and_confirm_preferred_model(
+    agent_id: str,
+    mid: str,
+    agent_service,
+    *,
+    ws_manager=None,
+) -> dict[str, object]:
+    """WS-relay POST /acn/v1/preferred-model and confirm heartbeat preferred.
+
+    Confirmation is stored ``metadata.preferred_model`` only — listen body
+    cannot stand in for a heartbeat. Failed apply clears ``desired_preferred_model``.
+    Mode A (public HTTP, no listen) is 503: ACN has no shared secret to
+    authenticate ``POST {endpoint}/acn/v1/preferred-model``.
+    """
+    try:
+        await agent_service.set_desired_preferred_model(agent_id, mid)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"reason": str(e)[:80]},
+        ) from e
+
+    try:
+        if ws_manager is None:
+            try:
+                from .dependencies import get_ws_manager
+
+                ws_manager = get_ws_manager()
+            except Exception:  # noqa: BLE001 — uninitialized manager == offline
+                ws_manager = None
+
+        relayed: dict[str, Any] | None = None
+        if ws_manager is not None:
+            try:
+                relayed = await ws_manager.relay_request_to_agent(
+                    agent_id,
+                    method="POST",
+                    path=PREFERRED_MODEL_APPLY_PATH,
+                    headers=dict(_PREFERRED_MODEL_APPLY_HEADERS),
+                    body=json.dumps({"preferred_model": mid}),
+                    timeout=_PREFERRED_MODEL_RELAY_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning("preferred_model_relay_timeout", agent_id=agent_id)
+                raise HTTPException(
+                    status_code=504,
+                    detail="Agent is connected but did not confirm the new default.",
+                ) from None
+
+        if relayed is None:
+            raise HTTPException(status_code=503, detail="Agent is not connected.")
+        _raise_preferred_model_apply_status(relayed)
+
+        try:
+            agent = await agent_service.get_agent(agent_id)
+        except AgentNotFoundException as e:
+            raise ACNHTTPError(
+                ErrorCode.AGENT_NOT_FOUND,
+                404,
+                details={"agent_id": agent_id},
+            ) from e
+        meta = (
+            agent.metadata if isinstance(getattr(agent, "metadata", None), dict) else {}
+        )
+        stored = str(meta.get("preferred_model") or "").strip()
+        if stored.lower() != mid.lower():
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                409,
+                details={"reason": "preferred_model_not_confirmed"},
+            )
+        return {
+            "status": "ok",
+            "agent_id": agent_id,
+            "preferred_model": stored,
+        }
+    except Exception:  # noqa: BLE001 — any apply failure must drop desired
+        await _clear_desired_preferred_model_best_effort(agent_service, agent_id)
+        raise
+
+
+@router.post("/{agent_id}/preferred-model")
+@limiter.limit("30/minute")
+async def set_agent_preferred_model(
+    request: Request,
+    agent_id: AgentIdPath,
+    body: PreferredModelBody,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Push a new default model to a live Mode B listener, then confirm heartbeat.
+
+    Auth: ``OwnerOrInternalDep``. Offline / Mode A (no listen) → 503.
+    Relay timeout → 504. Listen 4xx → 4xx.
+    Listing is not written here. Public A2A proxy cannot hit this path.
+    """
+    mid = body.preferred_model
+    logger.info(
+        "preferred_model_apply_requested",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+    )
+    return await relay_and_confirm_preferred_model(agent_id, mid, agent_service)
 
 
 def _acn_proxy_url_for(agent_id: str) -> str:

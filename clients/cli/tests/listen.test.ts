@@ -26,6 +26,20 @@ import {
 } from '../src/commands/listen.js';
 import { formatModelHeartbeatLog } from '../src/commands/model-heartbeat.js';
 
+function ownerApplyRequest(overrides: Partial<A2aRequestFrame> = {}): A2aRequestFrame {
+  const { headers, ...rest } = overrides;
+  return makeRequest({
+    path: '/acn/v1/preferred-model',
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-acn-preferred-model-apply': '1',
+      ...headers,
+    },
+    ...rest,
+  });
+}
+
 function makeRequest(overrides: Partial<A2aRequestFrame> = {}): A2aRequestFrame {
   return {
     type: 'a2a_request',
@@ -300,5 +314,145 @@ describe('formatModelHeartbeatLog', () => {
         supported: ['a/b'],
       })
     ).toBe(' preferred_model=openai/gpt-4o-mini supported_models=a/b');
+  });
+});
+
+describe('preferred-model apply intercept', () => {
+  it('applies before --forward and heartbeats the new default', async () => {
+    const prev = process.env.ACN_PREFERRED_MODEL;
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          status: 'ok',
+          preferred_model: 'minimax/minimax-m2.5',
+        }),
+    } as unknown as Response);
+    const frames: OutboundFrame[] = [];
+    const opts = {
+      forward: 'http://localhost:8080',
+      agentId: 'ag1',
+      apiKey: 'k',
+      baseUrl: 'https://api.acnlabs.dev',
+      preferredModel: 'old/model',
+      supportedModels: ['minimax/minimax-m2.5'],
+    };
+
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        body: JSON.stringify({ preferred_model: 'minimax/minimax-m2.5' }),
+      }),
+      opts,
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+
+    expect(opts.preferredModel).toBe('minimax/minimax-m2.5');
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
+    const urls = fetchFn.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes('/heartbeat'))).toBe(true);
+    expect(urls.every((u) => !u.includes('localhost:8080'))).toBe(true);
+    if (prev === undefined) delete process.env.ACN_PREFERRED_MODEL;
+    else process.env.ACN_PREFERRED_MODEL = prev;
+  });
+
+  it('rejects a model not on supported_models', async () => {
+    const fetchFn = vi.fn();
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        body: JSON.stringify({ preferred_model: 'openai/gpt-4o' }),
+      }),
+      {
+        exec: 'true',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+        supportedModels: ['minimax/minimax-m2.5'],
+      },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+    expect(frames[0]).toMatchObject({ status: 400 });
+    expect(String(frames[0].body)).toContain('unsupported_model');
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('does not intercept a suffixed lookalike path', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: (k: string) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+      text: () => Promise.resolve('{"result":"ok"}'),
+    } as unknown as Response);
+    const frames: OutboundFrame[] = [];
+    const opts = {
+      forward: 'http://localhost:8080',
+      agentId: 'ag1',
+      apiKey: 'k',
+      baseUrl: 'https://api.acnlabs.dev',
+      preferredModel: 'old/model',
+    };
+    await dispatchA2aRequest(
+      makeRequest({
+        path: '/foo/acn/v1/preferred-model',
+        body: JSON.stringify({ preferred_model: 'minimax/minimax-m2.5' }),
+      }),
+      opts,
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+    expect(opts.preferredModel).toBe('old/model');
+    const urls = fetchFn.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes('localhost:8080'))).toBe(true);
+    expect(urls.every((u) => !u.includes('/heartbeat'))).toBe(true);
+  });
+
+  it('403s a preferred-model path without the owner marker and does not forward', async () => {
+    const fetchFn = vi.fn();
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      makeRequest({
+        path: '/acn/v1/preferred-model',
+        body: JSON.stringify({ preferred_model: 'minimax/minimax-m2.5' }),
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+        preferredModel: 'old/model',
+      },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+    expect(frames[0]).toMatchObject({ status: 403 });
+    expect(String(frames[0].body)).toContain('preferred_model_owner_only');
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('403s a preferred-model path that carries X-ACN-Caller-Agent', async () => {
+    const fetchFn = vi.fn();
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        body: JSON.stringify({ preferred_model: 'minimax/minimax-m2.5' }),
+        headers: {
+          'x-acn-preferred-model-apply': '1',
+          'x-acn-caller-agent': 'attacker',
+        },
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+      },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+    expect(frames[0]).toMatchObject({ status: 403 });
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });

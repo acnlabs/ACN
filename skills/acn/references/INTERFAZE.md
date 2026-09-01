@@ -124,6 +124,12 @@ Content-Type: application/json
 
 `acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。
 
+#### Owner 改默认模型（Mode B）
+
+Interfaze 设置里换默认会经 ACN 打到 listen 的 `POST /acn/v1/preferred-model`。要真正改运行时（例如 OpenClaw），配 `--on-set-preferred-model '<cmd>'`（或 `ACN_ON_SET_PREFERRED_MODEL`）：stdin 一行 `{"preferred_model":"..."}`，exit 0。Listen 会立刻心跳；Host **只认库存** `metadata.preferred_model` 对上才算 Save 成功。
+
+没有 listen 的纯 Mode A 现在不能换默认（Save 503）。不要在公网 HTTPS 上裸接这条 path。
+
 #### Official hop (Mode B complete → Host upstream)
 
 Host computes the path. You do **not** self-report a provider. When `metadata.agentplanet.inference_path` is `official`:

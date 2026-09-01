@@ -112,6 +112,12 @@ class TestMethodNamesStillExist:
     def test_agent_service_update_heartbeat(self):
         assert callable(getattr(AgentService, "update_heartbeat", None))
 
+    def test_agent_service_set_desired_preferred_model(self):
+        assert callable(getattr(AgentService, "set_desired_preferred_model", None))
+
+    def test_agent_service_clear_desired_preferred_model(self):
+        assert callable(getattr(AgentService, "clear_desired_preferred_model", None))
+
     def test_agent_service_unregister_agent(self):
         assert callable(getattr(AgentService, "unregister_agent", None))
 
@@ -174,6 +180,7 @@ def _make_agent_mock(agent_id: str = "agent-test-001"):
     a.agent_id = agent_id
     a.owner = "user-1"
     a.name = "Test Agent"
+    a.metadata = {}
     a.model_dump = MagicMock(return_value={"agent_id": agent_id, "name": "Test Agent"})
     return a
 
@@ -439,7 +446,9 @@ class TestRegistryContract:
         svc = AsyncMock()
         svc.search_agents = AsyncMock(return_value=[])
         svc.get_agent = AsyncMock(return_value=_make_agent_mock())
-        svc.update_heartbeat = AsyncMock()
+        svc.update_heartbeat = AsyncMock(return_value=_make_agent_mock())
+        svc.set_desired_preferred_model = AsyncMock(return_value=_make_agent_mock())
+        svc.clear_desired_preferred_model = AsyncMock(return_value=_make_agent_mock())
         return svc
 
     def test_search_agents_endpoint_calls_search_agents(self, stub_agent_service):
