@@ -374,8 +374,10 @@ describe('preferred-model apply intercept', () => {
       (f) => frames.push(f),
       { fetchFn }
     );
-    expect(frames[0]).toMatchObject({ status: 400 });
-    expect(String(frames[0].body)).toContain('unsupported_model');
+    expect(frames[0]).toMatchObject({
+      status: 400,
+      body: expect.stringContaining('unsupported_model'),
+    });
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
@@ -427,8 +429,10 @@ describe('preferred-model apply intercept', () => {
       (f) => frames.push(f),
       { fetchFn }
     );
-    expect(frames[0]).toMatchObject({ status: 403 });
-    expect(String(frames[0].body)).toContain('preferred_model_owner_only');
+    expect(frames[0]).toMatchObject({
+      status: 403,
+      body: expect.stringContaining('preferred_model_owner_only'),
+    });
     expect(fetchFn).not.toHaveBeenCalled();
   });
 

@@ -10,8 +10,8 @@ from fastapi import HTTPException
 from acn.core.errors import ACNHTTPError
 from acn.core.exceptions import AgentNotFoundException
 from acn.routes.registry import (
-    PREFERRED_MODEL_APPLY_HEADER,
     _PROXY_HOP_BY_HOP_HEADERS,
+    PREFERRED_MODEL_APPLY_HEADER,
     _proxy_to_agent,
     _relay_or_inbox,
     relay_and_confirm_preferred_model,
