@@ -131,6 +131,33 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
     });
   });
 
+  it('forwards hop pick into complete env and wipes inherited ACN_REQUESTED_MODEL when unset', () => {
+    const withPick = parseJsonRpcBody(
+      chatMessageBody({ requested_model: 'tencenttokenplan/glm-5' })
+    );
+    expect(withPick.ok).toBe(true);
+    if (!withPick.ok) return;
+    expect(
+      completeInferenceEnv(normalizeEvent(withPick.body), { agentId: 'agent-1' })
+        .ACN_REQUESTED_MODEL
+    ).toBe('tencenttokenplan/glm-5');
+
+    const noPick = parseJsonRpcBody(chatMessageBody());
+    expect(noPick.ok).toBe(true);
+    if (!noPick.ok) return;
+    const prev = process.env.ACN_REQUESTED_MODEL;
+    process.env.ACN_REQUESTED_MODEL = 'stale/inherited';
+    try {
+      expect(
+        completeInferenceEnv(normalizeEvent(noPick.body), { agentId: 'agent-1' })
+          .ACN_REQUESTED_MODEL
+      ).toBe('');
+    } finally {
+      if (prev === undefined) delete process.env.ACN_REQUESTED_MODEL;
+      else process.env.ACN_REQUESTED_MODEL = prev;
+    }
+  });
+
   it('extracts official hop wake fields and rejects arbitrary host URLs', () => {
     expect(asHostInferenceUrl('https://evil.example/api/inference/v1')).toBeNull();
     expect(asHostInferenceUrl('https://evil.example/steal')).toBeNull();
@@ -435,6 +462,7 @@ describe('handleChatWriteback', () => {
       'https://api.agentplanet.org/api/inference/v1'
     );
     expect(env.ACN_AGENT_JWT).toBe('jwt-official');
+    expect(env.ACN_REQUESTED_MODEL).toBe('moonshotai/kimi-k2.5');
 
     const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const u = String(url);
@@ -468,6 +496,7 @@ describe('handleChatWriteback', () => {
     expect(completeCall?.[0]).toBe('http://127.0.0.1:9/complete');
     expect(completeCall?.[1]?.headers).toMatchObject({
       'X-ACN-Hop-Id': 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+      'X-ACN-Requested-Model': 'moonshotai/kimi-k2.5',
       'X-ACN-Inference-Path': 'official',
       'X-ACN-Agent-Jwt': 'jwt-from-acn',
     });

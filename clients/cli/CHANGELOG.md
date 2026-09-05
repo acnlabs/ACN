@@ -4,6 +4,14 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+### Added
+- `--chat-complete-exec` / `--chat-complete-url` now forward the hop pick:
+  `ACN_REQUESTED_MODEL` and `X-ACN-Requested-Model` (same id as
+  `chat.requested_model`). Complete must run that model when set; otherwise
+  the machine default (env is cleared so a parent `ACN_REQUESTED_MODEL`
+  cannot leak). `--chat-complete-url` help names `X-ACN-Requested-Model`.
+  Do not write Host official shelf ids into `--supported-models`.
+
 ## [1.0.14] - 2026-09-01
 
 CLI + skill patch. Server stays **1.0.1**. Skill **1.0.9**. Python/TS SDKs **1.0.2**.
