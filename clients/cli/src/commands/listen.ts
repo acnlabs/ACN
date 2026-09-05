@@ -684,11 +684,11 @@ export function listenCommand(): Command {
     )
     .option(
       '--chat-complete-url <url>',
-      'Complete URL (optional if official-only; mutually exclusive with --chat-complete-exec). Official hops open a Host door and require a Host invoice.'
+      'Complete URL (optional if official-only; mutually exclusive with --chat-complete-exec). Honor chat.requested_model (header X-ACN-Requested-Model). Official hops open a Host door and require a Host invoice.'
     )
     .option(
       '--chat-complete-exec <cmd>',
-      'Complete exec (optional if official-only): stdin event → stdout {"content"}. Official hops with this flag open a Host door and require a Host invoice.'
+      'Complete exec (optional if official-only): stdin NormalizedEvent → stdout {"content"}. Honor chat.requested_model (env ACN_REQUESTED_MODEL). Official hops with this flag open a Host door and require a Host invoice.'
     )
     .option(
       '--chat-complete-timeout <ms>',

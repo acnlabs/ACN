@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "1.0.9"
+  version: "1.0.10"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -369,6 +369,8 @@ acn listen --runtime http \
   --chat-complete-url http://127.0.0.1:PORT/chat/complete
 # host complete returns {"content":"..."} and optional usage
 # (input/output billed; extras stored). CLI 1.0.3+ forwards extras.
+# Hop model: honor chat.requested_model / ACN_REQUESTED_MODEL this hop;
+# if unset, machine default. Do not put Host official shelf in --supported-models.
 # Official hop: CLI 1.0.12+ with complete-url/exec opens a Host door.
 # Wrap complete with official_hop.py --complete -- <runtime> so official
 # hops only hit OPENAI_BASE_URL (skill 1.0.7+). Omit both flags to POST Host in-CLI.
@@ -696,8 +698,13 @@ acn heartbeat --supported-models openai/gpt-4o-mini,tencenttokenplan/kimi-k2.5
 # Clear the list later:
 #   acn heartbeat --clear-supported-models
 #
-# Interfaze user model pick arrives on wake as chat.requested_model —
-# your OpenClaw/Comiclaw handler must switch the LLM for that hop.
+# Interfaze user model pick arrives as requested_model (same field on every
+# transport). Mode B: NormalizedEvent.chat.requested_model, plus CLI env
+# ACN_REQUESTED_MODEL / header X-ACN-Requested-Model. Mode A: A2A
+# params.message.metadata.agentplanet.requested_model. If set, this hop must
+# run that Host Catalog id; if unset, run the machine default (heartbeat
+# preferred_model). Write back usage.model_id as what actually ran. Do not
+# put Host official shelf ids in --supported-models. Details: INTERFAZE.md.
 ```
 
 ### Three-layer communication

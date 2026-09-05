@@ -12,8 +12,10 @@ from official_hop import (
     _byo_cmd,
     _user_text,
     allow_host_url,
+    apply_requested_model,
     complete_official,
     door_already_open,
+    door_child_env,
     extract_completion_content,
     official_runtime_env,
     resolve_wake,
@@ -202,6 +204,40 @@ def test_official_cmd_requires_door_then_runs_guarded() -> None:
     assert b'"content": "ok"' in guarded.stdout or b'"content":"ok"' in guarded.stdout
 
 
+def test_door_child_env_stamps_and_wipes_requested_model() -> None:
+    wake = {
+        "host_inference_url": "https://api.agentplanet.org/api/inference/v1",
+        "jwt": "jwt",
+        "hop_id": "hop:1",
+        "agent_id": "agent-1",
+        "requested_model": "tencenttokenplan/glm-5",
+    }
+    got = door_child_env(
+        wake, {"STALE": "1", "ACN_REQUESTED_MODEL": "stale/inherited"}
+    )
+    assert got["ACN_REQUESTED_MODEL"] == "tencenttokenplan/glm-5"
+    assert got["ACN_AGENT_ID"] == "agent-1"
+    assert got["STALE"] == "1"
+
+    empty = dict(wake)
+    empty["requested_model"] = ""
+    empty["agent_id"] = ""
+    wiped = door_child_env(empty, {"ACN_REQUESTED_MODEL": "stale/inherited"})
+    assert wiped["ACN_REQUESTED_MODEL"] == ""
+    assert wiped.get("ACN_AGENT_ID") is None
+
+
+def test_apply_requested_model_overwrites_only_when_set() -> None:
+    payload: dict[str, object] = {"model": "openai/gpt-4o"}
+    apply_requested_model(
+        payload, {"ACN_REQUESTED_MODEL": "tencenttokenplan/glm-5"}
+    )
+    assert payload["model"] == "tencenttokenplan/glm-5"
+    kept: dict[str, object] = {"model": "openai/gpt-4o"}
+    apply_requested_model(kept, {"ACN_REQUESTED_MODEL": ""})
+    assert kept["model"] == "openai/gpt-4o"
+
+
 def test_complete_official_rejects_missing_and_byo() -> None:
     assert (
         complete_official(
@@ -238,5 +274,7 @@ if __name__ == "__main__":
     test_user_text_and_completion_content()
     test_official_runtime_env_requires_door_and_strips_vendor_keys()
     test_official_cmd_requires_door_then_runs_guarded()
+    test_door_child_env_stamps_and_wipes_requested_model()
+    test_apply_requested_model_overwrites_only_when_set()
     test_complete_official_rejects_missing_and_byo()
     print("ok")

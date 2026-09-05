@@ -280,6 +280,7 @@ describe('official hop CLI complete', () => {
     expect(env.OPENAI_BASE_URL).toBe('http://127.0.0.1:9/v1');
     expect(env.OPENAI_API_KEY).toBe('jwt-official');
     expect(env.ACN_AGENT_JWT).toBe('jwt-official');
+    expect(env.ACN_REQUESTED_MODEL).toBe('moonshotai/kimi-k2.5');
   });
 
   it('official + complete-exec opens a door, spawns exec, and requires a Host invoice', async () => {

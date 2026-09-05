@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Chat complete hop-model contract: honor `requested_model` on Mode A A2A
+  and Mode B complete (`ACN_REQUESTED_MODEL` / `X-ACN-Requested-Model`).
+  Skill **1.0.10**. CLI Unreleased (injects the env/header).
+
 ## [1.0.15] - 2026-09-01
 
 CLI + skill cut (`@acnlabs/acn-cli@1.0.14`, skill **1.0.9**). Python/TS

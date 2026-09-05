@@ -295,6 +295,29 @@ def extract_completion_content(payload: object) -> str:
     return ""
 
 
+def apply_requested_model(
+    payload: dict[str, object], env: dict[str, str] | None = None
+) -> None:
+    """When set, hop pick wins over whatever the runtime put in POST model."""
+    req_model = _clean((env or os.environ).get("ACN_REQUESTED_MODEL", ""), 200)
+    if req_model:
+        payload["model"] = req_model
+
+
+def door_child_env(
+    wake: dict[str, str], base: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Env for `--proxy`. Always stamp ACN_REQUESTED_MODEL (empty wipes inherit)."""
+    env = dict(base if base is not None else os.environ)
+    env["ACN_HOST_INFERENCE_URL"] = wake["host_inference_url"]
+    env["ACN_AGENT_JWT"] = wake["jwt"]
+    env["ACN_CHAT_HOP_ID"] = wake["hop_id"]
+    env["ACN_REQUESTED_MODEL"] = _clean(wake.get("requested_model"), 200)
+    if wake.get("agent_id"):
+        env["ACN_AGENT_ID"] = wake["agent_id"]
+    return env
+
+
 def serve_proxy() -> int:
     """Local OpenAI-compatible door that adds Host hop headers."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -337,6 +360,7 @@ def serve_proxy() -> int:
                 self._send(400, b'{"error":"invalid_json"}')
                 return
             payload.pop("agent_id", None)
+            apply_requested_model(payload)
             payload["hop_id"] = hop
             headers = {
                 "Authorization": f"Bearer {jwt}",
@@ -408,12 +432,7 @@ def run_door() -> int:
     if wake["inference_path"] != "official":
         print("# acn official_hop: byo")
         return 0
-    env = os.environ.copy()
-    env["ACN_HOST_INFERENCE_URL"] = wake["host_inference_url"]
-    env["ACN_AGENT_JWT"] = wake["jwt"]
-    env["ACN_CHAT_HOP_ID"] = wake["hop_id"]
-    if wake["agent_id"]:
-        env["ACN_AGENT_ID"] = wake["agent_id"]
+    env = door_child_env(wake)
     child = subprocess.Popen(  # noqa: S603
         [sys.executable, str(Path(__file__).resolve()), "--proxy"],
         stdout=subprocess.PIPE,
@@ -431,6 +450,7 @@ def run_door() -> int:
     print("export ACN_INFERENCE_PATH=official")
     print(f"export ACN_CHAT_HOP_ID={shlex.quote(wake['hop_id'])}")
     print(f"export ACN_HOST_INFERENCE_URL={shlex.quote(wake['host_inference_url'])}")
+    print(f"export ACN_REQUESTED_MODEL={shlex.quote(env['ACN_REQUESTED_MODEL'])}")
     print(f"export ACN_OFFICIAL_PROXY_PID={child.pid}")
     return 0
 

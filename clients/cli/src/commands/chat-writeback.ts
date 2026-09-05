@@ -382,6 +382,7 @@ export function completeInferenceEnv(
   const extra: Record<string, string> = { ACN_AGENT_ID: opts.agentId };
   const chat = event.chat;
   if (chat?.hop_id) extra.ACN_CHAT_HOP_ID = chat.hop_id;
+  extra.ACN_REQUESTED_MODEL = chat?.requested_model ?? '';
   if (chat?.inference_path) extra.ACN_INFERENCE_PATH = chat.inference_path;
   if (chat?.host_inference_url) {
     extra.ACN_HOST_INFERENCE_URL = chat.host_inference_url;
@@ -406,6 +407,9 @@ function completeInferenceHeaders(
   if (opts.agentId) headers['X-ACN-Agent-Id'] = opts.agentId;
   const chat = event.chat;
   if (chat?.hop_id) headers['X-ACN-Hop-Id'] = chat.hop_id;
+  if (chat?.requested_model) {
+    headers['X-ACN-Requested-Model'] = chat.requested_model;
+  }
   if (chat?.inference_path) headers['X-ACN-Inference-Path'] = chat.inference_path;
   if (chat?.host_inference_url) {
     headers['X-ACN-Host-Inference-Url'] = chat.host_inference_url;
