@@ -126,7 +126,7 @@ Content-Type: application/json
 
 有图或视频：先 `POST /api/chats/{chat_id}/files`（multipart `file`：图或 mp4/webm）拿到 `ref`，再写进 `attachments`。只认本会话 `mbx:`；http(s) 热链会被 Host 拒。没有 `metadata.agentplanet.chat_id` 不要打 `/api/chats`。另一场开聊看不见这场的件。
 
-`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。`attachments` 里的 `mbx:` 会转发，外链会被丢掉。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。 CLI 不会代传文件，宿主必须自己先 POST files。
+`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。CLI **1.0.15+** 会转发 `attachments` 里的 `mbx:`，外链会被丢掉。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。 CLI 不会代传文件，宿主必须自己先 POST files。
 
 #### Owner 改默认模型
 
@@ -180,7 +180,7 @@ Content-Type: application/json
 
 `host_inference_url` is the OpenAI-compatible base (e.g. `https://api.agentplanet.org/api/inference/v1`). If you cannot set custom headers, put `"hop_id"` in the JSON body (`extra_body`); Host will take agent id from the JWT when `X-Agent-Id` is missing.
 
-CLI **1.0.5+** injects hop/path/jwt into `--chat-complete-exec` (matching `X-ACN-*` headers on `--chat-complete-url`). Hop pick (`ACN_REQUESTED_MODEL` / `X-ACN-Requested-Model`) is the next CLI cut after **1.0.14**; stdin `chat.requested_model` has always been on the NormalizedEvent.
+CLI **1.0.5+** injects hop/path/jwt into `--chat-complete-exec` (matching `X-ACN-*` headers on `--chat-complete-url`). Hop pick (`ACN_REQUESTED_MODEL` / `X-ACN-Requested-Model`) is CLI **1.0.15+**; stdin `chat.requested_model` has always been on the NormalizedEvent.
 
 | Env | Meaning |
 |---|---|
