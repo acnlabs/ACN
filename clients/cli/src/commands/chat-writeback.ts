@@ -8,11 +8,12 @@
  *        official, no exec   → POST Host /chat/completions (CLI-owned; omit usage)
  *        byo                 → --chat-complete-url | --chat-complete-exec
  *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
- *   3) POSTs { content, reply_to_id?, usage? } to Chat Gateway agent-messages
- *      with Bearer JWT
+ *   3) POSTs { content, reply_to_id?, usage?, attachments? } to Chat Gateway
+ *      agent-messages with Bearer JWT
  *
  * Hosts return {"content":"..."} and optionally usage (in/out billed;
- * extras stored). See skills/acn/references/INTERFAZE.md.
+ * extras stored) and mailbox ``attachments`` (``mbx:{id}`` only).
+ * See skills/acn/references/INTERFAZE.md.
  * They do not call Gateway themselves.
  */
 
@@ -156,6 +157,8 @@ export type ChatCompleteResult = {
   usage?: ChatTokenUsage;
   /** Top-level complete.model_id when no token usage is present. */
   modelId?: string;
+  /** Mailbox refs only (``mbx:{id}``). Hotlinks are dropped. */
+  attachments?: string[];
 };
 
 /**
@@ -289,6 +292,26 @@ export function extractUsage(payload: unknown): ChatTokenUsage | undefined {
   return out;
 }
 
+const MAILBOX_REF = /^mbx:[A-Za-z0-9._-]+$/;
+
+/** Complete JSON ``attachments`` — only mailbox ids; never forward http(s). */
+export function extractMailboxAttachments(payload: unknown): string[] | undefined {
+  const rec = asRecord(payload);
+  if (!rec || !Array.isArray(rec.attachments) || rec.attachments.length === 0) {
+    return undefined;
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of rec.attachments) {
+    if (typeof item !== 'string') continue;
+    const t = item.trim();
+    if (!MAILBOX_REF.test(t) || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out.length ? out : undefined;
+}
+
 function parseCompletePayload(
   payload: unknown
 ): { ok: true; result: ChatCompleteResult } | { ok: false; reason: string } {
@@ -296,9 +319,11 @@ function parseCompletePayload(
   if (!content) return { ok: false, reason: 'complete_missing_content' };
   const usage = extractUsage(payload);
   const modelId = extractModelId(payload);
+  const attachments = extractMailboxAttachments(payload);
   const result: ChatCompleteResult = { content };
   if (usage) result.usage = usage;
   else if (modelId) result.modelId = modelId;
+  if (attachments) result.attachments = attachments;
   return { ok: true, result };
 }
 
@@ -810,6 +835,9 @@ async function postWriteback(
   } else if (complete.modelId) {
     // model_id only — do not invent zero token counts; Host defaults tokens to 0.
     body.usage = { model_id: complete.modelId };
+  }
+  if (complete.attachments?.length) {
+    body.attachments = complete.attachments;
   }
 
   const postOnce = async (

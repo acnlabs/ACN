@@ -13,6 +13,7 @@ import {
   extractContent,
   extractModelId,
   extractUsage,
+  extractMailboxAttachments,
   handleChatWriteback,
   officialCompleteFailureContent,
   officialV0SupportsModel,
@@ -321,6 +322,25 @@ describe('extractUsage', () => {
   });
 });
 
+describe('extractMailboxAttachments', () => {
+  it('keeps mbx refs and drops hotlinks', () => {
+    expect(
+      extractMailboxAttachments({
+        content: 'duck',
+        attachments: [
+          'mbx:att-1',
+          'https://cdn.example/x.png',
+          'mbx:att-1',
+          'mbx:att-2',
+        ],
+      })
+    ).toEqual(['mbx:att-1', 'mbx:att-2']);
+    expect(
+      extractMailboxAttachments({ content: 'hi', attachments: ['https://x'] })
+    ).toBeUndefined();
+  });
+});
+
 describe('validateChatWritebackOptions', () => {
   it('allows disabled', () => {
     expect(validateChatWritebackOptions({})).toBeNull();
@@ -429,6 +449,54 @@ describe('handleChatWriteback', () => {
     const hdrs = calls[2].headers as Record<string, string>;
     expect(hdrs['Authorization']).toBe('Bearer jwt-from-acn');
     expect(hdrs['X-Internal-Token']).toBeUndefined();
+  });
+
+  it('forwards mailbox attachments from complete JSON', async () => {
+    clearAgentJwtCache();
+    const calls: Array<{ url: string; body: string }> = [];
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      calls.push({ url: u, body: String(init?.body ?? '') });
+      if (u.includes('/complete')) {
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'here is a duck',
+            attachments: ['mbx:att-1', 'https://cdn.example/x.png'],
+          })
+        );
+      }
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const writeback = calls.find((c) => c.url.includes('/agent-messages'));
+    expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
+      content: 'here is a duck',
+      reply_to_id: 'user-msg-1',
+      attachments: ['mbx:att-1'],
+    });
   });
 
   it('injects official hop env for complete-exec and headers for complete-url', async () => {
