@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-09-11
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.15`). Skill stays **1.0.10**.
+Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
 ### Added
-- Chat complete hop-model contract: honor `requested_model` on Mode A A2A
-  and Mode B complete (`ACN_REQUESTED_MODEL` / `X-ACN-Requested-Model`).
-  Skill **1.0.10**. CLI Unreleased (injects the env/header).
+
+- Chat complete hop-model contract: honor `requested_model` on Mode A
+  A2A and Mode B complete (`ACN_REQUESTED_MODEL` /
+  `X-ACN-Requested-Model`).
+- Mode B `--chat-writeback` forwards complete JSON `attachments` that are
+  `mbx:{id}` only; http(s) hotlinks are dropped. CLI does not upload
+  files. Restart `acn listen` after upgrading.
 
 ## [1.0.15] - 2026-09-01
 

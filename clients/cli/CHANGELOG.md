@@ -4,6 +4,10 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.15] - 2026-09-11
+
+CLI-only patch. Server stays **1.0.1**. Skill **1.0.10**. Python/TS SDKs **1.0.2**.
+
 ### Added
 - `--chat-complete-exec` / `--chat-complete-url` now forward the hop pick:
   `ACN_REQUESTED_MODEL` and `X-ACN-Requested-Model` (same id as
@@ -11,6 +15,9 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
   the machine default (env is cleared so a parent `ACN_REQUESTED_MODEL`
   cannot leak). `--chat-complete-url` help names `X-ACN-Requested-Model`.
   Do not write Host official shelf ids into `--supported-models`.
+- `--chat-writeback` forwards complete JSON `attachments` that start with
+  `mbx:`. http(s) hotlinks are dropped; the CLI does not upload files.
+  Restart `acn listen` after upgrading.
 
 ## [1.0.14] - 2026-09-01
 
