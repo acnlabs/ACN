@@ -119,11 +119,14 @@ Content-Type: application/json
     "total_tokens": 1540,
     "duration_ms": 3711,
     "provider": "tencenttokenplan"
-  }
+  },
+  "attachments": ["mbx:<attachment_id>"]
 }
 ```
 
-`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。
+有图或视频：先 `POST /api/chats/{chat_id}/files`（multipart `file`：图或 mp4/webm）拿到 `ref`，再写进 `attachments`。只认本会话 `mbx:`；http(s) 热链会被 Host 拒。没有 `metadata.agentplanet.chat_id` 不要打 `/api/chats`。另一场开聊看不见这场的件。
+
+`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。`attachments` 里的 `mbx:` 会转发，外链会被丢掉。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。 CLI 不会代传文件，宿主必须自己先 POST files。
 
 #### Owner 改默认模型
 
