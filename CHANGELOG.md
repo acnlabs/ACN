@@ -15,7 +15,9 @@ Skill-only patch (agent skill **1.0.11**). CLI stays **1.0.16**. Server / SDKs s
 
 - `skills/acn/scripts/chat_attach.py`: Mode B complete helper uploads this-chat
   png/jpeg/gif/webp/mp4/webm to `POST /api/chats/{chat_id}/files` and prints
-  `{"content","attachments":["mbx:…"]}`. CLI still does not upload files.
+  `{"content","attachments":["mbx:…"]}`. Reads `ACN_CHAT_API_BASE`, newest
+  media first, envelope/`--resp-file` for `chat_id` + `usage`, quoted paths.
+  CLI still does not upload files.
 
 ## [1.0.17] - 2026-09-12
 

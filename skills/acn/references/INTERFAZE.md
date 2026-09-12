@@ -129,16 +129,14 @@ Content-Type: application/json
 Mode B complete-exec 用 skill helper，不要各机私有脚本：
 
 ```bash
-# stdin = NormalizedEvent. Inner complete first (official_hop.py --complete -- …).
+# Save stdin NormalizedEvent, run inner complete, then attach.
 # Only stdout of this process is the complete JSON. Do not wrap it again.
-# No chat.chat_id → print inner {"content"} and skip upload (WeCom / non-Interfaze).
-python3 scripts/chat_attach.py \
-  --chat-id "$CHAT_ID" \
-  --content "$CONTENT" \
-  --since-epoch "$START_EPOCH"
+# No chat.chat_id → print inner {"content"} (+ usage) and skip upload.
+python3 official_hop.py --complete -- "$INNER" < "$EVENT_FILE" \
+  | python3 scripts/chat_attach.py --event-file "$EVENT_FILE"
 ```
 
-`$CHAT_ID` = this hop’s `chat.chat_id`. `$START_EPOCH` = hop start (`date +%s` or envelope `received_at`). Files: path tokens in `--content`, `ACN_CHAT_ATTACH_FILES` (colon-separated), or `ACN_CHAT_MEDIA_DIR` files with `mtime >= --since-epoch`. Auth: `ACN_AGENT_JWT`, or mint via `ACN_API_KEY` / `~/.acn/config.json`.
+`--chat-id` / `--content` / `--since-epoch` still work; omit them to take `chat.chat_id` + `received_at` from the envelope and `content`/`usage` from inner JSON (stdin or `--resp-file`). That avoids ARG_MAX and keeps BYO `usage`. Official hops should still omit `usage`. Files: quoted or spaced paths in content, `ACN_CHAT_ATTACH_FILES` (`os.pathsep`), or `ACN_CHAT_MEDIA_DIR` files with `mtime >= since` (newest first, max 4). Host base: `ACN_CHAT_API_BASE` / `AGENTPLANET_API_BASE` / `CHAT_API_BASE`. Auth: `ACN_AGENT_JWT`, or mint via `ACN_API_KEY` / `~/.acn/config.json`.
 
 `acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。CLI **1.0.15+** 会转发 `attachments` 里的 `mbx:`，外链会被丢掉。CLI **1.0.16+** 官方 hop 不再丢掉 `attachments`。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。 CLI 不会代传文件，宿主必须自己先 POST files。
 
