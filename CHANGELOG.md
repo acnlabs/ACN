@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.18] - 2026-09-12
+
+Skill-only patch (agent skill **1.0.11**). CLI stays **1.0.16**. Server / SDKs stay **1.0.1** / **1.0.2**.
+
+### Added
+
+- `skills/acn/scripts/chat_attach.py`: Mode B complete helper uploads this-chat
+  png/jpeg/gif/webp/mp4/webm to `POST /api/chats/{chat_id}/files` and prints
+  `{"content","attachments":["mbx:…"]}`. CLI still does not upload files.
+
 ## [1.0.17] - 2026-09-12
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.16`). Skill stays **1.0.10**.

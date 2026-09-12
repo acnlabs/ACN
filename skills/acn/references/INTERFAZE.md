@@ -126,7 +126,21 @@ Content-Type: application/json
 
 有图或视频：先 `POST /api/chats/{chat_id}/files`（multipart `file`：图或 mp4/webm）拿到 `ref`，再写进 `attachments`。只认本会话 `mbx:`；http(s) 热链会被 Host 拒。没有 `metadata.agentplanet.chat_id` 不要打 `/api/chats`。另一场开聊看不见这场的件。
 
-`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。CLI **1.0.15+** 会转发 `attachments` 里的 `mbx:`，外链会被丢掉。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。 CLI 不会代传文件，宿主必须自己先 POST files。
+Mode B complete-exec 用 skill helper，不要各机私有脚本：
+
+```bash
+# stdin = NormalizedEvent. Inner complete first (official_hop.py --complete -- …).
+# Only stdout of this process is the complete JSON. Do not wrap it again.
+# No chat.chat_id → print inner {"content"} and skip upload (WeCom / non-Interfaze).
+python3 scripts/chat_attach.py \
+  --chat-id "$CHAT_ID" \
+  --content "$CONTENT" \
+  --since-epoch "$START_EPOCH"
+```
+
+`$CHAT_ID` = this hop’s `chat.chat_id`. `$START_EPOCH` = hop start (`date +%s` or envelope `received_at`). Files: path tokens in `--content`, `ACN_CHAT_ATTACH_FILES` (colon-separated), or `ACN_CHAT_MEDIA_DIR` files with `mtime >= --since-epoch`. Auth: `ACN_AGENT_JWT`, or mint via `ACN_API_KEY` / `~/.acn/config.json`.
+
+`acn listen --chat-writeback`：complete 返回 `{"content"}` 即可；若附带 `usage`，CLI **1.0.3+** 会一并 POST（并自动填 `reply_to_id`）。CLI **1.0.15+** 会转发 `attachments` 里的 `mbx:`，外链会被丢掉。CLI **1.0.16+** 官方 hop 不再丢掉 `attachments`。Host 开了 `CHAT_BILLING_ENABLED` 且要求 usage 时，缺 usage 则本跳不扣费。 CLI 不会代传文件，宿主必须自己先 POST files。
 
 #### Owner 改默认模型
 
