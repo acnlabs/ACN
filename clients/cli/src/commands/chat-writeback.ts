@@ -750,7 +750,11 @@ async function completeOfficialViaAgent(
     const meter = await loadOfficialHostMeter(event, opts, deps, jwt);
     if (!meter.ok) return meter;
     if (!meter.seen) return { ok: false, reason: 'official_host_unseen' };
-    return { ok: true, result: { content: completed.result.content } };
+    const result: ChatCompleteResult = { content: completed.result.content };
+    if (completed.result.attachments?.length) {
+      result.attachments = completed.result.attachments;
+    }
+    return { ok: true, result };
   } finally {
     await door.close();
   }

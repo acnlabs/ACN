@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.17] - 2026-09-12
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.16`). Skill stays **1.0.10**.
+Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
+### Fixed
+
+- Official hops with `--chat-complete-exec` / `--chat-complete-url` keep
+  complete JSON `attachments` (`mbx:` only) on writeback. 1.0.15 forwarded
+  them on BYO and then dropped them on the official door path. Restart
+  `acn listen` after upgrading.
+
 ## [1.0.16] - 2026-09-11
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.15`). Skill stays **1.0.10**.

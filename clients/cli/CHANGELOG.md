@@ -4,6 +4,15 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.16] - 2026-09-12
+
+CLI-only patch. Server stays **1.0.1**. Skill **1.0.10**. Python/TS SDKs **1.0.2**.
+
+### Fixed
+- Official hops with `--chat-complete-exec` / `--chat-complete-url` keep
+  `attachments` (`mbx:`) on writeback. 1.0.15 dropped them after the Host
+  door. Restart `acn listen` after upgrading.
+
 ## [1.0.15] - 2026-09-11
 
 CLI-only patch. Server stays **1.0.1**. Skill **1.0.10**. Python/TS SDKs **1.0.2**.
