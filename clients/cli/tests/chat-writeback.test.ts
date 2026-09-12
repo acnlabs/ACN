@@ -543,7 +543,12 @@ describe('handleChatWriteback', () => {
         return mockOkResponse(JSON.stringify({ seen: true, call_count: 1 }));
       }
       if (u.includes('/complete')) {
-        return mockOkResponse(JSON.stringify({ content: 'agent via door' }));
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'agent via door',
+            attachments: ['mbx:att-official', 'https://cdn.example/x.png'],
+          })
+        );
       }
       if (u.includes('/chat/completions')) {
         return mockOkResponse(
@@ -583,6 +588,7 @@ describe('handleChatWriteback', () => {
     expect(JSON.parse(String(writeback?.[1]?.body ?? '{}'))).toEqual({
       content: 'agent via door',
       reply_to_id: 'user-msg-1',
+      attachments: ['mbx:att-official'],
     });
   });
 
