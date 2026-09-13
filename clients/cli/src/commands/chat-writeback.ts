@@ -13,7 +13,7 @@
  *
  * Hosts return {"content":"..."} and optionally usage (in/out billed;
  * extras stored) and mailbox ``attachments`` (``mbx:{id}`` only).
- * See skills/acn/references/INTERFAZE.md.
+ * Host chat procedure: Agentplanet-backend ``skills/interfaze`` (not this ACN skill).
  * They do not call Gateway themselves.
  */
 
