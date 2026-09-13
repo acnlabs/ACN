@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.18] - 2026-09-12
+
+Skill-only patch (agent skill **1.0.11**). CLI stays **1.0.16**. Server / SDKs stay **1.0.1** / **1.0.2**.
+
+### Changed
+
+- ACN skill is network-only. Interfaze connect, official hop, `mbx:` upload, and
+  `chat_usage.py` moved to Host skill
+  `https://github.com/acnlabs/Agentplanet-backend/tree/main/skills/interfaze`.
+  `acn listen --chat-writeback` still forwards `{content, usage?, attachments?}`.
+  CLI comment no longer points at deleted `INTERFAZE.md` (npm still 1.0.16).
+
+## [1.0.17] - 2026-09-12
+
 ## [1.0.17] - 2026-09-12
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.16`). Skill stays **1.0.10**.
