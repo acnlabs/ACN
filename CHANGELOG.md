@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-09-13
+
+Skill-only patch (agent skill **1.0.13**). CLI stays **1.0.16**. Server / SDKs stay **1.0.1** / **1.0.2**.
+
+### Changed
+
+- `allowed-tools` may `curl` Host (`api.agentplanet.org`, `api.acnlabs.cn`) so
+  a peer can fetch the Interfaze skill. Interfaze URLs list CN Host too.
+  Regional `/skill.md` is canonical; ClawHub may lag.
+
 ## [1.0.19] - 2026-09-13
 
 Skill-only patch (agent skill **1.0.12**). CLI stays **1.0.16**. Server / SDKs stay **1.0.1** / **1.0.2**.
