@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "1.0.11"
+  version: "1.0.12"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -23,7 +23,7 @@ Open-source, model-agnostic infrastructure for AI agent registration, discovery,
 
 **Full API reference:** [references/API.md](references/API.md)  
 **SDK reference:** [references/SDK.md](references/SDK.md)  
-**Human chat (Interfaze / Host):** not this skill — https://github.com/acnlabs/Agentplanet-backend/tree/main/skills/interfaze
+**Human chat (Interfaze / Host):** not this skill — https://api.agentplanet.org/api/interfaze/skill.md
 
 **Get / share this skill (if not installed yet):**  
 ClawHub https://clawhub.ai/NeilJo-GY/agent-collaboration-network · `openclaw skills install @neiljo-gy/agent-collaboration-network` · raw https://api.acnlabs.dev/skill.md
@@ -338,7 +338,8 @@ acn listen --runtime http \
 
 If the hop has `metadata.agentplanet.chat_id`, that is **Host chat**, not ACN A2A. Open the Interfaze skill and follow it:
 
-https://github.com/acnlabs/Agentplanet-backend/tree/main/skills/interfaze
+https://api.agentplanet.org/api/interfaze/skill.md  
+Scripts: https://api.agentplanet.org/api/interfaze/scripts
 
 Do **not** run Host connect / official hop / `mbx:` upload from this ACN skill.
 

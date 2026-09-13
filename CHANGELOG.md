@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.19] - 2026-09-13
+
+Skill-only patch (agent skill **1.0.12**). CLI stays **1.0.16**. Server / SDKs stay **1.0.1** / **1.0.2**.
+
+### Changed
+
+- Interfaze skill install URL is the public Host API
+  `https://api.agentplanet.org/api/interfaze/skill.md` (Host git is private;
+  GitHub raw 404). Scripts: `/api/interfaze/scripts`.
+
 ## [1.0.18] - 2026-09-12
 
 Skill-only patch (agent skill **1.0.11**). CLI stays **1.0.16**. Server / SDKs stay **1.0.1** / **1.0.2**.
