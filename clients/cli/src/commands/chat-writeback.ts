@@ -8,7 +8,7 @@
  *        official, no exec   → POST Host /chat/completions (CLI-owned; omit usage)
  *        byo                 → --chat-complete-url | --chat-complete-exec
  *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
- *   3) POSTs { content, reply_to_id?, usage?, attachments? } to Chat Gateway
+ *   3) POSTs { content, reply_to_id?, usage?, attachments?, tool_lines? } to Chat Gateway
  *      agent-messages with Bearer JWT
  *
  * Hosts return {"content":"..."} and optionally usage (in/out billed;
@@ -159,6 +159,8 @@ export type ChatCompleteResult = {
   modelId?: string;
   /** Mailbox refs only (``mbx:{id}``). Hotlinks are dropped. */
   attachments?: string[];
+  /** Image units only; Host caps to this-hop files. */
+  tool_lines?: Array<{ kind: string; units: number }>;
 };
 
 /**
@@ -312,6 +314,28 @@ export function extractMailboxAttachments(payload: unknown): string[] | undefine
   return out.length ? out : undefined;
 }
 
+const MAX_PIECE_UNITS = 100;
+
+/** Complete JSON ``tool_lines`` — image units only; Host caps to this-hop files. */
+export function extractPieceToolLines(
+  payload: unknown
+): Array<{ kind: string; units: number }> | undefined {
+  const rec = asRecord(payload);
+  if (!rec || !Array.isArray(rec.tool_lines) || rec.tool_lines.length === 0) {
+    return undefined;
+  }
+  const out: Array<{ kind: string; units: number }> = [];
+  for (const item of rec.tool_lines) {
+    const line = asRecord(item);
+    if (!line) continue;
+    const kind = typeof line.kind === 'string' ? line.kind.trim().toLowerCase() : '';
+    const units = asNonNegInt(line.units);
+    if (kind !== 'image' || units === null || units <= 0) continue;
+    out.push({ kind: 'image', units: Math.min(units, MAX_PIECE_UNITS) });
+  }
+  return out.length ? out : undefined;
+}
+
 function parseCompletePayload(
   payload: unknown
 ): { ok: true; result: ChatCompleteResult } | { ok: false; reason: string } {
@@ -320,10 +344,12 @@ function parseCompletePayload(
   const usage = extractUsage(payload);
   const modelId = extractModelId(payload);
   const attachments = extractMailboxAttachments(payload);
+  const toolLines = extractPieceToolLines(payload);
   const result: ChatCompleteResult = { content };
   if (usage) result.usage = usage;
   else if (modelId) result.modelId = modelId;
   if (attachments) result.attachments = attachments;
+  if (toolLines) result.tool_lines = toolLines;
   return { ok: true, result };
 }
 
@@ -754,6 +780,9 @@ async function completeOfficialViaAgent(
     if (completed.result.attachments?.length) {
       result.attachments = completed.result.attachments;
     }
+    if (completed.result.tool_lines?.length) {
+      result.tool_lines = completed.result.tool_lines;
+    }
     return { ok: true, result };
   } finally {
     await door.close();
@@ -842,6 +871,9 @@ async function postWriteback(
   }
   if (complete.attachments?.length) {
     body.attachments = complete.attachments;
+  }
+  if (complete.tool_lines?.length) {
+    body.tool_lines = complete.tool_lines;
   }
 
   const postOnce = async (
