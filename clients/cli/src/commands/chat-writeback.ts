@@ -315,8 +315,9 @@ export function extractMailboxAttachments(payload: unknown): string[] | undefine
 }
 
 const MAX_PIECE_UNITS = 100;
+const PIECE_KINDS = new Set(["image", "video", "audio", "file"]);
 
-/** Complete JSON ``tool_lines`` — image units only; Host caps to this-hop files. */
+/** Complete JSON ``tool_lines`` — image/video/audio/file; Host caps to this-hop files. */
 export function extractPieceToolLines(
   payload: unknown
 ): Array<{ kind: string; units: number }> | undefined {
@@ -324,16 +325,18 @@ export function extractPieceToolLines(
   if (!rec || !Array.isArray(rec.tool_lines) || rec.tool_lines.length === 0) {
     return undefined;
   }
-  const out: Array<{ kind: string; units: number }> = [];
+  const totals = new Map<string, number>();
   for (const item of rec.tool_lines) {
     const line = asRecord(item);
     if (!line) continue;
     const kind = typeof line.kind === 'string' ? line.kind.trim().toLowerCase() : '';
     const units = asNonNegInt(line.units);
-    if (kind !== 'image' || units === null || units <= 0) continue;
-    out.push({ kind: 'image', units: Math.min(units, MAX_PIECE_UNITS) });
+    if (!PIECE_KINDS.has(kind) || units === null || units <= 0) continue;
+    const next = Math.min((totals.get(kind) ?? 0) + units, MAX_PIECE_UNITS);
+    totals.set(kind, next);
   }
-  return out.length ? out : undefined;
+  if (totals.size === 0) return undefined;
+  return [...totals.entries()].map(([kind, units]) => ({ kind, units }));
 }
 
 function parseCompletePayload(
