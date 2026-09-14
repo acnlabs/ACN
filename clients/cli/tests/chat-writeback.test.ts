@@ -343,7 +343,7 @@ describe('extractMailboxAttachments', () => {
 });
 
 describe('extractPieceToolLines', () => {
-  it('keeps image units and drops other kinds', () => {
+  it('keeps image/video/audio/file units and drops other kinds', () => {
     expect(
       extractPieceToolLines({
         content: 'duck',
@@ -351,9 +351,15 @@ describe('extractPieceToolLines', () => {
           { kind: 'image', units: 2 },
           { kind: 'token', units: 9 },
           { kind: 'image', units: 0 },
+          { kind: 'video', units: 1 },
+          { kind: 'file', units: 3 },
         ],
       })
-    ).toEqual([{ kind: 'image', units: 2 }]);
+    ).toEqual([
+      { kind: 'image', units: 2 },
+      { kind: 'video', units: 1 },
+      { kind: 'file', units: 3 },
+    ]);
     expect(extractPieceToolLines({ content: 'hi', tool_lines: [] })).toBeUndefined();
   });
 });

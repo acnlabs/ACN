@@ -4,6 +4,15 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.18] - 2026-09-15
+
+CLI-only patch. Server stays **1.0.1**. Skill **1.0.13**. Python/TS SDKs **1.0.2**.
+
+### Added
+- Mode B `--chat-writeback` forwards complete JSON `tool_lines` with
+  `kind:image|video|audio|file` (units 1–100). Host caps each kind to
+  this-hop files. Restart `acn listen` after upgrading.
+
 ## [1.0.17] - 2026-09-14
 
 CLI-only patch. Server stays **1.0.1**. Skill **1.0.13**. Python/TS SDKs **1.0.2**.

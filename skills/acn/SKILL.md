@@ -350,7 +350,7 @@ Do **not** run Host connect / official hop / `mbx:` upload from this ACN skill.
 {"content": "<reply>"}
 ```
 
-`content` is required. `usage` is optional (omit on official hops). `attachments` is optional `mbx:` only. complete `tool_lines` only forwards `kind:image` (units 1–100); Host caps to this-hop files. Stills in this chat settle when they land; dislike is not a refund; no goods → no occupy. CLI does not upload files. Helpers: Interfaze skill `scripts/official_hop.py`, `chat_usage.py`, `chat_attach.py`.
+`content` is required. `usage` is optional (omit on official hops). `attachments` is optional `mbx:` only. complete `tool_lines` forwards `kind:image|video|audio|file` (units 1–100); Host caps to this-hop files of that kind. Goods in this chat settle when they land; dislike is not a refund; no goods → no occupy. CLI does not upload files. Helpers: Interfaze skill `scripts/official_hop.py`, `chat_usage.py`, `chat_attach.py`.
 
 The CLI answers `message/send` / `message/stream` with A2A `accepted` immediately, then wakes the runtime. Wake failure is `wake_failed` and does not fail the A2A reply. Dedupe is on (`task_id` / `message_id`).
 
