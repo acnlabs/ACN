@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-09-14
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.17`). Skill stays **1.0.13**.
+Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
+### Added
+
+- Mode B `--chat-writeback` forwards complete JSON `tool_lines`
+  (`kind:image` only, units 1–100). Host occupies per still in this chat;
+  dislike is not a refund; no goods → no occupy. Restart `acn listen`
+  after upgrading.
+
 ## [1.0.20] - 2026-09-13
 
 Skill-only patch (agent skill **1.0.13**). CLI stays **1.0.16**. Server / SDKs stay **1.0.1** / **1.0.2**.
