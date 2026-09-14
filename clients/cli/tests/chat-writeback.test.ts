@@ -14,6 +14,7 @@ import {
   extractModelId,
   extractUsage,
   extractMailboxAttachments,
+  extractPieceToolLines,
   handleChatWriteback,
   officialCompleteFailureContent,
   officialV0SupportsModel,
@@ -341,6 +342,22 @@ describe('extractMailboxAttachments', () => {
   });
 });
 
+describe('extractPieceToolLines', () => {
+  it('keeps image units and drops other kinds', () => {
+    expect(
+      extractPieceToolLines({
+        content: 'duck',
+        tool_lines: [
+          { kind: 'image', units: 2 },
+          { kind: 'token', units: 9 },
+          { kind: 'image', units: 0 },
+        ],
+      })
+    ).toEqual([{ kind: 'image', units: 2 }]);
+    expect(extractPieceToolLines({ content: 'hi', tool_lines: [] })).toBeUndefined();
+  });
+});
+
 describe('validateChatWritebackOptions', () => {
   it('allows disabled', () => {
     expect(validateChatWritebackOptions({})).toBeNull();
@@ -496,6 +513,56 @@ describe('handleChatWriteback', () => {
       content: 'here is a duck',
       reply_to_id: 'user-msg-1',
       attachments: ['mbx:att-1'],
+    });
+  });
+
+  it('forwards image tool_lines from complete JSON', async () => {
+    clearAgentJwtCache();
+    const calls: Array<{ url: string; body: string }> = [];
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      calls.push({ url: u, body: String(init?.body ?? '') });
+      if (u.includes('/complete')) {
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'here is a duck',
+            attachments: ['mbx:att-1'],
+            tool_lines: [{ kind: 'image', units: 1 }, { kind: 'token', units: 3 }],
+          })
+        );
+      }
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const writeback = calls.find((c) => c.url.includes('/agent-messages'));
+    expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
+      content: 'here is a duck',
+      reply_to_id: 'user-msg-1',
+      attachments: ['mbx:att-1'],
+      tool_lines: [{ kind: 'image', units: 1 }],
     });
   });
 
