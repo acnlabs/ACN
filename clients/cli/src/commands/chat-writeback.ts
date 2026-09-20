@@ -8,11 +8,13 @@
  *        official, no exec   → POST Host /chat/completions (CLI-owned; omit usage)
  *        byo                 → --chat-complete-url | --chat-complete-exec
  *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
- *   3) POSTs { content, reply_to_id?, usage?, attachments?, tool_lines? } to Chat Gateway
- *      agent-messages with Bearer JWT
+ *   3) POSTs { content, reply_to_id?, usage?, attachments?, tool_lines?,
+ *      orchestration? } to Chat Gateway agent-messages with Bearer JWT
  *
  * Hosts return {"content":"..."} and optionally usage (in/out billed;
- * extras stored) and mailbox ``attachments`` (``mbx:{id}`` only).
+ * extras stored), mailbox ``attachments`` (``mbx:{id}`` only),
+ * ``tool_lines`` (``kind:image|video|audio|file``; Host caps to this-hop files),
+ * and ``orchestration.callees`` (who this hop invoked; Host sanitizes).
  * Host chat procedure: Agentplanet-backend ``skills/interfaze`` (not this ACN skill).
  * They do not call Gateway themselves.
  */
@@ -152,6 +154,13 @@ export type ChatTokenUsage = {
   provider?: string;
 };
 
+export type OrchestrationCallee = {
+  agent_id: string;
+  hop_id?: string;
+  status?: string;
+  name?: string;
+};
+
 export type ChatCompleteResult = {
   content: string;
   usage?: ChatTokenUsage;
@@ -159,8 +168,10 @@ export type ChatCompleteResult = {
   modelId?: string;
   /** Mailbox refs only (``mbx:{id}``). Hotlinks are dropped. */
   attachments?: string[];
-  /** Image units only; Host caps to this-hop files. */
+  /** Image/video/audio/file units; Host caps to this-hop files. */
   tool_lines?: Array<{ kind: string; units: number }>;
+  /** Downstream agents invoked this hop. Host sanitizes hop_id / local: ids. */
+  orchestration?: { callees: OrchestrationCallee[] };
 };
 
 /**
@@ -339,6 +350,53 @@ export function extractPieceToolLines(
   return [...totals.entries()].map(([kind, units]) => ({ kind, units }));
 }
 
+const MAX_ORCH_CALLEES = 8;
+const ORCH_STATUS = new Set(['accepted', 'sent', 'completed', 'failed']);
+
+/** Complete JSON ``orchestration.callees`` — invoke hops only; drop local:/sys:. */
+export function extractOrchestration(
+  payload: unknown
+): { callees: OrchestrationCallee[] } | undefined {
+  const rec = asRecord(payload);
+  const orch = rec ? asRecord(rec.orchestration) : null;
+  if (!orch || !Array.isArray(orch.callees) || orch.callees.length === 0) {
+    return undefined;
+  }
+  const out: OrchestrationCallee[] = [];
+  const seen = new Set<string>();
+  for (const item of orch.callees) {
+    if (out.length >= MAX_ORCH_CALLEES) break;
+    const row = asRecord(item);
+    if (!row) continue;
+    const rawId = row.agent_id ?? row.to;
+    if (typeof rawId !== 'string') continue;
+    let bare = rawId.trim();
+    if (bare.startsWith('acn:')) bare = bare.slice(4).trim();
+    if (!bare || bare.length > 128) continue;
+    const lowered = bare.toLowerCase();
+    if (lowered.startsWith('local:') || lowered.startsWith('sys:')) continue;
+    if (seen.has(bare)) continue;
+    seen.add(bare);
+    const callee: OrchestrationCallee = { agent_id: bare };
+    if (typeof row.hop_id === 'string') {
+      const hopId = row.hop_id.trim();
+      if (hopId.startsWith('hop:invoke:') && hopId.length > 11 && hopId.length <= 200) {
+        callee.hop_id = hopId;
+      }
+    }
+    if (typeof row.status === 'string') {
+      const st = row.status.trim().toLowerCase();
+      if (ORCH_STATUS.has(st)) callee.status = st;
+    }
+    if (typeof row.name === 'string') {
+      const label = row.name.trim().slice(0, 200);
+      if (label) callee.name = label;
+    }
+    out.push(callee);
+  }
+  return out.length ? { callees: out } : undefined;
+}
+
 function parseCompletePayload(
   payload: unknown
 ): { ok: true; result: ChatCompleteResult } | { ok: false; reason: string } {
@@ -348,11 +406,13 @@ function parseCompletePayload(
   const modelId = extractModelId(payload);
   const attachments = extractMailboxAttachments(payload);
   const toolLines = extractPieceToolLines(payload);
+  const orchestration = extractOrchestration(payload);
   const result: ChatCompleteResult = { content };
   if (usage) result.usage = usage;
   else if (modelId) result.modelId = modelId;
   if (attachments) result.attachments = attachments;
   if (toolLines) result.tool_lines = toolLines;
+  if (orchestration) result.orchestration = orchestration;
   return { ok: true, result };
 }
 
@@ -877,6 +937,9 @@ async function postWriteback(
   }
   if (complete.tool_lines?.length) {
     body.tool_lines = complete.tool_lines;
+  }
+  if (complete.orchestration?.callees?.length) {
+    body.orchestration = complete.orchestration;
   }
 
   const postOnce = async (

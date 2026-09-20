@@ -15,6 +15,7 @@ import {
   extractUsage,
   extractMailboxAttachments,
   extractPieceToolLines,
+  extractOrchestration,
   handleChatWriteback,
   officialCompleteFailureContent,
   officialV0SupportsModel,
@@ -364,6 +365,40 @@ describe('extractPieceToolLines', () => {
   });
 });
 
+describe('extractOrchestration', () => {
+  it('keeps invoke callees and drops local/dialog hops', () => {
+    expect(
+      extractOrchestration({
+        content: 'done',
+        orchestration: {
+          callees: [
+            {
+              agent_id: 'acn:peer-1',
+              hop_id: 'hop:invoke:abc',
+              status: 'Completed',
+              name: ' Peer ',
+            },
+            { agent_id: 'local:nova', hop_id: 'hop:invoke:x' },
+            { to: 'peer-1', hop_id: 'hop:invoke:dup' },
+            { agent_id: 'peer-2', hop_id: 'hop:dialog:m1', status: 'working' },
+          ],
+        },
+      })
+    ).toEqual({
+      callees: [
+        {
+          agent_id: 'peer-1',
+          hop_id: 'hop:invoke:abc',
+          status: 'completed',
+          name: 'Peer',
+        },
+        { agent_id: 'peer-2' },
+      ],
+    });
+    expect(extractOrchestration({ content: 'hi' })).toBeUndefined();
+  });
+});
+
 describe('validateChatWritebackOptions', () => {
   it('allows disabled', () => {
     expect(validateChatWritebackOptions({})).toBeNull();
@@ -569,6 +604,73 @@ describe('handleChatWriteback', () => {
       reply_to_id: 'user-msg-1',
       attachments: ['mbx:att-1'],
       tool_lines: [{ kind: 'image', units: 1 }],
+    });
+  });
+
+  it('forwards orchestration callees from complete JSON', async () => {
+    clearAgentJwtCache();
+    const calls: Array<{ url: string; body: string }> = [];
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      calls.push({ url: u, body: String(init?.body ?? '') });
+      if (u.includes('/complete')) {
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'asked a helper',
+            orchestration: {
+              callees: [
+                {
+                  agent_id: 'acn:peer-9',
+                  hop_id: 'hop:invoke:z',
+                  status: 'completed',
+                  name: 'Peer',
+                },
+                { agent_id: 'local:nova', hop_id: 'hop:invoke:nope' },
+              ],
+            },
+          })
+        );
+      }
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const writeback = calls.find((c) => c.url.includes('/agent-messages'));
+    expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
+      content: 'asked a helper',
+      reply_to_id: 'user-msg-1',
+      orchestration: {
+        callees: [
+          {
+            agent_id: 'peer-9',
+            hop_id: 'hop:invoke:z',
+            status: 'completed',
+            name: 'Peer',
+          },
+        ],
+      },
     });
   });
 
