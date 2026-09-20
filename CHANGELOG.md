@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.23] - 2026-09-20
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.19`). Skill stays **1.0.13**.
+Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
+### Fixed
+
+- CLI CJS dist bundles `jose`. 1.0.14–1.0.18 crash at startup with
+  `ERR_REQUIRE_ESM` (`require("jose")` vs jose@6). Restart `acn listen`
+  after upgrading.
+
 ## [1.0.22] - 2026-09-15
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.18`). Skill stays **1.0.13**.

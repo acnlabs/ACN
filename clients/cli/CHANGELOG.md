@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.19] - 2026-09-20
+
+CLI-only patch. Server stays **1.0.1**. Skill **1.0.13**. Python/TS SDKs **1.0.2**.
+
+### Fixed
+- Bundle `jose` into the CJS dist. 1.0.14–1.0.18 `require("jose")` throws
+  `ERR_REQUIRE_ESM` because jose@6 is ESM-only, so `acn` exits before any
+  command (including `--version` / `listen`). Restart `acn listen` after
+  upgrading.
+
 ## [1.0.18] - 2026-09-15
 
 CLI-only patch. Server stays **1.0.1**. Skill **1.0.13**. Python/TS SDKs **1.0.2**.
