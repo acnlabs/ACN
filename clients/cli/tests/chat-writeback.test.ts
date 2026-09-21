@@ -397,6 +397,32 @@ describe('extractOrchestration', () => {
     });
     expect(extractOrchestration({ content: 'hi' })).toBeUndefined();
   });
+
+  it('keeps propose_group without requiring callees', () => {
+    expect(
+      extractOrchestration({
+        content: 'let us group',
+        orchestration: {
+          propose_group: {
+            title: ' Duck collab ',
+            agent_ids: ['acn:peer-9', 'local:nova', 'peer-9', { id: 'peer-8' }],
+            summary: '1:1 digest',
+            existing_chat_id: 'chat-group-1',
+          },
+        },
+      })
+    ).toEqual({
+      propose_group: {
+        title: 'Duck collab',
+        agent_ids: ['peer-9', 'peer-8'],
+        summary: '1:1 digest',
+        existing_chat_id: 'chat-group-1',
+      },
+    });
+    expect(
+      extractOrchestration({ orchestration: { propose_group: true } })
+    ).toBeUndefined();
+  });
 });
 
 describe('validateChatWritebackOptions', () => {
