@@ -20,6 +20,9 @@ Env (complete-exec does **not** inject ``acn_*``):
   ACN_ORCH_SLOT   optional; v0 ``text.reply`` enables slot failover
   ACN_ORCH_NAME   optional display name on the callee bubble
   ACN_ORCH_SKIP   if ``1``, do not invoke (self-reply; debug)
+  ACN_ORCH_PROPOSE_GROUP  if ``1``, attach propose_group (human must confirm)
+  ACN_ORCH_PROPOSE_IDS    extra agent ids (comma); defaults to the callee
+  ACN_ORCH_PROPOSE_TITLE / ACN_ORCH_PROPOSE_SUMMARY / ACN_ORCH_PROPOSE_CHAT
 
 If invoke returns body text → one writeback, ``status=completed``.
 If only ``accepted``/``sent``/inbox → ``content`` is 「已请 X」;
@@ -300,6 +303,55 @@ def invoke_and_summarize(
     usage = own_usage(env)
     if usage:
         out["usage"] = usage
+    return attach_propose_group(out, env)
+
+
+def attach_propose_group(
+    out: dict[str, Any], env: Mapping[str, str]
+) -> dict[str, Any]:
+    """Optional P2 card. Host still will not create the group for the agent."""
+    flag = (env.get("ACN_ORCH_PROPOSE_GROUP") or "").strip().lower()
+    if flag not in ("1", "true", "yes"):
+        return out
+    orch = out.setdefault("orchestration", {})
+    if not isinstance(orch, dict):
+        return out
+    ids: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str) -> None:
+        bare = raw.strip()
+        if bare.lower().startswith("acn:"):
+            bare = bare[4:].strip()
+        key = bare.lower()
+        if not bare or key.startswith(("local:", "sys:")) or key in seen:
+            return
+        seen.add(key)
+        ids.append(bare)
+
+    extra = (env.get("ACN_ORCH_PROPOSE_IDS") or "").strip()
+    if extra:
+        for part in extra.split(","):
+            _add(part)
+    for row in orch.get("callees") or []:
+        if isinstance(row, dict) and isinstance(row.get("agent_id"), str):
+            _add(row["agent_id"])
+    existing = (env.get("ACN_ORCH_PROPOSE_CHAT") or "").strip()[:64]
+    if not ids and not existing:
+        return out
+    propose: dict[str, Any] = {}
+    if ids:
+        propose["agent_ids"] = ids[:8]
+    title = (env.get("ACN_ORCH_PROPOSE_TITLE") or "").strip()[:200]
+    summary = (env.get("ACN_ORCH_PROPOSE_SUMMARY") or "").strip()[:4000]
+    if title:
+        propose["title"] = title
+    if summary:
+        propose["summary"] = summary
+    if existing:
+        propose["existing_chat_id"] = existing
+    if propose:
+        orch["propose_group"] = propose
     return out
 
 
