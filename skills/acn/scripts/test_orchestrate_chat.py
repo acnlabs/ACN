@@ -94,6 +94,7 @@ def test_invoke_and_summarize_injectable() -> None:
     def fake(_base: str, _key: str, body: dict) -> dict:
         assert body["to"] == "peer-9"
         assert body["message"]["text"] == "画只鸭"
+        assert body["message"]["metadata"]["agentplanet"]["chat_id"] == "chat-9"
         return {
             "to": "peer-9",
             "hop_id": "hop:invoke:z",
@@ -108,6 +109,7 @@ def test_invoke_and_summarize_injectable() -> None:
             "ACN_API_KEY": "acn_test",
             "ACN_ORCH_TO": "peer-9",
             "ACN_ORCH_NAME": "Peer",
+            "ACN_ORCH_CHAT_ID": "chat-9",
             "ACN_ORCH_USAGE_JSON": json.dumps(
                 {"input_tokens": 3, "output_tokens": 1, "meter_source": "peer_self"}
             ),
@@ -121,6 +123,23 @@ def test_invoke_and_summarize_injectable() -> None:
         "meter_source": "peer_self",
     }
     assert "collab_request" not in out
+
+
+def test_complete_chat_passes_chat_id() -> None:
+    seen: dict[str, object] = {}
+
+    def fake(_base: str, _key: str, body: dict) -> dict:
+        seen["body"] = body
+        return {"to": "peer-9", "status": "accepted"}
+
+    complete_chat(
+        {"chat": {"chat_id": "chat-9", "user_text": "hi"}},
+        {"ACN_API_KEY": "acn_test", "ACN_ORCH_TO": "peer-9"},
+        invoke_fn=fake,
+    )
+    body = seen["body"]
+    assert isinstance(body, dict)
+    assert body["message"]["metadata"]["agentplanet"]["chat_id"] == "chat-9"
 
 
 def test_invoke_error_and_missing_key() -> None:
@@ -159,6 +178,7 @@ if __name__ == "__main__":
     test_summarize_completed_does_not_copy_usage()
     test_summarize_accepted_and_failed()
     test_invoke_and_summarize_injectable()
+    test_complete_chat_passes_chat_id()
     test_invoke_error_and_missing_key()
     test_complete_chat_skips_invoke_envelope()
     test_callee_status()
