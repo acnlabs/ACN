@@ -14,7 +14,8 @@
  * Hosts return {"content":"..."} and optionally usage (in/out billed;
  * extras stored), mailbox ``attachments`` (``mbx:{id}`` only),
  * ``tool_lines`` (``kind:image|video|audio|file``; Host caps to this-hop files),
- * and ``orchestration.callees`` (who this hop invoked; Host sanitizes).
+ * ``orchestration.callees`` (who this hop invoked; Host sanitizes),
+ * and optional ``propose_group`` / ``propose_task`` cards (stored only).
  * Host chat procedure: Agentplanet-backend ``skills/interfaze`` (not this ACN skill).
  * They do not call Gateway themselves.
  */
@@ -174,7 +175,15 @@ export type ChatCompleteResult = {
   orchestration?: {
     callees?: OrchestrationCallee[];
     propose_group?: OrchestrationProposeGroup;
+    propose_task?: OrchestrationProposeTask;
   };
+};
+
+export type OrchestrationProposeTask = {
+  title: string;
+  reward: string;
+  description?: string;
+  deadline_hours?: number;
 };
 
 export type OrchestrationProposeGroup = {
@@ -363,22 +372,25 @@ export function extractPieceToolLines(
 const MAX_ORCH_CALLEES = 8;
 const ORCH_STATUS = new Set(['accepted', 'sent', 'completed', 'failed']);
 
-/** Complete JSON ``orchestration`` — invoke hops + optional P2 propose_group. */
+/** Complete JSON ``orchestration`` — hops plus optional confirm cards. */
 export function extractOrchestration(
   payload: unknown
 ): {
   callees?: OrchestrationCallee[];
   propose_group?: OrchestrationProposeGroup;
+  propose_task?: OrchestrationProposeTask;
 } | undefined {
   const rec = asRecord(payload);
   const orch = rec ? asRecord(rec.orchestration) : null;
   if (!orch) return undefined;
   const callees = extractCallees(orch.callees);
   const propose_group = extractProposeGroup(orch.propose_group);
-  if (!callees && !propose_group) return undefined;
+  const propose_task = extractProposeTask(orch.propose_task);
+  if (!callees && !propose_group && !propose_task) return undefined;
   return {
     ...(callees ? { callees } : {}),
     ...(propose_group ? { propose_group } : {}),
+    ...(propose_task ? { propose_task } : {}),
   };
 }
 
@@ -455,6 +467,52 @@ function extractProposeGroup(raw: unknown): OrchestrationProposeGroup | undefine
   if (summary) out.summary = summary;
   if (existingOk) out.existing_chat_id = existingOk;
   return Object.keys(out).length ? out : undefined;
+}
+
+const TASK_REWARD_MAX = 1_000_000;
+const TASK_DEADLINE_MAX = 2160;
+
+function extractProposeTask(raw: unknown): OrchestrationProposeTask | undefined {
+  const rec = asRecord(raw);
+  if (!rec) return undefined;
+  const title = typeof rec.title === 'string' ? rec.title.trim().slice(0, 200) : '';
+  if (!title) return undefined;
+  const reward = taskRewardText(rec.reward);
+  if (reward === undefined) return undefined;
+  const out: OrchestrationProposeTask = { title, reward };
+  if (typeof rec.description === 'string') {
+    const description = rec.description.trim().slice(0, 2000);
+    if (description) out.description = description;
+  }
+  const deadline = taskDeadlineHours(rec.deadline_hours);
+  if (deadline !== undefined) out.deadline_hours = deadline;
+  return out;
+}
+
+function taskRewardText(raw: unknown): string | undefined {
+  if (typeof raw === 'boolean' || raw == null) return undefined;
+  let text: string;
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return undefined;
+    text = String(raw);
+  } else if (typeof raw === 'string') {
+    text = raw.trim();
+  } else {
+    return undefined;
+  }
+  if (!text) return undefined;
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || amount < 0 || amount > TASK_REWARD_MAX) return undefined;
+  return text.slice(0, 32);
+}
+
+function taskDeadlineHours(raw: unknown): number | undefined {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return undefined;
+  }
+  const hours = Math.trunc(raw);
+  if (hours < 1 || hours > TASK_DEADLINE_MAX) return undefined;
+  return hours;
 }
 
 function bareAgentId(raw: string): string | undefined {
@@ -1009,7 +1067,8 @@ async function postWriteback(
   }
   if (
     complete.orchestration?.callees?.length ||
-    complete.orchestration?.propose_group
+    complete.orchestration?.propose_group ||
+    complete.orchestration?.propose_task
   ) {
     body.orchestration = complete.orchestration;
   }

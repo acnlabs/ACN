@@ -423,6 +423,53 @@ describe('extractOrchestration', () => {
       extractOrchestration({ orchestration: { propose_group: true } })
     ).toBeUndefined();
   });
+
+  it('keeps propose_task and does not invent a reward', () => {
+    expect(
+      extractOrchestration({
+        content: 'post this',
+        orchestration: {
+          callees: [{ agent_id: 'peer-1', status: 'completed' }],
+          propose_task: {
+            title: ' 走路的鸭子 ',
+            reward: '12',
+            deadline_hours: 48,
+            description: '要能走',
+          },
+        },
+      })
+    ).toEqual({
+      callees: [{ agent_id: 'peer-1', status: 'completed' }],
+      propose_task: {
+        title: '走路的鸭子',
+        reward: '12',
+        deadline_hours: 48,
+        description: '要能走',
+      },
+    });
+    expect(
+      extractOrchestration({
+        orchestration: { propose_task: { title: '鸭', reward: 0, deadline_hours: 72 } },
+      })
+    ).toEqual({
+      propose_task: { title: '鸭', reward: '0', deadline_hours: 72 },
+    });
+    expect(
+      extractOrchestration({
+        orchestration: { propose_task: { title: '鸭', deadline_hours: 72 } },
+      })
+    ).toBeUndefined();
+    expect(
+      extractOrchestration({
+        orchestration: { propose_task: { title: '鸭', reward: true } },
+      })
+    ).toBeUndefined();
+    expect(
+      extractOrchestration({
+        orchestration: { propose_task: { title: '鸭', reward: '-5' } },
+      })
+    ).toBeUndefined();
+  });
 });
 
 describe('validateChatWritebackOptions', () => {

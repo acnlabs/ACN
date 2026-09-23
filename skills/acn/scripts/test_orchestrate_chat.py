@@ -149,6 +149,74 @@ def test_propose_group_opt_in() -> None:
         invoke_fn=fake,
     )
     assert "propose_group" not in skipped["orchestration"]
+    assert "propose_task" not in out["orchestration"]
+
+
+def test_propose_task_opt_in() -> None:
+    def fake(_base: str, _key: str, _body: dict) -> dict:
+        return {"to": "peer-9", "hop_id": "hop:invoke:z", "status": "accepted"}
+
+    base = {
+        "ACN_API_KEY": "acn_test",
+        "ACN_ORCH_TO": "peer-9",
+        "ACN_ORCH_PROPOSE_TASK": "1",
+    }
+    out = invoke_and_summarize(
+        "帮我找人画一只会走路的鸭子",
+        {
+            **base,
+            "ACN_ORCH_TASK_TITLE": "走路的鸭子",
+            "ACN_ORCH_TASK_REWARD": "12",
+            "ACN_ORCH_TASK_DEADLINE_HOURS": "48",
+            "ACN_ORCH_TASK_DESCRIPTION": "要能走",
+        },
+        invoke_fn=fake,
+    )
+    assert out["orchestration"]["propose_task"] == {
+        "title": "走路的鸭子",
+        "reward": "12",
+        "deadline_hours": 48,
+        "description": "要能走",
+    }
+    assert "collab_request" not in out
+
+    defaulted = invoke_and_summarize(
+        "  画只鸭  \n请尽快",
+        {**base, "ACN_ORCH_TASK_REWARD": "0"},
+        invoke_fn=fake,
+    )
+    assert defaulted["orchestration"]["propose_task"] == {
+        "title": "画只鸭 请尽快",
+        "reward": "0",
+        "deadline_hours": 72,
+    }
+
+    off = invoke_and_summarize(
+        "画只鸭",
+        {**base, "ACN_ORCH_PROPOSE_TASK": "0", "ACN_ORCH_TASK_REWARD": "12"},
+        invoke_fn=fake,
+    )
+    assert "propose_task" not in off["orchestration"]
+
+    for reward in ("", "-5", "nope", "1000001"):
+        dropped = invoke_and_summarize(
+            "画只鸭",
+            {**base, "ACN_ORCH_TASK_REWARD": reward, "ACN_ORCH_TASK_TITLE": "鸭"},
+            invoke_fn=fake,
+        )
+        assert "propose_task" not in dropped["orchestration"]
+
+    bad_deadline = invoke_and_summarize(
+        "画只鸭",
+        {
+            **base,
+            "ACN_ORCH_TASK_REWARD": "1",
+            "ACN_ORCH_TASK_TITLE": "鸭",
+            "ACN_ORCH_TASK_DEADLINE_HOURS": "0",
+        },
+        invoke_fn=fake,
+    )
+    assert "propose_task" not in bad_deadline["orchestration"]
 
 
 def test_invoke_error_and_missing_key() -> None:
@@ -187,6 +255,8 @@ if __name__ == "__main__":
     test_summarize_completed_does_not_copy_usage()
     test_summarize_accepted_and_failed()
     test_invoke_and_summarize_injectable()
+    test_propose_group_opt_in()
+    test_propose_task_opt_in()
     test_invoke_error_and_missing_key()
     test_complete_chat_skips_invoke_envelope()
     test_callee_status()
