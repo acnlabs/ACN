@@ -142,6 +142,34 @@ def test_complete_chat_passes_chat_id() -> None:
     assert body["message"]["metadata"]["agentplanet"]["chat_id"] == "chat-9"
 
 
+def test_propose_group_opt_in() -> None:
+    def fake(_base: str, _key: str, _body: dict) -> dict:
+        return {"to": "peer-9", "hop_id": "hop:invoke:z", "status": "accepted"}
+
+    out = invoke_and_summarize(
+        "组队",
+        {
+            "ACN_API_KEY": "acn_test",
+            "ACN_ORCH_TO": "peer-9",
+            "ACN_ORCH_PROPOSE_GROUP": "1",
+            "ACN_ORCH_PROPOSE_TITLE": "Duck collab",
+            "ACN_ORCH_PROPOSE_SUMMARY": "from 1:1",
+        },
+        invoke_fn=fake,
+    )
+    assert out["orchestration"]["propose_group"] == {
+        "agent_ids": ["peer-9"],
+        "title": "Duck collab",
+        "summary": "from 1:1",
+    }
+    skipped = invoke_and_summarize(
+        "组队",
+        {"ACN_API_KEY": "acn_test", "ACN_ORCH_TO": "peer-9"},
+        invoke_fn=fake,
+    )
+    assert "propose_group" not in skipped["orchestration"]
+
+
 def test_invoke_error_and_missing_key() -> None:
     def boom(_base: str, _key: str, _body: dict) -> dict:
         raise InvokeError(403, "spend_capped")
@@ -179,6 +207,7 @@ if __name__ == "__main__":
     test_summarize_accepted_and_failed()
     test_invoke_and_summarize_injectable()
     test_complete_chat_passes_chat_id()
+    test_propose_group_opt_in()
     test_invoke_error_and_missing_key()
     test_complete_chat_skips_invoke_envelope()
     test_callee_status()

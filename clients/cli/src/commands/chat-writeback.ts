@@ -171,7 +171,17 @@ export type ChatCompleteResult = {
   /** Image/video/audio/file units; Host caps to this-hop files. */
   tool_lines?: Array<{ kind: string; units: number }>;
   /** Downstream agents invoked this hop. Host sanitizes hop_id / local: ids. */
-  orchestration?: { callees: OrchestrationCallee[] };
+  orchestration?: {
+    callees?: OrchestrationCallee[];
+    propose_group?: OrchestrationProposeGroup;
+  };
+};
+
+export type OrchestrationProposeGroup = {
+  agent_ids?: string[];
+  title?: string;
+  summary?: string;
+  existing_chat_id?: string;
 };
 
 /**
@@ -353,29 +363,37 @@ export function extractPieceToolLines(
 const MAX_ORCH_CALLEES = 8;
 const ORCH_STATUS = new Set(['accepted', 'sent', 'completed', 'failed']);
 
-/** Complete JSON ``orchestration.callees`` — invoke hops only; drop local:/sys:. */
+/** Complete JSON ``orchestration`` — invoke hops + optional P2 propose_group. */
 export function extractOrchestration(
   payload: unknown
-): { callees: OrchestrationCallee[] } | undefined {
+): {
+  callees?: OrchestrationCallee[];
+  propose_group?: OrchestrationProposeGroup;
+} | undefined {
   const rec = asRecord(payload);
   const orch = rec ? asRecord(rec.orchestration) : null;
-  if (!orch || !Array.isArray(orch.callees) || orch.callees.length === 0) {
-    return undefined;
-  }
+  if (!orch) return undefined;
+  const callees = extractCallees(orch.callees);
+  const propose_group = extractProposeGroup(orch.propose_group);
+  if (!callees && !propose_group) return undefined;
+  return {
+    ...(callees ? { callees } : {}),
+    ...(propose_group ? { propose_group } : {}),
+  };
+}
+
+function extractCallees(raw: unknown): OrchestrationCallee[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
   const out: OrchestrationCallee[] = [];
   const seen = new Set<string>();
-  for (const item of orch.callees) {
+  for (const item of raw) {
     if (out.length >= MAX_ORCH_CALLEES) break;
     const row = asRecord(item);
     if (!row) continue;
     const rawId = row.agent_id ?? row.to;
     if (typeof rawId !== 'string') continue;
-    let bare = rawId.trim();
-    if (bare.startsWith('acn:')) bare = bare.slice(4).trim();
-    if (!bare || bare.length > 128) continue;
-    const lowered = bare.toLowerCase();
-    if (lowered.startsWith('local:') || lowered.startsWith('sys:')) continue;
-    if (seen.has(bare)) continue;
+    const bare = bareAgentId(rawId);
+    if (!bare || seen.has(bare)) continue;
     seen.add(bare);
     const callee: OrchestrationCallee = { agent_id: bare };
     if (typeof row.hop_id === 'string') {
@@ -394,7 +412,58 @@ export function extractOrchestration(
     }
     out.push(callee);
   }
-  return out.length ? { callees: out } : undefined;
+  return out.length ? out : undefined;
+}
+
+function extractProposeGroup(raw: unknown): OrchestrationProposeGroup | undefined {
+  const rec = asRecord(raw);
+  if (!rec) return undefined;
+  const idsRaw = rec.agent_ids ?? rec.participants;
+  const agent_ids: string[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(idsRaw)) {
+    for (const item of idsRaw) {
+      if (agent_ids.length >= MAX_ORCH_CALLEES) break;
+      let rawId: unknown = item;
+      const row = asRecord(item);
+      if (row) rawId = row.agent_id ?? row.id ?? row.to;
+      if (typeof rawId !== 'string') continue;
+      const bare = bareAgentId(rawId);
+      if (!bare || seen.has(bare)) continue;
+      seen.add(bare);
+      agent_ids.push(bare);
+    }
+  }
+  const title =
+    typeof rec.title === 'string' ? rec.title.trim().slice(0, 200) : '';
+  const summary =
+    typeof rec.summary === 'string' ? rec.summary.trim().slice(0, 4000) : '';
+  const existing =
+    typeof rec.existing_chat_id === 'string'
+      ? rec.existing_chat_id.trim().slice(0, 64)
+      : '';
+  const existingOk =
+    existing &&
+    !existing.toLowerCase().startsWith('local:') &&
+    !existing.toLowerCase().startsWith('sys:')
+      ? existing
+      : '';
+  if (!agent_ids.length && !existingOk) return undefined;
+  const out: OrchestrationProposeGroup = {};
+  if (agent_ids.length) out.agent_ids = agent_ids;
+  if (title) out.title = title;
+  if (summary) out.summary = summary;
+  if (existingOk) out.existing_chat_id = existingOk;
+  return Object.keys(out).length ? out : undefined;
+}
+
+function bareAgentId(raw: string): string | undefined {
+  let bare = raw.trim();
+  if (bare.startsWith('acn:')) bare = bare.slice(4).trim();
+  if (!bare || bare.length > 128) return undefined;
+  const lowered = bare.toLowerCase();
+  if (lowered.startsWith('local:') || lowered.startsWith('sys:')) return undefined;
+  return bare;
 }
 
 function parseCompletePayload(
@@ -938,7 +1007,10 @@ async function postWriteback(
   if (complete.tool_lines?.length) {
     body.tool_lines = complete.tool_lines;
   }
-  if (complete.orchestration?.callees?.length) {
+  if (
+    complete.orchestration?.callees?.length ||
+    complete.orchestration?.propose_group
+  ) {
     body.orchestration = complete.orchestration;
   }
 
