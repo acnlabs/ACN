@@ -36,6 +36,10 @@ _ALL_KEYS = (
     "AUTH0_AUDIENCE",
     "HUMAN_OIDC_PROVIDERS_JSON",
     "BLOB_SIGNING_SECRET",
+    "BLOB_STORE_BACKEND",
+    "BLOB_S3_BUCKET",
+    "BLOB_S3_ACCESS_KEY",
+    "BLOB_S3_SECRET_KEY",
 )
 
 
@@ -176,6 +180,38 @@ class TestProductionDefenses:
         with pytest.raises(ValidationError) as exc:
             _build_settings()
         assert "BLOB_SIGNING_SECRET" in str(exc.value)
+
+    def test_prod_filesystem_does_not_require_s3(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._prod_env(monkeypatch)
+        s = _build_settings()
+        assert s.blob_store_backend == "filesystem"
+        assert s.blob_s3_bucket is None
+
+    def test_s3_backend_requires_bucket_and_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._prod_env(monkeypatch, BLOB_STORE_BACKEND="s3")
+        with pytest.raises(ValidationError) as exc:
+            _build_settings()
+        msg = str(exc.value)
+        assert "BLOB_S3_BUCKET" in msg
+        assert "BLOB_S3_ACCESS_KEY" in msg
+
+    def test_s3_backend_ok_with_bucket_and_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._prod_env(
+            monkeypatch,
+            BLOB_STORE_BACKEND="r2",
+            BLOB_S3_BUCKET="acn-blobs",
+            BLOB_S3_ACCESS_KEY="ak",
+            BLOB_S3_SECRET_KEY="sk",
+        )
+        s = _build_settings()
+        assert s.blob_store_backend == "r2"
+        assert s.blob_s3_bucket == "acn-blobs"
+
+    def test_unknown_blob_store_backend_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._prod_env(monkeypatch, BLOB_STORE_BACKEND="gcs")
+        with pytest.raises(ValidationError) as exc:
+            _build_settings()
+        assert "BLOB_STORE_BACKEND" in str(exc.value)
 
 
 class TestHumanOidcProviderRegistry:

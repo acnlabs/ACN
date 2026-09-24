@@ -172,6 +172,8 @@ AGENTS.md                          # This file
 | `INTERNAL_API_TOKEN` | *(dev default)* | Service-to-service auth token shared with Backend |
 | `ESCROW_ENABLED` | `true` | Set `false` to disable payment settlement (self-hosted deployments) |
 | `ACN_REVENUE_WALLET_ID` | None | ACN revenue PLATFORM wallet ID in Backend; blank = escrow zero-fee, and blob extend 402 |
+| `BLOB_STORE_BACKEND` | `filesystem` | `filesystem` or `s3` (R2/MinIO/AWS). ACN still serves signed GET. |
+| `BLOB_SIGNING_SECRET` | None | HMAC for FilePart URIs; required when `DEV_MODE=false`; ≠ `INTERNAL_API_TOKEN` |
 | `AUTH0_DOMAIN` | None | Auth0 tenant (e.g. `tenant.auth0.com`) |
 | `AUTH0_AUDIENCE` | None | Auth0 audience URL |
 | `DEV_MODE` | `false` | Set `true` for local development to skip Auth0 enforcement |
