@@ -303,15 +303,20 @@ class ErrorCode(StrEnum):
     ERC8004_REGISTRATION_MISMATCH = "erc8004_registration_mismatch"
     ERC8004_NOT_BOUND = "erc8004_not_bound"
 
+    # ===== Blob storage (agent-to-agent FilePart objects) =====
+    BLOB_NOT_FOUND = "blob_not_found"
+    BLOB_TOO_LARGE = "blob_too_large"
+    BLOB_CAP_EXCEEDED = "blob_cap_exceeded"
+    BLOB_BILLING_UNAVAILABLE = "blob_billing_unavailable"
+
     # ===== Payments routes (sprint row #5) =====
     # ``AGENT_NOT_FOUND`` (×2), ``API_KEY_AGENT_MISMATCH`` (×4), and
     # ``FROM_AGENT_MISMATCH`` (×1 — body.from_agent vs auth-key
     # mismatch) are reused from the pilot / cross-module groups; the
     # four codes below are payments-specific resource-existence
-    # failures. ``INSUFFICIENT_BALANCE`` (in the reserved group below)
-    # is intentionally NOT raised by ``payments.py`` today: balance
-    # failures live one layer deeper (wallet / billing subsystem) and
-    # don't surface at the route boundary in the current architecture.
+    # failures. ``INSUFFICIENT_BALANCE`` is raised when a consumer
+    # extends a blob URI (mailbox retention). ``payments.py`` still
+    # does not emit it: payment-task routes stay on resource-existence codes.
     PAYMENT_CAPABILITY_NOT_FOUND = "payment_capability_not_found"
     PAYMENT_TASK_NOT_FOUND = "payment_task_not_found"
     TOKEN_PRICING_NOT_CONFIGURED = "token_pricing_not_configured"
@@ -508,6 +513,15 @@ _DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ),
     ErrorCode.INSUFFICIENT_BALANCE: (
         "The requested operation cannot be completed due to insufficient balance."
+    ),
+    ErrorCode.BLOB_NOT_FOUND: "The requested blob could not be found or has expired.",
+    ErrorCode.BLOB_TOO_LARGE: "The uploaded file exceeds the per-file size limit.",
+    ErrorCode.BLOB_CAP_EXCEEDED: (
+        "This agent has reached the maximum blob storage cap."
+    ),
+    ErrorCode.BLOB_BILLING_UNAVAILABLE: (
+        "Paid blob storage cannot be charged: wallet backend unavailable, "
+        "or ACN revenue wallet is not configured."
     ),
     ErrorCode.RESOURCE_CONFLICT: (
         "The request conflicts with the current state of the resource."

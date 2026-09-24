@@ -113,7 +113,9 @@ class Settings(BaseSettings):
 
     # ACN revenue wallet ID in Backend (wallet_type=PLATFORM, label=acn_revenue).
     # Backend's release/release_partial endpoints split fees and credit this wallet.
-    # Must be pre-created in Backend's wallets table before enabling fee collection.
+    # Paid blob extend credits this wallet via POST /api/internal/wallet/platform-credit
+    # after spend. Must be a PLATFORM wallet_id (seed_revenue_wallets.py).
+    # Blank + a live wallet client refuses extend (402, reason=no_revenue_wallet).
     acn_revenue_wallet_id: str | None = None
 
     # Internal API Token (shared with Backend for service-to-service auth).
@@ -268,6 +270,21 @@ class Settings(BaseSettings):
     # only after auditing every endpoint that consumes large dict fields
     # (message, metadata, ui_spec, agent_card).
     max_request_body_size: int = 1_048_576  # 1 MiB
+
+    # Blob mailbox for A2A FilePart (not hunter mbx). Filesystem today;
+    # point BLOB_STORE_PATH at a volume. Upload is a short free hold
+    # (blob_free_bytes / blob_free_ttl_seconds). Fetch does not keep it.
+    # Extending the URI bills the caller (consumer) in integer Credits
+    # (GiB-days, ceil, minimum 1). Production posts spend then receive
+    # into acn_revenue_wallet_id; that id missing → 402, not a silent burn.
+    blob_store_path: str = "./data/blobs"
+    blob_free_bytes: int = 52_428_800  # 50 MiB
+    blob_max_file_bytes: int = 10_485_760  # 10 MiB
+    blob_max_agent_bytes: int = 1_073_741_824  # 1 GiB
+    blob_free_ttl_seconds: int = 7 * 24 * 3600
+    blob_max_ttl_seconds: int = 90 * 24 * 3600
+    blob_credits_per_gib_day: float = 1.0
+    blob_signing_secret: str | None = None
 
     # Anti-spam / join controls
     # Max registrations from one IP per day (endpoint-less agents are cheaper to spam)
@@ -548,6 +565,25 @@ class Settings(BaseSettings):
                 "If you need to expose the service on a public interface, "
                 "set DEV_MODE=false (and configure Auth0 + a non-'*' CORS origin)."
             )
+
+        if not self.dev_mode:
+            blob_secret = (self.blob_signing_secret or "").strip()
+            token = (self.internal_api_token or "").strip()
+            if not blob_secret:
+                errors.append(
+                    "BLOB_SIGNING_SECRET must be set when DEV_MODE=false. "
+                    "FilePart HMAC must not share INTERNAL_API_TOKEN "
+                    "(rotating the token would invalidate live URIs)."
+                )
+            elif len(blob_secret) < 32:
+                errors.append(
+                    "BLOB_SIGNING_SECRET must be at least 32 characters "
+                    f"(current length: {len(blob_secret)})."
+                )
+            elif blob_secret == token:
+                errors.append(
+                    "BLOB_SIGNING_SECRET must be distinct from INTERNAL_API_TOKEN."
+                )
 
         if errors:
             raise ValueError(

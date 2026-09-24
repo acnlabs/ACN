@@ -4,6 +4,16 @@ All notable changes to `acn-client` are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `send_content` and `file_part_from_path` / `file_part_from_uri` /
+  `file_part_from_bytes` / `build_message`: send A2A `FilePart`. Local files
+  go through `POST /api/v1/blobs` and the message carries a signed URI.
+  `file_part_from_bytes` still inlines ≤160 KiB for callers who host themselves.
+- `extend_blob` / `blob_usage` / `parse_blob_uri` / `download_blob`: consumer-paid
+  retain of a mailbox URI, plus GET of the bytes. HMAC is blob_id-only, so the
+  original FilePart URI stays valid.
+
 ## [1.0.2] - 2026-08-30
 
 ### Added

@@ -52,6 +52,8 @@ import type {
   PendingSessionsResponse,
   SendMessageRequest,
   SendMessageResponse,
+  BlobObject,
+  BlobUsage,
   SessionEntry,
   SessionInviteRequest,
   AgentSubnetInvitationsResponse,
@@ -164,58 +166,76 @@ export class ACNClient {
         body: options?.body ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
       });
-
-      if (!response.ok) {
-        let body: Record<string, unknown> = {};
-        try {
-          const parsed = await response.json();
-          if (parsed && typeof parsed === 'object') body = parsed as Record<string, unknown>;
-        } catch { /* non-JSON body */ }
-
-        // Derive human-readable message
-        let message: string;
-        const rawDetail = body.detail;
-        if (typeof rawDetail === 'string') {
-          message = rawDetail;
-        } else if (Array.isArray(rawDetail) && rawDetail.length > 0) {
-          // FastAPI 422 validation list
-          message = rawDetail
-            .slice(0, 5)
-            .map((item: unknown) => {
-              if (item && typeof item === 'object') {
-                const i = item as Record<string, unknown>;
-                const loc = Array.isArray(i.loc) ? (i.loc as unknown[]).slice(1).join('.') : '';
-                const msg = String(i.msg ?? i.type ?? item);
-                return loc ? `${loc}: ${msg}` : msg;
-              }
-              return String(item);
-            })
-            .join('; ');
-        } else {
-          message = String(body.message ?? response.statusText ?? `HTTP ${response.status}`);
-        }
-
-        const errorCode = typeof body.error === 'string' ? body.error : undefined;
-        const requestId =
-          typeof body.request_id === 'string'
-            ? body.request_id
-            : (response.headers.get('X-Request-ID') ?? undefined);
-
-        throw new ACNError(response.status, message, {
-          errorCode,
-          requestId,
-          body,
-        });
-      }
-
-      if (response.status === 204) {
-        return undefined as T;
-      }
-
-      return response.json();
+      return await this.parseResponse<T>(response);
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  private async postForm<T>(path: string, form: FormData): Promise<T> {
+    const url = new URL(`${this.baseUrl}${path}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    try {
+      const response = await fetch(url.toString(), {
+        method: 'POST',
+        headers: { ...this.headers },
+        body: form,
+        signal: controller.signal,
+      });
+      return await this.parseResponse<T>(response);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private async parseResponse<T>(response: Response): Promise<T> {
+    if (!response.ok) {
+      let body: Record<string, unknown> = {};
+      try {
+        const parsed = await response.json();
+        if (parsed && typeof parsed === 'object') body = parsed as Record<string, unknown>;
+      } catch { /* non-JSON body */ }
+
+      let message: string;
+      const rawDetail = body.detail;
+      if (typeof rawDetail === 'string') {
+        message = rawDetail;
+      } else if (Array.isArray(rawDetail) && rawDetail.length > 0) {
+        message = rawDetail
+          .slice(0, 5)
+          .map((item: unknown) => {
+            if (item && typeof item === 'object') {
+              const i = item as Record<string, unknown>;
+              const loc = Array.isArray(i.loc) ? (i.loc as unknown[]).slice(1).join('.') : '';
+              const msg = String(i.msg ?? i.type ?? item);
+              return loc ? `${loc}: ${msg}` : msg;
+            }
+            return String(item);
+          })
+          .join('; ');
+      } else {
+        message = String(body.message ?? response.statusText ?? `HTTP ${response.status}`);
+      }
+
+      const errorCode = typeof body.error === 'string' ? body.error : undefined;
+      const requestId =
+        typeof body.request_id === 'string'
+          ? body.request_id
+          : (response.headers.get('X-Request-ID') ?? undefined);
+
+      throw new ACNError(response.status, message, {
+        errorCode,
+        requestId,
+        body,
+      });
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    return response.json();
   }
 
   private get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
@@ -736,6 +756,111 @@ export class ACNClient {
   /** Send message to an agent */
   async sendMessage(request: SendMessageRequest): Promise<SendMessageResponse> {
     return this.post('/api/v1/communication/send', request);
+  }
+
+  /**
+   * Upload bytes to ACN blob store. Returns metadata including a signed `uri`
+   * for A2A FilePart. Mailbox hold is free; call `extendBlob` to keep it.
+   */
+  async uploadBlob(
+    data: Uint8Array | Blob,
+    options: { name: string; mimeType?: string; ttlSeconds?: number },
+  ): Promise<BlobObject> {
+    const form = new FormData();
+    const blob =
+      data instanceof Blob
+        ? data
+        : new Blob([new Uint8Array(data)], {
+            type: options.mimeType || 'application/octet-stream',
+          });
+    form.append('file', blob, options.name);
+    if (options.ttlSeconds !== undefined) {
+      form.append('ttl_seconds', String(options.ttlSeconds));
+    }
+    return this.postForm('/api/v1/blobs', form);
+  }
+
+  /**
+   * Keep a blob URI alive. Caller pays Credits; ownership moves to the payer.
+   * `blobIdOrUri` may be the id or the signed FilePart URI (sig extracted).
+   */
+  async extendBlob(
+    blobIdOrUri: string,
+    extraDays: number,
+    options?: { sig?: string },
+  ): Promise<BlobObject> {
+    const parsed = parseBlobRef(blobIdOrUri);
+    const body: Record<string, unknown> = { extra_days: extraDays };
+    const sig = options?.sig ?? parsed.sig;
+    if (sig) body.sig = sig;
+    return this.post(`/api/v1/blobs/${parsed.blobId}/extend`, body);
+  }
+
+  /** Mailbox + retained quota for the authenticated agent. */
+  async blobUsage(): Promise<BlobUsage> {
+    return this.get('/api/v1/blobs/usage');
+  }
+
+  /**
+   * Send text and/or a file. Local bytes upload to ACN blobs; the message
+   * carries a signed FilePart URI (not inline bytes).
+   */
+  async sendContent(
+    fromAgent: string,
+    toAgent: string,
+    options: {
+      text?: string;
+      fileBytes?: Uint8Array;
+      fileUri?: string;
+      fileName?: string;
+      mimeType?: string;
+      priority?: string;
+    } = {},
+  ): Promise<SendMessageResponse> {
+    const parts: Array<Record<string, unknown>> = [];
+    if (options.text !== undefined) {
+      parts.push({ kind: 'text', text: options.text });
+    }
+    if (options.fileBytes) {
+      const uploaded = await this.uploadBlob(options.fileBytes, {
+        name: options.fileName || 'file',
+        mimeType: options.mimeType,
+      });
+      if (!uploaded.uri) {
+        throw new Error('blob upload did not return a uri');
+      }
+      parts.push({
+        kind: 'file',
+        file: {
+          uri: uploaded.uri,
+          name: options.fileName || 'file',
+          mimeType: options.mimeType || 'application/octet-stream',
+        },
+      });
+    }
+    if (options.fileUri) {
+      parts.push({
+        kind: 'file',
+        file: {
+          uri: options.fileUri,
+          ...(options.fileName ? { name: options.fileName } : {}),
+          mimeType: options.mimeType || 'application/octet-stream',
+        },
+      });
+    }
+    if (parts.length === 0) {
+      throw new Error('provide text, fileBytes, and/or fileUri');
+    }
+    const message =
+      parts.length === 1 && parts[0]?.kind === 'text'
+        ? { text: options.text, type: 'text' }
+        : { role: 'user', parts };
+    return this.sendMessage({
+      from_agent: fromAgent,
+      target_agent: toAgent,
+      message,
+      priority: options.priority,
+    });
   }
 
   /** Broadcast message to multiple agents in a subnet */
@@ -1808,5 +1933,26 @@ export class ACNError extends Error {
     const m = msg.match(/\borg_[0-9a-fA-F]+\b/);
     return m?.[0];
   }
+}
+
+const BLOB_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Parse a blob id or signed GET URI into `{ blobId, sig }`. */
+export function parseBlobRef(ref: string): { blobId: string; sig?: string } {
+  const trimmed = ref.trim();
+  if (BLOB_ID_RE.test(trimmed)) return { blobId: trimmed };
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error('blob ref must be a blob id or http(s) URI');
+  }
+  const blobId = url.pathname.split('/').filter(Boolean).pop() ?? '';
+  if (!BLOB_ID_RE.test(blobId)) {
+    throw new Error('blob ref must be a blob id or http(s) URI');
+  }
+  const sig = url.searchParams.get('sig') ?? undefined;
+  return { blobId, sig: sig || undefined };
 }
 

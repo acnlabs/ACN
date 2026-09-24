@@ -59,11 +59,16 @@ class _DownstreamApp:
         )
 
 
-def _http_scope(method: str, *, headers: list[tuple[bytes, bytes]] | None = None) -> dict[str, Any]:
+def _http_scope(
+    method: str,
+    *,
+    path: str = "/api/v1/foo",
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> dict[str, Any]:
     return {
         "type": "http",
         "method": method,
-        "path": "/api/v1/foo",
+        "path": path,
         "headers": headers or [],
     }
 
@@ -436,3 +441,75 @@ async def test_413_no_origin_header_no_cors_echo() -> None:
 
     headers = _headers_dict(sent[0])
     assert b"access-control-allow-origin" not in headers
+
+
+@pytest.mark.asyncio
+async def test_path_max_bytes_allows_larger_blob_prefix() -> None:
+    app = _DownstreamApp()
+    mw = BodySizeLimitMiddleware(
+        app,
+        max_bytes=10,
+        path_max_bytes={"/api/v1/blobs": 100},
+    )
+    scope = _http_scope(
+        "POST",
+        path="/api/v1/blobs",
+        headers=[(b"content-length", b"50")],
+    )
+    sent, _ = await _drive(mw, scope, [b"x" * 50])
+    assert sent[0]["status"] == 200
+    assert app.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_path_max_bytes_method_exact_does_not_widen_extend() -> None:
+    app = _DownstreamApp()
+    mw = BodySizeLimitMiddleware(
+        app,
+        max_bytes=10,
+        path_max_bytes={"POST /api/v1/blobs": 100},
+    )
+    scope = _http_scope(
+        "POST",
+        path="/api/v1/blobs/abc/extend",
+        headers=[(b"content-length", b"50")],
+    )
+    sent, _ = await _drive(mw, scope, [b""])
+    assert sent[0]["status"] == 413
+    assert app.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_path_max_bytes_method_exact_allows_upload() -> None:
+    app = _DownstreamApp()
+    mw = BodySizeLimitMiddleware(
+        app,
+        max_bytes=10,
+        path_max_bytes={"POST /api/v1/blobs": 100},
+    )
+    scope = _http_scope(
+        "POST",
+        path="/api/v1/blobs",
+        headers=[(b"content-length", b"50")],
+    )
+    sent, _ = await _drive(mw, scope, [b"x" * 50])
+    assert sent[0]["status"] == 200
+    assert app.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_path_max_bytes_still_rejects_over_prefix_cap() -> None:
+    app = _DownstreamApp()
+    mw = BodySizeLimitMiddleware(
+        app,
+        max_bytes=10,
+        path_max_bytes={"/api/v1/blobs": 100},
+    )
+    scope = _http_scope(
+        "POST",
+        path="/api/v1/blobs/abc",
+        headers=[(b"content-length", b"101")],
+    )
+    sent, _ = await _drive(mw, scope, [b""])
+    assert sent[0]["status"] == 413
+    assert app.calls == 0

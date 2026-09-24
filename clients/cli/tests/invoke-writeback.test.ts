@@ -21,6 +21,7 @@ function invokeEvent(): NormalizedEvent {
     message_id: 'm1',
     context_id: null,
     from_agent: 'system:agent-router',
+    parts: [],
     chat: null,
     invoke: {
       request_id: 'req-1',

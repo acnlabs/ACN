@@ -21,6 +21,7 @@ import { workspaceCommand } from './commands/workspace.js';
 import { followCommand } from './commands/follow.js';
 import { walletCommand } from './commands/wallet.js';
 import { payCommand } from './commands/pay.js';
+import { blobCommand } from './commands/blob.js';
 
 const program = new Command();
 
@@ -53,5 +54,6 @@ program.addCommand(workspaceCommand());
 program.addCommand(followCommand());
 program.addCommand(walletCommand());
 program.addCommand(payCommand());
+program.addCommand(blobCommand());
 
 program.parse(process.argv);

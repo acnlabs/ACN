@@ -392,6 +392,10 @@ class MessageRouter:
             Exception: On delivery failure
         """
         route_id = uuid4().hex[:8]
+        # The caller id travels inside the message, same field on direct
+        # delivery and relay. The recipient replies with another message
+        # to this id; it does not depend on which delivery mode carried it.
+        message = _with_sender(message, from_agent)
 
         logger.info(f"[{route_id}] Routing: {from_agent} -> {to_agent}")
 
@@ -1384,34 +1388,11 @@ class MessageRouter:
             entry["retry_count"] += 1
 
             try:
-                # Reconstruct message from stored data
-                msg_data = entry["message"]
-                parts = []
-
-                for part in msg_data.get("parts", []):
-                    if part.get("kind") == "text":
-                        parts.append(TextPart(text=part.get("text", "")))
-                    elif part.get("kind") == "data":
-                        parts.append(DataPart(data=part.get("data", {})))
-
-                # ``Message`` requires ``message_id``. ``_store_dlq`` writes
-                # ``model_dump()`` (snake_case) so the original id is in
-                # ``message_id``; older payloads written before the rename
-                # may carry the camelCase ``messageId``. Fall through to a
-                # fresh UUID only if both are absent (extremely rare —
-                # implies a hand-edited DLQ entry). Without this, any retry
-                # Pydantic-fails on Message construction and the entry
-                # bounces forever between rpop and lpush.
-                rebuilt_message_id = (
-                    msg_data.get("message_id")
-                    or msg_data.get("messageId")
-                    or f"dlq-{uuid4().hex[:12]}"
-                )
-                message = Message(
-                    role=msg_data.get("role", "user"),
-                    parts=parts,
-                    message_id=rebuilt_message_id,
-                )
+                # Restore the stored A2A message as-is. ``_store_dlq`` writes
+                # ``model_dump()``, which keeps every part kind (text, data,
+                # file). Rebuilding by hand used to keep only text and data,
+                # so a retried file never left the queue.
+                message = _message_from_stored_payload(entry["message"])
 
                 await self.route(
                     from_agent=entry["from_agent"],
@@ -1450,6 +1431,45 @@ class MessageRouter:
                 await self.redis.ltrim("acn:dlq", 0, 9999)
 
         return success_count
+
+
+def _with_sender(message: Message, from_agent: str) -> Message:
+    """Record the authenticated sender on the message.
+
+    Overwrites any client-supplied ``metadata.from_agent``. Routing knows
+    who sent this; the recipient must not have to trust the body.
+    """
+    if not isinstance(message, Message):
+        return message
+    metadata = getattr(message, "metadata", None)
+    current = dict(metadata) if isinstance(metadata, dict) else {}
+    current["from_agent"] = from_agent
+    return message.model_copy(update={"metadata": current})
+
+
+def _message_from_stored_payload(msg_data: Any) -> Message:
+    """Rebuild an A2A ``Message`` from a DLQ or inbox payload.
+
+    Validates the stored object through the SDK, so text, data, and file
+    parts all survive. ``message_id`` is filled in when a hand-edited entry
+    has neither snake_case nor camelCase id — ``Message`` rejects a missing
+    id, and that used to bounce the entry forever between rpop and lpush.
+    """
+    if not isinstance(msg_data, dict):
+        raise ValueError("stored message payload is not an object")
+    rebuilt_message_id = (
+        msg_data.get("message_id")
+        or msg_data.get("messageId")
+        or f"dlq-{uuid4().hex[:12]}"
+    )
+    payload = {
+        k: v
+        for k, v in msg_data.items()
+        if k not in ("message_id", "messageId")
+    }
+    if "role" not in payload:
+        payload["role"] = "user"
+    return Message.model_validate({**payload, "message_id": rebuilt_message_id})
 
 
 # =============================================================================

@@ -11,6 +11,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from a2a.compat.v0_3.types import Message  # type: ignore[import-untyped]
 
 from acn.infrastructure.messaging.message_router import (
     MessageRouter,
@@ -51,6 +52,58 @@ def _relay_agent_info():
     info.a2a_endpoint = ""
     info.status = "online"
     return info
+
+
+def _file_message() -> Message:
+    return Message.model_validate(
+        {
+            "message_id": "msg-file",
+            "role": "user",
+            "parts": [
+                {"kind": "text", "text": "diagram"},
+                {
+                    "kind": "file",
+                    "file": {
+                        "bytes": "aGVsbG8=",
+                        "mimeType": "text/plain",
+                        "name": "hi.txt",
+                    },
+                },
+            ],
+        }
+    )
+
+
+def _metadata_from_agent(node: object) -> str | None:
+    if isinstance(node, dict):
+        metadata = node.get("metadata")
+        if isinstance(metadata, dict):
+            value = metadata.get("from_agent")
+            if isinstance(value, str) and value:
+                return value
+        for value in node.values():
+            found = _metadata_from_agent(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _metadata_from_agent(item)
+            if found:
+                return found
+    return None
+
+
+def _parts_named_file(node: object) -> list[dict]:
+    found: list[dict] = []
+    if isinstance(node, dict):
+        if node.get("kind") == "file":
+            found.append(node)
+        for value in node.values():
+            found.extend(_parts_named_file(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_parts_named_file(item))
+    return found
 
 
 def _jsonrpc_message_reply() -> dict:
@@ -115,6 +168,48 @@ class TestRelayDelivery:
         assert result["response"]["messageId"] == "m-reply"
         # Real-time delivery must NOT touch the inbox.
         fake_pipe.zadd.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_relay_carries_file_part_both_ways(
+        self, mock_agent_service, fake_redis, fake_pipe
+    ):
+        """The relayed JSON-RPC body is the same message a direct POST would
+        carry. A file part on the request and on the reply both stay intact."""
+        mock_agent_service.find_agent = AsyncMock(return_value=_relay_agent_info())
+        reply = _jsonrpc_message_reply()
+        reply_body = json.loads(reply["body"])
+        reply_body["result"]["parts"].append(
+            {
+                "kind": "file",
+                "file": {
+                    "uri": "https://example.com/a.png",
+                    "mimeType": "image/png",
+                    "name": "a.png",
+                },
+            }
+        )
+        reply["body"] = json.dumps(reply_body)
+        ws_manager = MagicMock()
+        ws_manager.relay_request_to_agent = AsyncMock(return_value=reply)
+        router = MessageRouter(
+            agent_service=mock_agent_service,
+            redis_client=fake_redis,
+            ws_manager=ws_manager,
+        )
+
+        result = await router.route(
+            from_agent="agent-a",
+            to_agent="agent-b",
+            message=_file_message(),
+        )
+
+        sent = json.loads(ws_manager.relay_request_to_agent.await_args.kwargs["body"])
+        sent_files = _parts_named_file(sent)
+        assert sent_files[0]["file"]["bytes"] == "aGVsbG8="
+        assert sent_files[0]["file"]["name"] == "hi.txt"
+        assert _metadata_from_agent(sent) == "agent-a"
+        returned = _parts_named_file(result["response"])
+        assert returned[0]["file"]["uri"] == "https://example.com/a.png"
 
     @pytest.mark.asyncio
     async def test_offline_relay_agent_parks_in_inbox(
