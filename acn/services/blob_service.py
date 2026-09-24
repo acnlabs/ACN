@@ -30,7 +30,7 @@ from redis.asyncio import Redis
 
 from ..config import Settings
 from ..core.errors import ACNHTTPError, ErrorCode
-from ..infrastructure.blob_store import FilesystemBlobStore
+from ..infrastructure.blob_store import build_blob_store
 from .wallet_client import WalletClient, WalletResult
 
 logger = structlog.get_logger()
@@ -879,7 +879,7 @@ class BlobService:
 
 
 def build_blob_service(redis: Redis, settings: Settings) -> BlobService:
-    store = FilesystemBlobStore(settings.blob_store_path)
+    store = build_blob_store(settings)
     wallet: WalletClient | None = None
     if settings.backend_url and settings.internal_api_token:
         wallet = WalletClient(

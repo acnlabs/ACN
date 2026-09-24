@@ -271,13 +271,17 @@ class Settings(BaseSettings):
     # (message, metadata, ui_spec, agent_card).
     max_request_body_size: int = 1_048_576  # 1 MiB
 
-    # Blob mailbox for A2A FilePart (not hunter mbx). Filesystem today;
-    # point BLOB_STORE_PATH at a volume. Upload is a short free hold
-    # (blob_free_bytes / blob_free_ttl_seconds). Fetch does not keep it.
-    # Extending the URI bills the caller (consumer) in integer Credits
-    # (GiB-days, ceil, minimum 1). Production posts spend then receive
-    # into acn_revenue_wallet_id; that id missing → 402, not a silent burn.
+    # Blob mailbox for A2A FilePart (not hunter mbx). Bytes live in
+    # filesystem (default) or S3-compatible storage (R2/MinIO/AWS).
+    # ACN still serves HMAC-signed GET — the bucket is private.
+    blob_store_backend: str = "filesystem"
     blob_store_path: str = "./data/blobs"
+    blob_s3_bucket: str | None = None
+    blob_s3_endpoint_url: str | None = None
+    blob_s3_region: str = "auto"
+    blob_s3_access_key: str | None = None
+    blob_s3_secret_key: str | None = None
+    blob_s3_prefix: str = "blobs"
     blob_free_bytes: int = 52_428_800  # 50 MiB
     blob_max_file_bytes: int = 10_485_760  # 10 MiB
     blob_max_agent_bytes: int = 1_073_741_824  # 1 GiB
@@ -583,6 +587,22 @@ class Settings(BaseSettings):
             elif blob_secret == token:
                 errors.append(
                     "BLOB_SIGNING_SECRET must be distinct from INTERNAL_API_TOKEN."
+                )
+
+        kind = (self.blob_store_backend or "filesystem").strip().lower()
+        if kind not in {"filesystem", "fs", "s3", "r2", "minio"}:
+            errors.append(
+                f"BLOB_STORE_BACKEND={self.blob_store_backend!r} must be filesystem or s3."
+            )
+        elif kind in {"s3", "r2", "minio"}:
+            if not (self.blob_s3_bucket or "").strip():
+                errors.append("BLOB_S3_BUCKET is required when BLOB_STORE_BACKEND=s3.")
+            if not (self.blob_s3_access_key or "").strip() or not (
+                self.blob_s3_secret_key or ""
+            ).strip():
+                errors.append(
+                    "BLOB_S3_ACCESS_KEY and BLOB_S3_SECRET_KEY are required "
+                    "when BLOB_STORE_BACKEND=s3."
                 )
 
         if errors:
