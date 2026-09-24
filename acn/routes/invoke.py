@@ -156,6 +156,75 @@ def _parse_invoke_hop_id(hop_id: str) -> tuple[str, str] | None:
     return request_id, callee
 
 
+_CHAT_ID_CHARS = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
+
+
+def _safe_chat_id(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    cid = raw.strip()
+    if not cid or len(cid) > 80 or any(ch not in _CHAT_ID_CHARS for ch in cid):
+        return None
+    return cid
+
+
+def _caller_chat_id(message: dict[str, Any]) -> str | None:
+    meta = message.get("metadata")
+    if not isinstance(meta, dict):
+        return None
+    ap = meta.get("agentplanet")
+    if not isinstance(ap, dict):
+        return None
+    return _safe_chat_id(ap.get("chat_id"))
+
+
+def _invoke_envelope(
+    *,
+    body: InvokeRequest,
+    request_id: str,
+    hop_id: str,
+    caller_kind: str,
+    slot_id: str | None,
+    chat_id: str | None,
+) -> dict[str, Any]:
+    invoke_block: dict[str, Any] = {
+        "request_id": request_id,
+        "hop_id": hop_id,
+        "caller_kind": caller_kind,
+        **({"slot": slot_id} if slot_id else {}),
+        **({"chat_id": chat_id} if chat_id else {}),
+    }
+    ap: dict[str, Any] = {"invoke": invoke_block}
+    if chat_id:
+        ap["chat_id"] = chat_id
+    text = (
+        body.message.get("text")
+        if isinstance(body.message.get("text"), str)
+        else str(body.message)
+    )
+    envelope: dict[str, Any] = {
+        "role": "user",
+        "parts": [{"kind": "text", "text": text}],
+        "metadata": {"agentplanet": ap},
+    }
+    raw_meta = body.message.get("metadata")
+    base_meta = raw_meta if isinstance(raw_meta, dict) else {}
+    if isinstance(body.message.get("role"), str) and isinstance(
+        body.message.get("parts"), list
+    ):
+        envelope = {
+            **{
+                k: v
+                for k, v in body.message.items()
+                if k not in ("message_id", "messageId")
+            },
+            "metadata": {**base_meta, "agentplanet": ap},
+        }
+    return envelope
+
+
 def _slot_http_error(exc: SlotContractError) -> ACNHTTPError:
     return ACNHTTPError(
         ErrorCode.INVALID_REQUEST,
@@ -403,56 +472,18 @@ async def invoke(
     last_error: ACNHTTPError | None = None
     callee = candidates[0]
     result: Any = None
+    chat_id = _caller_chat_id(body.message)
 
     for callee in candidates:
         hop_id = _invoke_hop_id(request_id, callee)
-        envelope = {
-            "role": "user",
-            "parts": [
-                {
-                    "kind": "text",
-                    "text": body.message.get("text")
-                    if isinstance(body.message.get("text"), str)
-                    else str(body.message),
-                }
-            ],
-            "metadata": {
-                "agentplanet": {
-                    "invoke": {
-                        "request_id": request_id,
-                        "hop_id": hop_id,
-                        "caller_kind": caller_kind,
-                        **({"slot": slot_id} if slot_id else {}),
-                    }
-                }
-            },
-        }
-        raw_meta = body.message.get("metadata")
-        base_meta = raw_meta if isinstance(raw_meta, dict) else {}
-        raw_ap = base_meta.get("agentplanet")
-        ap_meta = raw_ap if isinstance(raw_ap, dict) else {}
-        if isinstance(body.message.get("role"), str) and isinstance(
-            body.message.get("parts"), list
-        ):
-            envelope = {
-                **{
-                    k: v
-                    for k, v in body.message.items()
-                    if k not in ("message_id", "messageId")
-                },
-                "metadata": {
-                    **base_meta,
-                    "agentplanet": {
-                        **ap_meta,
-                        "invoke": {
-                            "request_id": request_id,
-                            "hop_id": hop_id,
-                            "caller_kind": caller_kind,
-                            **({"slot": slot_id} if slot_id else {}),
-                        },
-                    },
-                },
-            }
+        envelope = _invoke_envelope(
+            body=body,
+            request_id=request_id,
+            hop_id=hop_id,
+            caller_kind=caller_kind,
+            slot_id=slot_id,
+            chat_id=chat_id,
+        )
         try:
             message = _payload_to_a2a_message(envelope)
             result = await message_service.send_message(
@@ -506,6 +537,10 @@ async def invoke(
         target_type="agent",
         message_id=_result_message_id(result),
     )
+    if chat_id:
+        await _notify_host_chat_admit(
+            hop_id=hop_id, callee=callee, chat_id=chat_id
+        )
 
     delivery = result if isinstance(result, dict) else {"status": "sent"}
     usage = delivery.get("usage") if isinstance(delivery.get("usage"), dict) else None
@@ -533,6 +568,42 @@ async def invoke(
         payload["fallback_from"] = attempts[0]["to"]
         payload["attempts"] = attempts
     return payload
+
+
+async def _notify_host_chat_admit(
+    *,
+    hop_id: str,
+    callee: str,
+    chat_id: str,
+) -> None:
+    """Admit the callee to this hunter chat. Failures do not fail invoke.
+
+    chat_id is the capability; reply_path is never forwarded on the hop.
+    """
+    settings = get_settings()
+    if not settings.backend_url or not settings.internal_api_token:
+        logger.info("invoke_chat_admit_skipped", reason="backend_unconfigured")
+        return
+    url = f"{settings.backend_url.rstrip('/')}/api/internal/agent-router/chat-admit"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                url,
+                json={
+                    "hop_id": hop_id,
+                    "callee_agent_id": callee,
+                    "chat_id": chat_id,
+                },
+                headers={"X-Internal-Token": settings.internal_api_token},
+            )
+        if resp.status_code >= 400:
+            logger.warning(
+                "invoke_chat_admit_failed",
+                status_code=resp.status_code,
+                hop_id=hop_id,
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("invoke_chat_admit_unreachable", error=str(exc), hop_id=hop_id)
 
 
 async def _forward_backend_complete(
