@@ -393,6 +393,36 @@ export interface SendMessageRequest {
   message_type?: ManifestMessageType;
 }
 
+/** ACN blob object for A2A FilePart URIs (mailbox + paid extend). */
+export interface BlobObject {
+  id: string;
+  owner_id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  sha256: string;
+  exp: number;
+  credits: number;
+  retained: boolean;
+  uri: string;
+  charged?: number;
+}
+
+/** Authenticated agent's mailbox + retained quota. */
+export interface BlobUsage {
+  agent_id: string;
+  mailbox_bytes: number;
+  mailbox_cap_bytes: number;
+  retained_bytes: number;
+  retained_cap_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+  max_agent_bytes: number;
+  max_file_bytes: number;
+  free_ttl_seconds: number;
+  credits_per_gib_day: number;
+}
+
 /** Broadcast delivery strategy */
 export type BroadcastStrategy = 'parallel' | 'sequential' | 'best_effort';
 

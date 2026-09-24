@@ -14,7 +14,8 @@
  * Hosts return {"content":"..."} and optionally usage (in/out billed;
  * extras stored), mailbox ``attachments`` (``mbx:{id}`` only),
  * ``tool_lines`` (``kind:image|video|audio|file``; Host caps to this-hop files),
- * and ``orchestration.callees`` (who this hop invoked; Host sanitizes).
+ * ``orchestration.callees`` (who this hop invoked; Host sanitizes),
+ * and optional ``propose_group`` / ``propose_task`` cards (stored only).
  * Host chat procedure: Agentplanet-backend ``skills/interfaze`` (not this ACN skill).
  * They do not call Gateway themselves.
  */
@@ -171,7 +172,25 @@ export type ChatCompleteResult = {
   /** Image/video/audio/file units; Host caps to this-hop files. */
   tool_lines?: Array<{ kind: string; units: number }>;
   /** Downstream agents invoked this hop. Host sanitizes hop_id / local: ids. */
-  orchestration?: { callees: OrchestrationCallee[] };
+  orchestration?: {
+    callees?: OrchestrationCallee[];
+    propose_group?: OrchestrationProposeGroup;
+    propose_task?: OrchestrationProposeTask;
+  };
+};
+
+export type OrchestrationProposeTask = {
+  title: string;
+  reward: string;
+  description?: string;
+  deadline_hours?: number;
+};
+
+export type OrchestrationProposeGroup = {
+  agent_ids?: string[];
+  title?: string;
+  summary?: string;
+  existing_chat_id?: string;
 };
 
 /**
@@ -353,29 +372,40 @@ export function extractPieceToolLines(
 const MAX_ORCH_CALLEES = 8;
 const ORCH_STATUS = new Set(['accepted', 'sent', 'completed', 'failed']);
 
-/** Complete JSON ``orchestration.callees`` — invoke hops only; drop local:/sys:. */
+/** Complete JSON ``orchestration`` — hops plus optional confirm cards. */
 export function extractOrchestration(
   payload: unknown
-): { callees: OrchestrationCallee[] } | undefined {
+): {
+  callees?: OrchestrationCallee[];
+  propose_group?: OrchestrationProposeGroup;
+  propose_task?: OrchestrationProposeTask;
+} | undefined {
   const rec = asRecord(payload);
   const orch = rec ? asRecord(rec.orchestration) : null;
-  if (!orch || !Array.isArray(orch.callees) || orch.callees.length === 0) {
-    return undefined;
-  }
+  if (!orch) return undefined;
+  const callees = extractCallees(orch.callees);
+  const propose_group = extractProposeGroup(orch.propose_group);
+  const propose_task = extractProposeTask(orch.propose_task);
+  if (!callees && !propose_group && !propose_task) return undefined;
+  return {
+    ...(callees ? { callees } : {}),
+    ...(propose_group ? { propose_group } : {}),
+    ...(propose_task ? { propose_task } : {}),
+  };
+}
+
+function extractCallees(raw: unknown): OrchestrationCallee[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
   const out: OrchestrationCallee[] = [];
   const seen = new Set<string>();
-  for (const item of orch.callees) {
+  for (const item of raw) {
     if (out.length >= MAX_ORCH_CALLEES) break;
     const row = asRecord(item);
     if (!row) continue;
     const rawId = row.agent_id ?? row.to;
     if (typeof rawId !== 'string') continue;
-    let bare = rawId.trim();
-    if (bare.startsWith('acn:')) bare = bare.slice(4).trim();
-    if (!bare || bare.length > 128) continue;
-    const lowered = bare.toLowerCase();
-    if (lowered.startsWith('local:') || lowered.startsWith('sys:')) continue;
-    if (seen.has(bare)) continue;
+    const bare = bareAgentId(rawId);
+    if (!bare || seen.has(bare)) continue;
     seen.add(bare);
     const callee: OrchestrationCallee = { agent_id: bare };
     if (typeof row.hop_id === 'string') {
@@ -394,7 +424,104 @@ export function extractOrchestration(
     }
     out.push(callee);
   }
-  return out.length ? { callees: out } : undefined;
+  return out.length ? out : undefined;
+}
+
+function extractProposeGroup(raw: unknown): OrchestrationProposeGroup | undefined {
+  const rec = asRecord(raw);
+  if (!rec) return undefined;
+  const idsRaw = rec.agent_ids ?? rec.participants;
+  const agent_ids: string[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(idsRaw)) {
+    for (const item of idsRaw) {
+      if (agent_ids.length >= MAX_ORCH_CALLEES) break;
+      let rawId: unknown = item;
+      const row = asRecord(item);
+      if (row) rawId = row.agent_id ?? row.id ?? row.to;
+      if (typeof rawId !== 'string') continue;
+      const bare = bareAgentId(rawId);
+      if (!bare || seen.has(bare)) continue;
+      seen.add(bare);
+      agent_ids.push(bare);
+    }
+  }
+  const title =
+    typeof rec.title === 'string' ? rec.title.trim().slice(0, 200) : '';
+  const summary =
+    typeof rec.summary === 'string' ? rec.summary.trim().slice(0, 4000) : '';
+  const existing =
+    typeof rec.existing_chat_id === 'string'
+      ? rec.existing_chat_id.trim().slice(0, 64)
+      : '';
+  const existingOk =
+    existing &&
+    !existing.toLowerCase().startsWith('local:') &&
+    !existing.toLowerCase().startsWith('sys:')
+      ? existing
+      : '';
+  if (!agent_ids.length && !existingOk) return undefined;
+  const out: OrchestrationProposeGroup = {};
+  if (agent_ids.length) out.agent_ids = agent_ids;
+  if (title) out.title = title;
+  if (summary) out.summary = summary;
+  if (existingOk) out.existing_chat_id = existingOk;
+  return Object.keys(out).length ? out : undefined;
+}
+
+const TASK_REWARD_MAX = 1_000_000;
+const TASK_DEADLINE_MAX = 2160;
+
+function extractProposeTask(raw: unknown): OrchestrationProposeTask | undefined {
+  const rec = asRecord(raw);
+  if (!rec) return undefined;
+  const title = typeof rec.title === 'string' ? rec.title.trim().slice(0, 200) : '';
+  if (!title) return undefined;
+  const reward = taskRewardText(rec.reward);
+  if (reward === undefined) return undefined;
+  const out: OrchestrationProposeTask = { title, reward };
+  if (typeof rec.description === 'string') {
+    const description = rec.description.trim().slice(0, 2000);
+    if (description) out.description = description;
+  }
+  const deadline = taskDeadlineHours(rec.deadline_hours);
+  if (deadline !== undefined) out.deadline_hours = deadline;
+  return out;
+}
+
+function taskRewardText(raw: unknown): string | undefined {
+  if (typeof raw === 'boolean' || raw == null) return undefined;
+  let text: string;
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return undefined;
+    text = String(raw);
+  } else if (typeof raw === 'string') {
+    text = raw.trim();
+  } else {
+    return undefined;
+  }
+  if (!text) return undefined;
+  const amount = Number(text);
+  if (!Number.isFinite(amount) || amount < 0 || amount > TASK_REWARD_MAX) return undefined;
+  return text.slice(0, 32);
+}
+
+function taskDeadlineHours(raw: unknown): number | undefined {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return undefined;
+  }
+  const hours = Math.trunc(raw);
+  if (hours < 1 || hours > TASK_DEADLINE_MAX) return undefined;
+  return hours;
+}
+
+function bareAgentId(raw: string): string | undefined {
+  let bare = raw.trim();
+  if (bare.startsWith('acn:')) bare = bare.slice(4).trim();
+  if (!bare || bare.length > 128) return undefined;
+  const lowered = bare.toLowerCase();
+  if (lowered.startsWith('local:') || lowered.startsWith('sys:')) return undefined;
+  return bare;
 }
 
 function parseCompletePayload(
@@ -938,7 +1065,11 @@ async function postWriteback(
   if (complete.tool_lines?.length) {
     body.tool_lines = complete.tool_lines;
   }
-  if (complete.orchestration?.callees?.length) {
+  if (
+    complete.orchestration?.callees?.length ||
+    complete.orchestration?.propose_group ||
+    complete.orchestration?.propose_task
+  ) {
     body.orchestration = complete.orchestration;
   }
 

@@ -113,7 +113,9 @@ class Settings(BaseSettings):
 
     # ACN revenue wallet ID in Backend (wallet_type=PLATFORM, label=acn_revenue).
     # Backend's release/release_partial endpoints split fees and credit this wallet.
-    # Must be pre-created in Backend's wallets table before enabling fee collection.
+    # Paid blob extend credits this wallet via POST /api/internal/wallet/platform-credit
+    # after spend. Must be a PLATFORM wallet_id (seed_revenue_wallets.py).
+    # Blank + a live wallet client refuses extend (402, reason=no_revenue_wallet).
     acn_revenue_wallet_id: str | None = None
 
     # Internal API Token (shared with Backend for service-to-service auth).
@@ -268,6 +270,25 @@ class Settings(BaseSettings):
     # only after auditing every endpoint that consumes large dict fields
     # (message, metadata, ui_spec, agent_card).
     max_request_body_size: int = 1_048_576  # 1 MiB
+
+    # Blob mailbox for A2A FilePart (not hunter mbx). Bytes live in
+    # filesystem (default) or S3-compatible storage (R2/MinIO/AWS).
+    # ACN still serves HMAC-signed GET — the bucket is private.
+    blob_store_backend: str = "filesystem"
+    blob_store_path: str = "./data/blobs"
+    blob_s3_bucket: str | None = None
+    blob_s3_endpoint_url: str | None = None
+    blob_s3_region: str = "auto"
+    blob_s3_access_key: str | None = None
+    blob_s3_secret_key: str | None = None
+    blob_s3_prefix: str = "blobs"
+    blob_free_bytes: int = 52_428_800  # 50 MiB
+    blob_max_file_bytes: int = 10_485_760  # 10 MiB
+    blob_max_agent_bytes: int = 1_073_741_824  # 1 GiB
+    blob_free_ttl_seconds: int = 7 * 24 * 3600
+    blob_max_ttl_seconds: int = 90 * 24 * 3600
+    blob_credits_per_gib_day: float = 1.0
+    blob_signing_secret: str | None = None
 
     # Anti-spam / join controls
     # Max registrations from one IP per day (endpoint-less agents are cheaper to spam)
@@ -548,6 +569,41 @@ class Settings(BaseSettings):
                 "If you need to expose the service on a public interface, "
                 "set DEV_MODE=false (and configure Auth0 + a non-'*' CORS origin)."
             )
+
+        if not self.dev_mode:
+            blob_secret = (self.blob_signing_secret or "").strip()
+            token = (self.internal_api_token or "").strip()
+            if not blob_secret:
+                errors.append(
+                    "BLOB_SIGNING_SECRET must be set when DEV_MODE=false. "
+                    "FilePart HMAC must not share INTERNAL_API_TOKEN "
+                    "(rotating the token would invalidate live URIs)."
+                )
+            elif len(blob_secret) < 32:
+                errors.append(
+                    "BLOB_SIGNING_SECRET must be at least 32 characters "
+                    f"(current length: {len(blob_secret)})."
+                )
+            elif blob_secret == token:
+                errors.append(
+                    "BLOB_SIGNING_SECRET must be distinct from INTERNAL_API_TOKEN."
+                )
+
+        kind = (self.blob_store_backend or "filesystem").strip().lower()
+        if kind not in {"filesystem", "fs", "s3", "r2", "minio"}:
+            errors.append(
+                f"BLOB_STORE_BACKEND={self.blob_store_backend!r} must be filesystem or s3."
+            )
+        elif kind in {"s3", "r2", "minio"}:
+            if not (self.blob_s3_bucket or "").strip():
+                errors.append("BLOB_S3_BUCKET is required when BLOB_STORE_BACKEND=s3.")
+            if not (self.blob_s3_access_key or "").strip() or not (
+                self.blob_s3_secret_key or ""
+            ).strip():
+                errors.append(
+                    "BLOB_S3_ACCESS_KEY and BLOB_S3_SECRET_KEY are required "
+                    "when BLOB_STORE_BACKEND=s3."
+                )
 
         if errors:
             raise ValueError(

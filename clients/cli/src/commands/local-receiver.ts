@@ -9,6 +9,7 @@ import {
   dedupeKey,
   normalizeEvent,
   parseJsonRpcBody,
+  type ContentPart,
   type NormalizedEvent,
 } from './normalize-event.js';
 import {
@@ -34,11 +35,19 @@ export interface ReceiverResponseFrame {
   body: string;
 }
 
+export interface ReplySender {
+  agentId: string;
+  apiKey: string;
+  baseUrl: string;
+}
+
 export interface LocalReceiverOptions extends RuntimeWakeOptions {
   dedupe: boolean;
   dedupeTtlSec: number;
   /** When set, chat envelopes skip wakeRuntime and use Gateway writeback. */
   chatWriteback?: ChatWritebackOptions;
+  /** Credentials for sending a later content message back to the caller. */
+  sender?: ReplySender;
 }
 
 export interface LocalReceiverDeps extends WakeDeps, ChatWritebackDeps {
@@ -155,6 +164,61 @@ export function processIncomingRequest(
   return { response, event, shouldWake: true, dedupeHit: false };
 }
 
+async function deliverContentReply(
+  event: NormalizedEvent,
+  parts: ContentPart[] | undefined,
+  opts: LocalReceiverOptions,
+  deps: LocalReceiverDeps
+): Promise<void> {
+  if (!parts || parts.length === 0) return;
+  const logFn = deps.logFn ?? ((line: string) => console.error(line));
+  if (!event.from_agent) {
+    logFn(
+      `[acn listen] content_reply_skipped message_id=${event.message_id} reason=no_from_agent`
+    );
+    return;
+  }
+  if (!opts.sender) {
+    logFn(
+      `[acn listen] content_reply_skipped message_id=${event.message_id} reason=no_sender`
+    );
+    return;
+  }
+  const fetchFn = deps.fetchFn ?? fetch;
+  const url = `${opts.sender.baseUrl.replace(/\/+$/, '')}/api/v1/communication/send`;
+  try {
+    const res = await fetchFn(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${opts.sender.apiKey}`,
+      },
+      body: JSON.stringify({
+        from_agent: opts.sender.agentId,
+        target_agent: event.from_agent,
+        message: { role: 'agent', parts },
+      }),
+    });
+    try {
+      await res.text();
+    } catch {
+      /* ignore drain errors */
+    }
+    if (res.status < 200 || res.status >= 300) {
+      logFn(
+        `[acn listen] content_reply_failed to=${event.from_agent} http=${res.status}`
+      );
+      return;
+    }
+    logFn(`[acn listen] content_reply_sent to=${event.from_agent}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logFn(
+      `[acn listen] content_reply_failed to=${event.from_agent} reason=${msg.slice(0, 200)}`
+    );
+  }
+}
+
 function formatWakeFailed(event: NormalizedEvent, reason: string): string {
   const task = event.task_id ?? '-';
   return (
@@ -234,12 +298,14 @@ export function dispatchLocalReceiver(
   }
 
   void wakeRuntime(event, opts, deps)
-    .then((wake) => {
+    .then(async (wake) => {
       if (!wake.ok) {
         // Release the slot so ACN at-least-once retries can wake again.
         if (key) dedupeStore.forget(key);
         logFn(formatWakeFailed(event, wake.reason));
+        return;
       }
+      await deliverContentReply(event, wake.replyParts, opts, deps);
     })
     .catch((err: unknown) => {
       if (key) dedupeStore.forget(key);
@@ -322,8 +388,10 @@ export async function dispatchLocalReceiverAndWaitWake(
     if (!wake.ok) {
       if (key) dedupeStore.forget(key);
       logFn(formatWakeFailed(result.event, wake.reason));
+      return { dedupeHit: false, woke: false };
     }
-    return { dedupeHit: false, woke: wake.ok };
+    await deliverContentReply(result.event, wake.replyParts, opts, deps);
+    return { dedupeHit: false, woke: true };
   } catch (err) {
     if (key) dedupeStore.forget(key);
     const msg = err instanceof Error ? err.message : String(err);

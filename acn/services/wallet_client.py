@@ -18,6 +18,7 @@ class WalletResult(BaseModel):
     message: str
     balance: float | None = None
     error: str | None = None
+    status_code: int | None = None
 
 
 class EarningsResult(BaseModel):
@@ -50,6 +51,7 @@ class WalletClient:
     Handles:
     - get_balance: Get agent wallet balance
     - spend: Deduct credits for agent actions
+    - credit_platform: Credit a PLATFORM revenue wallet by wallet_id
     - receive: Add credits to agent wallet
     - add_earnings: Distribute earnings with owner share split
     - topup: Owner tops up agent wallet
@@ -73,9 +75,15 @@ class WalletClient:
         self.timeout = timeout
         self.internal_token = internal_token
 
-    def _get_headers(self) -> dict:
+    def _http_timeout(self) -> httpx.Timeout:
+        """Read-bounded timeout so connect/write cannot stack to 4× ``timeout``."""
+        read = float(self.timeout)
+        short = min(10.0, read) if read > 0 else 10.0
+        return httpx.Timeout(connect=short, read=read, write=short, pool=min(5.0, short))
+
+    def _get_headers(self) -> dict[str, str]:
         """Get request headers with internal token"""
-        headers = {"Content-Type": "application/json"}
+        headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.internal_token:
             headers["X-Internal-Token"] = self.internal_token
         return headers
@@ -198,6 +206,8 @@ class WalletClient:
         agent_id: str,
         amount: float,
         description: str,
+        *,
+        idempotency_key: str | None = None,
     ) -> WalletResult:
         """
         Agent spends credits
@@ -217,14 +227,19 @@ class WalletClient:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
+            async with httpx.AsyncClient(timeout=self._http_timeout(), trust_env=False) as client:
+                payload: dict[str, object] = {
+                    "amount": int(amount),
+                    "description": description,
+                }
+                headers = self._get_headers()
+                if idempotency_key:
+                    payload["idempotency_key"] = idempotency_key
+                    headers["Idempotency-Key"] = idempotency_key
                 response = await client.post(
                     f"{self.backend_url}/api/agent-wallets/{agent_id}/spend",
-                    headers=self._get_headers(),
-                    json={
-                        "amount": amount,
-                        "description": description,
-                    },
+                    headers=headers,
+                    json=payload,
                 )
 
                 if response.status_code == 200:
@@ -252,6 +267,7 @@ class WalletClient:
                         success=False,
                         message="Failed to spend",
                         error=error,
+                        status_code=response.status_code,
                     )
 
         except httpx.RequestError as e:
@@ -331,6 +347,76 @@ class WalletClient:
             logger.error(
                 "wallet_receive_error",
                 agent_id=agent_id,
+                error=str(e),
+            )
+            return WalletResult(
+                success=False,
+                message="Wallet service unavailable",
+                error=str(e),
+            )
+
+    async def credit_platform(
+        self,
+        wallet_id: str,
+        amount: float,
+        description: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> WalletResult:
+        """Credit a Backend PLATFORM wallet by ``wallet_id``. Does not create AGENT wallets."""
+        if amount <= 0:
+            return WalletResult(
+                success=True,
+                message="No amount to credit",
+            )
+        credits = int(amount)
+        try:
+            async with httpx.AsyncClient(timeout=self._http_timeout(), trust_env=False) as client:
+                payload: dict[str, object] = {
+                    "wallet_id": wallet_id,
+                    "amount": credits,
+                    "description": description,
+                }
+                headers = self._get_headers()
+                if idempotency_key:
+                    payload["idempotency_key"] = idempotency_key
+                    headers["Idempotency-Key"] = idempotency_key
+                response = await client.post(
+                    f"{self.backend_url}/api/internal/wallet/platform-credit",
+                    headers=headers,
+                    json=payload,
+                )
+                if response.status_code == 200:
+                    data = self._parse_json(response)
+                    logger.info(
+                        "wallet_platform_credit",
+                        wallet_id=wallet_id,
+                        amount=credits,
+                        balance_after=data.get("balance"),
+                        idempotent=data.get("idempotent"),
+                    )
+                    return WalletResult(
+                        success=True,
+                        message="Credited successfully",
+                        balance=data.get("balance"),
+                    )
+                error = self._extract_error(response)
+                logger.warning(
+                    "wallet_platform_credit_failed",
+                    wallet_id=wallet_id,
+                    amount=credits,
+                    error=error,
+                )
+                return WalletResult(
+                    success=False,
+                    message="Failed to credit platform wallet",
+                    error=error,
+                    status_code=response.status_code,
+                )
+        except httpx.RequestError as e:
+            logger.error(
+                "wallet_platform_credit_error",
+                wallet_id=wallet_id,
                 error=str(e),
             )
             return WalletResult(

@@ -55,8 +55,8 @@ What this test does NOT do
   responsible for "code matches docs"; this test is responsible
   for "code matches itself across modules".
 * Does NOT validate that a code defined in ``ErrorCode`` enum
-  is actually raised somewhere. The reserved-but-unraised
-  pattern (``INSUFFICIENT_BALANCE``) is intentional.
+  is actually raised somewhere. Catalog members may exist before
+  every emitter is migrated.
 
 How to extend
 -------------

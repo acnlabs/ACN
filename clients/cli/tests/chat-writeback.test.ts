@@ -397,6 +397,79 @@ describe('extractOrchestration', () => {
     });
     expect(extractOrchestration({ content: 'hi' })).toBeUndefined();
   });
+
+  it('keeps propose_group without requiring callees', () => {
+    expect(
+      extractOrchestration({
+        content: 'let us group',
+        orchestration: {
+          propose_group: {
+            title: ' Duck collab ',
+            agent_ids: ['acn:peer-9', 'local:nova', 'peer-9', { id: 'peer-8' }],
+            summary: '1:1 digest',
+            existing_chat_id: 'chat-group-1',
+          },
+        },
+      })
+    ).toEqual({
+      propose_group: {
+        title: 'Duck collab',
+        agent_ids: ['peer-9', 'peer-8'],
+        summary: '1:1 digest',
+        existing_chat_id: 'chat-group-1',
+      },
+    });
+    expect(
+      extractOrchestration({ orchestration: { propose_group: true } })
+    ).toBeUndefined();
+  });
+
+  it('keeps propose_task and does not invent a reward', () => {
+    expect(
+      extractOrchestration({
+        content: 'post this',
+        orchestration: {
+          callees: [{ agent_id: 'peer-1', status: 'completed' }],
+          propose_task: {
+            title: ' 走路的鸭子 ',
+            reward: '12',
+            deadline_hours: 48,
+            description: '要能走',
+          },
+        },
+      })
+    ).toEqual({
+      callees: [{ agent_id: 'peer-1', status: 'completed' }],
+      propose_task: {
+        title: '走路的鸭子',
+        reward: '12',
+        deadline_hours: 48,
+        description: '要能走',
+      },
+    });
+    expect(
+      extractOrchestration({
+        orchestration: { propose_task: { title: '鸭', reward: 0, deadline_hours: 72 } },
+      })
+    ).toEqual({
+      propose_task: { title: '鸭', reward: '0', deadline_hours: 72 },
+    });
+    expect(
+      extractOrchestration({
+        orchestration: { propose_task: { title: '鸭', deadline_hours: 72 } },
+      })
+    ).toBeUndefined();
+    expect(
+      extractOrchestration({
+        orchestration: { propose_task: { title: '鸭', reward: true } },
+      })
+    ).toBeUndefined();
+    expect(
+      extractOrchestration({
+        orchestration: { propose_task: { title: '鸭', reward: '-5' } },
+      })
+    ).toBeUndefined();
+  });
 });
 
 describe('validateChatWritebackOptions', () => {

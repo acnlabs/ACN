@@ -502,3 +502,50 @@ class TestDlqRetryHonorsCurrentPolicy:
         assert retried == 0
         # Non-policy failures still re-queue.
         fake_redis.lpush.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_retry_restores_file_part(
+        self, mock_agent_service, fake_redis, policy_service
+    ):
+        """A stored file part is delivered again. The old rebuild kept only
+        text and data, so the file disappeared on retry."""
+        dlq_entry = {
+            "route_id": "f11e",
+            "from_agent": "agent-a",
+            "to_agent": "agent-b",
+            "message": {
+                "role": "user",
+                "messageId": "msg-file",
+                "parts": [
+                    {"kind": "text", "text": "diagram"},
+                    {
+                        "kind": "file",
+                        "file": {
+                            "bytes": "aGVsbG8=",
+                            "mimeType": "text/plain",
+                            "name": "hi.txt",
+                        },
+                    },
+                ],
+            },
+            "error": "previous transient failure",
+            "timestamp": "2026-04-29T10:00:00+00:00",
+            "retry_count": 0,
+        }
+        fake_redis.rpop = AsyncMock(side_effect=[json.dumps(dlq_entry), None])
+        router = MessageRouter(
+            agent_service=mock_agent_service,
+            redis_client=fake_redis,
+            policy_service=policy_service,
+        )
+        router.route = AsyncMock(return_value={"status": "delivered"})  # type: ignore[method-assign]
+
+        retried = await router.retry_dlq()
+
+        assert retried == 1
+        message = router.route.await_args.kwargs["message"]
+        parts = [p.root if hasattr(p, "root") else p for p in message.parts]
+        assert parts[0].text == "diagram"
+        assert parts[1].kind == "file"
+        assert parts[1].file.bytes == "aGVsbG8="
+        assert parts[1].file.name == "hi.txt"

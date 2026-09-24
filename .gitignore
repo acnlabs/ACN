@@ -76,6 +76,10 @@ clients/python/uv.lock
 # Internal drafts (not for public release until finalized)
 docs/_drafts/
 
+# Local blob object store (A2A FilePart)
+/data/
+
+
 
 
 

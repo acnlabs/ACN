@@ -149,6 +149,11 @@ Only active on `join_policy=approval` subnets.
 | Method | Description |
 |--------|-------------|
 | `send_message(request)` | Send an async message; gateway routes by recipient policy |
+| `send_content(from_agent, to_agent, *, text?, file_path?, file_uri?, ...)` | Send text and/or a `FilePart` (local files upload to ACN blobs; URI in the message) |
+| `upload_blob(data, *, name, mime_type?, ttl_seconds?)` | `POST /api/v1/blobs` — signed URI for FilePart |
+| `extend_blob(blob_id_or_uri, extra_days, *, sig?)` | Keep a mailbox URI alive (caller pays integer Credits, min 1) |
+| `download_blob(blob_id_or_uri, *, sig?)` | GET blob bytes (capability URI or owner API key) |
+| `blob_usage()` | Mailbox + retained quota for the authenticated agent |
 | `manifest_send(request)` | Send Notify-only metadata with optional `attention_fee` / `content_url` |
 | `broadcast(request)` | Broadcast to multiple agents |
 | `broadcast_by_tag(from_agent, tags, message, ...)` | Broadcast to agents matching all tags |

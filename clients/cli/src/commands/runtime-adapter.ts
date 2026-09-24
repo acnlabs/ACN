@@ -5,7 +5,11 @@
 
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
-import type { NormalizedEvent } from './normalize-event.js';
+import {
+  extractReplyParts,
+  type ContentPart,
+  type NormalizedEvent,
+} from './normalize-event.js';
 
 export type RuntimeId = 'http' | 'command' | 'log';
 
@@ -18,8 +22,20 @@ export interface RuntimeWakeOptions {
 }
 
 export type WakeResult =
-  | { ok: true }
+  | { ok: true; replyParts?: ContentPart[] }
   | { ok: false; reason: string };
+
+const MAX_REPLY_CHARS = 300_000;
+
+function replyPartsFromText(text: string): ContentPart[] | undefined {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.length > MAX_REPLY_CHARS) return undefined;
+  try {
+    return extractReplyParts(JSON.parse(trimmed)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface WakeDeps {
   fetchFn?: typeof fetch;
@@ -88,16 +104,12 @@ async function wakeHttp(
       body: JSON.stringify(event),
       signal: controller.signal,
     });
-    // Drain the body so keep-alive sockets are not left half-open.
-    try {
-      await res.arrayBuffer();
-    } catch {
-      /* ignore drain errors */
-    }
+    const bodyText = await res.text().catch(() => '');
     if (res.status < 200 || res.status >= 300) {
       return { ok: false, reason: `http_${res.status}` };
     }
-    return { ok: true };
+    const replyParts = replyPartsFromText(bodyText);
+    return replyParts ? { ok: true, replyParts } : { ok: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (controller.signal.aborted || /abort|timeout/i.test(msg)) {
@@ -122,6 +134,8 @@ function wakeCommand(
     let settled = false;
     const child: ChildProcess = spawnFn(opts.wakeExec!, { shell: true });
     const errOut: Buffer[] = [];
+    const stdOut: Buffer[] = [];
+    let stdoutChars = 0;
 
     const finish = (result: WakeResult) => {
       if (settled) return;
@@ -135,13 +149,24 @@ function wakeCommand(
       finish({ ok: false, reason: 'timeout' });
     }, timeoutMs);
 
+    child.stdout?.on('data', (d: Buffer) => {
+      if (stdoutChars > MAX_REPLY_CHARS) return;
+      const chunk = Buffer.from(d);
+      stdoutChars += chunk.length;
+      stdOut.push(chunk);
+    });
     child.stderr?.on('data', (d: Buffer) => errOut.push(Buffer.from(d)));
     child.on('error', (e: Error) =>
       finish({ ok: false, reason: e.message.slice(0, 200) })
     );
     child.on('close', (code: number | null) => {
-      if (code === 0) finish({ ok: true });
-      else {
+      if (code === 0) {
+        const replyParts =
+          stdoutChars <= MAX_REPLY_CHARS
+            ? replyPartsFromText(Buffer.concat(stdOut).toString('utf-8'))
+            : undefined;
+        finish(replyParts ? { ok: true, replyParts } : { ok: true });
+      } else {
         const detail = Buffer.concat(errOut).toString('utf-8').slice(0, 80);
         finish({
           ok: false,

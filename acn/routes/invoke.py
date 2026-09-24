@@ -484,6 +484,11 @@ async def invoke(
             slot_id=slot_id,
             chat_id=chat_id,
         )
+        if chat_id:
+            # Admit before delivery so a fast Mode B complete can upload.
+            await _notify_host_chat_admit(
+                hop_id=hop_id, callee=callee, chat_id=chat_id
+            )
         try:
             message = _payload_to_a2a_message(envelope)
             result = await message_service.send_message(
@@ -537,10 +542,6 @@ async def invoke(
         target_type="agent",
         message_id=_result_message_id(result),
     )
-    if chat_id:
-        await _notify_host_chat_admit(
-            hop_id=hop_id, callee=callee, chat_id=chat_id
-        )
 
     delivery = result if isinstance(result, dict) else {"status": "sent"}
     usage = delivery.get("usage") if isinstance(delivery.get("usage"), dict) else None

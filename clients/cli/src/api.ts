@@ -50,9 +50,11 @@ export async function acnFetch<T>(
   }
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
     ...(fetchOptions.headers as Record<string, string> | undefined),
   };
+  if (!(fetchOptions.body instanceof FormData) && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   if (config.api_key) {
     headers['Authorization'] = `Bearer ${config.api_key}`;
@@ -80,6 +82,41 @@ export function acnGet<T>(
   return acnFetch<T>(path, { method: 'GET', params, baseUrl: opts?.baseUrl });
 }
 
+export async function acnGetBytes(
+  path: string,
+  params?: Record<string, string | number | boolean | undefined>,
+  opts?: { baseUrl?: string }
+): Promise<{ bytes: Uint8Array; contentType: string; filename?: string }> {
+  const config = loadConfig();
+  const origin = opts?.baseUrl
+    ? normalizeBaseUrl(opts.baseUrl)
+    : config.base_url;
+  const url = new URL(`${origin}/api/v1${path}`);
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined) url.searchParams.set(k, String(v));
+    }
+  }
+  const headers: Record<string, string> = {};
+  if (config.api_key) {
+    headers['Authorization'] = `Bearer ${config.api_key}`;
+  }
+  const res = await fetch(url.toString(), { method: 'GET', headers });
+  if (!res.ok) {
+    let body: unknown;
+    try { body = await res.json(); } catch { body = await res.text(); }
+    throw new AcnApiError(res.status, body, `HTTP ${res.status}: ${extractDetail(body)}`);
+  }
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const cd = res.headers.get('content-disposition') ?? '';
+  const match = /filename="([^"]+)"/.exec(cd);
+  return {
+    bytes,
+    contentType: res.headers.get('content-type') || 'application/octet-stream',
+    filename: match?.[1],
+  };
+}
+
 export function acnPost<T>(
   path: string,
   body?: unknown,
@@ -90,6 +127,10 @@ export function acnPost<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
     baseUrl: opts?.baseUrl,
   });
+}
+
+export function acnPostForm<T>(path: string, form: FormData, opts?: { baseUrl?: string }): Promise<T> {
+  return acnFetch<T>(path, { method: 'POST', body: form, baseUrl: opts?.baseUrl });
 }
 
 export function acnPatch<T>(

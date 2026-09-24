@@ -352,6 +352,7 @@ describe('wakeRuntime + dispatch order', () => {
         message_id: 'msg-cmd',
         context_id: null,
         from_agent: null,
+        parts: [],
         chat: null,
         invoke: null,
         received_at: new Date().toISOString(),
@@ -403,5 +404,94 @@ describe('handleA2aRequest --runtime vs legacy --exec', () => {
       { spawnFn: spawnFn as never }
     );
     expect(JSON.parse(resp.body).result.custom).toBe(true);
+  });
+});
+
+describe('content parts on the wake, file reply as a later message', () => {
+  it('puts file parts on the wake event and keeps the accepted ack', async () => {
+    const parsed = parseJsonRpcBody(
+      messageSendBody({
+        metadata: { from_agent: 'agent-a' },
+        parts: [
+          { kind: 'text', text: 'draw this' },
+          {
+            kind: 'file',
+            file: { bytes: 'aGVsbG8=', mimeType: 'text/plain', name: 'hi.txt' },
+          },
+        ],
+      })
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const event = normalizeEvent(parsed.body);
+    expect(event.from_agent).toBe('agent-a');
+    expect(event.parts).toEqual([
+      { kind: 'text', text: 'draw this' },
+      {
+        kind: 'file',
+        file: { bytes: 'aGVsbG8=', mimeType: 'text/plain', name: 'hi.txt' },
+      },
+    ]);
+  });
+
+  it('sends a new message when the runtime returns reply parts', async () => {
+    const calls: { url: string; body: string }[] = [];
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: String(init?.body ?? '') });
+      const isWake = url.includes('/wake');
+      return {
+        status: 200,
+        headers: { get: () => null },
+        text: async () =>
+          isWake
+            ? JSON.stringify({
+                reply: {
+                  parts: [
+                    {
+                      kind: 'file',
+                      file: { uri: 'https://example.com/a.png', name: 'a.png' },
+                    },
+                  ],
+                },
+              })
+            : '',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      } as unknown as Response;
+    });
+
+    const frames: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-file',
+      messageSendBody({
+        messageId: 'm-file',
+        metadata: { from_agent: 'agent-a' },
+        parts: [{ kind: 'text', text: 'draw' }],
+      }),
+      {
+        runtime: 'http',
+        wakeUrl: 'http://127.0.0.1:9/wake',
+        dedupe: false,
+        dedupeTtlSec: 3600,
+        wakeTimeoutMs: 1000,
+        sender: {
+          agentId: 'agent-b',
+          apiKey: 'key',
+          baseUrl: 'http://acn.test',
+        },
+      },
+      new DedupeStore(3600),
+      (f) => frames.push(f),
+      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => undefined }
+    );
+
+    expect(JSON.parse((frames[0] as { body: string }).body).result.parts[0].text).toBe(
+      'accepted'
+    );
+    const sent = calls.find((c) => c.url.endsWith('/api/v1/communication/send'));
+    expect(sent).toBeTruthy();
+    const body = JSON.parse(sent!.body);
+    expect(body.from_agent).toBe('agent-b');
+    expect(body.target_agent).toBe('agent-a');
+    expect(body.message.parts[0].file.uri).toBe('https://example.com/a.png');
   });
 });

@@ -20,6 +20,14 @@ Env (complete-exec does **not** inject ``acn_*``):
   ACN_ORCH_SLOT   optional; v0 ``text.reply`` enables slot failover
   ACN_ORCH_NAME   optional display name on the callee bubble
   ACN_ORCH_SKIP   if ``1``, do not invoke (self-reply; debug)
+  ACN_ORCH_PROPOSE_GROUP  if ``1``, attach propose_group (human must confirm)
+  ACN_ORCH_PROPOSE_IDS    extra agent ids (comma); defaults to the callee
+  ACN_ORCH_PROPOSE_TITLE / ACN_ORCH_PROPOSE_SUMMARY / ACN_ORCH_PROPOSE_CHAT
+  ACN_ORCH_PROPOSE_TASK   if ``1``, attach propose_task (human must confirm)
+  ACN_ORCH_TASK_REWARD    required when the switch is on; numeric string, 0 allowed
+  ACN_ORCH_TASK_TITLE     optional; defaults to a short slice of the user text
+  ACN_ORCH_TASK_DEADLINE_HOURS  optional; default 72 (1..2160)
+  ACN_ORCH_TASK_DESCRIPTION     optional
 
 If invoke returns body text → one writeback, ``status=completed``.
 If only ``accepted``/``sent``/inbox → ``content`` is 「已请 X」;
@@ -303,6 +311,120 @@ def invoke_and_summarize(
     usage = own_usage(env)
     if usage:
         out["usage"] = usage
+    return attach_propose_task(attach_propose_group(out, env), env, user_text)
+
+
+def attach_propose_group(
+    out: dict[str, Any], env: Mapping[str, str]
+) -> dict[str, Any]:
+    """Optional P2 card. Host still will not create the group for the agent."""
+    flag = (env.get("ACN_ORCH_PROPOSE_GROUP") or "").strip().lower()
+    if flag not in ("1", "true", "yes"):
+        return out
+    orch = out.setdefault("orchestration", {})
+    if not isinstance(orch, dict):
+        return out
+    ids: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str) -> None:
+        bare = raw.strip()
+        if bare.lower().startswith("acn:"):
+            bare = bare[4:].strip()
+        key = bare.lower()
+        if not bare or key.startswith(("local:", "sys:")) or key in seen:
+            return
+        seen.add(key)
+        ids.append(bare)
+
+    extra = (env.get("ACN_ORCH_PROPOSE_IDS") or "").strip()
+    if extra:
+        for part in extra.split(","):
+            _add(part)
+    for row in orch.get("callees") or []:
+        if isinstance(row, dict) and isinstance(row.get("agent_id"), str):
+            _add(row["agent_id"])
+    existing = (env.get("ACN_ORCH_PROPOSE_CHAT") or "").strip()[:64]
+    if not ids and not existing:
+        return out
+    propose: dict[str, Any] = {}
+    if ids:
+        propose["agent_ids"] = ids[:8]
+    title = (env.get("ACN_ORCH_PROPOSE_TITLE") or "").strip()[:200]
+    summary = (env.get("ACN_ORCH_PROPOSE_SUMMARY") or "").strip()[:4000]
+    if title:
+        propose["title"] = title
+    if summary:
+        propose["summary"] = summary
+    if existing:
+        propose["existing_chat_id"] = existing
+    if propose:
+        orch["propose_group"] = propose
+    return out
+
+
+_TASK_REWARD_MAX = 1_000_000
+_TASK_TITLE_DEFAULT = 80
+
+
+def _task_reward(raw: str) -> str | None:
+    """Match gateway: numeric text, 0..1_000_000, stored trimmed (max 32)."""
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        amount = float(text)
+    except ValueError:
+        return None
+    if amount != amount or amount < 0 or amount > _TASK_REWARD_MAX:
+        return None
+    return text[:32]
+
+
+def _task_deadline_hours(raw: str | None) -> int | None:
+    """Blank → 72. Explicit value must be an integer in 1..2160."""
+    if raw is None or not str(raw).strip():
+        return 72
+    text = str(raw).strip()
+    if not text.isdigit():
+        return None
+    hours = int(text)
+    if 1 <= hours <= 2160:
+        return hours
+    return None
+
+
+def attach_propose_task(
+    out: dict[str, Any], env: Mapping[str, str], user_text: str
+) -> dict[str, Any]:
+    """Optional P4 card. This script does not create a task or call match."""
+    flag = (env.get("ACN_ORCH_PROPOSE_TASK") or "").strip().lower()
+    if flag not in ("1", "true", "yes"):
+        return out
+    reward = _task_reward(env.get("ACN_ORCH_TASK_REWARD") or "")
+    if reward is None:
+        return out
+    title = (env.get("ACN_ORCH_TASK_TITLE") or "").strip()
+    if not title:
+        title = " ".join((user_text or "").split())[:_TASK_TITLE_DEFAULT]
+    title = title[:200]
+    if not title:
+        return out
+    deadline = _task_deadline_hours(env.get("ACN_ORCH_TASK_DEADLINE_HOURS"))
+    if deadline is None:
+        return out
+    orch = out.setdefault("orchestration", {})
+    if not isinstance(orch, dict):
+        return out
+    propose: dict[str, Any] = {
+        "title": title,
+        "reward": reward,
+        "deadline_hours": deadline,
+    }
+    description = (env.get("ACN_ORCH_TASK_DESCRIPTION") or "").strip()[:2000]
+    if description:
+        propose["description"] = description
+    orch["propose_task"] = propose
     return out
 
 
