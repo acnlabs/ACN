@@ -138,6 +138,61 @@ def test_agent_invoke_uses_authenticated_from(
     assert kwargs["from_agent_id"] == "11111111-1111-1111-1111-111111111111"
 
 
+def _agentplanet_from_message(message: object) -> dict:
+    meta = getattr(message, "metadata", None)
+    if meta is None and isinstance(message, dict):
+        meta = message.get("metadata")
+    if hasattr(meta, "model_dump"):
+        meta = meta.model_dump()
+    elif hasattr(meta, "dict"):
+        meta = meta.dict()
+    if not isinstance(meta, dict):
+        return {}
+    ap = meta.get("agentplanet")
+    if hasattr(ap, "model_dump"):
+        ap = ap.model_dump()
+    return ap if isinstance(ap, dict) else {}
+
+
+def test_agent_invoke_forwards_chat_id_not_reply_path(
+    stub_metrics, stub_message_service, stub_audit, stub_agent_service
+):
+    _wire(stub_metrics, stub_message_service, stub_audit, stub_agent_service)
+    client = TestClient(app)
+    callee = "22222222-2222-2222-2222-222222222222"
+    with (
+        patch("acn.routes.invoke._notify_backend_complete", new=AsyncMock()),
+        patch("acn.routes.invoke._notify_host_chat_admit", new=AsyncMock()) as admit,
+    ):
+        resp = client.post(
+            "/api/v1/invoke",
+            headers={"Authorization": "Bearer acn_test_key"},
+            json={
+                "to": callee,
+                "request_id": "req-chat-1",
+                "message": {
+                    "text": "hi",
+                    "metadata": {
+                        "agentplanet": {
+                            "chat_id": "76259088-fccd-4565-a905-5c6b5d9c4611",
+                            "reply_path": "/api/chats/76259088-fccd-4565-a905-5c6b5d9c4611/agent-messages",
+                            "reply_channel": "agentplanet.chat",
+                        }
+                    },
+                },
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    ap = _agentplanet_from_message(
+        stub_message_service.send_message.await_args.kwargs["message"]
+    )
+    assert ap.get("chat_id") == "76259088-fccd-4565-a905-5c6b5d9c4611"
+    assert ap.get("reply_path") is None
+    assert ap.get("reply_channel") is None
+    assert ap["invoke"]["chat_id"] == "76259088-fccd-4565-a905-5c6b5d9c4611"
+    admit.assert_awaited()
+
+
 def _slot_agent(agent_id: str, *, slots=None, mode="open", owner=None, name=None):
     agent = AsyncMock()
     agent.agent_id = agent_id

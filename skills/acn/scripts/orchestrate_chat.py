@@ -276,6 +276,9 @@ def invoke_and_summarize(
 
     slot = (env.get("ACN_ORCH_SLOT") or "").strip()
     message: dict[str, Any] = {"text": user_text or "hello"}
+    chat_id = (env.get("ACN_ORCH_CHAT_ID") or "").strip()
+    if chat_id:
+        message["metadata"] = {"agentplanet": {"chat_id": chat_id}}
     body: dict[str, Any] = {"to": callee, "message": message}
     if slot:
         body["slot"] = slot
@@ -435,7 +438,11 @@ def complete_chat(
     if event.get("invoke") and not event.get("chat"):
         return {"content": "这是 invoke 跳，不是对话编排。"}
     text = user_text_from_event(event)
-    return invoke_and_summarize(text, env, invoke_fn=invoke_fn)
+    env_out: dict[str, str] = dict(env)
+    cid = chat_id_from_event(event)
+    if cid:
+        env_out["ACN_ORCH_CHAT_ID"] = cid
+    return invoke_and_summarize(text, env_out, invoke_fn=invoke_fn)
 
 
 def main() -> int:
