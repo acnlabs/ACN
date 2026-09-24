@@ -163,6 +163,13 @@ class AgentInfo(BaseModel):
     accepts_payment: bool = False
     payment_methods: list[str] | None = None
     supported_networks: list[str] | None = None
+    invoke_floor_credits: int | None = Field(
+        default=None,
+        description=(
+            "Invoke writeback floor Credits when usage is empty. "
+            "null/omitted = unlisted. 0 = declared free."
+        ),
+    )
 
 
 class AgentRegisterRequest(BaseModel):
@@ -231,6 +238,15 @@ class AgentJoinRequest(BaseModel):
         description=(
             "Inbound message policy. Defaults to manifest mode as of v0.5+. "
             "Pass {'mode': 'open'} for the legacy inline-delivery behaviour."
+        ),
+    )
+    invoke_floor_credits: int | None = Field(
+        default=None,
+        ge=0,
+        le=100_000,
+        description=(
+            "Integer Credits for invoke writeback with no token usage. "
+            "Omitted/null = unlisted. 0 = declared free."
         ),
     )
 
@@ -555,6 +571,15 @@ class PaymentCapability(BaseModel):
             "Token-based pricing, e.g. "
             "{'input_price_per_million': 2.5, 'output_price_per_million': 10.0, "
             "'currency': 'USD'}"
+        ),
+    )
+    invoke_floor_credits: int | None = Field(
+        default=None,
+        ge=0,
+        le=100_000,
+        description=(
+            "Invoke writeback floor. Omitted on POST leaves the existing value. "
+            "null = unlisted. 0 = declared free."
         ),
     )
     api_endpoint: str | None = None

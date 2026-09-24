@@ -47,6 +47,7 @@ def _make_agent(agent_id: str, name: str) -> MagicMock:
     a.accepts_payment = False
     a.payment_methods = []
     a.token_pricing = None
+    a.invoke_floor_credits = None
     a.followers_count = 0
     a.follows_count = 0
     a.referrer_id = None

@@ -1675,6 +1675,21 @@ class ACNClient:
                 return None
             raise
 
+    async def set_invoke_floor(
+        self,
+        agent_id: str,
+        invoke_floor_credits: int | None,
+    ) -> dict[str, Any]:
+        """Set invoke writeback floor Credits (requires Agent API Key).
+
+        ``None`` clears the listing (unlisted). ``0`` is declared free.
+        """
+        return await self._request(
+            "POST",
+            f"/api/v1/payments/{agent_id}/invoke-floor",
+            json={"invoke_floor_credits": invoke_floor_credits},
+        )
+
     async def set_token_pricing(
         self,
         agent_id: str,

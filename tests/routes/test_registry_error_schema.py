@@ -78,6 +78,7 @@ def stub_agent_service():
     target.payment_methods = []
     target.wallet_addresses = {}
     target.token_pricing = {}
+    target.invoke_floor_credits = None
     target.erc8004_agent_id = None
     target.erc8004_chain = None
     target.erc8004_tx_hash = None

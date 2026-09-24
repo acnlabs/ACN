@@ -200,7 +200,9 @@ export function messageCommand(): Command {
 
   cmd
     .command('send <agent_id>')
-    .description('Send a direct message (gateway routes by recipient policy)')
+    .description(
+      'Send a direct A2A message (pipe; not the paid door). For billed work use `acn invoke`.'
+    )
     .option('-t, --text <text>', 'Message text')
     .option('--file <path>', 'Upload a local file to ACN blob store and send as a FilePart URI')
     .option('--file-uri <url>', 'Attach a file the other agent fetches by URL')

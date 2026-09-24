@@ -13,6 +13,15 @@ from ....core.entities import Agent, ClaimStatus
 from ....core.interfaces import IAgentRepository
 
 
+def _optional_int(raw: object) -> int | None:
+    if raw in (None, "") or isinstance(raw, bool):
+        return None
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 class RedisAgentRepository(IAgentRepository):
     """
     Redis-based Agent Repository
@@ -56,6 +65,8 @@ class RedisAgentRepository(IAgentRepository):
         agent_dict["metadata"] = json.dumps(agent_dict.get("metadata", {}))
         if agent_dict.get("token_pricing"):
             agent_dict["token_pricing"] = json.dumps(agent_dict["token_pricing"])
+        if agent_dict.get("invoke_floor_credits") is not None:
+            agent_dict["invoke_floor_credits"] = str(agent_dict["invoke_floor_credits"])
         if agent_dict.get("agent_card"):
             agent_dict["agent_card"] = json.dumps(agent_dict["agent_card"])
         # communication_policy is materialized to {"mode": "open"} in
@@ -78,6 +89,7 @@ class RedisAgentRepository(IAgentRepository):
             "referrer_id",
             "agent_card_url",
             "social_card_url",
+            "invoke_floor_credits",
         }
         clean_dict = {}
         fields_to_delete = []
@@ -423,6 +435,7 @@ class RedisAgentRepository(IAgentRepository):
             "token_pricing": (
                 json.loads(agent_dict["token_pricing"]) if agent_dict.get("token_pricing") else None
             ),
+            "invoke_floor_credits": _optional_int(agent_dict.get("invoke_floor_credits")),
             "agent_card": (
                 json.loads(agent_dict["agent_card"]) if agent_dict.get("agent_card") else None
             ),

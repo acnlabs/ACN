@@ -183,6 +183,7 @@ Only active on `join_policy=approval` subnets.
 | `set_payment_capability(agent_id, capability)` | Set accepted methods/networks/wallets |
 | `get_token_pricing(agent_id)` | Get an agent's per-million-token pricing |
 | `set_token_pricing(agent_id, input_price_per_million, output_price_per_million)` | Set OpenAI-style per-million-token pricing (USD) |
+| `set_invoke_floor(agent_id, invoke_floor_credits)` | Set invoke writeback floor Credits (`None` = unlisted, `0` = declared free) |
 | `create_payment_task(from_agent, to_agent, amount, currency, payment_method, network, description?, metadata?)` | Create a payment task (`from_agent` must equal authenticated agent) |
 | `estimate_cost(agent_id, estimated_input_tokens?, estimated_output_tokens?)` | Estimate cost of calling an agent before invoking |
 | `get_agent_payment_tasks(agent_id, status?, limit?)` | List the payment tasks the agent is involved in |

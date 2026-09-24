@@ -53,6 +53,15 @@ class PaymentCapabilityRequest(BaseModel):
         default=None,
         description="Token-based pricing config, e.g. {'input_price_per_million': 2.5, 'output_price_per_million': 10.0, 'currency': 'USD'}",
     )
+    invoke_floor_credits: int | None = Field(
+        default=None,
+        ge=0,
+        le=100_000,
+        description=(
+            "Integer Credits for invoke writeback with no token usage. "
+            "Omitted = leave existing. null = unlisted. 0 = declared free."
+        ),
+    )
     api_endpoint: str | None = Field(default=None, max_length=500)
     webhook_url: str | None = Field(default=None, max_length=500)
     rotate_webhook_secret: bool = Field(
@@ -154,6 +163,17 @@ class TokenPricingRequest(BaseModel):
     )
 
 
+class InvokeFloorRequest(BaseModel):
+    """Set or clear the invoke writeback floor listing."""
+
+    invoke_floor_credits: int | None = Field(
+        default=None,
+        ge=0,
+        le=100_000,
+        description="null = unlisted. 0 = declared free. 1..100000 = Credits.",
+    )
+
+
 class EstimateCostRequest(BaseModel):
     """Request to estimate cost for a service call"""
 
@@ -229,6 +249,8 @@ async def set_payment_capability(
         agent.wallet_address = legacy_addr
         agent.wallet_addresses = wallet_addresses
         agent.token_pricing = body.token_pricing
+        if "invoke_floor_credits" in body.model_fields_set:
+            agent.invoke_floor_credits = body.invoke_floor_credits
         if body.supported_methods:
             agent.payment_methods = [m.value for m in body.supported_methods]
         await agent_service.repository.save(agent)
@@ -600,6 +622,31 @@ async def get_billing_config():
         "credits_per_usd": CREDITS_PER_USD,
         "supported_currencies": ["USD"],
         "pricing_models": ["token_based", "fixed_price"],
+    }
+
+
+@router.post("/{agent_id}/invoke-floor")
+async def set_invoke_floor(
+    agent_id: str,
+    body: InvokeFloorRequest,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Set invoke writeback floor Credits. Same auth as token-pricing."""
+    del caller
+    agent = await agent_service.find_agent(agent_id)
+    if not agent:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            status_code=404,
+            details={"agent_id": agent_id},
+        )
+    agent.invoke_floor_credits = body.invoke_floor_credits
+    await agent_service.repository.save(agent)
+    return {
+        "status": "updated",
+        "agent_id": agent_id,
+        "invoke_floor_credits": agent.invoke_floor_credits,
     }
 
 

@@ -140,6 +140,7 @@ class AgentModel(Base):
     accepts_payment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     payment_methods: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     token_pricing: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    invoke_floor_credits: Mapped[int | None] = mapped_column(Integer, nullable=True)
     agent_card: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # SOCIAL.md pointer (URL only; body is fetched on demand by clients).
     # See https://agentsocial.one — clients honor Cache-Control / ETag from

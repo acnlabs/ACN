@@ -368,6 +368,15 @@ class AgentJoinRequest(BaseModel):
         default=None,
         description="Token-based pricing, e.g. {'input_price_per_million': 3.0, 'output_price_per_million': 15.0, 'currency': 'USD'}",
     )
+    invoke_floor_credits: int | None = Field(
+        default=None,
+        ge=0,
+        le=100_000,
+        description=(
+            "Integer Credits for invoke writeback with no token usage. "
+            "null = unlisted. 0 = declared free."
+        ),
+    )
     # Phase 3: new agents default to ``manifest`` mode so senders
     # must go through the Notify layer before the full message reaches
     # the recipient. Existing agents keep their stored policy
@@ -1101,6 +1110,7 @@ def _agent_entity_to_info(
         accepts_payment=agent.accepts_payment,
         payment_methods=agent.payment_methods,
         token_pricing=agent.token_pricing,
+        invoke_floor_credits=agent.invoke_floor_credits,
         social_card_url=agent.social_card_url,
         reception_mode=_public_reception_mode(agent),
     )
@@ -2091,6 +2101,7 @@ async def _join_agent_impl(
             accepts_payment=body.accepts_payment,
             payment_methods=body.payment_methods,
             token_pricing=body.token_pricing,
+            invoke_floor_credits=body.invoke_floor_credits,
             communication_policy=body.communication_policy,
             agent_card_url=body.agent_card_url,
             social_card_url=getattr(body, "social_card_url", None),
@@ -5206,6 +5217,15 @@ class AgentWalletsResponse(BaseModel):
         default=None,
         description="Token-based pricing config (input/output price per million tokens)",
     )
+    invoke_floor_credits: int | None = Field(
+        default=None,
+        ge=0,
+        le=100_000,
+        description=(
+            "Integer Credits for invoke writeback with no token usage. "
+            "null = unlisted. 0 = declared free."
+        ),
+    )
     pricing: dict = Field(
         default_factory=dict,
         description="Fixed pricing per skill (e.g. {'coding': '50.00'})",
@@ -5259,6 +5279,7 @@ async def get_agent_wallets(
         wallet_addresses=agent.wallet_addresses,
         platform_credits_id=agent.agent_id,
         token_pricing=agent.token_pricing,
+        invoke_floor_credits=agent.invoke_floor_credits,
         pricing={},
         payment_processor=None,
         erc8004=erc8004,

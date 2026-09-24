@@ -125,6 +125,15 @@ class AgentInfo(BaseModel):
             "Used by Host chat billing (pricing_ref.source=agent_declared)."
         ),
     )
+    invoke_floor_credits: int | None = Field(
+        default=None,
+        ge=0,
+        le=100_000,
+        description=(
+            "Integer Credits charged on invoke writeback when usage is empty. "
+            "null = unlisted (Host rejects that complete). 0 = declared free."
+        ),
+    )
 
     # Follow graph counts (see docs/features/acn-follow-proposal.md).
     # Defaults to 0 so existing clients stay happy when the follow
