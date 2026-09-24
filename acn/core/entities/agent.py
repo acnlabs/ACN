@@ -112,6 +112,9 @@ class Agent:
     # Token-based pricing (OpenAI-style, per million tokens)
     # Format: {"input_price_per_million": 3.0, "output_price_per_million": 15.0, "currency": "USD"}
     token_pricing: dict | None = None
+    # Invoke hop floor when writeback has no token usage. None = unlisted
+    # (Host 422). 0 = declared free. Cap is MAX_INVOKE_FLOOR_CREDITS.
+    invoke_floor_credits: int | None = None
 
     # Agent Wallet - 钱包数据由 Backend 管理，不在 ACN 存储
     # [REMOVED] balance, total_earned, total_spent, owner_share - 全部迁移到 Backend Wallet
@@ -362,6 +365,7 @@ class Agent:
             "accepts_payment": self.accepts_payment,
             "payment_methods": self.payment_methods,
             "token_pricing": self.token_pricing,
+            "invoke_floor_credits": self.invoke_floor_credits,
             # [REMOVED] Agent Wallet fields - 由 Backend 管理
             # ERC-8004 On-Chain Identity
             "erc8004_agent_id": self.erc8004_agent_id,
@@ -404,6 +408,20 @@ class Agent:
         # the entity and ``cls(**data)`` would otherwise raise
         # ``TypeError: unexpected keyword argument 'status'``.
         data.pop("status", None)
+        raw_floor = data.get("invoke_floor_credits")
+        if raw_floor in ("", None) or isinstance(raw_floor, bool):
+            data["invoke_floor_credits"] = None
+        elif isinstance(raw_floor, int):
+            data["invoke_floor_credits"] = raw_floor
+        elif isinstance(raw_floor, float):
+            data["invoke_floor_credits"] = int(raw_floor)
+        elif isinstance(raw_floor, str):
+            try:
+                data["invoke_floor_credits"] = int(raw_floor)
+            except ValueError:
+                data["invoke_floor_credits"] = None
+        else:
+            data["invoke_floor_credits"] = None
         # Parse claim_status enum
         if isinstance(data.get("claim_status"), str):
             data["claim_status"] = ClaimStatus(data["claim_status"])

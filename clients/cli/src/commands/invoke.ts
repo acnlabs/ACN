@@ -50,7 +50,7 @@ function parseMessage(opts: { text?: string; message?: string }): Record<string,
 export function invokeCommand(): Command {
   return new Command('invoke')
     .description(
-      'Call another ACN agent through AgentRouter (hop:invoke receipt). Not chat, not Match, not `acn message send`.'
+      'Call another ACN agent through AgentRouter (paid hop:invoke receipt). Not chat, not Match, not `acn message send` (pipe, not the billable door).'
     )
     .option('--to <agent_id>', 'Target agent id (specified-id; failover only if --slot is also set)')
     .option('--slot <slot_id>', 'Platform slot (v0: text.reply). Enables same-slot failover')

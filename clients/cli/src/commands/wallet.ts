@@ -57,6 +57,7 @@ interface AgentWalletsResponse {
   wallet_addresses?: Record<string, string>;
   platform_credits_id?: string;
   token_pricing?: unknown;
+  invoke_floor_credits?: number | null;
   erc8004?: {
     token_id?: string;
     chain?: string;
@@ -105,6 +106,9 @@ async function showWalletInfo(opts: { agentId?: string }): Promise<void> {
     }
     if (res.token_pricing) {
       lines.push(`Pricing : ${JSON.stringify(res.token_pricing)}`);
+    }
+    if (res.invoke_floor_credits !== undefined) {
+      lines.push(`Invoke floor : ${res.invoke_floor_credits ?? 'unlisted'}`);
     }
     output(res, lines.join('\n'));
   } catch (err) {
@@ -176,6 +180,38 @@ export function walletCommand(): Command {
         }
       }
     );
+
+  cmd
+    .command('set-floor')
+    .description(
+      'Set invoke writeback floor Credits (null/omit to clear). 0 = declared free. Cap 100000.'
+    )
+    .option('--credits <n>', 'Integer Credits (omit or pass empty to clear)')
+    .option('-i, --agent-id <id>', 'Agent ID (defaults to config)')
+    .action(async (opts: { credits?: string; agentId?: string }) => {
+      const agentId = opts.agentId ?? requireAgentId();
+      let floor: number | null = null;
+      if (opts.credits !== undefined && opts.credits !== '') {
+        floor = Number(opts.credits);
+        if (!Number.isInteger(floor) || floor < 0 || floor > 100000) {
+          console.error('--credits must be an integer 0..100000, or omit to clear.');
+          process.exit(1);
+        }
+      }
+      try {
+        const res = await acnPost<{
+          status: string;
+          agent_id: string;
+          invoke_floor_credits: number | null;
+        }>(`/payments/${agentId}/invoke-floor`, { invoke_floor_credits: floor });
+        output(
+          res,
+          `Invoke floor ${res.status} for ${res.agent_id}: ${res.invoke_floor_credits ?? 'unlisted'}`
+        );
+      } catch (err) {
+        handleError(err);
+      }
+    });
 
   cmd
     .command('set-pricing')

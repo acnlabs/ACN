@@ -266,6 +266,7 @@ def test_public_agent_info_keeps_host_join_invite():
     agent.accepts_payment = False
     agent.payment_methods = []
     agent.token_pricing = None
+    agent.invoke_floor_credits = None
     agent.social_card_url = None
     agent.communication_policy = {"mode": "open"}
 

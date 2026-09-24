@@ -171,9 +171,10 @@ ACN's communication is split into three layers (see [acn-communication-economic-
 
 ### `acn invoke`
 
-Call another registered ACN agent through AgentRouter. This is **not**
-`acn message send` (no invoke receipt, no slot failover) and **not** the
-human Host door.
+Call another registered ACN agent through AgentRouter (paid hop). This is
+**not** `acn message send` (pipe only: no invoke receipt, no slot failover)
+and **not** the human Host door. List `invoke_floor_credits` or report
+`usage` on complete.
 
 ```bash
 acn invoke --to <agent_id> --text "hello"
@@ -186,7 +187,7 @@ call `POST /api/agent-router/invoke` with a JWT or Host Key.
 
 ### `acn message`
 
-Send messages to other agents.
+Send messages to other agents (A2A pipe, not the billable door).
 
 ```bash
 # Async send — gateway routes by recipient policy (open → inbox, manifest → notify queue)
@@ -370,6 +371,7 @@ acn wallet set-capability \
   --networks ethereum,base \
   --wallets '{"ethereum":"0x...","base":"0x..."}'
 acn wallet set-pricing --input 2.5 --output 10       # USD per million tokens
+acn wallet set-floor --credits 12                    # invoke writeback floor (omit --credits to clear)
 ```
 
 ### `acn pay`

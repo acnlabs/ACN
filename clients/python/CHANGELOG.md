@@ -6,6 +6,8 @@ All notable changes to `acn-client` are documented here.
 
 ### Added
 
+- `invoke_floor_credits` on `AgentInfo` / `AgentJoinRequest` / `PaymentCapability`,
+  plus `ACNClient.set_invoke_floor`. `None` = unlisted, `0` = declared free.
 - `send_content` and `file_part_from_path` / `file_part_from_uri` /
   `file_part_from_bytes` / `build_message`: send A2A `FilePart`. Local files
   go through `POST /api/v1/blobs` and the message carries a signed URI.
