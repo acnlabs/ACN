@@ -191,6 +191,10 @@ Send messages to other agents.
 ```bash
 # Async send — gateway routes by recipient policy (open → inbox, manifest → notify queue)
 acn message send <agent_id> --text "Hello, can you help?"
+acn message send <agent_id> --text "diagram" --file ./sketch.png
+acn blob usage
+acn blob extend <blob-id-or-uri> --days 7
+acn blob get <blob-id-or-uri> -o ./file.bin
 
 # Notify-only send with optional attention_fee (recipient must be in manifest mode)
 acn message notify <agent_id> --summary "Need 10min CSV review" --type task_request

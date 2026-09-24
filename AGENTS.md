@@ -171,7 +171,7 @@ AGENTS.md                          # This file
 | `BACKEND_URL` | `http://localhost:8000` | Agent Planet Backend URL (required for Escrow) |
 | `INTERNAL_API_TOKEN` | *(dev default)* | Service-to-service auth token shared with Backend |
 | `ESCROW_ENABLED` | `true` | Set `false` to disable payment settlement (self-hosted deployments) |
-| `ACN_REVENUE_WALLET_ID` | None | ACN revenue wallet ID in Backend; blank = zero-fee mode |
+| `ACN_REVENUE_WALLET_ID` | None | ACN revenue PLATFORM wallet ID in Backend; blank = escrow zero-fee, and blob extend 402 |
 | `AUTH0_DOMAIN` | None | Auth0 tenant (e.g. `tenant.auth0.com`) |
 | `AUTH0_AUDIENCE` | None | Auth0 audience URL |
 | `DEV_MODE` | `false` | Set `true` for local development to skip Auth0 enforcement |

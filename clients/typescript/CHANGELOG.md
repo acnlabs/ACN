@@ -4,6 +4,13 @@ All notable changes to `acn-client` (TypeScript) are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `uploadBlob` / `extendBlob` / `blobUsage` / `parseBlobRef` / `sendContent`:
+  ACN mailbox blobs for A2A FilePart URIs. HMAC signs blob_id only, so extend
+  does not rotate the original URI. `sendContent` uploads local bytes then
+  sends a FilePart URI.
+
 ## [1.0.2] - 2026-08-30
 
 ### Added

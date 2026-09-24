@@ -1102,6 +1102,140 @@ class ACNClient:
             json=request.model_dump(exclude_none=True),
         )
 
+    async def upload_blob(
+        self,
+        data: bytes,
+        *,
+        name: str,
+        mime_type: str | None = None,
+        ttl_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        """Upload bytes to ACN blob store. Returns metadata including ``uri``."""
+        files = {"file": (name, data, mime_type or "application/octet-stream")}
+        form: dict[str, str] | None = None
+        if ttl_seconds is not None:
+            form = {"ttl_seconds": str(ttl_seconds)}
+        response = await self._client.post("/api/v1/blobs", files=files, data=form)
+        if not response.is_success:
+            raise _build_acn_error(response)
+        result: dict[str, Any] = response.json()
+        return result
+
+    async def blob_usage(self) -> dict[str, Any]:
+        """Mailbox + retained quota for the authenticated agent."""
+        return await self._request("GET", "/api/v1/blobs/usage")
+
+    async def extend_blob(
+        self,
+        blob_id_or_uri: str,
+        extra_days: int,
+        *,
+        sig: str | None = None,
+    ) -> dict[str, Any]:
+        """Keep a blob URI alive. Caller pays integer Credits (min 1); ownership moves to payer."""
+        from .message_parts import parse_blob_uri
+
+        blob_id, uri_sig = parse_blob_uri(blob_id_or_uri)
+        body: dict[str, Any] = {"extra_days": extra_days}
+        use_sig = sig or uri_sig
+        if use_sig:
+            body["sig"] = use_sig
+        return await self._request(
+            "POST",
+            f"/api/v1/blobs/{blob_id}/extend",
+            json=body,
+        )
+
+    async def download_blob(
+        self,
+        blob_id_or_uri: str,
+        *,
+        sig: str | None = None,
+    ) -> bytes:
+        """GET blob bytes. ``blob_id_or_uri`` may be the signed FilePart URI."""
+        from .message_parts import parse_blob_uri
+
+        blob_id, uri_sig = parse_blob_uri(blob_id_or_uri)
+        params: dict[str, str] = {}
+        use_sig = sig or uri_sig
+        if use_sig:
+            params["sig"] = use_sig
+        response = await self._client.get(
+            f"/api/v1/blobs/{blob_id}",
+            params=params or None,
+        )
+        if not response.is_success:
+            raise _build_acn_error(response)
+        return response.content
+
+    async def send_content(
+        self,
+        from_agent: str,
+        to_agent: str,
+        *,
+        text: str | None = None,
+        file_path: str | None = None,
+        file_bytes: bytes | None = None,
+        file_uri: str | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+        priority: str = "normal",
+    ) -> dict[str, Any]:
+        """Send text and/or a file. Same contract as ``acn message send --file``.
+
+        Local files are uploaded to ACN blob storage; the message carries a
+        signed FilePart URI (not inline bytes). Incoming wakes expose the
+        same parts on ``from_agent``; reply by calling this again toward
+        that id.
+        """
+        from pathlib import Path
+
+        from .message_parts import build_message, file_part_from_uri
+
+        if file_path is not None and file_bytes is not None:
+            raise ValueError("file_path and file_bytes cannot both be set")
+        extra: list[dict[str, Any]] = []
+        if file_path is not None:
+            path = Path(file_path)
+            uploaded = await self.upload_blob(
+                path.read_bytes(),
+                name=file_name or path.name,
+                mime_type=mime_type,
+            )
+            uri = uploaded.get("uri")
+            if not isinstance(uri, str) or not uri:
+                raise ACNError(502, "blob upload did not return a uri")
+            extra.append(
+                file_part_from_uri(uri, name=file_name or path.name, mime_type=mime_type)
+            )
+        elif file_bytes is not None:
+            uploaded = await self.upload_blob(
+                file_bytes,
+                name=file_name or "file",
+                mime_type=mime_type,
+            )
+            uri = uploaded.get("uri")
+            if not isinstance(uri, str) or not uri:
+                raise ACNError(502, "blob upload did not return a uri")
+            extra.append(
+                file_part_from_uri(
+                    uri, name=file_name or "file", mime_type=mime_type
+                )
+            )
+        if file_uri is not None:
+            extra.append(
+                file_part_from_uri(file_uri, name=file_name, mime_type=mime_type)
+            )
+        message = build_message(text=text, parts=extra or None)
+        return await self.send_message(
+            SendMessageRequest(
+                from_agent=from_agent,
+                target_agent=to_agent,
+                message=message,
+                priority=priority,
+            )
+        )
+
     async def broadcast(self, request: BroadcastRequest) -> dict[str, Any]:
         """Broadcast message to multiple agents"""
         return await self._request(

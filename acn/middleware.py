@@ -54,6 +54,7 @@ class BodySizeLimitMiddleware:
         max_bytes: int,
         *,
         cors_allow_origins: list[str] | None = None,
+        path_max_bytes: dict[str, int] | None = None,
     ) -> None:
         """Construct the body-size limiter.
 
@@ -64,6 +65,12 @@ class BodySizeLimitMiddleware:
         list (or the list is the wildcard ``["*"]``).  This is here purely
         so that browsers see the proper 413 instead of a generic CORS
         error — the security check itself doesn't depend on it.
+
+        ``path_max_bytes`` raises the cap for matching routes.
+        Keys may be a URL prefix (longest prefix wins) or
+        ``"METHOD /exact/path"`` (exact path, that method only).
+        Blob upload uses the method form so ``POST /blobs/{id}/extend``
+        stays on the JSON 1 MiB default.
         """
 
         if max_bytes <= 0:
@@ -71,6 +78,27 @@ class BodySizeLimitMiddleware:
         self.app = app
         self.max_bytes = max_bytes
         self.cors_allow_origins = cors_allow_origins or []
+        self.path_max_bytes = path_max_bytes or {}
+
+    def _limit_for(self, method: str, path: str) -> int:
+        exact: int | None = None
+        prefix_best = self.max_bytes
+        prefix_len = -1
+        method = (method or "").upper()
+        normalized = path.rstrip("/") or "/"
+        for key, cap in self.path_max_bytes.items():
+            raw = key.strip()
+            if " " in raw:
+                want_method, rest = raw.split(" ", 1)
+                if want_method.upper() != method:
+                    continue
+                if normalized == (rest.rstrip("/") or "/"):
+                    exact = cap
+                continue
+            if path.startswith(raw) and len(raw) > prefix_len:
+                prefix_best = cap
+                prefix_len = len(raw)
+        return exact if exact is not None else prefix_best
 
     # Methods we wrap ``receive`` for. GET/HEAD/DELETE/OPTIONS aren't supposed
     # to carry meaningful bodies — wrapping their receive is pure overhead —
@@ -85,13 +113,16 @@ class BodySizeLimitMiddleware:
             return
 
         method = scope.get("method", "").upper()
+        max_bytes = self._limit_for(method, str(scope.get("path") or ""))
 
         for name, value in scope.get("headers", []):
             if name == b"content-length":
                 try:
                     declared = int(value)
                 except ValueError:
-                    await self._reject(send, scope, reason="malformed_content_length")
+                    await self._reject(
+                        send, scope, reason="malformed_content_length", max_bytes=max_bytes
+                    )
                     return
                 # Negative or oversized declared length: reject. Negative
                 # was the audit-round-2 finding — ``int(b"-1")`` happily
@@ -99,9 +130,13 @@ class BodySizeLimitMiddleware:
                 # let a hostile/buggy client smuggle past the pre-check
                 # entirely. RFC 7230 forbids negative Content-Length, so
                 # treating it as malformed is correct.
-                if declared < 0 or declared > self.max_bytes:
+                if declared < 0 or declared > max_bytes:
                     await self._reject(
-                        send, scope, reason="content_length_invalid", declared=declared
+                        send,
+                        scope,
+                        reason="content_length_invalid",
+                        declared=declared,
+                        max_bytes=max_bytes,
                     )
                     return
                 break
@@ -121,14 +156,14 @@ class BodySizeLimitMiddleware:
             if msg.get("type") == "http.request":
                 chunk = msg.get("body", b"") or b""
                 received += len(chunk)
-                if received > self.max_bytes:
+                if received > max_bytes:
                     exceeded = True
                     logger.warning(
                         "body_size_streaming_exceeded",
                         path=scope.get("path"),
                         method=scope.get("method"),
                         received=received,
-                        max_bytes=self.max_bytes,
+                        max_bytes=max_bytes,
                     )
                     return {"type": "http.disconnect"}
             return msg
@@ -142,18 +177,20 @@ class BodySizeLimitMiddleware:
         *,
         reason: str,
         declared: int | None = None,
+        max_bytes: int | None = None,
     ) -> None:
+        limit = self.max_bytes if max_bytes is None else max_bytes
         logger.warning(
             "body_size_rejected",
             path=scope.get("path"),
             method=scope.get("method"),
             reason=reason,
             declared=declared,
-            max_bytes=self.max_bytes,
+            max_bytes=limit,
         )
         body = (
             b'{"detail":"Request body too large.","max_bytes":'
-            + str(self.max_bytes).encode()
+            + str(limit).encode()
             + b"}"
         )
         headers = [

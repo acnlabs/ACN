@@ -35,12 +35,28 @@ export interface InvokeEnvelope {
   slot: string | null;
 }
 
+/** One A2A content part, same three kinds the wire uses. */
+export type ContentPart =
+  | { kind: 'text'; text: string }
+  | { kind: 'data'; data: Record<string, unknown> }
+  | {
+      kind: 'file';
+      file: {
+        bytes?: string;
+        uri?: string;
+        mimeType?: string;
+        name?: string;
+      };
+    };
+
 export interface NormalizedEvent {
   event_type: 'a2a_message';
   task_id: string | null;
   message_id: string;
   context_id: string | null;
   from_agent: string | null;
+  /** Text, data, and file parts from the message. Empty when there are none. */
+  parts: ContentPart[];
   /** Present when Chat Gateway attached a writeback contract. */
   chat: ChatEnvelope | null;
   /** Present when AgentRouter attached an invoke hop (no chat bubble). */
@@ -160,6 +176,61 @@ function extractFromAgent(message: Record<string, unknown>): string | null {
   );
 }
 
+function optionalString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/** Keep text, data, and file parts. Drop anything that is not those three. */
+export function extractContentParts(raw: unknown): ContentPart[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ContentPart[] = [];
+  for (const item of raw) {
+    const part = asRecord(item);
+    if (!part) continue;
+    if (part.kind === 'text') {
+      const text = asNonEmptyString(part.text);
+      if (text) out.push({ kind: 'text', text });
+      continue;
+    }
+    if (part.kind === 'data') {
+      const data = asRecord(part.data);
+      if (data) out.push({ kind: 'data', data });
+      continue;
+    }
+    if (part.kind !== 'file') continue;
+    const file = asRecord(part.file);
+    if (!file) continue;
+    const bytes = optionalString(file.bytes);
+    const uri = optionalString(file.uri);
+    if (!bytes && !uri) continue;
+    const mimeType = optionalString(file.mimeType) ?? optionalString(file.mime_type);
+    const name = optionalString(file.name);
+    out.push({
+      kind: 'file',
+      file: {
+        ...(bytes ? { bytes } : {}),
+        ...(uri ? { uri } : {}),
+        ...(mimeType ? { mimeType } : {}),
+        ...(name ? { name } : {}),
+      },
+    });
+  }
+  return out;
+}
+
+/**
+ * A runtime hands a file back by returning ``{ reply: { parts } }``.
+ * Anything else is not a reply.
+ */
+export function extractReplyParts(payload: unknown): ContentPart[] | null {
+  const rec = asRecord(payload);
+  if (!rec) return null;
+  const reply = asRecord(rec.reply);
+  if (!reply) return null;
+  const parts = extractContentParts(reply.parts);
+  return parts.length > 0 ? parts : null;
+}
+
 function extractUserText(message: Record<string, unknown>): string | null {
   const parts = message.parts;
   if (!Array.isArray(parts)) return null;
@@ -274,6 +345,7 @@ export function normalizeEvent(
     message_id: extractMessageId(message, generateId),
     context_id: extractContextId(message),
     from_agent: extractFromAgent(message),
+    parts: extractContentParts(message.parts),
     chat: extractChatEnvelope(message),
     invoke: extractInvokeEnvelope(message),
     received_at: now().toISOString(),

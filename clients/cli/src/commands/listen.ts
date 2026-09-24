@@ -120,6 +120,11 @@ export interface RuntimeHandlerOptions {
   dedupe: boolean;
   dedupeTtlSec: number;
   chatWriteback?: ChatWritebackOptions;
+  sender?: {
+    agentId: string;
+    apiKey: string;
+    baseUrl: string;
+  };
 }
 
 export interface HandlerOptions {
@@ -889,6 +894,11 @@ export function listenCommand(): Command {
                 dedupe: opts.dedupe !== false,
                 dedupeTtlSec,
                 chatWriteback,
+                sender: {
+                  agentId,
+                  apiKey: apiKey!,
+                  baseUrl: config.base_url,
+                },
               }
             : undefined,
         });

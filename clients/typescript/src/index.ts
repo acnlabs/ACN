@@ -22,7 +22,7 @@
  */
 
 // HTTP Client
-export { ACNClient, ACNError } from './client';
+export { ACNClient, ACNError, parseBlobRef } from './client';
 
 // Hosted regions (ADR-0013)
 export {
@@ -79,6 +79,8 @@ export type {
   AttentionFee,
   SendMessageRequest,
   SendMessageResponse,
+  BlobObject,
+  BlobUsage,
   BroadcastStrategy,
   BroadcastRequest,
   BroadcastByTagRequest,

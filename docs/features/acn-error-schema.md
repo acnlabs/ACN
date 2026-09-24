@@ -137,7 +137,22 @@ Pilot codes `agent_not_found` (×1 — followee lookup miss) and `api_key_agent_
 
 Pilot codes `agent_not_found`, `api_key_agent_mismatch`, and `from_agent_mismatch` are also raised by payments — see the *Used by* column on the pilot table. The 3 remaining 5xx sites (`set_payment_capability`, `create_payment_task`, `set_token_pricing` catch-alls) stay on raw `HTTPException(500)` per the sanitisation contract; all three carry the `except ACNHTTPError: raise` + `except HTTPException: raise` defence layers (P3 cross-module catch-all defence).
 
-`INSUFFICIENT_BALANCE` stays in the reserved group of the `ErrorCode` catalog: `payments.py` only surfaces *resource-existence* failures (the four codes above), not balance failures. Balance failures live one layer deeper (wallet / billing subsystem) and may surface at a different boundary in a future sprint.
+`INSUFFICIENT_BALANCE` is raised when a consumer extends a blob URI and wallet `spend` is rejected (balance / business decline). Wallet **timeout / connect / unavailable** is `blob_billing_unavailable` (`details.reason`), not insufficient funds. `payments.py` still only surfaces resource-existence failures.
+
+### Blob routes (A2A FilePart objects)
+
+
+| `error_code`               | HTTP status | Used by                                              | `details` schema                                                                 |
+| -------------------------- | ----------- | ---------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `blob_not_found`           | 404         | GET/extend missing, expired, or unauthorized blob    | `{ blob_id: string }`                                                            |
+| `blob_too_large`           | 413         | POST `/blobs` over per-file cap                      | `{ size: int, max_file_bytes: int }`                                             |
+| `blob_cap_exceeded`        | 403         | POST mailbox over 50MiB, or extend over 1GiB retain  | `{ used_bytes: int, size: int, cap_bytes: int, kind: "mailbox" \| "retained" }` |
+| `blob_billing_unavailable` | 402         | Paid extend with no wallet, no `ACN_REVENUE_WALLET_ID`, wallet timeout/unavailable, or platform-credit failure | `{ agent_id: string, credits: int, reason: string }` |
+| `insufficient_balance`     | 402         | Wallet `spend` rejected on URI extend (not timeout)  | `{ agent_id: string, credits: int, reason: string }`                          |
+| `resource_conflict`        | 409         | Concurrent PUT or extend (`blob_busy`), or Backend spend/credit idempotency amount mismatch (`idempotency_conflict`) | `{ reason: "blob_busy" \| "idempotency_conflict" }` |
+
+
+Upload is a **mailbox**: free 50 MiB / 7 days, no charge. Fetching the signed URI does not keep the object. A background GC plus lazy delete on GET/extend remove bytes when `exp` passes, so the uploader's mailbox quota frees — except while an extend **spend has succeeded** (or the spend outcome is ambiguous/timeout) and credit is still pending; unpaid insufficient-balance extends do not leave that marker. `POST /blobs/{id}/extend` keeps the URI alive, bills the **caller** (consumer) in integer Credits for the **requested** extra TTL (GiB-days × `BLOB_CREDITS_PER_GIB_DAY`, `ceil`, minimum 1 Credit; not the `now`-capped granted window, so retry keeps the same spend amount), credits the same amount to `ACN_REVENUE_WALLET_ID` via Backend `POST /api/internal/wallet/platform-credit` (PLATFORM wallet only — not agent `/receive`), and moves ownership onto their retained quota (1 GiB / 90 days). Missing revenue wallet id refuses extend (`blob_billing_unavailable`, `reason=no_revenue_wallet`) before TTL is written, instead of silently burning. Spend failure **or platform credit failure** rolls back TTL but never writes `exp` into the past. A pending marker is written only after **spend succeeded** or the spend outcome is **ambiguous** (`5xx` / missing HTTP status, typically timeout or connect); a later ambiguous spend does not refresh an existing marker for that payer. `400/402/403` `insufficient_balance` and spend `409` neither create nor refresh that marker, and they do not delete a prior one. Markers are **per payer** so a later timeout cannot overwrite another caller's `old_exp`. Rollback restores the previous `exp` and does not clamp it into the future — GET/GC keep bytes via the pending marker; GC does not push the expiry index by a full pending TTL, so bytes drop once that marker is gone. Retry can then finish spend+credit with the original key (`blob_id + payer + old_exp + extra_seconds`, not the capped `new_exp`, which follows `now`) because Backend `/spend` plus `/platform-credit` replay that key. Extend holds a lock for **both** wallet HTTP timeouts (spend then credit). The caller must be the current owner or present a live `sig` from the FilePart URI. HMAC signs `blob_id` only, so extend does not rotate the original URI; expiry is server `meta.exp`. GET is rate-limited (60/min) and verifies `sha256` before returning bytes. Production requires `BLOB_SIGNING_SECRET` (≥32 chars, distinct from `INTERNAL_API_TOKEN`). Not hunter `mbx:` — no chat price tag.
 
 ### Onchain (ERC-8004) routes (sprint row #7)
 
@@ -303,9 +318,9 @@ Default `_DEFAULT_MESSAGES` for these codes are short, generic, and SDK-friendly
 
 ### Reserved (declared, not yet raised)
 
-`wallet_rate_limit_exceeded` / `insufficient_balance` / `resource_conflict`
+`wallet_rate_limit_exceeded`
 
-Reserved codes will be picked up by the migration sprint as each route is converted (see Section 7).
+`insufficient_balance` is raised by blob URI extend when wallet `spend` is rejected (timeout/unavailable is `blob_billing_unavailable`). `resource_conflict` is already used by org/workspace/admission (`details.reason`), by concurrent blob PUT/extend (`reason=blob_busy`), and by Backend spend/credit idempotency amount mismatch (`reason=idempotency_conflict`). Remaining reserved codes will be picked up as each route is converted (see Section 7).
 
 ### `details` field semantics
 
@@ -460,7 +475,7 @@ The 1 5xx site (`create_task` catch-all) stays on `HTTPException` by design (san
 
 The 3 5xx sites (`set_payment_capability`, `create_payment_task`, `set_token_pricing` catch-alls) stay on `HTTPException` by design (sanitised-5xx handler chain). All three carry the `except ACNHTTPError: raise` + `except HTTPException: raise` defence layers so caller-actionable 4xx raised inside the try body propagates instead of being silently rewritten as 500.
 
-`INSUFFICIENT_BALANCE` stays in the reserved group of the catalog: `payments.py` only surfaces *resource-existence* failures, not balance failures (those live in the wallet/billing subsystem and may surface at a different boundary).
+`INSUFFICIENT_BALANCE` is raised by blob retain billing when wallet `spend` is rejected. Timeout / unavailable maps to `BLOB_BILLING_UNAVAILABLE`. `payments.py` only surfaces resource-existence failures.
 ```
 
 [^6]: **Follows full migration (sprint #6).** All 5 4xx raise sites in `acn/routes/follows.py` are migrated:

@@ -127,6 +127,7 @@ from .routes import (
     websocket,
     workspaces,
 )
+from .routes import blobs as blob_routes
 from .routes.dependencies import limiter
 from .security import check_tls_config
 from .services import (
@@ -142,6 +143,7 @@ from .services import (
     TaskService,
 )
 from .services.activity_service import ActivityService
+from .services.blob_service import build_blob_service
 from .services.erc8004_client import ERC8004Client
 from .services.escrow_client import AgentPlanetEscrowProvider
 from .services.join_flow_service import JoinFlowService
@@ -738,6 +740,9 @@ async def lifespan(app: FastAPI):
         workspace_service=workspace_service_instance,
     )
 
+    blob_routes.init_blob_service(build_blob_service(redis_client, settings))
+    blob_service_instance = blob_routes.get_blob_service()
+
     # Phase 1 wiring guard
     # ----------------------------------------------------------------
     # The four reverse-proxy endpoints in routes/registry.py and the
@@ -953,6 +958,18 @@ async def lifespan(app: FastAPI):
 
     sweeper_task = asyncio.create_task(_payment_sweeper())
 
+    async def _blob_gc_worker() -> None:
+        while True:
+            await asyncio.sleep(300)
+            try:
+                purged = await blob_service_instance.purge_expired()
+                if purged:
+                    logger.info("blob_gc_ran", purged=purged)
+            except Exception as e:
+                logger.error("blob_gc_error", error=str(e))
+
+    blob_gc_task = asyncio.create_task(_blob_gc_worker())
+
     # Background worker: refund locked attention_fee escrows whose
     # manifest TTL has expired without an ack or recipient-delete.
     # Runs every 5 minutes; the first run is intentionally delayed
@@ -1072,6 +1089,7 @@ async def lifespan(app: FastAPI):
     #   4. Close Redis connection pool.
     #   5. Dispose PG engine last (it's the outermost resource).
     sweeper_task.cancel()
+    blob_gc_task.cancel()
     if _refund_worker_task is not None:
         _refund_worker_task.cancel()
     # Settlement worker: graceful stop with bounded timeout so a
@@ -1356,6 +1374,9 @@ app.add_middleware(
 app.add_middleware(
     BodySizeLimitMiddleware,
     max_bytes=settings.max_request_body_size,
+    path_max_bytes={
+        "POST /api/v1/blobs": settings.blob_max_file_bytes + 65_536,
+    },
     cors_allow_origins=settings.cors_origins,
 )
 
@@ -1410,6 +1431,7 @@ app.include_router(agent_subnets.router)
 app.include_router(registry.router)
 app.include_router(onchain.router)
 app.include_router(communication.router)
+app.include_router(blob_routes.router)
 app.include_router(invoke.router)
 # Phase 2 PR #1: manifest queue routes share the
 # /api/v1/communication prefix with the communication router so the

@@ -10,6 +10,16 @@ Example:
 """
 
 from .client import ACNClient, ACNError
+from .message_parts import (
+    MAX_INLINE_FILE_BYTES,
+    FileTooLargeError,
+    InvalidFileUriError,
+    build_message,
+    file_part_from_bytes,
+    file_part_from_path,
+    file_part_from_uri,
+    parse_blob_uri,
+)
 from .models import (
     KNOWN_INBOX_MESSAGE_STATUSES,
     KNOWN_ORG_WORK_STATUSES,
@@ -111,6 +121,14 @@ __all__ = [
     "ManifestSendRequest",
     "MessageType",
     "SendMessageRequest",
+    "MAX_INLINE_FILE_BYTES",
+    "FileTooLargeError",
+    "InvalidFileUriError",
+    "build_message",
+    "file_part_from_bytes",
+    "file_part_from_path",
+    "file_part_from_uri",
+    "parse_blob_uri",
     # Session models
     "SessionEntry",
     "SessionInviteRequest",

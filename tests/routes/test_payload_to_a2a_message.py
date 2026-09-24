@@ -19,7 +19,7 @@ These tests pin the new contract:
 
 from __future__ import annotations
 
-from a2a.compat.v0_3.types import DataPart, TextPart  # type: ignore[import-untyped]
+from a2a.compat.v0_3.types import DataPart, FilePart, TextPart  # type: ignore[import-untyped]
 
 from acn.routes.communication import _payload_to_a2a_message
 
@@ -84,6 +84,41 @@ def test_a2a_envelope_with_data_part():
     assert len(parts) == 2
     assert isinstance(parts[0], TextPart) and parts[0].text == "process this"
     assert isinstance(parts[1], DataPart) and parts[1].data == {"foo": "bar"}
+
+
+def test_a2a_envelope_file_part_bytes_and_uri():
+    """File parts are content on the message, same as text and data."""
+    payload = {
+        "role": "user",
+        "parts": [
+            {"kind": "text", "text": "diagram"},
+            {
+                "kind": "file",
+                "file": {
+                    "bytes": "aGVsbG8=",
+                    "mimeType": "text/plain",
+                    "name": "hi.txt",
+                },
+            },
+            {
+                "kind": "file",
+                "file": {
+                    "uri": "https://example.com/a.png",
+                    "mimeType": "image/png",
+                    "name": "a.png",
+                },
+            },
+        ],
+    }
+    msg = _payload_to_a2a_message(payload)
+
+    parts = [p.root if hasattr(p, "root") else p for p in msg.parts]
+    assert isinstance(parts[0], TextPart) and parts[0].text == "diagram"
+    assert isinstance(parts[1], FilePart)
+    assert parts[1].file.bytes == "aGVsbG8="
+    assert parts[1].file.name == "hi.txt"
+    assert isinstance(parts[2], FilePart)
+    assert parts[2].file.uri == "https://example.com/a.png"
 
 
 # ─── Branch 2: simple text shape ────────────────────────────────────────────
