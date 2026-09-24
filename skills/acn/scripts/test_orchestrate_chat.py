@@ -125,6 +125,18 @@ def test_invoke_and_summarize_injectable() -> None:
     assert "collab_request" not in out
 
 
+def test_invoke_and_summarize_omits_chat_id() -> None:
+    def fake(_base: str, _key: str, body: dict) -> dict:
+        assert "metadata" not in body["message"]
+        return {"to": "peer-9", "status": "accepted"}
+
+    invoke_and_summarize(
+        "hi",
+        {"ACN_API_KEY": "acn_test", "ACN_ORCH_TO": "peer-9"},
+        invoke_fn=fake,
+    )
+
+
 def test_complete_chat_passes_chat_id() -> None:
     seen: dict[str, object] = {}
 
@@ -274,6 +286,7 @@ if __name__ == "__main__":
     test_summarize_completed_does_not_copy_usage()
     test_summarize_accepted_and_failed()
     test_invoke_and_summarize_injectable()
+    test_invoke_and_summarize_omits_chat_id()
     test_complete_chat_passes_chat_id()
     test_propose_group_opt_in()
     test_propose_task_opt_in()

@@ -190,7 +190,49 @@ def test_agent_invoke_forwards_chat_id_not_reply_path(
     assert ap.get("reply_path") is None
     assert ap.get("reply_channel") is None
     assert ap["invoke"]["chat_id"] == "76259088-fccd-4565-a905-5c6b5d9c4611"
-    admit.assert_awaited()
+    admit.assert_awaited_once()
+    assert admit.await_args.kwargs == {
+        "hop_id": f"hop:invoke:req-chat-1:{callee}",
+        "callee": callee,
+        "chat_id": "76259088-fccd-4565-a905-5c6b5d9c4611",
+    }
+
+
+def test_agent_invoke_drops_unsafe_chat_id(
+    stub_metrics, stub_message_service, stub_audit, stub_agent_service
+):
+    _wire(stub_metrics, stub_message_service, stub_audit, stub_agent_service)
+    client = TestClient(app)
+    callee = "22222222-2222-2222-2222-222222222222"
+    with (
+        patch("acn.routes.invoke._notify_backend_complete", new=AsyncMock()),
+        patch("acn.routes.invoke._notify_host_chat_admit", new=AsyncMock()) as admit,
+    ):
+        resp = client.post(
+            "/api/v1/invoke",
+            headers={"Authorization": "Bearer acn_test_key"},
+            json={
+                "to": callee,
+                "request_id": "req-chat-bad",
+                "message": {
+                    "text": "hi",
+                    "metadata": {
+                        "agentplanet": {
+                            "chat_id": "../etc/passwd",
+                            "reply_path": "/api/chats/x/agent-messages",
+                        }
+                    },
+                },
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    ap = _agentplanet_from_message(
+        stub_message_service.send_message.await_args.kwargs["message"]
+    )
+    assert ap.get("chat_id") is None
+    assert "chat_id" not in ap.get("invoke", {})
+    assert ap.get("reply_path") is None
+    admit.assert_not_awaited()
 
 
 def _slot_agent(agent_id: str, *, slots=None, mode="open", owner=None, name=None):

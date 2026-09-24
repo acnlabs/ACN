@@ -577,7 +577,10 @@ async def _notify_host_chat_admit(
     callee: str,
     chat_id: str,
 ) -> None:
-    """Let the callee upload into this hunter chat. Failures do not fail invoke."""
+    """Admit the callee to this hunter chat. Failures do not fail invoke.
+
+    chat_id is the capability; reply_path is never forwarded on the hop.
+    """
     settings = get_settings()
     if not settings.backend_url or not settings.internal_api_token:
         logger.info("invoke_chat_admit_skipped", reason="backend_unconfigured")
