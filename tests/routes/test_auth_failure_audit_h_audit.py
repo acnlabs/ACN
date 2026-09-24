@@ -446,8 +446,8 @@ class TestJwtAndPermissionBranches:
         """A real ACN ``Settings`` with Auth0 enabled (dev_mode=False).
 
         ``Settings`` enforces a non-wildcard ``cors_origins`` whenever
-        ``dev_mode`` is False (security audit C2), so the fixture must
-        supply a concrete value.
+        ``dev_mode`` is False (security audit C2), and requires a
+        dedicated ``BLOB_SIGNING_SECRET`` distinct from the internal token.
         """
         from acn.config import Settings
 
@@ -456,6 +456,7 @@ class TestJwtAndPermissionBranches:
             auth0_domain="https://example.auth0.com",
             auth0_audience="https://api.example.com",
             internal_api_token="x" * 32,
+            blob_signing_secret="blob-signing-secret-must-be-32-chars-min",
             redis_url="redis://localhost:6379/0",
             cors_origins=["https://app.example.com"],
         )
