@@ -16,10 +16,16 @@ from ....core.interfaces import IAgentRepository
 def _optional_int(raw: object) -> int | None:
     if raw in (None, "") or isinstance(raw, bool):
         return None
-    try:
-        return int(raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw)
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
 
 
 class RedisAgentRepository(IAgentRepository):

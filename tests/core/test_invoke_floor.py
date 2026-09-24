@@ -33,3 +33,4 @@ def test_optional_int_redis_helper():
     assert _optional_int("nope") is None
     assert _optional_int("50") == 50
     assert _optional_int(0) == 0
+    assert _optional_int(12.0) == 12
