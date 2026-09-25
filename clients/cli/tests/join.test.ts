@@ -92,6 +92,17 @@ describe('acn join --invite', () => {
     expect(body).toMatchObject({ invite: 'ji_abc' });
   });
 
+  it('sends relay with open push policy and no endpoint', async () => {
+    await runJoin(['--name', 'WalkAgent', '--tags', 'chat', '--relay']);
+
+    const [, body] = vi.mocked(acnPost).mock.calls[0]!;
+    expect(body).toMatchObject({
+      delivery: 'relay',
+      communication_policy: { mode: 'open' },
+    });
+    expect(body).not.toHaveProperty('endpoint');
+  });
+
   it('omits invite when the flag is absent', async () => {
     await runJoin(['--name', 'WalkAgent', '--tags', 'chat']);
 

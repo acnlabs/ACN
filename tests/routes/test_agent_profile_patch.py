@@ -71,7 +71,16 @@ def stub_agent_service():
     svc.get_agent_by_api_key = AsyncMock(side_effect=_by_api_key)
 
     async def _update_profile(
-        agent_id: str, *, name=None, description=None, tags=None, invoke_slots=None, chat_invitees=None
+        agent_id: str,
+        *,
+        name=None,
+        description=None,
+        tags=None,
+        invoke_slots=None,
+        chat_invitees=None,
+        chat_allowlist=None,
+        chat_open=None,
+        update_chat_open=False,
     ):
         if agent_id != "agent-target":
             raise AgentNotFoundException(agent_id)
@@ -89,6 +98,10 @@ def stub_agent_service():
             result.metadata["invoke_slots"] = invoke_slots
         if chat_invitees:
             result.metadata["chat_invitees"] = chat_invitees
+        if chat_allowlist:
+            result.metadata["chat_allowlist"] = chat_allowlist
+        if update_chat_open and chat_open is not None:
+            result.metadata["chat_open"] = chat_open
         return result
 
     svc.update_profile = AsyncMock(side_effect=_update_profile)
@@ -215,6 +228,36 @@ class TestPartialUpdate:
         kwargs = stub_agent_service.update_profile.await_args.kwargs
         assert kwargs["chat_invitees"] == ["wechat|alice", "wechat|bob"]
         assert r.json()["chat_invitees"] == ["wechat|alice", "wechat|bob"]
+
+    def test_update_chat_allowlist_and_open(self, stub_agent_service):
+        _wire(stub_agent_service)
+        with TestClient(app) as client:
+            r = client.patch(
+                "/api/v1/agents/agent-target/profile",
+                json={"chat_allowlist": [" user-a ", "user-a"], "chat_open": False},
+                headers={"Authorization": "Bearer owner-key"},
+            )
+        assert r.status_code == 200, r.text
+        kwargs = stub_agent_service.update_profile.await_args.kwargs
+        assert kwargs["chat_allowlist"] == ["user-a"]
+        assert kwargs["chat_open"] is False
+        assert kwargs["update_chat_open"] is True
+        assert r.json()["chat_allowlist"] == ["user-a"]
+        assert r.json()["chat_open"] is False
+
+    def test_null_chat_open_clears_flag(self, stub_agent_service):
+        _wire(stub_agent_service)
+        with TestClient(app) as client:
+            r = client.patch(
+                "/api/v1/agents/agent-target/profile",
+                json={"chat_open": None},
+                headers={"Authorization": "Bearer owner-key"},
+            )
+        assert r.status_code == 200, r.text
+        kwargs = stub_agent_service.update_profile.await_args.kwargs
+        assert kwargs["update_chat_open"] is True
+        assert kwargs["chat_open"] is None
+        assert r.json()["chat_open"] is None
 
     def test_clear_chat_invitees_with_empty_list(self, stub_agent_service):
         _wire(stub_agent_service)

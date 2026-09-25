@@ -343,6 +343,33 @@ class AgentService:
         await self.repository.save(agent)
         return agent
 
+    async def update_agent_card(
+        self,
+        agent_id: str,
+        *,
+        agent_card: dict | None = None,
+        agent_card_url: str | None = None,
+        update_card: bool = False,
+        update_card_url: bool = False,
+    ) -> Agent:
+        """Replace the stored A2A Agent Card snapshot and/or its discovery URL.
+
+        Partial: only flags set by the route are written. ``agent_card=None``
+        with ``update_card`` clears the snapshot so ``GET
+        /.well-known/agent-card.json`` falls back to the generated card.
+        ``agent_card_url=None`` with ``update_card_url`` clears the pointer.
+
+        Does not fetch the URL and does not change the delivery endpoint.
+        Those stay on ``PATCH /endpoint`` and ``PATCH /delivery``.
+        """
+        agent = await self.get_agent(agent_id)
+        if update_card:
+            agent.agent_card = agent_card
+        if update_card_url:
+            agent.agent_card_url = agent_card_url or None
+        await self.repository.save(agent)
+        return agent
+
     async def update_profile(
         self,
         agent_id: str,
@@ -352,6 +379,9 @@ class AgentService:
         tags: list[str] | None = None,
         invoke_slots: list[dict] | None = None,
         chat_invitees: list[str] | None = None,
+        chat_allowlist: list[str] | None = None,
+        chat_open: bool | None = None,
+        update_chat_open: bool = False,
     ) -> Agent:
         """Partial update of an agent's editable metadata.
 
@@ -380,6 +410,12 @@ class AgentService:
                 leave unchanged.
             chat_invitees: Human user ids allowed to invoke (AgentRouter
                 P9). Empty list clears. ``None`` leaves unchanged.
+            chat_allowlist: Legacy alias Host still reads when
+                ``chat_invitees`` is empty. Empty list clears. ``None``
+                leaves unchanged.
+            chat_open: Explicit public-chat flag Host chat ACL reads.
+                Honored only when ``update_chat_open`` is true; ``None``
+                then removes the key so Host uses its derived default.
 
         Raises:
             AgentNotFoundException: If the agent does not exist.
@@ -391,7 +427,12 @@ class AgentService:
             agent.description = description
         if tags is not None:
             agent.tags = list(tags)
-        if invoke_slots is not None or chat_invitees is not None:
+        if (
+            invoke_slots is not None
+            or chat_invitees is not None
+            or chat_allowlist is not None
+            or update_chat_open
+        ):
             meta = dict(agent.metadata or {})
             if invoke_slots is not None:
                 if invoke_slots:
@@ -403,6 +444,16 @@ class AgentService:
                     meta["chat_invitees"] = list(chat_invitees)
                 else:
                     meta.pop("chat_invitees", None)
+            if chat_allowlist is not None:
+                if chat_allowlist:
+                    meta["chat_allowlist"] = list(chat_allowlist)
+                else:
+                    meta.pop("chat_allowlist", None)
+            if update_chat_open:
+                if chat_open is None:
+                    meta.pop("chat_open", None)
+                else:
+                    meta["chat_open"] = bool(chat_open)
             agent.metadata = meta
         await self.repository.save(agent)
         return agent

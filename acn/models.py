@@ -360,6 +360,15 @@ class AgentRegisterRequest(BaseModel):
                     "reached only over their outbound WebSocket. Omit the URL, or "
                     "use delivery='direct' to be dialled over HTTP."
                 )
+            # Relay is a push transport. manifest/closed never push, so accepting
+            # delivery=relay there would register a pull-only agent and drop the
+            # WebSocket intent. Omitted policy on this register path is open.
+            if policy_mode not in {"open", "allowlist"}:
+                raise ValueError(
+                    "delivery='relay' requires communication_policy.mode 'open' or "
+                    f"'allowlist' (got {policy_mode!r}). Relay only carries real-time "
+                    "pushes; 'manifest' and 'closed' never push."
+                )
             return self
         if policy_mode in {"manifest", "closed"}:
             return self
