@@ -543,7 +543,7 @@ async def invoke(
         message_id=_result_message_id(result),
     )
 
-    delivery = result if isinstance(result, dict) else {"status": "sent"}
+    delivery = result if isinstance(result, dict) else {"status": "delivered"}
     usage = delivery.get("usage") if isinstance(delivery.get("usage"), dict) else None
 
     if caller_kind == "agent":
@@ -552,7 +552,7 @@ async def invoke(
             callee=callee,
             caller=from_agent,
             usage=usage,
-            delivery_status=str(delivery.get("status") or "sent"),
+            delivery_status=str(delivery.get("status") or "delivered"),
         )
 
     payload: dict[str, Any] = {
@@ -560,7 +560,7 @@ async def invoke(
         "hop_id": hop_id,
         "to": callee,
         "from": from_agent,
-        "status": delivery.get("status") or "sent",
+        "status": delivery.get("status") or "delivered",
         "delivery": delivery,
         "usage": usage,
         **({"slot": slot_id} if slot_id else {}),

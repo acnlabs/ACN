@@ -166,6 +166,7 @@ export type {
 export {
   KNOWN_PAYMENT_TASK_STATUSES,
   KNOWN_INBOX_MESSAGE_STATUSES,
+  KNOWN_SEND_RESULTS,
   orgSubnetId,
 } from './types';
 

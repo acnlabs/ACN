@@ -104,6 +104,7 @@ if TYPE_CHECKING:
     from ...services.agent_service import AgentService
     from ...services.allowlist_service import AllowlistService
     from ...services.policy_service import PolicyCheckService
+    from ...services.session_service import SessionService
     from .manifest_dispatcher import ManifestDispatcher
     from .websocket_manager import WebSocketManager
 
@@ -116,6 +117,18 @@ def _agent_delivery_endpoint(agent_info: Any) -> str:
     if isinstance(a2a_endpoint, str) and a2a_endpoint:
         return a2a_endpoint
     return agent_info.endpoint
+
+
+def _queued_inbox_envelope(route_id: str) -> dict[str, Any]:
+    """Message is parked for later pull.
+
+    ``status`` is the result. ``delivery_mode`` is the pipe.
+    """
+    return {
+        "status": "queued",
+        "delivery_mode": "inbox",
+        "route_id": route_id,
+    }
 
 
 # Global message audit trail. Stored as a Redis stream (not one string
@@ -175,6 +188,7 @@ class MessageRouter:
         manifest_dispatcher: "ManifestDispatcher | None" = None,
         allowlist_service: "AllowlistService | None" = None,
         ws_manager: "WebSocketManager | None" = None,
+        session_service: "SessionService | None" = None,
     ):
         """
         Initialize Message Router
@@ -231,6 +245,9 @@ class MessageRouter:
         # WebSocket. When ``None`` (legacy tests / scripts), relay-delivery
         # agents fall back to the inbox path — same as before this feature.
         self.ws_manager = ws_manager
+        # Accepted sessions let the pair send the full message past
+        # manifest / allowlist divert. ``None`` keeps the old gate.
+        self.session_service = session_service
 
         # Cache of A2A clients by endpoint (capped to prevent unbounded growth)
         self._clients: dict[str, Client] = {}
@@ -346,6 +363,12 @@ class MessageRouter:
                 logger.warning("failed_to_close_a2a_client", endpoint=endpoint, error=str(e))
         self._clients.clear()
         logger.info("message_router_closed", clients_cleared=True)
+
+    async def _session_grants_full_send(self, from_agent: str, to_agent: str) -> bool:
+        """An accepted, unexpired session lets this pair skip manifest divert."""
+        if self.session_service is None:
+            return False
+        return await self.session_service.has_active_grant(from_agent, to_agent)
 
     async def route(
         self,
@@ -468,7 +491,9 @@ class MessageRouter:
                     reject_reason=decision.reject_reason,
                     recipient_id=to_agent,
                 )
-            if decision.route_to == "manifest":
+            if decision.route_to == "manifest" and not await self._session_grants_full_send(
+                from_agent, to_agent
+            ):
                 return await self._route_to_manifest(
                     route_id=route_id,
                     from_agent=from_agent,
@@ -532,12 +557,12 @@ class MessageRouter:
         #    connect timeout on the httpx client (see ``_get_client``): a dead
         #    host fails fast instead of blocking for the full read timeout.
         #
-        #    ``alive_now`` only selects the FAILURE semantics, preserving the
-        #    legacy contracts:
-        #      - believed-online but failed  → unexpected → inbox + DLQ + raise
-        #        (retry-worthy; the caller sees the error)
-        #      - believed-offline and failed → expected   → inbox only, no raise
-        #        (graceful envelope, same surface the old pre-check produced)
+        #    ``alive_now`` only selects whether a failed push is also queued
+        #    for server-side DLQ retry. Both cases park the message and return
+        #    the same queued envelope. Raising after the inbox write made
+        #    HTTP callers see 500 and send the message again.
+        #      - believed-online but failed  → inbox + DLQ + queued envelope
+        #      - believed-offline and failed → inbox only + queued envelope
         alive_now = await self.agent_service.is_alive(to_agent)
 
         # Only the send itself is guarded by the failure handler. Post-delivery
@@ -609,8 +634,8 @@ class MessageRouter:
             )
 
             if alive_now:
-                # We believed the agent was online, so this is an unexpected
-                # failure: queue for retry and surface the error (legacy path).
+                # Unexpected miss: keep a server-side retry. The caller still
+                # gets the queued envelope — the message is already in the inbox.
                 await self._store_dlq(
                     route_id=route_id,
                     from_agent=from_agent,
@@ -618,16 +643,8 @@ class MessageRouter:
                     message=message,
                     error=str(e),
                 )
-                raise
 
-            # Believed-offline and unreachable: an expected condition. Return
-            # the inbox envelope gracefully — no DLQ, no raise — matching the
-            # surface the legacy offline pre-check produced.
-            return {
-                "status": "inbox",
-                "delivery_mode": "inbox",
-                "route_id": route_id,
-            }
+            return _queued_inbox_envelope(route_id)
 
         # --- Reached only on a confirmed successful delivery. ---
         probe_ms = (time.monotonic() - probe_started) * 1000.0
@@ -848,11 +865,7 @@ class MessageRouter:
             direction="inbound",
         )
         await self._store_inbox(to_agent=to_agent, log_entry=log_entry)
-        return {
-            "status": "inbox",
-            "delivery_mode": "inbox",
-            "route_id": route_id,
-        }
+        return _queued_inbox_envelope(route_id)
 
     async def route_by_tag(
         self,
@@ -1241,7 +1254,7 @@ class MessageRouter:
         and metric counting; this method's only job is to surface
         the result in the router's ``route()`` response shape so the
         caller (``POST /send`` etc.) gets a consistent
-        ``{"status": "sent", "delivery_mode": "manifest", ...}`` envelope.
+        ``{"status": "notified", "delivery_mode": "manifest", ...}`` envelope.
 
         We don't ``_log_message`` here: the send was accepted, but
         actual delivery is deferred. Logging as ``direction=
@@ -1275,14 +1288,10 @@ class MessageRouter:
             message_type=message_type,
             ttl_seconds=ttl_seconds,
         )
-        # P1-B2 review fix: keep ``status="sent"`` so existing SDK
-        # clients that branch on ``result["status"] == "sent"``
-        # continue to recognise this as success. ``delivery_mode``
-        # is the new field for clients that want to distinguish
-        # inbox vs manifest semantics. Pure additive — Phase 1
-        # responses didn't carry ``delivery_mode`` at all.
+        # ``status`` is the delivery result. ``delivery_mode`` still says
+        # which pipe was used.
         response: dict[str, Any] = {
-            "status": "sent",
+            "status": "notified",
             "delivery_mode": "manifest",
             "route_id": route_id,
             "mid": entry.mid,

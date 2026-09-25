@@ -44,7 +44,12 @@ class BroadcastStrategy(StrEnum):
 
 @dataclass
 class BroadcastResult:
-    """Result of a broadcast operation"""
+    """Result of a broadcast operation.
+
+    ``success`` counts targets delivered now. ``queued`` and ``notified``
+    stay in ``results`` and are counted in neither ``success`` nor
+    ``failed``. ``failed`` is a transport error or a policy rejection.
+    """
 
     broadcast_id: str
     total: int
@@ -292,36 +297,24 @@ class BroadcastService:
 
         # Calculate stats
         # ----------------------------------------------------------------
-        # ``router.route()`` returns either:
-        #   - a dict like ``{"status": "inbox", ...}`` (offline target)
-        #   - an a2a SDK ``SendMessageResponse`` Pydantic model
-        #     (online target — the "happy path" return type)
-        #   - a dict ``{"error": ...}`` (delivery failure, see
-        #     ``send_one`` in this file)
-        #   - a dict ``{"status": "rejected", ...}`` (Phase 1 — see
-        #     ``PolicyRejected`` branches in this file)
-        #
-        # The pre-Phase-1 success rule was ``"error" not in r``, which
-        # implicitly counted Pydantic models as success because their
-        # default ``__contains__`` returns ``False`` for unknown keys.
-        # Phase 1 needs to *additionally* exclude policy rejections
-        # without breaking the SendMessageResponse case.
-        #
-        # The contract therefore: a result is "failed" only when it
-        # is a dict that *explicitly* signals failure (has ``"error"``
-        # OR ``status == "rejected"``). Any other shape — including
-        # SendMessageResponse — is treated as success, preserving the
-        # historical implicit invariant.
+        # ``success`` counts targets that were delivered now. A parked
+        # inbox (``queued``) or a manifest notice (``notified``) is not
+        # a delivery. ``failed`` is only a transport error or a policy
+        # rejection — the message was not stored, or the recipient
+        # refused it. Queued and notified sit in neither bucket.
+        def _is_delivered(r: object) -> bool:
+            if not isinstance(r, dict):
+                # SendMessageResponse: the peer answered in real time.
+                return True
+            return "error" not in r and r.get("status") == "delivered"
+
         def _is_failed(r: object) -> bool:
             if not isinstance(r, dict):
-                # SendMessageResponse / other Pydantic model — the
-                # only way ``router.route`` reaches here is via a
-                # successful in-line delivery, so this is success.
                 return False
             return "error" in r or r.get("status") == "rejected"
 
-        success = sum(1 for r in results.values() if not _is_failed(r))
-        failed = len(results) - success
+        success = sum(1 for r in results.values() if _is_delivered(r))
+        failed = sum(1 for r in results.values() if _is_failed(r))
 
         # Log broadcast complete
         await self._log_broadcast(

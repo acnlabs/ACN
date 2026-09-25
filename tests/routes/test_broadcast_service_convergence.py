@@ -350,10 +350,8 @@ class TestResultToHttpResponseAdapter:
     break wire compat."""
 
     def test_inbox_short_circuit_becomes_success(self):
-        """``router.route()`` returns ``{"status": "inbox", ...}``
-        when the recipient is offline. The adapter wraps it under
-        ``status: "success"`` (delivery accepted) — the actual
-        delivery status lives in ``response.status``."""
+        """``router.route()`` returns an inbox envelope when the
+        recipient is offline. The HTTP item status is ``queued``."""
         result = BroadcastResult(
             broadcast_id="b1", total=1, success=1, failed=0,
             results={"agent-x": {"status": "inbox", "route_id": "r1"}},
@@ -364,8 +362,8 @@ class TestResultToHttpResponseAdapter:
         assert out == [
             {
                 "agent_id": "agent-x",
-                "status": "success",
-                "response": {"status": "inbox", "route_id": "r1"},
+                "status": "queued",
+                "route_id": "r1",
             }
         ]
 
@@ -431,7 +429,7 @@ class TestResultToHttpResponseAdapter:
         assert out == [
             {
                 "agent_id": "agent-x",
-                "status": "success",
+                "status": "delivered",
                 "response": {"message_id": "m1", "status": "ok"},
             }
         ]
@@ -460,7 +458,7 @@ class TestResultToHttpResponseAdapter:
         out = _broadcast_result_to_http_responses(result)
 
         by_id = {entry["agent_id"]: entry for entry in out}
-        assert by_id["agent-ok"]["status"] == "success"
+        assert by_id["agent-ok"]["status"] == "delivered"
         assert by_id["agent-closed"]["status"] == "rejected"
         assert by_id["agent-closed"]["reason"] == "policy_closed"
         assert by_id["agent-down"]["status"] == "failed"

@@ -164,7 +164,7 @@ class TestAllowlistNonMemberDiverts:
         )
 
         websocket.send_json.assert_not_awaited()
-        assert result["status"] == "sent"
+        assert result["status"] == "notified"
         assert result["delivery_mode"] == "manifest"
 
     async def test_dispatcher_called_with_subnet_path(

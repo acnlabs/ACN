@@ -38,6 +38,13 @@ async function runSend(args: string[]): Promise<void> {
   await root.parseAsync(['node', 'acn', 'message', 'send', ...args]);
 }
 
+async function runBroadcast(args: string[]): Promise<void> {
+  const root = new Command();
+  root.exitOverride();
+  root.addCommand(messageCommand());
+  await root.parseAsync(['node', 'acn', 'message', 'broadcast', ...args]);
+}
+
 describe('buildSendMessage', () => {
   it('keeps the text-only convenience shape', () => {
     const built = buildSendMessage({ text: 'hello' });
@@ -132,7 +139,26 @@ describe('acn message send', () => {
       target_agent: 'agent-b',
       message: { text: 'hello', type: 'text' },
     });
-    expect(output).toHaveBeenCalled();
+    expect(output).toHaveBeenCalledWith(
+      { message_id: 'm1' },
+      'Message delivered to agent-b (id: m1)'
+    );
+  });
+
+  it('prints a known send status and ignores a foreign one', async () => {
+    vi.mocked(acnPost).mockResolvedValueOnce({ status: 'queued', message_id: 'm2' } as never);
+    await runSend(['agent-b', '--text', 'hello']);
+    expect(output).toHaveBeenCalledWith(
+      { status: 'queued', message_id: 'm2' },
+      'Message queued to agent-b (id: m2)'
+    );
+
+    vi.mocked(acnPost).mockResolvedValueOnce({ status: { state: 'completed' } } as never);
+    await runSend(['agent-b', '--text', 'hello']);
+    expect(output).toHaveBeenLastCalledWith(
+      { status: { state: 'completed' } },
+      'Message delivered to agent-b'
+    );
   });
 
   it('POSTs a FilePart for --file-uri', async () => {
@@ -181,5 +207,32 @@ describe('acn message send', () => {
         ],
       },
     });
+  });
+});
+
+describe('acn message broadcast', () => {
+  beforeEach(() => {
+    vi.mocked(loadConfig).mockReturnValue({
+      api_key: 'acn_TEST_KEY',
+      agent_id: 'agent-a',
+      base_url: 'https://api.test',
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('summarizes per-target statuses instead of the successful count', async () => {
+    vi.mocked(acnPost).mockResolvedValue({
+      broadcast_id: 'b1',
+      successful: 2,
+      responses: [{ status: 'queued' }, { status: 'queued' }, { status: 'delivered' }],
+    } as never);
+    await runBroadcast(['--text', 'hello']);
+    expect(output).toHaveBeenCalledWith(
+      expect.objectContaining({ broadcast_id: 'b1' }),
+      'Broadcast sent (id: b1). 1 delivered, 2 queued.'
+    );
   });
 });

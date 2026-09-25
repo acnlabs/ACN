@@ -110,6 +110,62 @@ def _payload_to_a2a_message(payload: dict) -> Message:
     )
 
 
+_SEND_RESULTS = frozenset({"delivered", "queued", "notified", "rejected", "failed"})
+
+
+def _delivery_status(per_target: object) -> str:
+    """One result for a broadcast target.
+
+    ``delivered`` / ``queued`` / ``notified`` / ``rejected``. ``failed``
+    means the message was not stored.
+    """
+    if not isinstance(per_target, dict):
+        return "delivered"
+    if "error" in per_target:
+        return "failed"
+    status = per_target.get("status")
+    if status in _SEND_RESULTS:
+        return str(status)
+    mode = per_target.get("delivery_mode")
+    if mode == "manifest" or status == "sent":
+        return "notified"
+    if mode == "inbox" or status == "inbox":
+        return "queued"
+    return "delivered"
+
+
+def _public_send_body(result: object) -> dict:
+    """HTTP body for one send.
+
+    Router envelopes already carry ``delivery_mode`` and pass through.
+    A live direct push is the peer's A2A body. Nest that body under
+    ``response`` and set ``status`` to ``delivered``, so a peer field
+    named ``status`` is not read as the delivery result.
+    """
+    if isinstance(result, dict) and result.get("delivery_mode") in {
+        "inbox",
+        "manifest",
+        "relay",
+        "direct",
+    }:
+        return result
+    response = (
+        result.model_dump(mode="json")
+        if hasattr(result, "model_dump")
+        else result
+    )
+    body: dict = {
+        "status": "delivered",
+        "delivery_mode": "direct",
+        "response": response,
+    }
+    if isinstance(response, dict):
+        message_id = response.get("message_id")
+        if isinstance(message_id, str):
+            body["message_id"] = message_id
+    return body
+
+
 def _broadcast_result_to_http_responses(result: BroadcastResult) -> list[dict]:
     """Adapt a ``BroadcastResult`` to the legacy HTTP per-target shape.
 
@@ -124,52 +180,54 @@ def _broadcast_result_to_http_responses(result: BroadcastResult) -> list[dict]:
     Per-target normalisation maps ``BroadcastService`` shapes back
     to the historical ``status`` taxonomy:
 
-    * dict with ``error`` key → ``{status: "failed", error: ...}``
-      (network / 5xx / etc.).
-    * dict with ``status == "rejected"`` → kept verbatim, the
-      ``reason`` / ``reject_reason`` fields are already aligned.
-    * any other dict (e.g. inbox short-circuit
-      ``{"status": "inbox", "route_id": ...}``) → forwarded under
-      ``status: "success"`` with ``response`` carrying the dict —
-      same shape callers used to see.
-    * Pydantic-style ``SendMessageResponse`` model →
-      ``status: "success"`` and ``response`` carrying the
-      ``model_dump()`` representation.
+    * dict with ``error`` key → ``{status: "failed", error: ...}``.
+      The message was not stored.
+    * dict with ``status == "rejected"`` → ``status: "rejected"`` plus
+      ``reason`` / ``reject_reason``.
+    * a parked or notified envelope → ``status`` is ``queued`` or
+      ``notified``, with ``route_id`` / ``delivery_mode`` / ``mid`` lifted
+      onto the item.
+    * a live A2A reply → ``status: "delivered"`` and ``response`` carrying
+      the peer body.
     """
     out: list[dict] = []
     for agent_id, per_target in result.results.items():
-        if isinstance(per_target, dict):
-            if "error" in per_target:
-                out.append(
-                    {
-                        "agent_id": agent_id,
-                        "status": "failed",
-                        "error": per_target["error"],
-                    }
-                )
-            elif per_target.get("status") == "rejected":
-                out.append({"agent_id": agent_id, **per_target})
-            else:
-                out.append(
-                    {
-                        "agent_id": agent_id,
-                        "status": "success",
-                        "response": per_target,
-                    }
-                )
-        else:
-            response_dump = (
-                per_target.model_dump()
-                if hasattr(per_target, "model_dump")
-                else per_target
-            )
+        if isinstance(per_target, dict) and "error" in per_target:
             out.append(
                 {
                     "agent_id": agent_id,
-                    "status": "success",
-                    "response": response_dump,
+                    "status": "failed",
+                    "error": per_target["error"],
                 }
             )
+            continue
+        if isinstance(per_target, dict) and per_target.get("status") == "rejected":
+            item = {"agent_id": agent_id, **per_target}
+            item.pop("outcome", None)
+            out.append(item)
+            continue
+        status = _delivery_status(per_target)
+        if isinstance(per_target, dict):
+            item = {"agent_id": agent_id, "status": status}
+            for key in ("delivery_mode", "route_id", "mid", "ts", "message_id"):
+                if key in per_target:
+                    item[key] = per_target[key]
+            if "response" in per_target:
+                item["response"] = per_target["response"]
+            out.append(item)
+            continue
+        response_dump = (
+            per_target.model_dump()
+            if hasattr(per_target, "model_dump")
+            else per_target
+        )
+        out.append(
+            {
+                "agent_id": agent_id,
+                "status": "delivered",
+                "response": response_dump,
+            }
+        )
     return out
 
 
@@ -587,7 +645,7 @@ async def manifest_send(
             to_agent=body.target_agent,
             message_type=body.message_type,
         )
-        return result
+        return _public_send_body(result)
 
     except ACNHTTPError:
         raise
@@ -718,7 +776,7 @@ async def send_message(
 
         logger.info("message_sent", from_agent=body.from_agent, to_agent=body.target_agent)
 
-        return result
+        return _public_send_body(result)
 
     except ACNHTTPError:
         # Inline 4xx that we raised ourselves (e.g. ``ATTENTION_FEE_INVALID``
@@ -978,6 +1036,7 @@ async def broadcast_message(
             "from_agent": body.from_agent,
             "responses": responses,
             "total": result.total,
+            # Delivered now. Queued and notified are in ``responses``, not here.
             "successful": result.success,
         }
 
@@ -1084,6 +1143,7 @@ async def broadcast_by_tag(
             "responses": responses,
             "total": total_sent,
             "returned": len(responses),
+            # Delivered now. Queued and notified are in ``responses``.
             "successful": success_count,
         }
 
@@ -1399,7 +1459,7 @@ async def internal_send_message(
             to_agent=body.target_agent,
         )
 
-        return result
+        return _public_send_body(result)
 
     except AgentNotFoundException as e:
         logger.info(

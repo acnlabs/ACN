@@ -899,7 +899,7 @@ async def test_join_response_hint_when_endpoint_unreachable():
 
     with patch(
         "acn.routes.registry._resolve_registration_endpoint",
-        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, False, False)),
+        new=AsyncMock(return_value=("https://agent.example.com/a2a", None, False, None)),
     ):
         resp = await _join_agent_impl(
             body,
@@ -914,10 +914,12 @@ async def test_join_response_hint_when_endpoint_unreachable():
 
 
 @pytest.mark.asyncio
-async def test_join_response_hint_when_reachable_but_not_a2a():
-    """Reachable host but the URL is not an A2A endpoint (bare-origin footgun):
-    response must carry a2a_handshake_ok=False and a hint that points the
-    operator at re-registering the full A2A path."""
+async def test_join_rejects_when_reachable_but_not_a2a():
+    """A reachable host that confirmed it is not A2A must not be stored.
+
+    Otherwise every later direct push parks in the inbox and the sender
+    cannot tell a wrong path from an offline peer.
+    """
     fake_agent = _make_fake_agent()
     fake_agent.communication_policy = {"mode": "open"}
     svc = AsyncMock()
@@ -925,7 +927,7 @@ async def test_join_response_hint_when_reachable_but_not_a2a():
 
     body = AgentJoinRequest(
         name="ReachabilityTestAgent",
-        description="Tests the reachable-but-not-A2A hint.",
+        description="Tests the reachable-but-not-A2A rejection.",
         tags=["test"],
         a2a_endpoint="https://agent.example.com",
         communication_policy={"mode": "open"},
@@ -935,18 +937,17 @@ async def test_join_response_hint_when_reachable_but_not_a2a():
         "acn.routes.registry._resolve_registration_endpoint",
         new=AsyncMock(return_value=("https://agent.example.com", None, True, False)),
     ):
-        resp = await _join_agent_impl(
-            body,
-            BackgroundTasks(),
-            ref=None,
-            agent_service=svc,
-        )
+        with pytest.raises(HTTPException) as exc:
+            await _join_agent_impl(
+                body,
+                BackgroundTasks(),
+                ref=None,
+                agent_service=svc,
+            )
 
-    assert resp.endpoint_reachable is True
-    assert resp.a2a_handshake_ok is False
-    assert resp.next_step_hint is not None
-    hint = resp.next_step_hint.lower()
-    assert "a2a" in hint and "/endpoint" in resp.next_step_hint
+    assert exc.value.status_code == 400
+    assert "A2A" in exc.value.detail
+    svc.join_agent.assert_not_awaited()
 
 
 @pytest.mark.asyncio

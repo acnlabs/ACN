@@ -1260,8 +1260,10 @@ class ACNClient:
                 "status": "broadcasted",
                 "broadcast_id": "...",
                 "total": N,
-                "successful": N,
-                "responses": [{"agent_id": ..., "status": "success"|"failed"|"rejected", ...}]
+                "successful": N,  # delivered now; queued/notified are in responses
+                "responses": [
+                    {"agent_id": ..., "status": "<KNOWN_SEND_RESULTS>", ...}
+                ]
             }
 
         Args:

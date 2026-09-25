@@ -12,9 +12,8 @@ PR #1 audit caught two specific gaps that this file plugs:
    trying to opt out of).
 
 2. The router's response shape on a manifest divert is part of the
-   public SDK contract — clients branch on ``status == "sent"`` for
-   success and read ``delivery_mode == "manifest"`` to distinguish
-   inbox vs manifest delivery. Both fields are pinned here.
+   public contract. ``status`` is ``notified``. ``delivery_mode``
+   is ``manifest``. Both fields are pinned here.
 
 The dispatcher itself is unit-tested in
 ``test_manifest_dispatcher.py``; here we only assert that the
@@ -27,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from acn.core.exceptions import PolicyRejected
 from acn.infrastructure.messaging.manifest_dispatcher import ManifestDispatcher
 from acn.infrastructure.messaging.message_router import (
     MessageRouter,
@@ -125,17 +125,13 @@ class TestManifestRecipientDiverts:
     """
 
     @pytest.mark.asyncio
-    async def test_returns_status_sent_with_delivery_mode_manifest(
+    async def test_returns_status_notified_with_delivery_mode_manifest(
         self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
     ):
         """The public response contract.
 
-        SDK clients today branch on ``status == "sent"`` for success.
-        Manifest divert must continue to satisfy that branch — a
-        ``status == "manifest"`` response (the original PR #1 shape)
-        would silently look like a *failure* to those clients.
-        ``delivery_mode == "manifest"`` is the new field for clients
-        that want to distinguish the two delivery paths.
+        ``status`` is ``notified``: the recipient got a summary.
+        ``delivery_mode`` is ``manifest``.
         """
         mock_agent_service.find_agent = AsyncMock(
             return_value=_make_agent_info(
@@ -155,7 +151,7 @@ class TestManifestRecipientDiverts:
             message=create_text_message("hello"),
         )
 
-        assert result["status"] == "sent"
+        assert result["status"] == "notified"
         assert result["delivery_mode"] == "manifest"
         assert result["mid"] == "0123456789abcdef0123456789abcdef"
         assert result["ts"] == 1714377600000
@@ -376,3 +372,63 @@ class TestMissingDispatcherFailsLoudly:
                 to_agent="agent-b",
                 message=create_text_message("hi"),
             )
+
+
+class TestAcceptedSessionSkipsManifest:
+    @pytest.mark.asyncio
+    async def test_grant_delivers_full_message(
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
+    ):
+        mock_agent_service.find_agent = AsyncMock(
+            return_value=_make_agent_info(
+                communication_policy={"mode": "manifest"},
+            )
+        )
+        sessions = AsyncMock()
+        sessions.has_active_grant = AsyncMock(return_value=True)
+        router = MessageRouter(
+            agent_service=mock_agent_service,
+            redis_client=fake_redis,
+            policy_service=policy_service,
+            manifest_dispatcher=stub_dispatcher,
+            session_service=sessions,
+        )
+        router._send_message_with_client = AsyncMock(return_value={"ok": True})
+        router._get_client = AsyncMock(return_value=object())
+
+        result = await router.route(
+            from_agent="agent-a",
+            to_agent="agent-b",
+            message=create_text_message("hello"),
+        )
+
+        assert result == {"ok": True}
+        stub_dispatcher.dispatch.assert_not_awaited()
+        sessions.has_active_grant.assert_awaited_once_with("agent-a", "agent-b")
+
+    @pytest.mark.asyncio
+    async def test_closed_still_rejects_with_grant(
+        self, mock_agent_service, fake_redis, policy_service, stub_dispatcher
+    ):
+        mock_agent_service.find_agent = AsyncMock(
+            return_value=_make_agent_info(
+                communication_policy={"mode": "closed"},
+            )
+        )
+        sessions = AsyncMock()
+        sessions.has_active_grant = AsyncMock(return_value=True)
+        router = MessageRouter(
+            agent_service=mock_agent_service,
+            redis_client=fake_redis,
+            policy_service=policy_service,
+            manifest_dispatcher=stub_dispatcher,
+            session_service=sessions,
+        )
+
+        with pytest.raises(PolicyRejected):
+            await router.route(
+                from_agent="agent-a",
+                to_agent="agent-b",
+                message=create_text_message("hello"),
+            )
+        sessions.has_active_grant.assert_not_awaited()

@@ -199,8 +199,8 @@ class TestDirectDelivery:
     A reachable agent whose heartbeat loop died still receives in real time,
     and a completed delivery renews the alive TTL. Only the FAILURE path
     branches on the alive key:
-      - believed-online + failed  → inbox + DLQ + raise (retry-worthy)
-      - believed-offline + failed → inbox only, graceful envelope (no raise)
+      - believed-online + failed  → inbox + DLQ + queued envelope (no raise)
+      - believed-offline + failed → inbox only, queued envelope (no raise)
     """
 
     def _make_agent_info(self, status: str = "offline"):
@@ -258,8 +258,9 @@ class TestDirectDelivery:
         )
 
         # Graceful inbox envelope, not a raise.
-        assert result["status"] == "inbox"
+        assert result["status"] == "queued"
         assert result["delivery_mode"] == "inbox"
+        assert "outcome" not in result
         assert "route_id" in result
 
         assert fake_pipe.zadd.call_count == 1
@@ -313,8 +314,14 @@ class TestDirectDelivery:
         router.agent_service.touch_alive.assert_awaited_once_with("agent-b")
 
     @pytest.mark.asyncio
-    async def test_online_failure_writes_dlq_and_raises(self, router, fake_redis, fake_pipe):
-        """Believed-online but delivery fails → inbox + DLQ + raise (legacy contract)."""
+    async def test_online_failure_writes_dlq_and_returns_queued(
+        self, router, fake_redis, fake_pipe
+    ):
+        """Believed-online but delivery fails → inbox + DLQ + queued envelope.
+
+        The message is already parked, so the caller must not see an error
+        and retry it.
+        """
         router.agent_service.find_agent = AsyncMock(
             return_value=self._make_agent_info("online")
         )
@@ -323,10 +330,12 @@ class TestDirectDelivery:
         message = MagicMock()
         message.model_dump.return_value = {"role": "user", "parts": []}
 
-        with pytest.raises(RuntimeError, match="boom"):
-            await router.route(
-                from_agent="agent-a", to_agent="agent-b", message=message
-            )
+        result = await router.route(
+            from_agent="agent-a", to_agent="agent-b", message=message
+        )
+
+        assert result["status"] == "queued"
+        assert "outcome" not in result
 
         # Inbox written …
         assert fake_pipe.zadd.call_count == 1

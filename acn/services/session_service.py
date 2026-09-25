@@ -69,6 +69,12 @@ def _pending_zset_key(agent_id: str) -> str:
     return f"acn:sessions:pending:{{{agent_id}}}"
 
 
+def _grant_key(agent_a: str, agent_b: str) -> str:
+    """Pair key for an accepted session. Order does not matter."""
+    left, right = sorted((agent_a, agent_b))
+    return f"acn:session:grant:{left}:{right}"
+
+
 def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
 
@@ -224,7 +230,12 @@ class SessionService:
             )
 
         session_key = _session_key(session_id)
-        await self.redis.hset(session_key, "status", "accepted")
+        remaining = max(1, (session.expires_at_ms - _now_ms()) // 1000)
+        grant_key = _grant_key(session.inviter_id, session.invitee_id)
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.hset(session_key, "status", "accepted")
+            pipe.set(grant_key, session_id, ex=remaining)
+            await pipe.execute()
         return SessionEntry(
             session_id=session.session_id,
             inviter_id=session.inviter_id,
@@ -264,7 +275,7 @@ class SessionService:
                 "only 'pending' sessions can be rejected"
             )
 
-        await self._delete_session(session_id, session.invitee_id)
+        await self._delete_session(session)
         return SessionEntry(
             session_id=session.session_id,
             inviter_id=session.inviter_id,
@@ -300,7 +311,7 @@ class SessionService:
                 f"got {closer_id!r}"
             )
 
-        await self._delete_session(session_id, session.invitee_id)
+        await self._delete_session(session)
         return SessionEntry(
             session_id=session.session_id,
             inviter_id=session.inviter_id,
@@ -354,13 +365,30 @@ class SessionService:
                 results.append(entry)
         return results
 
-    async def _delete_session(self, session_id: str, invitee_id: str) -> None:
-        """Remove the session HASH and the pending-ZSET membership."""
-        session_key = _session_key(session_id)
-        invitee_zset = _pending_zset_key(invitee_id)
+    async def has_active_grant(self, agent_a: str, agent_b: str) -> bool:
+        """True when this pair accepted a session that has not expired.
+
+        A pending invitation is not a grant. Either direction of send
+        is covered by the same key.
+        """
+        return bool(await self.redis.exists(_grant_key(agent_a, agent_b)))
+
+    async def _delete_session(self, session: SessionEntry) -> None:
+        """Remove the session HASH, the pending index, and this session's grant.
+
+        A newer accepted session between the same pair keeps its own grant.
+        """
+        session_key = _session_key(session.session_id)
+        invitee_zset = _pending_zset_key(session.invitee_id)
+        grant_key = _grant_key(session.inviter_id, session.invitee_id)
+        current = await self.redis.get(grant_key)
+        if isinstance(current, bytes):
+            current = current.decode()
         async with self.redis.pipeline(transaction=True) as pipe:
             pipe.delete(session_key)
-            pipe.zrem(invitee_zset, session_id)
+            pipe.zrem(invitee_zset, session.session_id)
+            if current == session.session_id:
+                pipe.delete(grant_key)
             await pipe.execute()
 
 

@@ -13,6 +13,31 @@ const NOTIFY_MESSAGE_TYPES = [
   'session_invite',
 ];
 
+/** Words the send/broadcast routes put in ``status``. Anything else is a peer body. */
+const KNOWN_SEND_RESULTS = ['delivered', 'queued', 'notified', 'rejected', 'failed'] as const;
+
+function sendResultLabel(status: unknown): string {
+  if (typeof status === 'string' && (KNOWN_SEND_RESULTS as readonly string[]).includes(status)) {
+    return status;
+  }
+  return 'delivered';
+}
+
+function broadcastResultSummary(responses: Array<{ status?: string }> | undefined): string {
+  if (!responses?.length) {
+    return 'No agents.';
+  }
+  const counts = new Map<string, number>();
+  for (const item of responses) {
+    const label = sendResultLabel(item?.status);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const parts = KNOWN_SEND_RESULTS.filter((status) => counts.has(status)).map(
+    (status) => `${counts.get(status)} ${status}`
+  );
+  return `${parts.join(', ')}.`;
+}
+
 /** Raw bytes that still fit under the 256 KB A2A message JSON cap after base64. */
 export const MAX_INLINE_FILE_BYTES = 160 * 1024;
 
@@ -271,7 +296,7 @@ export function messageCommand(): Command {
           process.exit(1);
         }
         try {
-          const res = await acnPost<{ success: boolean; message_id?: string }>(
+          const res = await acnPost<{ status?: string; message_id?: string }>(
             '/communication/send',
             {
               from_agent: agent_id,
@@ -279,10 +304,9 @@ export function messageCommand(): Command {
               message: built.message,
             }
           );
-          output(
-            res,
-            `Message sent to ${agentId}${res.message_id ? ` (id: ${res.message_id})` : ''}`
-          );
+          const label = sendResultLabel(res.status);
+          const idInfo = res.message_id ? ` (id: ${res.message_id})` : '';
+          output(res, `Message ${label} to ${agentId}${idInfo}`);
         } catch (err) {
           handleError(err);
         }
@@ -384,7 +408,10 @@ export function messageCommand(): Command {
     .action(async (opts: { text: string; tag?: string; strategy?: string }) => {
       const { agent_id } = requireCredentials();
       try {
-        let res: { status?: string; broadcast_id?: string; total?: number; successful?: number };
+        let res: {
+          broadcast_id?: string;
+          responses?: Array<{ status?: string }>;
+        };
         if (opts.tag) {
           res = await acnPost('/communication/broadcast-by-tag', {
             from_agent: agent_id,
@@ -399,10 +426,7 @@ export function messageCommand(): Command {
           });
         }
         const idInfo = res.broadcast_id ? ` (id: ${res.broadcast_id})` : '';
-        output(
-          res,
-          `Broadcast sent${idInfo}. Reached ${res.successful ?? res.total ?? '?'} agent(s).`
-        );
+        output(res, `Broadcast sent${idInfo}. ${broadcastResultSummary(res.responses)}`);
       } catch (err) {
         handleError(err);
       }

@@ -147,6 +147,32 @@ class TestPerTargetRejectedShape:
         assert result.success == 1
         assert result.failed == 1
 
+    @pytest.mark.asyncio
+    async def test_queued_and_notified_are_neither_success_nor_failed(self):
+        """Parking a message in the inbox, or leaving a manifest notice,
+        is not a delivery and is not a failure. Both used to inflate
+        ``success`` because the counter treated any dict without
+        ``error`` as success."""
+        router = _make_router(
+            side_effects_by_agent={
+                "parked": {"status": "queued", "delivery_mode": "inbox"},
+                "manifest": {"status": "notified", "delivery_mode": "manifest"},
+            }
+        )
+        svc = _make_service(router)
+
+        result = await svc.send(
+            from_agent="sender",
+            to_agents=["parked", "manifest", "live"],
+            message=_make_message(),
+        )
+
+        assert result.total == 3
+        assert result.success == 1
+        assert result.failed == 0
+        assert result.results["parked"]["status"] == "queued"
+        assert result.results["manifest"]["status"] == "notified"
+
 
 # --------------------------------------------------------------------------- #
 # SEQUENTIAL must continue past PolicyRejected — the actual security bug

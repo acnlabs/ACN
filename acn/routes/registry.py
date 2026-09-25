@@ -252,9 +252,9 @@ class AgentJoinRequest(BaseModel):
             "be the COMPLETE URL your A2A server listens on, including any path "
             "(e.g. https://host/a2a, not https://host) — ACN posts each message "
             "to this exact URL verbatim and never appends a path. A handshake "
-            "probe at registration returns a2a_handshake_ok=false if the URL "
-            "responds but is not a JSON-RPC endpoint (null if the probe is "
-            "indeterminate, e.g. it timed out)."
+            "probe at registration rejects the join when the URL responds but "
+            "is not a JSON-RPC endpoint. A timed-out probe (indeterminate) "
+            "still allows registration."
         ),
     )
     agent_card_url: str | None = Field(
@@ -540,8 +540,8 @@ class AgentJoinResponse(BaseModel):
             "is NOT an A2A JSON-RPC endpoint — verify the path (e.g. it should "
             "be https://host/a2a, not https://host). null = indeterminate "
             "(probe timed out / no endpoint probed) — no conclusion, could be "
-            "a slow-but-valid server. Soft signal: registration always "
-            "succeeds regardless."
+            "a slow-but-valid server. A confirmed false rejects push-mode "
+            "registration; null does not."
         ),
     )
 
@@ -649,9 +649,10 @@ async def _probe_a2a_handshake(endpoint: str, *, timeout: float = 8.0) -> bool |
       on every request can take >timeout to answer even an unknown method), so
       callers MUST NOT surface a "not A2A" warning on ``None``.
 
-    SOFT signal only — never blocks registration regardless of the result.
-    The timeout is generous (vs the HEAD probe's 3s) precisely so a slow valid
-    server resolves to None rather than a false ``False``.
+    ``False`` blocks a push-mode write (join, register, endpoint, delivery,
+    or a switch into a push mode). ``None`` does not: a slow valid server
+    must not be rejected. The timeout is generous (vs the HEAD probe's 3s)
+    so a slow server resolves to None rather than a false ``False``.
     """
     payload = {
         "jsonrpc": "2.0",
@@ -684,6 +685,26 @@ async def _probe_a2a_handshake(endpoint: str, *, timeout: float = 8.0) -> bool |
         return True
     err = data.get("error")
     return isinstance(err, dict) and isinstance(err.get("code"), int)
+
+
+def _reject_confirmed_non_a2a(a2a_handshake_ok: bool | None) -> None:
+    """Refuse to persist a direct URL that confirmed it is not A2A.
+
+    ``None`` (timeout or transport failure) is not a refusal. ``True``
+    passes. Only a confirmed ``False`` raises, before any agent row is
+    written, so a wrong path cannot park every later message in the inbox.
+    """
+    if a2a_handshake_ok is not False:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Endpoint is reachable but did not respond as an A2A JSON-RPC "
+            "server. Register the complete URL your A2A server listens on "
+            "(for example https://host/a2a, not the bare origin). "
+            "A timed-out probe does not cause this error."
+        ),
+    )
 
 
 async def _check_endpoint_reachability(endpoint: str) -> bool:
@@ -812,9 +833,9 @@ async def _resolve_registration_endpoint(
     ``a2a_handshake_ok`` is the tri-state JSON-RPC handshake probe result (see
     ``_probe_a2a_handshake``): ``True`` confirmed A2A, ``False`` confirmed NOT
     A2A (the bare-origin / wrong-path footgun), ``None`` indeterminate (timeout
-    / slow server). It is strictly a soft signal — never blocks registration —
-    and only a confirmed ``False`` should drive a "wrong path" warning so a
-    slow-but-valid server is not mislabelled.
+    / slow server). Callers that are about to persist a push URL must reject
+    a confirmed ``False`` via ``_reject_confirmed_non_a2a``. ``None`` must
+    not be treated as "not A2A".
 
     DNS failures are hard errors (raise HTTPException); HTTP probe
     failures are soft — callers propagate the flag to the client so
@@ -1031,11 +1052,12 @@ async def dev_register_agent(
         # outbound WebSocket (`acn listen`), never dialled — skip endpoint
         # resolution and store no direct URL even in push modes.
         if _policy_mode in _PUSH_MODES and request.delivery != "relay":
-            endpoint, agent_card, _, _ = await _resolve_registration_endpoint(
+            endpoint, agent_card, _, handshake_ok = await _resolve_registration_endpoint(
                 direct_endpoint=request.get_direct_a2a_endpoint(),
                 agent_card_url=request.agent_card_url,
                 agent_card=request.agent_card,
             )
+            _reject_confirmed_non_a2a(handshake_ok)
         else:
             endpoint = request.get_direct_a2a_endpoint()
             agent_card = request.agent_card
@@ -1275,11 +1297,12 @@ async def register_agent(
         # outbound WebSocket (`acn listen`), never dialled — skip endpoint
         # resolution and store no direct URL even in push modes.
         if _policy_mode in _PUSH_MODES and request.delivery != "relay":
-            endpoint, agent_card, _, _ = await _resolve_registration_endpoint(
+            endpoint, agent_card, _, handshake_ok = await _resolve_registration_endpoint(
                 direct_endpoint=request.get_direct_a2a_endpoint(),
                 agent_card_url=request.agent_card_url,
                 agent_card=request.agent_card,
             )
+            _reject_confirmed_non_a2a(handshake_ok)
         else:
             endpoint = request.get_direct_a2a_endpoint()
             agent_card = request.agent_card
@@ -2136,6 +2159,8 @@ async def _join_agent_impl(
             # ``communication_mode`` to choose manifest-notify over direct.
             endpoint_reachable = False
             a2a_handshake_ok = None
+
+        _reject_confirmed_non_a2a(a2a_handshake_ok)
 
         join_metadata = dict(default_metadata) if default_metadata else {}
         extra_meta = body.metadata if isinstance(body.metadata, dict) else {}
@@ -3185,10 +3210,9 @@ async def update_agent_endpoint(
         # both hard-fail with 400. Scheme / gateway-host / SSRF were
         # already enforced by the request validator.
         endpoint_reachable = await _check_endpoint_reachability(body.endpoint)
-        # Soft A2A handshake probe — never blocks. Catches the pull→push
-        # upgrade case where the operator points the endpoint at a bare origin
-        # while their A2A server is mounted at /a2a (would silently 404).
+        # Confirmed non-A2A refuses the write. A timeout still stores the URL.
         a2a_handshake_ok = await _probe_a2a_handshake(body.endpoint)
+        _reject_confirmed_non_a2a(a2a_handshake_ok)
     else:
         # Clearing while in a push mode would leave the agent in the
         # exact inconsistent state the registration validator forbids.
@@ -3454,6 +3478,7 @@ async def update_agent_delivery(
         # direct — probe then persist (same gates as PATCH /endpoint set)
         await _check_endpoint_reachability(body.endpoint)  # type: ignore[arg-type]
         a2a_handshake_ok = await _probe_a2a_handshake(body.endpoint)  # type: ignore[arg-type]
+        _reject_confirmed_non_a2a(a2a_handshake_ok)
         updated = await agent_service.set_direct_delivery(
             agent_id, body.endpoint  # type: ignore[arg-type]
         )
@@ -3610,7 +3635,10 @@ async def get_communication_profile(
 
     Returns:
         ``{"agent_id": ..., "mode": ..., "attention_fee_required": bool,
-          "unread_manifest_count": int}``
+          "unread_manifest_count": int, "inbound_reachable": bool | null,
+          "last_inbound_ok_at": str | null}``
+        ``inbound_reachable`` is the last real push outcome (not the
+        heartbeat). ``null`` means no push has been recorded.
         ``mode`` is one of ``open | manifest | allowlist | closed``.
         ``attention_fee_required`` is ``true`` when the policy carries
         an ``attention_fee`` requirement (reserved for future use;
@@ -3638,11 +3666,23 @@ async def get_communication_profile(
         except Exception:
             pass
 
+    inbound_reachable = None
+    last_inbound_ok_at = None
+    try:
+        health = await agent_service.get_inbound_health(agent_id)
+        if isinstance(health, dict):
+            inbound_reachable = health.get("reachable")
+            last_inbound_ok_at = health.get("last_ok_at")
+    except Exception as e:  # noqa: BLE001 — diagnostic field is best-effort
+        logger.warning("inbound_health_lookup_failed", agent_id=agent_id, error=str(e))
+
     return {
         "agent_id": agent_id,
         "mode": policy.get("mode", "open"),
         "attention_fee_required": bool(policy.get("attention_fee_required", False)),
         "unread_manifest_count": unread_count,
+        "inbound_reachable": inbound_reachable,
+        "last_inbound_ok_at": last_inbound_ok_at,
     }
 
 
@@ -3686,6 +3726,16 @@ async def update_agent_policy(
             details={"agent_id": agent_id},
         ) from e
     old_mode = (existing.communication_policy or {}).get("mode", "open")
+    intended = body.communication_policy
+    intended_mode = "open" if intended is None else str(intended.get("mode", "open"))
+    # A URL stored while in pull mode was not probed. Entering a push mode
+    # is the moment that URL starts receiving messages.
+    if intended_mode in _PUSH_MODES and old_mode not in _PUSH_MODES:
+        direct_url = getattr(existing, "a2a_endpoint", None) or getattr(
+            existing, "endpoint", None
+        )
+        if isinstance(direct_url, str) and direct_url:
+            _reject_confirmed_non_a2a(await _probe_a2a_handshake(direct_url))
 
     try:
         agent = await agent_service.update_communication_policy(

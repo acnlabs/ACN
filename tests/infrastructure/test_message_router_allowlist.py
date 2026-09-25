@@ -190,7 +190,7 @@ class TestAllowlistNonMember:
             message=create_text_message("hi"),
         )
 
-        assert result["status"] == "sent"
+        assert result["status"] == "notified"
         assert result["delivery_mode"] == "manifest"
         stub_dispatcher.dispatch.assert_awaited_once()
         kwargs = stub_dispatcher.dispatch.await_args.kwargs

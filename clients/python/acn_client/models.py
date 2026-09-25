@@ -106,6 +106,17 @@ class PaymentNetwork(StrEnum):
 # SDK change — callers should accept any str, not compare to this exhaustively.
 KNOWN_INBOX_MESSAGE_STATUSES: tuple[str, ...] = ("unread", "read", "processed")
 
+# Result of one send or one broadcast target. ``failed`` means the
+# message was not stored. Typed as str at the call site; compare
+# against this tuple when branching.
+KNOWN_SEND_RESULTS: tuple[str, ...] = (
+    "delivered",
+    "queued",
+    "notified",
+    "rejected",
+    "failed",
+)
+
 KNOWN_PAYMENT_TASK_STATUSES: tuple[str, ...] = (
     "created",
     "payment_requested",

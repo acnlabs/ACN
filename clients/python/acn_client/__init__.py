@@ -24,6 +24,7 @@ from .models import (
     KNOWN_INBOX_MESSAGE_STATUSES,
     KNOWN_ORG_WORK_STATUSES,
     KNOWN_PAYMENT_TASK_STATUSES,
+    KNOWN_SEND_RESULTS,
     AgentInfo,
     AgentJoinRequest,
     AgentJoinResponse,
@@ -136,6 +137,7 @@ __all__ = [
     "SubnetInfo",
     # Communication constants
     "KNOWN_INBOX_MESSAGE_STATUSES",
+    "KNOWN_SEND_RESULTS",
     # Payment models
     "KNOWN_PAYMENT_TASK_STATUSES",
     "PaymentCapability",

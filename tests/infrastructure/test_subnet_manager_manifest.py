@@ -148,7 +148,7 @@ class TestManifestRecipientDivertsOnSubnet:
         )
 
         websocket.send_json.assert_not_awaited()
-        assert result["status"] == "sent"
+        assert result["status"] == "notified"
         assert result["delivery_mode"] == "manifest"
         assert result["mid"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert result["ts"] == 1714377600000

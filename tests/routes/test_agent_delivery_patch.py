@@ -318,6 +318,27 @@ class TestPatchDirect:
         assert r.status_code == 400, r.text
         stub_agent_service.set_direct_delivery.assert_not_awaited()
 
+    def test_confirmed_non_a2a_does_not_persist(self, client, stub_agent_service):
+        stub_agent_service.stored_endpoint = None
+        with patch(
+            "acn.routes.registry._check_endpoint_reachability",
+            new=AsyncMock(return_value=True),
+        ), patch(
+            "acn.routes.registry._probe_a2a_handshake",
+            new=AsyncMock(return_value=False),
+        ):
+            r = client.patch(
+                "/api/v1/agents/agent-target/delivery",
+                json={
+                    "delivery": "direct",
+                    "endpoint": "https://agent.example.com",
+                },
+                headers={"Authorization": "Bearer owner-key"},
+            )
+        assert r.status_code == 400, r.text
+        assert "A2A" in r.text
+        stub_agent_service.set_direct_delivery.assert_not_awaited()
+
 
 # --------------------------------------------------------------------------- #
 # Regression: bare PATCH /endpoint clear in open still 400

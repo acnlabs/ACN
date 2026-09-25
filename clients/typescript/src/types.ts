@@ -459,11 +459,27 @@ export interface BroadcastBySkillRequest {
   metadata?: Record<string, unknown>;
 }
 
-/** Send message response — delivery_mode indicates routing outcome */
+/**
+ * Result of one send or one broadcast target.
+ * `failed` means the message was not stored. `status` on the wire is
+ * `string`; compare against this list when branching.
+ */
+export const KNOWN_SEND_RESULTS = [
+  'delivered',
+  'queued',
+  'notified',
+  'rejected',
+  'failed',
+] as const;
+
+/** Send message response. `status` is a `KNOWN_SEND_RESULTS` value. */
 export interface SendMessageResponse {
   status: string;
-  delivery_mode: 'inbox' | 'manifest';
-  route_id: string;
+  delivery_mode: 'inbox' | 'manifest' | 'relay' | 'direct';
+  route_id?: string;
+  /** Peer body on a direct or relay delivery. */
+  response?: unknown;
+  message_id?: string;
   /** Present when delivery_mode === 'manifest' */
   mid?: string;
   /** Present when delivery_mode === 'manifest' */

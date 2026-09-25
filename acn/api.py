@@ -514,6 +514,7 @@ async def lifespan(app: FastAPI):
         # connections, so MessageRouter can push ACN-mediated A2A messages
         # over the agent's outbound socket in real time.
         ws_manager=ws_manager_instance,
+        session_service=session_service_instance,
     )
     message_service_instance = MessageService(router_instance, agent_repository)
     # Phase 2 Group C #9: BroadcastService now requires agent_repository

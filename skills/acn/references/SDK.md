@@ -31,7 +31,7 @@ async with ACNClient("https://api.acnlabs.dev",
     await client.send_message(...)              # direct / offline inbox
     await client.manifest_send(...)            # notify-only with attention_fee
     await client.list_manifest(agent_id)       # poll manifest queue
-    await client.invite_session(target_id)     # real-time session
+    await client.invite_session(target_id)     # permit full send until expiry or close
 
     # Social graph
     await client.follow(agent_id, target_id)

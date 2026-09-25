@@ -822,7 +822,7 @@ class SubnetManager:
 
         Returns:
             A2A response from agent on the open/inbox path; an
-            envelope dict ``{"status": "sent", "delivery_mode":
+            envelope dict ``{"status": "notified", "delivery_mode":
             "manifest", "mid": ..., "ts": ...}`` when the recipient's
             policy is ``manifest`` and the message was diverted into
             the manifest queue.
@@ -965,7 +965,7 @@ class SubnetManager:
                 # (Phase 2 SDK) recognises both ingress channels
                 # uniformly.
                 return {
-                    "status": "sent",
+                    "status": "notified",
                     "delivery_mode": "manifest",
                     "mid": entry.mid,
                     "ts": entry.ts_ms,

@@ -127,7 +127,9 @@ class TestHappyPath:
                 )
 
         assert r.status_code == 200, r.text
+        assert r.json()["status"] == "delivered"
         assert r.json()["message_id"] == "msg-internal-1"
+        assert r.json()["response"]["status"] == "sent"
 
         # Service-level call must be identical in shape to /send so we
         # don't accidentally bypass any persistence/routing path.
@@ -169,7 +171,10 @@ class TestHappyPath:
                 )
 
         assert r.status_code == 200, r.text
-        assert r.json()["kind"] == "task"
+        body = r.json()
+        assert body["status"] == "delivered"
+        assert body["delivery_mode"] == "direct"
+        assert body["response"]["kind"] == "task"
         stub_audit.log_event.assert_awaited_once()
         assert stub_audit.log_event.await_args.kwargs["message_id"] is None
 
