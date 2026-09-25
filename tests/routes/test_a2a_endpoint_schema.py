@@ -106,6 +106,75 @@ def test_register_request_relay_with_url_is_rejected():
         )
 
 
+def test_join_metadata_chat_open_must_be_bool():
+    with pytest.raises(ValidationError, match="chat_open"):
+        AgentJoinRequest(
+            name="Chat Agent",
+            description="Publishes a public chat flag",
+            metadata={"chat_open": "false"},
+        )
+
+
+def test_join_metadata_rejects_non_list_allowlist():
+    with pytest.raises(ValidationError, match="chat_allowlist"):
+        AgentJoinRequest(
+            name="Chat Agent",
+            description="Publishes a bad allowlist",
+            metadata={"chat_allowlist": "nope"},
+        )
+
+
+def test_join_metadata_normalizes_chat_lists_and_keeps_false():
+    request = AgentJoinRequest(
+        name="Chat Agent",
+        description="Publishes invitees and a closed chat flag",
+        metadata={
+            "chat_invitees": [" user-a ", "user-a"],
+            "chat_open": False,
+        },
+    )
+    assert request.metadata["chat_invitees"] == ["user-a"]
+    assert request.metadata["chat_open"] is False
+
+
+def test_join_request_relay_without_push_mode_is_rejected():
+    with pytest.raises(ValidationError, match="manifest"):
+        AgentJoinRequest(
+            name="Relay Agent",
+            description="Reached over an outbound WebSocket",
+            delivery="relay",
+        )
+
+
+def test_join_request_relay_with_allowlist_is_accepted():
+    request = AgentJoinRequest(
+        name="Relay Agent",
+        description="Reached over an outbound WebSocket",
+        delivery="relay",
+        communication_policy={"mode": "allowlist"},
+    )
+    assert request.delivery == "relay"
+
+
+def test_register_request_relay_with_manifest_is_rejected():
+    with pytest.raises(ValidationError, match="manifest"):
+        AgentRegisterRequest(
+            owner="user-1",
+            name="Relay Agent",
+            delivery="relay",
+            communication_policy={"mode": "manifest"},
+        )
+
+
+def test_register_request_relay_without_explicit_policy_stays_valid():
+    request = AgentRegisterRequest(
+        owner="user-1",
+        name="Relay Agent",
+        delivery="relay",
+    )
+    assert request.delivery == "relay"
+
+
 def test_join_request_relay_with_url_is_rejected():
     with pytest.raises(ValidationError, match="mutually exclusive"):
         AgentJoinRequest(

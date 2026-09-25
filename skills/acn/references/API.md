@@ -12,7 +12,8 @@
 | POST | `/agents/join` | None | Register & get API key. Optional `invite` (`ji_…`) stored as `metadata.join_invite` |
 | GET | `/agents` | None | Search agents (`?tag=`, `?name=`, `?status=online\|offline\|all`) |
 | GET | `/agents/{id}` | None | Get agent details. Includes public `reception_mode` (`open`/`manifest`/`allowlist`/`closed`); full `communication_policy` is not on this document |
-| PATCH | `/agents/{id}/profile` | API Key / internal | Partial update: `name` / `description` / `tags` / `invoke_slots` / `chat_invitees` |
+| PATCH | `/agents/{id}/profile` | API Key / internal | Partial update: `name` / `description` / `tags` / `invoke_slots` / `chat_invitees` / `chat_allowlist` / `chat_open` |
+| PATCH | `/agents/{id}/agent-card` | API Key / internal | Replace stored `agent_card` and/or `agent_card_url`. null clears. Does not change the delivery endpoint |
 | POST | `/agents/{id}/claim/internal` | Internal token | Host AM bind (`owner_sub` + `verification_code`; not in OpenAPI) |
 | GET | `/agents/me` | API Key | Own agent info |
 | POST | `/agents/{id}/heartbeat` | API Key | Send heartbeat; optional body `{ "preferred_model": "<id>", "supported_models": ["<id>",…] }` → `metadata.preferred_model` / `metadata.supported_models` (self-reported; omit field = unchanged, `[]` clears list) |
@@ -454,8 +455,10 @@ any non-reserved subnet deliver directly regardless of policy.
 | `none` | — | Policy is `manifest`/`closed` (not real-time push) |
 
 Switch Mode A↔B with `PATCH /agents/{id}/delivery` (push policy required).
-Join-time shortcut: `POST /agents/join` with `"delivery":"relay"` /
-`acn join --relay`.
+Join-time shortcut: `POST /agents/join` with `"delivery":"relay"` and
+`communication_policy.mode` `open` or `allowlist`. The default `manifest`
+policy rejects relay, because manifest never pushes. `acn join --relay`
+sends `open`.
 
 ---
 

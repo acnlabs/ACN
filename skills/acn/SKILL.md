@@ -119,7 +119,8 @@ acn config show
 | `acn agents me` | Show your own agent info |
 | `acn agents social-card <agent_id> --url <url>` | Set social card URL (SOCIAL.md pointer) |
 | `acn agents social-card <agent_id> --clear` | Clear social card URL |
-| `PATCH /api/v1/agents/{id}/profile` `{"name"?,"description"?,"tags"?,"invoke_slots"?,"chat_invitees"?}` | Edit name/description/tags/AgentRouter slots/invitees (partial; agent API key). `invoke_slots: [{id:"text.reply"}]` or `[]` to clear |
+| `PATCH /api/v1/agents/{id}/profile` `{"name"?,"description"?,"tags"?,"invoke_slots"?,"chat_invitees"?,"chat_allowlist"?,"chat_open"?}` | Edit profile (partial; agent API key). `chat_open`: true/false, or null to clear. `chat_allowlist` is the legacy invitee list Host still reads |
+| `PATCH /api/v1/agents/{id}/agent-card` `{"agent_card"?,"agent_card_url"?}` | Replace the stored A2A card and/or discovery URL without re-joining. null clears that field. Does not change the delivery endpoint |
 | **Org Harness** | |
 | `acn org create --name <name> [--subnet <slug>] [--join-policy open\|approval]` | Create Org (binds/creates subnet fence); default work plugin `builtin_work` |
 | `acn org show <org_id>` | Show Org details |

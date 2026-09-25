@@ -190,6 +190,25 @@ def _validate_agent_endpoint_url(v: str | None) -> str | None:
 # ========== Request/Response Models ==========
 
 
+def _normalize_user_id_list(v: list[str] | None) -> list[str] | None:
+    """Dedupe and cap a human-id list (chat_invitees / chat_allowlist)."""
+    if v is None:
+        return None
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in v:
+        if not isinstance(raw, str):
+            continue
+        uid = raw.strip()[:128]
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
+        out.append(uid)
+        if len(out) >= 50:
+            break
+    return out
+
+
 def _validate_agent_name(v: str) -> str:
     """Validate an agent display name (shared by join + profile PATCH).
 
@@ -252,7 +271,8 @@ class AgentJoinRequest(BaseModel):
             "Inbound delivery transport (ADR-0012). 'direct' (default): ACN "
             "dials the agent's public endpoint / agent_card_url. 'relay': the "
             "agent holds an outbound WebSocket (`acn listen`) and ACN pushes "
-            "messages over it in real time — no public delivery URL required."
+            "messages over it in real time — no public delivery URL required. "
+            "Requires communication_policy.mode 'open' or 'allowlist'."
         ),
     )
     referrer_id: str | None = Field(None, max_length=128, description="Referrer agent ID")
@@ -333,6 +353,16 @@ class AgentJoinRequest(BaseModel):
                     "reached only over their outbound WebSocket. Omit the URL, or "
                     "use delivery='direct' to be dialled over HTTP."
                 )
+            # Default join policy is manifest, which never pushes. Accepting
+            # delivery=relay there would succeed and then derive delivery=none,
+            # so the outbound WebSocket would never receive messages.
+            if policy_mode not in {"open", "allowlist"}:
+                raise ValueError(
+                    "delivery='relay' requires communication_policy.mode 'open' or "
+                    f"'allowlist' (got {policy_mode!r}). Relay only carries real-time "
+                    "pushes; 'manifest' and 'closed' never push. Pass mode 'open' "
+                    "or 'allowlist' (acn join --relay sends open)."
+                )
             return self
         if policy_mode in {"manifest", "closed"}:
             return self
@@ -396,8 +426,9 @@ class AgentJoinRequest(BaseModel):
         default=None,
         description=(
             "Optional join metadata. Only chat invite keys are kept: "
-            "chat_invitees, chat_allowlist, chat_open. Host join invites "
-            "must use the invite field, not metadata."
+            "chat_invitees, chat_allowlist, chat_open. Edit them later via "
+            "PATCH /agents/{id}/profile. Host join invites must use the "
+            "invite field, not metadata."
         ),
     )
     # Optional SOCIAL.md pointer — see https://agentsocial.one. ACN stores
@@ -410,6 +441,31 @@ class AgentJoinRequest(BaseModel):
             "Body is fetched on demand by consumers — ACN never caches it."
         ),
     )
+
+    @field_validator("metadata")
+    @classmethod
+    def validate_join_metadata(cls, v: dict | None) -> dict | None:
+        """Same chat-field types as PATCH /profile.
+
+        ``chat_invitees`` / ``chat_allowlist`` are string lists.
+        ``chat_open`` is a real boolean so Host does not treat the
+        string ``"false"`` as true.
+        """
+        if v is None:
+            return None
+        if not isinstance(v, dict):
+            raise ValueError("metadata must be an object")
+        cleaned = dict(v)
+        for key in ("chat_invitees", "chat_allowlist"):
+            if key not in cleaned:
+                continue
+            raw = cleaned[key]
+            if not isinstance(raw, list):
+                raise ValueError(f"metadata.{key} must be a list of strings")
+            cleaned[key] = _normalize_user_id_list(raw) or []
+        if "chat_open" in cleaned and not isinstance(cleaned["chat_open"], bool):
+            raise ValueError("metadata.chat_open must be a boolean")
+        return cleaned
 
     @field_validator("communication_policy")
     @classmethod
@@ -2075,9 +2131,12 @@ async def _join_agent_impl(
 
         join_metadata = dict(default_metadata) if default_metadata else {}
         extra_meta = body.metadata if isinstance(body.metadata, dict) else {}
-        for key in ("chat_invitees", "chat_allowlist", "chat_open"):
-            if key in extra_meta:
-                join_metadata[key] = extra_meta[key]
+        for key in ("chat_invitees", "chat_allowlist"):
+            values = extra_meta.get(key)
+            if values:
+                join_metadata[key] = values
+        if "chat_open" in extra_meta:
+            join_metadata["chat_open"] = extra_meta["chat_open"]
         invite_code = _sanitize_host_join_invite(invite) or _sanitize_host_join_invite(
             getattr(body, "invite", None)
         )
@@ -3826,17 +3885,118 @@ async def update_agent_social_card_url(
     }
 
 
+class AgentCardPatchRequest(BaseModel):
+    """PATCH body for ``/agents/{id}/agent-card``.
+
+    Partial update of the stored A2A card snapshot and/or its discovery
+    URL. Omitting a field leaves it unchanged. ``null`` clears that field.
+    Does not change the delivery endpoint and does not fetch the URL.
+    """
+
+    agent_card: dict | None = Field(
+        default=None,
+        description="Replacement A2A Agent Card dict, or null to clear the snapshot.",
+    )
+    agent_card_url: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Discovery URL for the card, or null to clear. http(s) only.",
+    )
+
+    @field_validator("agent_card")
+    @classmethod
+    def _agent_card_size(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return None
+        if not v:
+            return None
+        return check_dict_size_64k("agent_card", v)
+
+    @field_validator("agent_card_url")
+    @classmethod
+    def _agent_card_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        return _validate_agent_endpoint_url(v)
+
+    @model_validator(mode="after")
+    def _require_at_least_one_field(self):
+        if (
+            "agent_card" not in self.model_fields_set
+            and "agent_card_url" not in self.model_fields_set
+        ):
+            raise ValueError("At least one of agent_card or agent_card_url must be provided.")
+        return self
+
+
+@router.patch("/{agent_id}/agent-card")
+@limiter.limit("30/minute")
+async def update_agent_card(
+    request: Request,
+    agent_id: AgentIdPath,
+    body: AgentCardPatchRequest,
+    caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Replace the stored A2A Agent Card without re-joining.
+
+    Re-joining would mint a new ``agent_id``. This route keeps identity,
+    reputation, and subnet membership. The public well-known card still
+    rewrites ``url`` to the ACN proxy. Delivery stays on
+    ``PATCH /{id}/endpoint``.
+
+    Auth: ``OwnerOrInternalDep``.
+    """
+    update_card = "agent_card" in body.model_fields_set
+    update_card_url = "agent_card_url" in body.model_fields_set
+    try:
+        agent = await agent_service.update_agent_card(
+            agent_id,
+            agent_card=body.agent_card,
+            agent_card_url=body.agent_card_url,
+            update_card=update_card,
+            update_card_url=update_card_url,
+        )
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    logger.info(
+        "agent_card_updated",
+        agent_id=agent_id,
+        caller_kind=caller.get("caller_kind"),
+        caller_agent_id=caller.get("agent_id"),
+        card_set=agent.agent_card is not None,
+        card_url_set=agent.agent_card_url is not None,
+    )
+    return {
+        "agent_id": agent_id,
+        "agent_card": agent.agent_card,
+        "agent_card_url": agent.agent_card_url,
+    }
+
+
 class ProfilePatchRequest(BaseModel):
     """PATCH body for ``/agents/{id}/profile``.
 
     Partial update of editable metadata: ``name`` / ``description`` /
-    ``tags`` / ``invoke_slots`` / ``chat_invitees``. Every field is optional
+    ``tags`` / ``invoke_slots`` / ``chat_invitees`` / ``chat_allowlist`` /
+    ``chat_open``. Every field is optional
     — only those present are changed. This is a PATCH (partial), not a PUT
     (replace): omitting a field leaves it untouched; it is never blanked out.
     ``tags`` *is* replaced wholesale when present (the list is the unit
     of update); pass the full desired list, or ``[]`` to clear all tags.
     ``invoke_slots`` is the AgentRouter P2 declaration (not tags).
     ``chat_invitees`` is AgentRouter P9 (human user ids allowed to invoke).
+    ``chat_allowlist`` is the legacy invitee list Host still reads when
+    ``chat_invitees`` is empty. ``chat_open`` is the explicit public-chat
+    flag (true/false); ``null`` clears it so Host uses its derived default.
 
     The same validators that run at registration apply here so a value
     rejected on join can't slip in via edit.
@@ -3876,6 +4036,20 @@ class ProfilePatchRequest(BaseModel):
             "Pass [] to clear."
         ),
     )
+    chat_allowlist: list[str] | None = Field(
+        default=None,
+        description=(
+            "Legacy human-id list Host reads when chat_invitees is empty. "
+            "Replaces the list. Pass [] to clear. Omit to leave unchanged."
+        ),
+    )
+    chat_open: bool | None = Field(
+        default=None,
+        description=(
+            "Explicit public-chat flag stored as metadata.chat_open. "
+            "true/false sets it. null clears the key. Omit to leave unchanged."
+        ),
+    )
 
     @field_validator("name")
     @classmethod
@@ -3896,24 +4070,10 @@ class ProfilePatchRequest(BaseModel):
         except SlotContractError as exc:
             raise ValueError(str(exc)) from exc
 
-    @field_validator("chat_invitees")
+    @field_validator("chat_invitees", "chat_allowlist")
     @classmethod
-    def _validate_chat_invitees(cls, v: list[str] | None) -> list[str] | None:
-        if v is None:
-            return None
-        out: list[str] = []
-        seen: set[str] = set()
-        for raw in v:
-            if not isinstance(raw, str):
-                continue
-            uid = raw.strip()[:128]
-            if not uid or uid in seen:
-                continue
-            seen.add(uid)
-            out.append(uid)
-            if len(out) >= 50:
-                break
-        return out
+    def _validate_user_id_list(cls, v: list[str] | None) -> list[str] | None:
+        return _normalize_user_id_list(v)
 
     @model_validator(mode="after")
     def _require_at_least_one_field(self):
@@ -3923,10 +4083,12 @@ class ProfilePatchRequest(BaseModel):
             and self.tags is None
             and self.invoke_slots is None
             and self.chat_invitees is None
+            and self.chat_allowlist is None
+            and "chat_open" not in self.model_fields_set
         ):
             raise ValueError(
                 "At least one of name, description, tags, invoke_slots, "
-                "or chat_invitees must be provided."
+                "chat_invitees, chat_allowlist, or chat_open must be provided."
             )
         return self
 
@@ -3962,6 +4124,9 @@ async def update_agent_profile(
             tags=body.tags,
             invoke_slots=body.invoke_slots,
             chat_invitees=body.chat_invitees,
+            chat_allowlist=body.chat_allowlist,
+            chat_open=body.chat_open,
+            update_chat_open="chat_open" in body.model_fields_set,
         )
     except AgentNotFoundException as e:
         raise ACNHTTPError(
@@ -3975,38 +4140,45 @@ async def update_agent_profile(
     # for up to the cache TTL.
     evict_agent_from_cache(agent_id)
 
+    changed = [
+        f
+        for f, v in (
+            ("name", body.name),
+            ("description", body.description),
+            ("tags", body.tags),
+            ("invoke_slots", body.invoke_slots),
+            ("chat_invitees", body.chat_invitees),
+            ("chat_allowlist", body.chat_allowlist),
+        )
+        if v is not None
+    ]
+    if "chat_open" in body.model_fields_set:
+        changed.append("chat_open")
     logger.info(
         "agent_profile_updated",
         agent_id=agent_id,
         caller_kind=caller.get("caller_kind"),
         caller_agent_id=caller.get("agent_id"),
-        fields=[
-            f
-            for f, v in (
-                ("name", body.name),
-                ("description", body.description),
-                ("tags", body.tags),
-                ("invoke_slots", body.invoke_slots),
-                ("chat_invitees", body.chat_invitees),
-            )
-            if v is not None
-        ],
+        fields=changed,
     )
 
     meta = updated.metadata if isinstance(updated.metadata, dict) else {}
-    raw_invitees = meta.get("chat_invitees")
-    invitees = (
-        [str(x) for x in raw_invitees if isinstance(x, str)]
-        if isinstance(raw_invitees, list)
-        else []
-    )
+
+    def _id_list(key: str) -> list[str]:
+        raw = meta.get(key)
+        if not isinstance(raw, list):
+            return []
+        return [str(x) for x in raw if isinstance(x, str)]
+
     return {
         "agent_id": agent_id,
         "name": updated.name,
         "description": updated.description,
         "tags": updated.tags,
         "invoke_slots": parse_declared_slots(updated.metadata),
-        "chat_invitees": invitees,
+        "chat_invitees": _id_list("chat_invitees"),
+        "chat_allowlist": _id_list("chat_allowlist"),
+        "chat_open": bool(meta["chat_open"]) if "chat_open" in meta else None,
     }
 
 
