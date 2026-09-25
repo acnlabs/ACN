@@ -504,6 +504,14 @@ class AgentJoinResponse(BaseModel):
     tasks_endpoint: str = Field(..., description="Endpoint to fetch tasks")
     heartbeat_endpoint: str = Field(..., description="Heartbeat endpoint")
     agent_card_url: str = Field(..., description="URL to retrieve the stored Agent Card")
+    public_url: str = Field(
+        ...,
+        description=(
+            "Stable public address other agents use to reach this agent. "
+            "Always the ACN gateway URL, including when this agent has no "
+            "a2a_endpoint of its own."
+        ),
+    )
 
     # Reachability probe result (soft check — False means the server didn't respond
     # to a HEAD probe at registration time, but registration still succeeded).
@@ -2230,6 +2238,7 @@ async def _join_agent_impl(
             tasks_endpoint=f"{base_url}/api/v1/tasks",
             heartbeat_endpoint=f"{base_url}/api/v1/agents/{agent.agent_id}/heartbeat",
             agent_card_url=f"{base_url}/api/v1/agents/{agent.agent_id}/.well-known/agent-card.json",
+            public_url=f"{base_url}/api/v1/agents/{agent.agent_id}",
             endpoint_reachable=endpoint_reachable,
             a2a_handshake_ok=a2a_handshake_ok,
             communication_mode=_mode,

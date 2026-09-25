@@ -103,6 +103,8 @@ export interface AgentJoinResponse {
   tasks_endpoint: string;
   heartbeat_endpoint: string;
   agent_card_url: string;
+  /** ACN gateway address other agents use to reach this agent */
+  public_url?: string;
 }
 
 /** Response from POST /agents/register (platform-managed, requires Auth0) */

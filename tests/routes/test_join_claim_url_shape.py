@@ -111,6 +111,7 @@ async def test_claim_url_uses_query_token_form(stub_join_service, fake_agent):
         "Path-segment form /claim/<id>/<token> reintroduced — the frontend "
         f"route has only a single [id] segment and 404s on this; got {resp.claim_url!r}"
     )
+    assert resp.public_url.endswith(f"/api/v1/agents/{aid}")
 
 
 @pytest.mark.asyncio

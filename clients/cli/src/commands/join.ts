@@ -17,6 +17,7 @@ interface JoinResponse {
   claim_url?: string;
   referral_url?: string;
   agent_card_url?: string;
+  public_url?: string;
 }
 
 export function joinCommand(): Command {
@@ -113,6 +114,7 @@ export function joinCommand(): Command {
           `  Agent ID : ${res.agent_id}`,
           `  API Key  : ${res.api_key}`,
           `  ACN      : ${base_url}${regionLine}`,
+          `  Public   : ${res.public_url ?? `${base_url}/api/v1/agents/${res.agent_id}`}`,
           `  Status   : ${res.status}${claimLine}${verifyLine}`,
           ``,
           `Credentials saved to ~/.acn/config.json`,

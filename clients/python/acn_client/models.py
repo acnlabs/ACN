@@ -267,6 +267,7 @@ class AgentJoinResponse(BaseModel):
     tasks_endpoint: str
     heartbeat_endpoint: str
     agent_card_url: str
+    public_url: str = ""
 
 
 class AgentSearchOptions(BaseModel):
