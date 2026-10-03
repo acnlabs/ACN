@@ -32,7 +32,11 @@ dependencies = [
     # Storage
     "redis>=5.0.0",
     # PostgreSQL (optional — only used when DATABASE_URL is set)
-    "sqlalchemy[asyncio]>=2.0",
+    # 2.1 defaults a bare postgresql:// URL to psycopg v3. Docker installs
+    # from this file with pip, so an open lower bound pulls 2.1 and Alembic
+    # exits before /health. Stay on 2.0 until the migration URL and driver
+    # are verified against 2.1.
+    "sqlalchemy[asyncio]>=2.0,<2.1",
     "asyncpg>=0.29",
     "psycopg2-binary>=2.9",
     "alembic>=1.13",

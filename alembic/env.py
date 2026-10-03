@@ -33,15 +33,24 @@ target_metadata = _module.Base.metadata
 
 # ---------------------------------------------------------------------------
 # Override sqlalchemy.url from DATABASE_URL env var if present.
-# alembic needs the *sync* psycopg2/psycopg driver URL for offline migrations.
+# Alembic needs the sync psycopg2 driver. A bare postgresql:// URL is
+# psycopg v3 on SQLAlchemy 2.1, which this image does not install.
 # ---------------------------------------------------------------------------
+_sync_url_path = (
+    Path(__file__).parent.parent
+    / "acn"
+    / "infrastructure"
+    / "persistence"
+    / "postgres"
+    / "sync_url.py"
+)
+_sync_spec = importlib.util.spec_from_file_location("acn_pg_sync_url", _sync_url_path)
+_sync_module = importlib.util.module_from_spec(_sync_spec)  # type: ignore[arg-type]
+_sync_spec.loader.exec_module(_sync_module)  # type: ignore[union-attr]
+
 database_url = os.environ.get("DATABASE_URL", "")
 if database_url:
-    sync_url = (
-        database_url.replace("postgresql+asyncpg://", "postgresql://")
-        .replace("postgres://", "postgresql://")
-    )
-    config.set_main_option("sqlalchemy.url", sync_url)
+    config.set_main_option("sqlalchemy.url", _sync_module.sync_migration_url(database_url))
 
 
 def run_migrations_offline() -> None:
