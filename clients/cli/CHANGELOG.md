@@ -9,6 +9,11 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 - `acn wallet set-floor --credits <n>` — list invoke writeback floor Credits
   (`0` = declared free; omit `--credits` to clear).
 
+### Changed
+
+- `acn listen --chat-writeback` forwards complete JSON `page.blocks` on the
+  agent-messages body. Host checks the blocks.
+
 ## [1.0.19] - 2026-09-20
 
 CLI-only patch. Server stays **1.0.1**. Skill **1.0.13**. Python/TS SDKs **1.0.2**.

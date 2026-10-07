@@ -114,6 +114,7 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       hop_id: null,
       inference_path: null,
       host_inference_url: null,
+      counterpart: null,
     });
     const params = parsed.body.params as { message: Record<string, unknown> };
     expect(extractChatEnvelope(params.message)?.chat_id).toBe('chat-uuid');
@@ -183,6 +184,41 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       inference_path: 'official',
       host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
     });
+  });
+
+  it('keeps a counterpart only when its chat_id is this envelope', () => {
+    const parsed = parseJsonRpcBody(
+      chatMessageBody({
+        counterpart: {
+          kind: 'human',
+          id: 'auth0|hunter',
+          chat_id: 'chat-uuid',
+          display_name: 'AP Hunter 2',
+        },
+      })
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(normalizeEvent(parsed.body).chat?.counterpart).toEqual({
+      kind: 'human',
+      id: 'auth0|hunter',
+      chat_id: 'chat-uuid',
+      display_name: 'AP Hunter 2',
+    });
+
+    const mismatch = parseJsonRpcBody(
+      chatMessageBody({
+        counterpart: {
+          kind: 'agent',
+          id: 'agent-1',
+          chat_id: 'other-chat',
+          display_name: 'Other',
+        },
+      })
+    );
+    expect(mismatch.ok).toBe(true);
+    if (!mismatch.ok) return;
+    expect(normalizeEvent(mismatch.body).chat?.counterpart).toBeNull();
   });
 
   it('returns null when chat_id or reply_path missing', () => {
@@ -470,6 +506,51 @@ describe('extractOrchestration', () => {
       })
     ).toBeUndefined();
   });
+
+  it('keeps decide options and drops a single choice', () => {
+    expect(
+      extractOrchestration({
+        content: 'which way',
+        orchestration: {
+          decide: {
+            options: [
+              { id: 'do_a', label: ' 做 A ' },
+              { id: 'ask_human', label: '这次问人' },
+              { id: '1bad', label: '丢' },
+            ],
+          },
+        },
+      })
+    ).toEqual({
+      decide: {
+        options: [
+          { id: 'do_a', label: '做 A' },
+          { id: 'ask_human', label: '这次问人' },
+        ],
+      },
+    });
+    expect(
+      extractOrchestration({
+        orchestration: { decide: { options: [{ id: 'only', label: '一条' }] } },
+      })
+    ).toBeUndefined();
+  });
+
+  it('forwards a plan written from the user job', () => {
+    expect(
+      extractOrchestration({
+        orchestration: {
+          plan: { title: ' 15秒中文介绍视频 ', summary: ' 不要再问确认 ', goal: 'ignored' },
+        },
+      })
+    ).toEqual({
+      plan: { title: '15秒中文介绍视频', summary: '不要再问确认' },
+    });
+    expect(extractOrchestration({ orchestration: { plan: { title: '   ' } } })).toBeUndefined();
+    expect(
+      extractOrchestration({ orchestration: { plan: { goal: ' 口播一条 ' } } })
+    ).toEqual({ plan: { title: '口播一条' } });
+  });
 });
 
 describe('validateChatWritebackOptions', () => {
@@ -743,6 +824,61 @@ describe('handleChatWriteback', () => {
             name: 'Peer',
           },
         ],
+      },
+    });
+  });
+
+  it('forwards page blocks from complete JSON', async () => {
+    clearAgentJwtCache();
+    const calls: Array<{ url: string; body: string }> = [];
+    const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      calls.push({ url: u, body: String(init?.body ?? '') });
+      if (u.includes('/complete')) {
+        return mockOkResponse(
+          JSON.stringify({
+            content: '看这一块',
+            page: {
+              blocks: [
+                { name: 'main', type: 'html', title: '说明', body: '<p>你好</p>' },
+                'skip',
+              ],
+            },
+          })
+        );
+      }
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const writeback = calls.find((c) => c.url.includes('/agent-messages'));
+    expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
+      content: '看这一块',
+      reply_to_id: 'user-msg-1',
+      page: {
+        blocks: [{ name: 'main', type: 'html', title: '说明', body: '<p>你好</p>' }],
       },
     });
   });

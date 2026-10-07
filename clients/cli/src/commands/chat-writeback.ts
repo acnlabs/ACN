@@ -9,13 +9,15 @@
  *        byo                 → --chat-complete-url | --chat-complete-exec
  *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
  *   3) POSTs { content, reply_to_id?, usage?, attachments?, tool_lines?,
- *      orchestration? } to Chat Gateway agent-messages with Bearer JWT
+ *      orchestration?, page? } to Chat Gateway agent-messages with Bearer JWT
  *
  * Hosts return {"content":"..."} and optionally usage (in/out billed;
  * extras stored), mailbox ``attachments`` (``mbx:{id}`` only),
  * ``tool_lines`` (``kind:image|video|audio|file``; Host caps to this-hop files),
  * ``orchestration.callees`` (who this hop invoked; Host sanitizes),
- * and optional ``propose_group`` / ``propose_task`` cards (stored only).
+ * optional ``propose_group`` / ``propose_task`` cards, ``decide`` options,
+ * ``plan`` {title, summary?} written from the user job (stored only),
+ * and ``page.blocks`` (manuscript text, html, table, image, or video; Host checks names and versions).
  * Host chat procedure: Agentplanet-backend ``skills/interfaze`` (not this ACN skill).
  * They do not call Gateway themselves.
  */
@@ -176,7 +178,11 @@ export type ChatCompleteResult = {
     callees?: OrchestrationCallee[];
     propose_group?: OrchestrationProposeGroup;
     propose_task?: OrchestrationProposeTask;
+    decide?: OrchestrationDecide;
+    plan?: OrchestrationPlan;
   };
+  /** Manuscript blocks. Host checks names, versions, and size. */
+  page?: { blocks: Array<Record<string, unknown>> };
 };
 
 export type OrchestrationProposeTask = {
@@ -184,6 +190,20 @@ export type OrchestrationProposeTask = {
   reward: string;
   description?: string;
   deadline_hours?: number;
+};
+
+export type OrchestrationDecideOption = {
+  id: string;
+  label: string;
+};
+
+export type OrchestrationDecide = {
+  options: OrchestrationDecideOption[];
+};
+
+export type OrchestrationPlan = {
+  title: string;
+  summary?: string;
 };
 
 export type OrchestrationProposeGroup = {
@@ -379,6 +399,8 @@ export function extractOrchestration(
   callees?: OrchestrationCallee[];
   propose_group?: OrchestrationProposeGroup;
   propose_task?: OrchestrationProposeTask;
+  decide?: OrchestrationDecide;
+  plan?: OrchestrationPlan;
 } | undefined {
   const rec = asRecord(payload);
   const orch = rec ? asRecord(rec.orchestration) : null;
@@ -386,12 +408,57 @@ export function extractOrchestration(
   const callees = extractCallees(orch.callees);
   const propose_group = extractProposeGroup(orch.propose_group);
   const propose_task = extractProposeTask(orch.propose_task);
-  if (!callees && !propose_group && !propose_task) return undefined;
+  const decide = extractDecide(orch.decide);
+  const plan = extractPlan(orch.plan);
+  if (!callees && !propose_group && !propose_task && !decide && !plan) return undefined;
   return {
     ...(callees ? { callees } : {}),
     ...(propose_group ? { propose_group } : {}),
     ...(propose_task ? { propose_task } : {}),
+    ...(decide ? { decide } : {}),
+    ...(plan ? { plan } : {}),
   };
+}
+
+const MAX_DECIDE_OPTIONS = 8;
+const DECIDE_ID = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
+
+function extractDecide(raw: unknown): OrchestrationDecide | undefined {
+  const rec = asRecord(raw);
+  if (!rec || !Array.isArray(rec.options)) return undefined;
+  const options: OrchestrationDecideOption[] = [];
+  const seen = new Set<string>();
+  for (const item of rec.options) {
+    if (options.length >= MAX_DECIDE_OPTIONS) break;
+    const row = asRecord(item);
+    if (!row || typeof row.id !== 'string' || typeof row.label !== 'string') continue;
+    const id = row.id.trim().slice(0, 32);
+    const label = row.label.trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (!id || !label || seen.has(id) || !DECIDE_ID.test(id)) continue;
+    seen.add(id);
+    options.push({ id, label });
+  }
+  if (options.length < 2) return undefined;
+  return { options };
+}
+
+function extractPlan(raw: unknown): OrchestrationPlan | undefined {
+  const rec = asRecord(raw);
+  if (!rec) return undefined;
+  const titleRaw =
+    typeof rec.title === 'string'
+      ? rec.title
+      : typeof rec.goal === 'string'
+        ? rec.goal
+        : '';
+  const title = titleRaw.trim().replace(/\s+/g, ' ').slice(0, 200);
+  if (!title) return undefined;
+  const out: OrchestrationPlan = { title };
+  if (typeof rec.summary === 'string') {
+    const summary = rec.summary.trim().replace(/\s+/g, ' ').slice(0, 4000);
+    if (summary) out.summary = summary;
+  }
+  return out;
 }
 
 function extractCallees(raw: unknown): OrchestrationCallee[] | undefined {
@@ -524,6 +591,20 @@ function bareAgentId(raw: string): string | undefined {
   return bare;
 }
 
+function extractPage(
+  payload: unknown
+): { blocks: Array<Record<string, unknown>> } | undefined {
+  const rec = asRecord(payload);
+  const page = rec ? asRecord(rec.page) : null;
+  if (!page || !Array.isArray(page.blocks)) return undefined;
+  const blocks = page.blocks.filter(
+    (item): item is Record<string, unknown> =>
+      !!item && typeof item === 'object' && !Array.isArray(item)
+  );
+  if (!blocks.length) return undefined;
+  return { blocks };
+}
+
 function parseCompletePayload(
   payload: unknown
 ): { ok: true; result: ChatCompleteResult } | { ok: false; reason: string } {
@@ -534,12 +615,14 @@ function parseCompletePayload(
   const attachments = extractMailboxAttachments(payload);
   const toolLines = extractPieceToolLines(payload);
   const orchestration = extractOrchestration(payload);
+  const page = extractPage(payload);
   const result: ChatCompleteResult = { content };
   if (usage) result.usage = usage;
   else if (modelId) result.modelId = modelId;
   if (attachments) result.attachments = attachments;
   if (toolLines) result.tool_lines = toolLines;
   if (orchestration) result.orchestration = orchestration;
+  if (page) result.page = page;
   return { ok: true, result };
 }
 
@@ -1068,9 +1151,14 @@ async function postWriteback(
   if (
     complete.orchestration?.callees?.length ||
     complete.orchestration?.propose_group ||
-    complete.orchestration?.propose_task
+    complete.orchestration?.propose_task ||
+    complete.orchestration?.decide ||
+    complete.orchestration?.plan
   ) {
     body.orchestration = complete.orchestration;
+  }
+  if (complete.page?.blocks.length) {
+    body.page = complete.page;
   }
 
   const postOnce = async (
