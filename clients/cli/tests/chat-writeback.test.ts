@@ -114,7 +114,6 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       hop_id: null,
       inference_path: null,
       host_inference_url: null,
-      counterpart: null,
     });
     const params = parsed.body.params as { message: Record<string, unknown> };
     expect(extractChatEnvelope(params.message)?.chat_id).toBe('chat-uuid');
@@ -184,41 +183,6 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       inference_path: 'official',
       host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
     });
-  });
-
-  it('keeps a counterpart only when its chat_id is this envelope', () => {
-    const parsed = parseJsonRpcBody(
-      chatMessageBody({
-        counterpart: {
-          kind: 'human',
-          id: 'auth0|hunter',
-          chat_id: 'chat-uuid',
-          display_name: 'AP Hunter 2',
-        },
-      })
-    );
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) return;
-    expect(normalizeEvent(parsed.body).chat?.counterpart).toEqual({
-      kind: 'human',
-      id: 'auth0|hunter',
-      chat_id: 'chat-uuid',
-      display_name: 'AP Hunter 2',
-    });
-
-    const mismatch = parseJsonRpcBody(
-      chatMessageBody({
-        counterpart: {
-          kind: 'agent',
-          id: 'agent-1',
-          chat_id: 'other-chat',
-          display_name: 'Other',
-        },
-      })
-    );
-    expect(mismatch.ok).toBe(true);
-    if (!mismatch.ok) return;
-    expect(normalizeEvent(mismatch.body).chat?.counterpart).toBeNull();
   });
 
   it('returns null when chat_id or reply_path missing', () => {
