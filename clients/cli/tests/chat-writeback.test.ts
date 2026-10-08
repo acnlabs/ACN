@@ -290,7 +290,9 @@ describe('extractUsage', () => {
       output_tokens: 1,
       model_id: 'anthropic/claude-sonnet-4',
     });
-    // model_id alone must not invent zero-token usage
+    // one side, or model_id alone, must not invent the missing token count
+    expect(extractUsage({ usage: { input_tokens: 1 } })).toBeUndefined();
+    expect(extractUsage({ usage: { output_tokens: 2 } })).toBeUndefined();
     expect(extractUsage({ content: 'hi', model_id: 'openai/gpt-4o-mini' })).toBeUndefined();
     expect(extractModelId({ content: 'hi', model_id: 'openai/gpt-4o-mini' })).toBe(
       'openai/gpt-4o-mini'
@@ -576,7 +578,12 @@ describe('handleChatWriteback', () => {
         headers: init?.headers,
       });
       if (u.includes('/complete')) {
-        return mockOkResponse(JSON.stringify({ content: 'agent says hi' }));
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'agent says hi',
+            usage: { input_tokens: 0, output_tokens: 0 },
+          })
+        );
       }
       if (u.includes('/oauth/token')) {
         return mockOkResponse(
@@ -621,6 +628,11 @@ describe('handleChatWriteback', () => {
     expect(JSON.parse(calls[2].body)).toEqual({
       content: 'agent says hi',
       reply_to_id: 'user-msg-1',
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        meter_source: 'peer_self',
+      },
     });
     const hdrs = calls[2].headers as Record<string, string>;
     expect(hdrs['Authorization']).toBe('Bearer jwt-from-acn');
@@ -637,6 +649,7 @@ describe('handleChatWriteback', () => {
         return mockOkResponse(
           JSON.stringify({
             content: 'here is a duck',
+            usage: { input_tokens: 0, output_tokens: 0 },
             attachments: ['mbx:att-1', 'https://cdn.example/x.png'],
           })
         );
@@ -671,6 +684,11 @@ describe('handleChatWriteback', () => {
     expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
       content: 'here is a duck',
       reply_to_id: 'user-msg-1',
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        meter_source: 'peer_self',
+      },
       attachments: ['mbx:att-1'],
     });
   });
@@ -685,6 +703,7 @@ describe('handleChatWriteback', () => {
         return mockOkResponse(
           JSON.stringify({
             content: 'here is a duck',
+            usage: { input_tokens: 0, output_tokens: 0 },
             attachments: ['mbx:att-1'],
             tool_lines: [{ kind: 'image', units: 1 }, { kind: 'token', units: 3 }],
           })
@@ -720,6 +739,11 @@ describe('handleChatWriteback', () => {
     expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
       content: 'here is a duck',
       reply_to_id: 'user-msg-1',
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        meter_source: 'peer_self',
+      },
       attachments: ['mbx:att-1'],
       tool_lines: [{ kind: 'image', units: 1 }],
     });
@@ -735,6 +759,7 @@ describe('handleChatWriteback', () => {
         return mockOkResponse(
           JSON.stringify({
             content: 'asked a helper',
+            usage: { input_tokens: 0, output_tokens: 0 },
             orchestration: {
               callees: [
                 {
@@ -779,6 +804,11 @@ describe('handleChatWriteback', () => {
     expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
       content: 'asked a helper',
       reply_to_id: 'user-msg-1',
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        meter_source: 'peer_self',
+      },
       orchestration: {
         callees: [
           {
@@ -802,6 +832,7 @@ describe('handleChatWriteback', () => {
         return mockOkResponse(
           JSON.stringify({
             content: '看这一块',
+            usage: { input_tokens: 0, output_tokens: 0 },
             canvas: {
               blocks: [
                 { name: 'main', type: 'html', title: '说明', body: '<p>你好</p>' },
@@ -841,6 +872,11 @@ describe('handleChatWriteback', () => {
     expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
       content: '看这一块',
       reply_to_id: 'user-msg-1',
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        meter_source: 'peer_self',
+      },
       canvas: {
         blocks: [{ name: 'main', type: 'html', title: '说明', body: '<p>你好</p>' }],
       },
@@ -1201,6 +1237,77 @@ describe('handleChatWriteback', () => {
     expect(result).toEqual({ ok: false, reason: 'byo_complete_missing' });
   });
 
+  it('fails BYO hops that return content without token usage', async () => {
+    const logs: string[] = [];
+    const fetchFn = vi.fn(async (url: string | URL) => {
+      if (String(url).includes('/complete')) {
+        return mockOkResponse(
+          JSON.stringify({ content: 'pong', model_id: 'tencenttokenplan/deepseek-v4-flash' })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'should-not-post' }), 201);
+    });
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const result = await handleChatWriteback(
+      event,
+      buildChatWritebackOptions({
+        chatWriteback: true,
+        chatApiBase: 'http://gw:8000',
+        acnBaseUrl: 'https://api.acnlabs.dev',
+        apiKey: 'acn_secret',
+        chatCompleteUrl: 'http://127.0.0.1:9/complete',
+        agentId: 'agent-1',
+      })!,
+      {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        logFn: (line) => logs.push(line),
+      }
+    );
+    expect(result).toEqual({ ok: false, reason: 'byo_usage_required' });
+    expect(fetchFn.mock.calls.some((c) => String(c[0]).includes('/agent-messages'))).toBe(
+      false
+    );
+    expect(logs.some((line) => line.includes('chat_writeback_ok'))).toBe(false);
+    expect(logs.some((line) => line.includes('byo_usage_required'))).toBe(true);
+  });
+
+  it('fails BYO hops that report only one token side', async () => {
+    const fetchFn = vi.fn(async (url: string | URL) => {
+      if (String(url).includes('/complete')) {
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'pong',
+            usage: { input_tokens: 12 },
+          })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'should-not-post' }), 201);
+    });
+    const event = normalizeEvent(
+      (parseJsonRpcBody(chatMessageBody()) as { ok: true; body: Record<string, unknown> })
+        .body
+    );
+    const result = await handleChatWriteback(
+      event,
+      buildChatWritebackOptions({
+        chatWriteback: true,
+        chatApiBase: 'http://gw:8000',
+        acnBaseUrl: 'https://api.acnlabs.dev',
+        apiKey: 'acn_secret',
+        chatCompleteUrl: 'http://127.0.0.1:9/complete',
+        agentId: 'agent-1',
+      })!,
+      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => {} }
+    );
+    expect(result).toEqual({ ok: false, reason: 'byo_usage_required' });
+    expect(fetchFn.mock.calls.some((c) => String(c[0]).includes('/agent-messages'))).toBe(
+      false
+    );
+  });
+
   it('forwards host usage + reply_to_id for billing settle', async () => {
     clearAgentJwtCache();
     const calls: Array<{ url: string; body: string }> = [];
@@ -1291,7 +1398,12 @@ describe('handleChatWriteback', () => {
     const fetchFn = vi.fn(async (url: string | URL) => {
       const u = String(url);
       if (u.includes('/complete')) {
-        return mockOkResponse(JSON.stringify({ content: 'retry me' }));
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'retry me',
+            usage: { input_tokens: 0, output_tokens: 0 },
+          })
+        );
       }
       if (u.includes('/oauth/token')) {
         oauthCalls += 1;
@@ -1354,7 +1466,12 @@ describe('handleChatWriteback', () => {
   it('rejects writeback when envelope reply_path was tampered after normalize', async () => {
     const fetchFn = vi.fn(async (url: string | URL) => {
       if (String(url).includes('/complete')) {
-        return mockOkResponse(JSON.stringify({ content: 'x' }));
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'x',
+            usage: { input_tokens: 0, output_tokens: 0 },
+          })
+        );
       }
       return mockOkResponse('{}', 201);
     });
@@ -1392,7 +1509,12 @@ describe('dispatchLocalReceiver chat vs task wake', () => {
         return mockOkResponse('should-not', 500);
       }
       if (u.includes('complete')) {
-        return mockOkResponse(JSON.stringify({ content: 'done' }));
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'done',
+            usage: { input_tokens: 0, output_tokens: 0 },
+          })
+        );
       }
       if (u.includes('/oauth/token')) {
         return mockOkResponse(

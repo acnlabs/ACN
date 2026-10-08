@@ -7,12 +7,15 @@
  *        official + exec/url → door + agent complete; Host must have seen the hop
  *        official, no exec   → POST Host /chat/completions (CLI-owned; omit usage)
  *        byo                 → --chat-complete-url | --chat-complete-exec
+ *                              must report this hop's input_tokens and output_tokens
+ *                              (explicit 0 is forwarded; omitted usage is an error)
  *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
  *   3) POSTs { content, reply_to_id?, usage?, attachments?, tool_lines?,
  *      orchestration?, canvas? } to Chat Gateway agent-messages with Bearer JWT
  *
- * Hosts return {"content":"..."} and optionally usage (in/out billed;
- * extras stored), mailbox ``attachments`` (``mbx:{id}`` only),
+ * Official hops omit usage: Host holds the meter. BYO complete JSON must
+ * include this hop's input_tokens and output_tokens. Extra usage fields are
+ * stored as reported. Complete JSON may also include mailbox ``attachments`` (``mbx:{id}`` only),
  * ``tool_lines`` (``kind:image|video|audio|file``; Host caps to this-hop files),
  * ``orchestration.callees`` (who this hop invoked; Host sanitizes),
  * optional ``propose_group`` / ``propose_task`` cards, ``decide`` options,
@@ -286,10 +289,10 @@ export function extractModelId(payload: unknown): string | undefined {
 }
 
 /**
- * Optional token usage from host complete JSON (chat billing settle).
+ * Token usage from host complete JSON (chat billing settle).
  * Accepts usage.input_tokens/output_tokens or prompt_tokens/completion_tokens.
- * model_id-only complete payloads do NOT invent zero-token usage — use
- * {@link extractModelId} / writeback `usage: { model_id }` instead.
+ * Both sides must be present. Explicit 0 is kept. A missing side, or a
+ * model_id-only payload, does NOT invent zero-token usage.
  */
 export function extractUsage(payload: unknown): ChatTokenUsage | undefined {
   const rec = asRecord(payload);
@@ -303,10 +306,10 @@ export function extractUsage(payload: unknown): ChatTokenUsage | undefined {
     asNonNegInt(usageRec.output_tokens) ??
     asNonNegInt(usageRec.completion_tokens) ??
     asNonNegInt(usageRec.output);
-  if (input === null && output === null) return undefined;
+  if (input === null || output === null) return undefined;
   const out: ChatTokenUsage = {
-    input_tokens: input ?? 0,
-    output_tokens: output ?? 0,
+    input_tokens: input,
+    output_tokens: output,
   };
   const ms = usageRec.meter_source;
   if (
@@ -1322,6 +1325,17 @@ export async function handleChatWriteback(
       }
     }
     return { ok: false, reason: completed.reason };
+  }
+
+  // Official hops are metered by Host, so content-only writeback stays valid.
+  // BYO must report this hop's tokens. Explicit 0 is a report; a missing
+  // usage object is not, and must not be logged as success or posted.
+  if (event.chat.inference_path !== 'official' && !completed.result.usage) {
+    logFn(
+      `[acn listen] byo_usage_required chat_id=${event.chat.chat_id} ` +
+        `message_id=${event.message_id}`
+    );
+    return { ok: false, reason: 'byo_usage_required' };
   }
 
   const written = await postWriteback(event, completed.result, opts, deps);

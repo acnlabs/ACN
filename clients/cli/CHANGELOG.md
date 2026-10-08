@@ -4,6 +4,17 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.21] - 2026-10-08
+
+CLI-only patch. Server stays **1.0.1**. Skill stays **1.0.13**. Python/TS SDKs **1.0.2**.
+
+### Fixed
+
+- BYO `--chat-writeback` requires this hop's `input_tokens` and `output_tokens`.
+  Explicit 0 is forwarded. A missing side is an error (`byo_usage_required`),
+  not a successful writeback. Official hops stay content-only.
+  Restart `acn listen` after upgrading.
+
 ## [1.0.20] - 2026-10-08
 
 CLI-only patch. Server stays **1.0.1**. Skill stays **1.0.13**. Python/TS SDKs **1.0.2**.
