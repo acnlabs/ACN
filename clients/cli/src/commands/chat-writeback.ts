@@ -9,7 +9,7 @@
  *        byo                 → --chat-complete-url | --chat-complete-exec
  *   2) mints a short-lived ACN agent JWT via POST /oauth/token (acn_* API key)
  *   3) POSTs { content, reply_to_id?, usage?, attachments?, tool_lines?,
- *      orchestration?, page? } to Chat Gateway agent-messages with Bearer JWT
+ *      orchestration?, canvas? } to Chat Gateway agent-messages with Bearer JWT
  *
  * Hosts return {"content":"..."} and optionally usage (in/out billed;
  * extras stored), mailbox ``attachments`` (``mbx:{id}`` only),
@@ -17,7 +17,7 @@
  * ``orchestration.callees`` (who this hop invoked; Host sanitizes),
  * optional ``propose_group`` / ``propose_task`` cards, ``decide`` options,
  * ``plan`` {title, summary?} written from the user job (stored only),
- * and ``page.blocks`` (manuscript text, html, table, image, or video; Host checks names and versions).
+ * and ``canvas.blocks`` (Canvas text, html, table, image, or video; Host checks names and versions).
  * Host chat procedure: Agentplanet-backend ``skills/interfaze`` (not this ACN skill).
  * They do not call Gateway themselves.
  */
@@ -181,8 +181,8 @@ export type ChatCompleteResult = {
     decide?: OrchestrationDecide;
     plan?: OrchestrationPlan;
   };
-  /** Manuscript blocks. Host checks names, versions, and size. */
-  page?: { blocks: Array<Record<string, unknown>> };
+  /** Canvas blocks. Host checks names, versions, and size. */
+  canvas?: { blocks: Array<Record<string, unknown>> };
 };
 
 export type OrchestrationProposeTask = {
@@ -591,11 +591,11 @@ function bareAgentId(raw: string): string | undefined {
   return bare;
 }
 
-function extractPage(
+function extractCanvas(
   payload: unknown
 ): { blocks: Array<Record<string, unknown>> } | undefined {
   const rec = asRecord(payload);
-  const page = rec ? asRecord(rec.page) : null;
+  const page = rec ? asRecord(rec.canvas) : null;
   if (!page || !Array.isArray(page.blocks)) return undefined;
   const blocks = page.blocks.filter(
     (item): item is Record<string, unknown> =>
@@ -615,14 +615,14 @@ function parseCompletePayload(
   const attachments = extractMailboxAttachments(payload);
   const toolLines = extractPieceToolLines(payload);
   const orchestration = extractOrchestration(payload);
-  const page = extractPage(payload);
+  const canvas = extractCanvas(payload);
   const result: ChatCompleteResult = { content };
   if (usage) result.usage = usage;
   else if (modelId) result.modelId = modelId;
   if (attachments) result.attachments = attachments;
   if (toolLines) result.tool_lines = toolLines;
   if (orchestration) result.orchestration = orchestration;
-  if (page) result.page = page;
+  if (canvas) result.canvas = canvas;
   return { ok: true, result };
 }
 
@@ -1157,8 +1157,8 @@ async function postWriteback(
   ) {
     body.orchestration = complete.orchestration;
   }
-  if (complete.page?.blocks.length) {
-    body.page = complete.page;
+  if (complete.canvas?.blocks.length) {
+    body.canvas = complete.canvas;
   }
 
   const postOnce = async (

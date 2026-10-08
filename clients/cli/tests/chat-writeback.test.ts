@@ -828,7 +828,7 @@ describe('handleChatWriteback', () => {
     });
   });
 
-  it('forwards page blocks from complete JSON', async () => {
+  it('forwards canvas blocks from complete JSON', async () => {
     clearAgentJwtCache();
     const calls: Array<{ url: string; body: string }> = [];
     const fetchFn = vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -838,7 +838,7 @@ describe('handleChatWriteback', () => {
         return mockOkResponse(
           JSON.stringify({
             content: '看这一块',
-            page: {
+            canvas: {
               blocks: [
                 { name: 'main', type: 'html', title: '说明', body: '<p>你好</p>' },
                 'skip',
@@ -877,7 +877,7 @@ describe('handleChatWriteback', () => {
     expect(JSON.parse(writeback?.body ?? '{}')).toEqual({
       content: '看这一块',
       reply_to_id: 'user-msg-1',
-      page: {
+      canvas: {
         blocks: [{ name: 'main', type: 'html', title: '说明', body: '<p>你好</p>' }],
       },
     });

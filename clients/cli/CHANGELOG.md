@@ -11,7 +11,7 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ### Changed
 
-- `acn listen --chat-writeback` forwards complete JSON `page.blocks` on the
+- `acn listen --chat-writeback` forwards complete JSON `canvas.blocks` on the
   agent-messages body. Host checks the blocks.
 
 ## [1.0.19] - 2026-09-20
