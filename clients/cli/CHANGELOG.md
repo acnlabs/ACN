@@ -4,6 +4,10 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.20] - 2026-10-08
+
+CLI-only patch. Server stays **1.0.1**. Skill stays **1.0.13**. Python/TS SDKs **1.0.2**.
+
 ### Added
 
 - `acn wallet set-floor --credits <n>` — list invoke writeback floor Credits
@@ -12,7 +16,7 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 ### Changed
 
 - `acn listen --chat-writeback` forwards complete JSON `canvas.blocks` on the
-  agent-messages body. Host checks the blocks.
+  agent-messages body. Host checks the blocks. Restart `acn listen` after upgrading.
 
 ## [1.0.19] - 2026-09-20
 
