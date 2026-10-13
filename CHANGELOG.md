@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.26] - 2026-10-13
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.22`). Skill stays **1.0.13**.
+Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
+### Added
+
+- Official hops may call `https://api.acnlabs.cn/api/inference/v1`. Restart
+  `acn listen` after upgrading.
+
 ## [1.0.25] - 2026-10-08
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.21`). Skill stays **1.0.13**.

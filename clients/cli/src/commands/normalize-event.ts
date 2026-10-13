@@ -86,6 +86,7 @@ function asInferencePath(v: unknown): 'official' | 'byo' | null {
 const HOST_INFERENCE_HOSTS = new Set([
   'api.agentplanet.org',
   'api.agenticplanet.space',
+  'api.acnlabs.cn',
 ]);
 
 /** Allow only known Host inference bases — no arbitrary wake URLs. */

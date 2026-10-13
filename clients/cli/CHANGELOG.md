@@ -4,6 +4,15 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.22] - 2026-10-13
+
+CLI-only patch. Server stays **1.0.1**. Skill stays **1.0.13**. Python/TS SDKs **1.0.2**.
+
+### Added
+
+- Official hops may call `https://api.acnlabs.cn/api/inference/v1`. That host
+  holds the China key. Restart `acn listen` after upgrading.
+
 ## [1.0.21] - 2026-10-08
 
 CLI-only patch. Server stays **1.0.1**. Skill stays **1.0.13**. Python/TS SDKs **1.0.2**.
