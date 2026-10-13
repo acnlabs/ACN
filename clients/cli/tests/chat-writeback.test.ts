@@ -168,6 +168,9 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       'http://127.0.0.1:8000/api/inference/v1'
     );
     expect(asHostInferenceUrl('http://evil.example/api/inference/v1')).toBeNull();
+    expect(asHostInferenceUrl('https://api.acnlabs.cn/api/inference/v1')).toBe(
+      'https://api.acnlabs.cn/api/inference/v1'
+    );
 
     const parsed = parseJsonRpcBody(
       chatMessageBody({
