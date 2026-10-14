@@ -487,7 +487,10 @@ async def invoke(
         if chat_id:
             # Admit before delivery so a fast Mode B complete can upload.
             await _notify_host_chat_admit(
-                hop_id=hop_id, callee=callee, chat_id=chat_id
+                hop_id=hop_id,
+                callee=callee,
+                chat_id=chat_id,
+                caller=from_agent,
             )
         try:
             message = _payload_to_a2a_message(envelope)
@@ -506,6 +509,14 @@ async def invoke(
                 else "agent_not_found"
             )
             attempts.append({"to": callee, "status": "failed", "reason": reason})
+            if chat_id:
+                await _notify_host_chat_hop(
+                    hop_id=hop_id,
+                    chat_id=chat_id,
+                    from_agent=from_agent,
+                    to_agent=callee,
+                    phase="failed",
+                )
             await metrics.inc_message_count(
                 from_agent=from_agent, to_agent=callee, status="rejected"
             )
@@ -576,6 +587,7 @@ async def _notify_host_chat_admit(
     hop_id: str,
     callee: str,
     chat_id: str,
+    caller: str,
 ) -> None:
     """Admit the callee to this hunter chat. Failures do not fail invoke.
 
@@ -594,6 +606,7 @@ async def _notify_host_chat_admit(
                     "hop_id": hop_id,
                     "callee_agent_id": callee,
                     "chat_id": chat_id,
+                    "caller_agent_id": caller,
                 },
                 headers={"X-Internal-Token": settings.internal_api_token},
             )
@@ -605,6 +618,38 @@ async def _notify_host_chat_admit(
             )
     except httpx.HTTPError as exc:
         logger.warning("invoke_chat_admit_unreachable", error=str(exc), hop_id=hop_id)
+
+
+async def _notify_host_chat_hop(
+    *,
+    hop_id: str,
+    chat_id: str,
+    from_agent: str,
+    to_agent: str,
+    phase: str,
+) -> None:
+    """Tell the chat dock this hop failed. Does not settle."""
+    settings = get_settings()
+    if not settings.backend_url or not settings.internal_api_token:
+        return
+    url = f"{settings.backend_url.rstrip('/')}/api/internal/agent-router/chat-hop"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                url,
+                json={
+                    "hop_id": hop_id,
+                    "chat_id": chat_id,
+                    "from_agent_id": from_agent,
+                    "to_agent_id": to_agent,
+                    "phase": phase,
+                },
+                headers={"X-Internal-Token": settings.internal_api_token},
+            )
+        if resp.status_code >= 400:
+            logger.warning("invoke_chat_hop_failed", status_code=resp.status_code, hop_id=hop_id)
+    except httpx.HTTPError as exc:
+        logger.warning("invoke_chat_hop_unreachable", error=str(exc), hop_id=hop_id)
 
 
 async def _forward_backend_complete(
