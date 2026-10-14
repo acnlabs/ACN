@@ -191,11 +191,47 @@ def test_agent_invoke_forwards_chat_id_not_reply_path(
     assert ap.get("reply_channel") is None
     assert ap["invoke"]["chat_id"] == "76259088-fccd-4565-a905-5c6b5d9c4611"
     admit.assert_awaited_once()
-    assert admit.await_args.kwargs == {
-        "hop_id": f"hop:invoke:req-chat-1:{callee}",
-        "callee": callee,
-        "chat_id": "76259088-fccd-4565-a905-5c6b5d9c4611",
-    }
+    assert admit.await_args.kwargs["hop_id"] == f"hop:invoke:req-chat-1:{callee}"
+    assert admit.await_args.kwargs["callee"] == callee
+    assert admit.await_args.kwargs["chat_id"] == "76259088-fccd-4565-a905-5c6b5d9c4611"
+    assert admit.await_args.kwargs["caller"] == "11111111-1111-1111-1111-111111111111"
+
+
+def test_agent_invoke_notifies_failed_hop_when_send_misses(
+    stub_metrics, stub_message_service, stub_audit, stub_agent_service
+):
+    stub_message_service.send_message = AsyncMock(side_effect=AgentNotFoundException())
+    _wire(stub_metrics, stub_message_service, stub_audit, stub_agent_service)
+    client = TestClient(app)
+    callee = "22222222-2222-2222-2222-222222222222"
+    with (
+        patch("acn.routes.invoke._notify_backend_complete", new=AsyncMock()) as complete,
+        patch("acn.routes.invoke._notify_host_chat_admit", new=AsyncMock()),
+        patch("acn.routes.invoke._notify_host_chat_hop", new=AsyncMock()) as hop,
+    ):
+        resp = client.post(
+            "/api/v1/invoke",
+            headers={"Authorization": "Bearer acn_test_key"},
+            json={
+                "to": callee,
+                "request_id": "req-miss-1",
+                "message": {
+                    "text": "hi",
+                    "metadata": {
+                        "agentplanet": {
+                            "chat_id": "76259088-fccd-4565-a905-5c6b5d9c4611",
+                        }
+                    },
+                },
+            },
+        )
+    assert resp.status_code == 404, resp.text
+    complete.assert_not_awaited()
+    hop.assert_awaited_once()
+    assert hop.await_args.kwargs["phase"] == "failed"
+    assert hop.await_args.kwargs["hop_id"] == f"hop:invoke:req-miss-1:{callee}"
+    assert hop.await_args.kwargs["from_agent"] == "11111111-1111-1111-1111-111111111111"
+    assert hop.await_args.kwargs["to_agent"] == callee
 
 
 def test_agent_invoke_drops_unsafe_chat_id(
