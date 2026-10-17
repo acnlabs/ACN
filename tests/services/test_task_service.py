@@ -336,7 +336,9 @@ class TestCancelParticipation:
             canceller_id="agent-001",
         )
 
-        mock_task_pool.cancel_participation.assert_awaited_once_with("part-001", "task-001")
+        mock_task_pool.cancel_participation.assert_awaited_once_with(
+            "part-001", "task-001", expected_status=None
+        )
 
     async def test_cancel_by_other_user_raises(self, service, mock_repo, mock_task_pool):
         """Non-participant cannot cancel someone else's participation"""
