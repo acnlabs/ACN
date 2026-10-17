@@ -285,13 +285,6 @@ async def _release_hop(hop_id: str) -> None:
             )
     except httpx.HTTPError as exc:
         logger.warning("invoke_release_unreachable", error=str(exc), hop_id=hop_id)
-    meta = message.get("metadata")
-    if not isinstance(meta, dict):
-        return None
-    ap = meta.get("agentplanet")
-    if not isinstance(ap, dict):
-        return None
-    return _safe_chat_id(ap.get("chat_id"))
 
 
 def _invoke_envelope(
