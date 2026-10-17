@@ -1363,7 +1363,8 @@ async def cancel_task(
         raise ACNHTTPError(
             ErrorCode.RESOURCE_CONFLICT,
             409,
-            details={"task_id": e.task_id, "expected": e.expected, "actual": e.actual},
+            message=str(e),
+            details={"reason": "task_status_conflict"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(
