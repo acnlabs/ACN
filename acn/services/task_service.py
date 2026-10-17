@@ -65,6 +65,16 @@ class TaskNotFoundException(Exception):
     pass
 
 
+class TaskStatusConflict(Exception):
+    """Cancel required a status the task no longer has."""
+
+    def __init__(self, task_id: str, expected: str, actual: str) -> None:
+        self.task_id = task_id
+        self.expected = expected
+        self.actual = actual
+        super().__init__(f"Task {task_id} is {actual}, not {expected}")
+
+
 class TaskService:
     """
     Task Service
@@ -1926,6 +1936,7 @@ class TaskService:
         canceller_id: str,
         *,
         canceller_type: Literal["human", "agent"] | None = None,
+        expected_status: TaskStatus | None = None,
     ) -> Task:
         """
         Cancel a task.
@@ -1953,23 +1964,34 @@ class TaskService:
         if task.status == TaskStatus.CANCELLED:
             return task
 
+        # Caller can require the status it already observed. A submit that
+        # landed after that observation must not be wiped by this cancel.
+        if expected_status is not None and task.status != expected_status:
+            raise TaskStatusConflict(task_id, expected_status.value, task.status.value)
+
         # Snapshot the pre-transition status; the CAS below requires the
         # persisted row to still be in this exact state.
-        expected_status = task.status
+        cas_status = task.status
 
         # Run the in-memory transition first so we know the destination is legal
         # (e.g. ``Task.cancel()`` raises if status is COMPLETED). CAS comes next
         # — only when CAS wins do we touch participations / payment / escrow.
         task.cancel()
-        won = await self.repository.compare_and_save(task, expected_status=expected_status)
+        won = await self.repository.compare_and_save(task, expected_status=cas_status)
         if not won:
+            latest = await self.get_task(task_id)
             logger.info(
                 "cancel_task_lost_race",
                 task_id=task_id,
                 canceller_id=canceller_id,
-                expected_status=expected_status.value,
+                expected_status=cas_status.value,
+                actual_status=latest.status.value,
             )
-            return await self.get_task(task_id)
+            # A caller that named the status it observed must not treat a lost
+            # race as success: the task moved (usually to submitted) underneath.
+            if expected_status is not None and latest.status != TaskStatus.CANCELLED:
+                raise TaskStatusConflict(task_id, expected_status.value, latest.status.value)
+            return latest
 
         # Batch cancel all active participations for multi-participant tasks.
         # MUST run AFTER the CAS won — otherwise a concurrent ``complete_task``

@@ -29,7 +29,7 @@ from .reputation_query_service import (
 from .reputation_service import ReputationService
 from .session_service import SessionEntry, SessionService
 from .subnet_service import SubnetService
-from .task_service import TaskNotFoundException, TaskService
+from .task_service import TaskNotFoundException, TaskService, TaskStatusConflict
 from .wallet_client import OrgWalletSummary, WalletClient
 
 __all__ = [
@@ -59,6 +59,7 @@ __all__ = [
     "SubnetService",
     "TaskService",
     "TaskNotFoundException",
+    "TaskStatusConflict",
     "OrgWalletSummary",
     "WalletClient",
 ]
