@@ -217,9 +217,17 @@ class TaskPool:
         )
         return pid
 
-    async def cancel_participation(self, participation_id: str, task_id: str) -> None:
+    async def cancel_participation(
+        self,
+        participation_id: str,
+        task_id: str,
+        *,
+        expected_status: str | None = None,
+    ) -> None:
         """Cancel a participation"""
-        await self.repository.atomic_cancel_participation(participation_id, task_id)
+        await self.repository.atomic_cancel_participation(
+            participation_id, task_id, expected_status=expected_status
+        )
         logger.info(
             "participation_cancelled",
             task_id=task_id,

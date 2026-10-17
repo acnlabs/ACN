@@ -93,6 +93,10 @@ end
 if current_status == 'completed' or current_status == 'cancelled' then
     return redis.error_reply('CANNOT_CANCEL')
 end
+local expected = ARGV[2]
+if expected and expected ~= '' and current_status ~= expected then
+    return redis.error_reply('WRONG_STATUS')
+end
 
 local was_active = (current_status == 'active' or current_status == 'submitted')
 
@@ -750,6 +754,8 @@ class RedisTaskRepository(ITaskRepository):
         self,
         participation_id: str,
         task_id: str,
+        *,
+        expected_status: str | None = None,
     ) -> None:
         """Atomically cancel participation and decrement active count"""
         script = self._get_cancel_script()
@@ -761,12 +767,14 @@ class RedisTaskRepository(ITaskRepository):
         try:
             await script(
                 keys=[participation_key, active_count_key, task_key],
-                args=[datetime.now(UTC).isoformat()],
+                args=[datetime.now(UTC).isoformat(), expected_status or ""],
             )
         except redis.ResponseError as e:
             err = str(e)
             if "NOT_FOUND" in err:
                 raise ValueError("Participation not found") from e
+            elif "WRONG_STATUS" in err:
+                raise ValueError("Participation is no longer in the expected status") from e
             elif "CANNOT_CANCEL" in err:
                 raise ValueError(
                     "Participation cannot be cancelled (already completed or cancelled)"

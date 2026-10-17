@@ -1482,14 +1482,20 @@ async def cancel_participation(
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
-    """Cancel a participation (participant withdraws)"""
+    """Cancel a participation (participant withdraws).
+
+    An internal caller that is not impersonating a creator may cancel one
+    seat that is still active and has not been submitted.
+    """
     agent_id, _, _ = _resolve_actor(payload, request)
+    platform = payload.get("type") == "internal" and not request.headers.get("x-creator-id")
 
     try:
         task = await task_service.cancel_participation(
             task_id=task_id,
             participation_id=participation_id,
             canceller_id=agent_id,
+            platform=platform,
         )
         # P3-7: expose submission only to the task creator.
         return _task_to_response(task, expose_submission=(agent_id == task.creator_id))
@@ -1499,6 +1505,13 @@ async def cancel_participation(
             404,
             details={"task_id": task_id},
         ) from None
+    except TaskStatusConflict as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            message=str(e),
+            details={"reason": "task_status_conflict"},
+        ) from e
     except PermissionError as e:
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
