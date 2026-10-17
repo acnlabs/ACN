@@ -334,12 +334,18 @@ class AgentJoinRequest(BaseModel):
         # Endpoint requirement depends on the inbound delivery model:
         # - ``open`` / ``allowlist`` push to the agent over HTTP, so they
         #   need a delivery endpoint.
-        # - ``manifest`` (the default) and ``closed`` never push — manifest
-        #   agents pull from ``GET /communication/manifest/{id}``; closed
-        #   agents reject all inbound. Both can register without any URL.
-        # This keeps the default registration path open to pull-only AI
-        # assistants and local-dev agents that have no public HTTP server.
-        policy_mode = (self.communication_policy or {}).get("mode", "manifest")
+        # - ``manifest`` and ``closed`` never push — manifest agents pull
+        #   from ``GET /communication/manifest/{id}``; closed agents reject
+        #   all inbound. Both can register without any URL when chosen
+        #   explicitly. Omitting the policy does not mean manifest.
+        # No public URL and no explicit policy: open + relay, so `acn listen`
+        # receives pushes. Existing stored policies are not rewritten.
+        has_url = bool(self.a2a_endpoint or self.endpoint or self.agent_card_url)
+        if self.communication_policy is None:
+            self.communication_policy = {"mode": "open"}
+            if not has_url and self.delivery is None:
+                self.delivery = "relay"
+        policy_mode = (self.communication_policy or {}).get("mode", "open")
         # ADR-0012 Mode B: relay-delivery agents are pushed to over their
         # outbound WebSocket (`acn listen`), so a push-mode agent may join
         # without any public delivery URL when it opts into relay. A direct
@@ -353,9 +359,9 @@ class AgentJoinRequest(BaseModel):
                     "reached only over their outbound WebSocket. Omit the URL, or "
                     "use delivery='direct' to be dialled over HTTP."
                 )
-            # Default join policy is manifest, which never pushes. Accepting
-            # delivery=relay there would succeed and then derive delivery=none,
-            # so the outbound WebSocket would never receive messages.
+            # manifest/closed never push. Accepting delivery=relay there would
+            # succeed and then derive delivery=none, so the outbound
+            # WebSocket would never receive messages.
             if policy_mode not in {"open", "allowlist"}:
                 raise ValueError(
                     "delivery='relay' requires communication_policy.mode 'open' or "
@@ -369,9 +375,9 @@ class AgentJoinRequest(BaseModel):
         if not (self.a2a_endpoint or self.endpoint or self.agent_card_url):
             raise ValueError(
                 f"communication_policy.mode={policy_mode!r} requires a delivery URL. "
-                "Pass a2a_endpoint, endpoint, or agent_card_url, OR omit "
-                "communication_policy to use the default 'manifest' (pull-based) "
-                "mode which does not need a public endpoint."
+                "Pass a2a_endpoint, endpoint, or agent_card_url, OR set "
+                "delivery='relay' with mode 'open' or 'allowlist', OR set "
+                "mode 'manifest' for pull-only (no public endpoint)."
             )
         return self
 
@@ -407,19 +413,18 @@ class AgentJoinRequest(BaseModel):
             "null = unlisted. 0 = declared free."
         ),
     )
-    # Phase 3: new agents default to ``manifest`` mode so senders
-    # must go through the Notify layer before the full message reaches
-    # the recipient. Existing agents keep their stored policy
-    # (``Agent.__post_init__`` backfills ``None`` → ``open`` for
-    # rows that predate this change). Callers can always override
-    # by passing an explicit ``communication_policy``.
+    # Omitted policy is open. With no delivery URL the validator also
+    # sets delivery=relay, so a join that does not publish an address
+    # is reachable via `acn listen`. Explicit manifest/closed stays
+    # pull-or-reject. Existing agents keep whatever policy they stored.
     communication_policy: dict | None = Field(
-        default={"mode": "manifest"},
+        default=None,
         description=(
             "Inbound message policy. Accepts "
             "{'mode': 'open' | 'closed' | 'manifest' | 'allowlist', "
             "'reject_reason'?: str}. "
-            "Default: manifest (Phase 3+)."
+            "Omitted: open. No delivery URL with that default also "
+            "selects relay (`acn listen`). Pass mode 'manifest' for pull-only."
         ),
     )
     metadata: dict | None = Field(
@@ -788,6 +793,13 @@ def _build_next_step_hint(
             "rejected. To start receiving messages, PATCH "
             f"{base_url}/api/v1/agents/{agent_id}/policy with "
             "{\"mode\": \"manifest\"} (pull) or {\"mode\": \"open\"} (push)."
+        )
+    if mode in _PUSH_MODES and not has_endpoint:
+        return (
+            "Registered in push mode with relay delivery (no public URL). "
+            "Hold the line with `acn listen` so inbound messages are pushed "
+            "over the WebSocket. While listen is not running, messages park "
+            "in the offline inbox."
         )
     # Push modes (open / allowlist): the endpoint is load-bearing and was
     # probed. Surface a hint only when it didn't answer.
@@ -2137,7 +2149,7 @@ async def _join_agent_impl(
         #     registration for no benefit (the original closed-mode
         #     complaint). Reachability is (re)verified later via
         #     PATCH /{id}/endpoint if the agent switches to a push mode.
-        _policy_mode = (body.communication_policy or {}).get("mode", "manifest")
+        _policy_mode = (body.communication_policy or {}).get("mode", "open")
         # ADR-0012 Mode B: relay-delivery agents are reached over their
         # outbound WebSocket (`acn listen`), never dialled — skip endpoint
         # resolution and store no direct URL even in push modes.

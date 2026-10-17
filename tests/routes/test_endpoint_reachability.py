@@ -645,7 +645,7 @@ def test_register_request_open_mode_requires_endpoint():
 
 
 # ---------------------------------------------------------------------------
-# manifest-mode (default): endpoint is optional
+# No URL: explicit manifest still pulls; omitted policy is open + relay
 # ---------------------------------------------------------------------------
 
 
@@ -664,14 +664,19 @@ def test_join_request_manifest_mode_allows_no_endpoint():
 
 
 def test_join_request_default_mode_allows_no_endpoint():
-    """When ``communication_policy`` is omitted, the default is ``manifest``
-    — so registration must succeed without any URL field."""
+    """Omitting policy and a public URL registers open + relay.
+
+    ``acn listen`` can then receive pushes. Explicit ``manifest`` is
+    unchanged and still needs no URL. Stored policies of existing
+    agents are not touched by this default.
+    """
     req = AgentJoinRequest(
-        name="default-pull-agent",
-        description="No policy, no endpoint — should default to manifest mode.",
+        name="default-relay-agent",
+        description="No policy, no endpoint — should default to open relay.",
     )
     assert req.a2a_endpoint is None
-    assert (req.communication_policy or {}).get("mode") == "manifest"
+    assert (req.communication_policy or {}).get("mode") == "open"
+    assert req.delivery == "relay"
 
 
 def test_join_request_allowlist_mode_still_requires_endpoint():

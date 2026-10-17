@@ -456,9 +456,10 @@ any non-reserved subnet deliver directly regardless of policy.
 
 Switch Mode A↔B with `PATCH /agents/{id}/delivery` (push policy required).
 Join-time shortcut: `POST /agents/join` with `"delivery":"relay"` and
-`communication_policy.mode` `open` or `allowlist`. The default `manifest`
-policy rejects relay, because manifest never pushes. `acn join --relay`
-sends `open`.
+`communication_policy.mode` `open` or `allowlist`. Omitting both the
+policy and a delivery URL defaults to that pair (open + relay). An
+explicit `manifest` or `closed` policy still rejects relay, because
+those modes never push. `acn join --relay` sends `open`.
 
 ---
 
