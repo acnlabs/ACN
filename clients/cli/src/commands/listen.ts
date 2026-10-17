@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import WebSocket from 'ws';
+import { acnGet } from '../api.js';
 import { loadConfig } from '../config.js';
 import {
   buildChatWritebackOptions,
@@ -611,6 +612,60 @@ function collectWakeHeader(value: string, previous: string[]): string[] {
 }
 
 /** Validate mutually exclusive handler flags. Returns an error message or null. */
+/** Spoken when listen is attached to an agent that never receives pushes. */
+export function listenReceptionWarning(
+  profile:
+    | { communication_mode?: string | null; delivery?: string | null }
+    | null
+    | undefined
+): string | null {
+  const mode = (profile?.communication_mode ?? '').trim().toLowerCase();
+  if (mode === 'manifest') {
+    return (
+      "[acn listen] This agent is in 'manifest' mode, so pushed messages will not arrive on this socket. " +
+      'Pull them with `acn inbox pending`, or switch to real-time with `acn inbox mode set open` then `acn delivery set relay`.'
+    );
+  }
+  if (mode === 'closed') {
+    return (
+      "[acn listen] This agent is in 'closed' mode, so inbound messages are rejected and will not arrive here. " +
+      'Switch with `acn inbox mode set open`, then `acn delivery set relay`.'
+    );
+  }
+  if ((profile?.delivery ?? '').trim().toLowerCase() === 'none') {
+    return (
+      "[acn listen] Delivery is 'none', so this socket will not receive pushed messages. Check `acn delivery get`."
+    );
+  }
+  return null;
+}
+
+export async function warnIfNotReceivingPushes(opts: {
+  agentId: string;
+  baseUrl?: string;
+  logFn?: (line: string) => void;
+  getDelivery?: () => Promise<{
+    communication_mode?: string | null;
+    delivery?: string | null;
+  }>;
+}): Promise<void> {
+  const log = opts.logFn ?? ((line: string) => console.error(line));
+  const getDelivery =
+    opts.getDelivery ??
+    (() =>
+      acnGet<{ communication_mode?: string | null; delivery?: string | null }>(
+        `/agents/${opts.agentId}/delivery`,
+        undefined,
+        { baseUrl: opts.baseUrl }
+      ));
+  try {
+    const warning = listenReceptionWarning(await getDelivery());
+    if (warning) log(warning);
+  } catch {
+    // A profile read failure must not stop listen. Heartbeats still matter.
+  }
+}
+
 export function validateListenHandlerFlags(opts: {
   runtime?: string;
   forward?: string;
@@ -719,7 +774,7 @@ export function listenCommand(): Command {
       'When Interfaze saves a new default: stdin JSON {preferred_model} → exit 0 to persist on the runtime (env: ACN_ON_SET_PREFERRED_MODEL)'
     )
     .action(
-      (opts: {
+      async (opts: {
         runtime?: string;
         wakeUrl?: string;
         wakeHeader?: string[];
@@ -873,6 +928,11 @@ export function listenCommand(): Command {
           opts.onSetPreferredModel?.trim() ||
           process.env.ACN_ON_SET_PREFERRED_MODEL?.trim() ||
           undefined;
+
+        await warnIfNotReceivingPushes({
+          agentId,
+          baseUrl: config.base_url,
+        });
 
         runListener({
           agentId,

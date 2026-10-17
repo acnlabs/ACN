@@ -15,10 +15,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   dispatchA2aRequest,
   handleA2aRequest,
+  listenReceptionWarning,
   postAgentHeartbeat,
   resolvePreferredModel,
   resolveSupportedModels,
   toWebsocketUrl,
+  warnIfNotReceivingPushes,
   type A2aRequestFrame,
   type A2aStreamChunkFrame,
   type A2aStreamEndFrame,
@@ -490,5 +492,40 @@ describe('preferred-model apply intercept', () => {
     );
     expect(frames[0]).toMatchObject({ status: 403 });
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('listen reception warning', () => {
+  it('speaks when the agent is manifest or closed', () => {
+    expect(listenReceptionWarning({ communication_mode: 'open', delivery: 'relay' })).toBeNull();
+    expect(listenReceptionWarning({ communication_mode: 'manifest', delivery: 'none' })).toMatch(
+      /manifest/
+    );
+    expect(listenReceptionWarning({ communication_mode: 'closed', delivery: 'none' })).toMatch(
+      /closed/
+    );
+  });
+
+  it('logs the warning and still resolves when the profile says manifest', async () => {
+    const lines: string[] = [];
+    await warnIfNotReceivingPushes({
+      agentId: 'ag1',
+      logFn: (line) => lines.push(line),
+      getDelivery: async () => ({ communication_mode: 'manifest', delivery: 'none' }),
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/manifest/);
+  });
+
+  it('stays quiet when the profile cannot be read', async () => {
+    const lines: string[] = [];
+    await warnIfNotReceivingPushes({
+      agentId: 'ag1',
+      logFn: (line) => lines.push(line),
+      getDelivery: async () => {
+        throw new Error('offline');
+      },
+    });
+    expect(lines).toEqual([]);
   });
 });

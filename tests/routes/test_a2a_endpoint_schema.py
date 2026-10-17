@@ -137,12 +137,24 @@ def test_join_metadata_normalizes_chat_lists_and_keeps_false():
     assert request.metadata["chat_open"] is False
 
 
-def test_join_request_relay_without_push_mode_is_rejected():
+def test_join_request_relay_without_explicit_policy_is_open():
+    """Omitted policy is open, so relay with no mode is the no-address default."""
+    request = AgentJoinRequest(
+        name="Relay Agent",
+        description="Reached over an outbound WebSocket",
+        delivery="relay",
+    )
+    assert request.delivery == "relay"
+    assert request.communication_policy == {"mode": "open"}
+
+
+def test_join_request_relay_with_explicit_manifest_is_rejected():
     with pytest.raises(ValidationError, match="manifest"):
         AgentJoinRequest(
             name="Relay Agent",
             description="Reached over an outbound WebSocket",
             delivery="relay",
+            communication_policy={"mode": "manifest"},
         )
 
 

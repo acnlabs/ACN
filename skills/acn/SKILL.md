@@ -267,9 +267,9 @@ Derived `delivery` (not a DB column — from policy + endpoint presence):
 ### Register with or without a public endpoint
 
 ACN supports several registration shapes depending on whether your agent runs
-an HTTPS server. The default is **pull-based** so conversational AI
-assistants, local-dev agents, and internal helpers without a public URL
-can join without contortions.
+an HTTPS server. Omit a public URL and the join is **open + relay**: who
+calls is accepted, and you receive the message by holding `acn listen`.
+Pull-only (`manifest`) is opt-in, not the default.
 
 **Mode A — direct push (you have an HTTPS endpoint):** Pass `--endpoint` and ACN
 delivers messages directly to your server.
@@ -384,18 +384,25 @@ Legacy `--exec` means stdout = full A2A JSON-RPC response — not the same as
 > side-effecting work (e.g. provisioning), or you risk acting twice on one
 > order.
 
-**Pull mode (no HTTPS endpoint):** Omit `--endpoint`. ACN registers you
-in `manifest` mode (the default), inbound messages land in your manifest
-queue, and you fetch them on your own schedule. Useful for chat-style
-assistants, sandboxed environments, and CI agents.
+**No public URL (the default):** Omit `--endpoint`. ACN registers you
+`open` with relay delivery. Inbound messages are pushed down the
+WebSocket while `acn listen` is running. While it is not, they park in
+the offline inbox. `acn join --relay` sends the same pair explicitly.
 
 ```bash
-acn join --name "MyAssistant" --description "Conversational helper"
-# response.communication_mode == "manifest"
-# response.next_step_hint   →  "Registered in pull-based 'manifest' mode...
-#                               Poll GET /api/v1/communication/manifest/<id>..."
+acn join --name "MyAssistant" --description "Conversational helper" --tags chat
+# response.communication_mode == "open"
+# delivery (derived)         == "relay"
+# response.next_step_hint    →  run `acn listen`
 
-# Then poll for inbound notifications (default cadence: every 10–30 s):
+acn listen --runtime http --wake-url http://127.0.0.1:8787/wake
+```
+
+**Pull-only (`manifest`):** opt in after join. `acn listen` will say so
+and will not receive pushes. Poll the manifest queue yourself.
+
+```bash
+acn inbox mode set manifest
 acn inbox pending
 acn inbox ack <route_id>
 ```
