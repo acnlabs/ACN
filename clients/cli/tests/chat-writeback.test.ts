@@ -114,6 +114,7 @@ describe('extractChatEnvelope / normalizeEvent.chat', () => {
       hop_id: null,
       inference_path: null,
       host_inference_url: null,
+      job_token: null,
     });
     const params = parsed.body.params as { message: Record<string, unknown> };
     expect(extractChatEnvelope(params.message)?.chat_id).toBe('chat-uuid');

@@ -69,6 +69,16 @@ def _wire(metrics, message_service, audit, agent_service=None) -> None:
     app.dependency_overrides[get_agent_service] = lambda: agent_service or AsyncMock()
 
 
+@pytest.fixture(autouse=True)
+def paid_gate(monkeypatch):
+    """Delivery tests assume the ledger already froze the hop."""
+    authorize = AsyncMock(return_value={"status": "held", "pass_job_token": True})
+    release = AsyncMock()
+    monkeypatch.setattr("acn.routes.invoke._authorize_hop", authorize)
+    monkeypatch.setattr("acn.routes.invoke._release_hop", release)
+    return {"authorize": authorize, "release": release}
+
+
 def test_host_invoke_delivers_as_system_agent_router(
     stub_metrics, stub_message_service, stub_audit, monkeypatch
 ):
@@ -138,6 +148,82 @@ def test_agent_invoke_uses_authenticated_from(
     assert kwargs["from_agent_id"] == "11111111-1111-1111-1111-111111111111"
 
 
+def test_authorize_refusal_does_not_deliver(
+    stub_metrics, stub_message_service, stub_audit, stub_agent_service, monkeypatch
+):
+    from acn.core.errors import ACNHTTPError, ErrorCode
+
+    async def _refuse(**_kwargs):
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            402,
+            details={"code": "insufficient_credits"},
+        )
+
+    monkeypatch.setattr("acn.routes.invoke._authorize_hop", _refuse)
+    _wire(stub_metrics, stub_message_service, stub_audit, stub_agent_service)
+    client = TestClient(app)
+    with patch("acn.routes.invoke._notify_host_chat_admit", new=AsyncMock()) as admit:
+        resp = client.post(
+            "/api/v1/invoke",
+            headers={"Authorization": "Bearer acn_test_key"},
+            json={
+                "to": "22222222-2222-2222-2222-222222222222",
+                "message": {"text": "hi"},
+                "request_id": "req-broke",
+            },
+        )
+    assert resp.status_code == 402, resp.text
+    stub_message_service.send_message.assert_not_awaited()
+    admit.assert_not_awaited()
+
+
+def test_job_token_is_attached_only_when_the_ledger_passes_it(
+    stub_metrics, stub_message_service, stub_audit, stub_agent_service, paid_gate
+):
+    _wire(stub_metrics, stub_message_service, stub_audit, stub_agent_service)
+    client = TestClient(app)
+    callee = "22222222-2222-2222-2222-222222222222"
+    paid_gate["authorize"].return_value = {"status": "held", "pass_job_token": False}
+    with patch("acn.routes.invoke._notify_backend_complete", new=AsyncMock()):
+        denied = client.post(
+            "/api/v1/invoke",
+            headers={"Authorization": "Bearer acn_test_key"},
+            json={
+                "to": callee,
+                "request_id": "req-token-off",
+                "message": {
+                    "text": "hi",
+                    "metadata": {"agentplanet": {"job_token": "job_secret"}},
+                },
+            },
+        )
+    assert denied.status_code == 200, denied.text
+    hidden = _agentplanet_from_message(stub_message_service.send_message.await_args.kwargs["message"])
+    assert "job_token" not in hidden
+    auth_body = paid_gate["authorize"].await_args.kwargs
+    assert auth_body["job_token"] == "job_secret"
+    assert auth_body["caller_agent_id"] == "11111111-1111-1111-1111-111111111111"
+
+    paid_gate["authorize"].return_value = {"status": "held", "pass_job_token": True}
+    with patch("acn.routes.invoke._notify_backend_complete", new=AsyncMock()):
+        allowed = client.post(
+            "/api/v1/invoke",
+            headers={"Authorization": "Bearer acn_test_key"},
+            json={
+                "to": callee,
+                "request_id": "req-token-on",
+                "message": {
+                    "text": "hi",
+                    "metadata": {"agentplanet": {"job_token": "job_secret"}},
+                },
+            },
+        )
+    assert allowed.status_code == 200, allowed.text
+    shown = _agentplanet_from_message(stub_message_service.send_message.await_args.kwargs["message"])
+    assert shown.get("job_token") == "job_secret"
+
+
 def _agentplanet_from_message(message: object) -> dict:
     meta = getattr(message, "metadata", None)
     if meta is None and isinstance(message, dict):
@@ -198,7 +284,7 @@ def test_agent_invoke_forwards_chat_id_not_reply_path(
 
 
 def test_agent_invoke_notifies_failed_hop_when_send_misses(
-    stub_metrics, stub_message_service, stub_audit, stub_agent_service
+    stub_metrics, stub_message_service, stub_audit, stub_agent_service, paid_gate
 ):
     stub_message_service.send_message = AsyncMock(side_effect=AgentNotFoundException())
     _wire(stub_metrics, stub_message_service, stub_audit, stub_agent_service)
@@ -232,6 +318,7 @@ def test_agent_invoke_notifies_failed_hop_when_send_misses(
     assert hop.await_args.kwargs["hop_id"] == f"hop:invoke:req-miss-1:{callee}"
     assert hop.await_args.kwargs["from_agent"] == "11111111-1111-1111-1111-111111111111"
     assert hop.await_args.kwargs["to_agent"] == callee
+    paid_gate["release"].assert_awaited_once_with(f"hop:invoke:req-miss-1:{callee}")
 
 
 def test_agent_invoke_drops_unsafe_chat_id(

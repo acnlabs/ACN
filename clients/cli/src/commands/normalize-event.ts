@@ -27,12 +27,15 @@ export interface ChatEnvelope {
   inference_path: 'official' | 'byo' | null;
   /** OpenAI-compatible Host base (`…/api/inference/v1`) when official. */
   host_inference_url: string | null;
+  /** Opened-job capability. Runtime copies this to ACN_JOB_TOKEN and strips it from stdin. */
+  job_token: string | null;
 }
 
 export interface InvokeEnvelope {
   request_id: string;
   hop_id: string;
   slot: string | null;
+  job_token: string | null;
 }
 
 /** One A2A content part, same three kinds the wire uses. */
@@ -306,7 +309,14 @@ export function extractChatEnvelope(
     hop_id: asNonEmptyString(ap.hop_id),
     inference_path: asInferencePath(ap.inference_path),
     host_inference_url: asHostInferenceUrl(ap.host_inference_url),
+    job_token: asNonEmptyString(ap.job_token),
   };
+}
+
+export function stripJobToken(event: NormalizedEvent): NormalizedEvent {
+  const chat = event.chat ? { ...event.chat, job_token: null } : event.chat;
+  const invoke = event.invoke ? { ...event.invoke, job_token: null } : event.invoke;
+  return { ...event, chat, invoke };
 }
 
 export function extractInvokeEnvelope(
@@ -324,6 +334,7 @@ export function extractInvokeEnvelope(
     request_id: requestId,
     hop_id: hopId,
     slot: asNonEmptyString(invoke.slot),
+    job_token: asNonEmptyString(ap?.job_token),
   };
 }
 

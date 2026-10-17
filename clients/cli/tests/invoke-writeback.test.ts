@@ -27,6 +27,7 @@ function invokeEvent(): NormalizedEvent {
       request_id: 'req-1',
       hop_id: 'hop:invoke:req-1:agent-b',
       slot: null,
+      job_token: null,
     },
     received_at: new Date().toISOString(),
     raw: {},
@@ -50,6 +51,7 @@ describe('invoke writeback', () => {
       request_id: 'req-1',
       hop_id: 'hop:invoke:req-1:agent-b',
       slot: 'text.reply',
+      job_token: null,
     });
   });
 
