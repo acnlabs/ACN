@@ -18,7 +18,7 @@ from ..core.entities import TaskStatus
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException
 from ..core.validators import check_dict_size_64k
-from ..services import TaskNotFoundException, TaskService
+from ..services import TaskNotFoundException, TaskService, TaskStatusConflict
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     InternalTokenDep,
@@ -1308,10 +1308,24 @@ async def review_task(
 async def cancel_task(
     request: Request,
     task_id: TaskIdPath,
+    expected_status: str | None = Query(
+        default=None,
+        description="Cancel only while the task is still in this status",
+    ),
     payload: dict = Depends(require_task_write_auth()),
     task_service: TaskServiceDep = None,
 ):
     """Cancel a task (creator; or Org treasury for creator_type=org)."""
+    required_status: TaskStatus | None = None
+    if expected_status:
+        try:
+            required_status = TaskStatus(expected_status)
+        except ValueError:
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                400,
+                details={"reason": "invalid_expected_status", "expected_status": expected_status},
+            ) from None
     canceller_id, _, actor_type = _resolve_actor(payload, request)
     auth_type = payload.get("type", "jwt")
     if auth_type == "agent":
@@ -1328,6 +1342,7 @@ async def cancel_task(
             task_id=task_id,
             canceller_id=canceller_id,
             canceller_type=canceller_type,  # type: ignore[arg-type]
+            expected_status=required_status,
         )
         expose = _caller_can_see_submission(task, canceller_id, payload)
         return _task_to_response(task, expose_submission=expose)
@@ -1343,6 +1358,13 @@ async def cancel_task(
             ErrorCode.OWNERSHIP_MISMATCH,
             403,
             details={"task_id": task_id, "reason": "permission_denied"},
+        ) from e
+    except TaskStatusConflict as e:
+        raise ACNHTTPError(
+            ErrorCode.RESOURCE_CONFLICT,
+            409,
+            message=str(e),
+            details={"reason": "task_status_conflict"},
         ) from e
     except ValueError as e:
         raise ACNHTTPError(

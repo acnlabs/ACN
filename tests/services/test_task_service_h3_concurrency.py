@@ -31,7 +31,7 @@ import pytest
 from acn.core.entities.task import Task, TaskStatus
 from acn.core.interfaces.task_repository import ITaskRepository
 from acn.infrastructure.task_pool import TaskPool
-from acn.services.task_service import TaskService
+from acn.services.task_service import TaskService, TaskStatusConflict
 
 
 def _submitted_task(**overrides) -> Task:
@@ -324,6 +324,37 @@ class TestCancelTaskCAS:
         await svc.cancel_task(task_id="task-h3-multi", canceller_id="creator-1")
 
         pool.batch_cancel_participations.assert_not_awaited()
+
+    async def test_expected_status_refuses_a_task_that_already_moved(
+        self, service: TaskService, repo: AsyncMock
+    ) -> None:
+        task = _submitted_task(status=TaskStatus.SUBMITTED)
+        repo.find_by_id.return_value = task
+
+        with pytest.raises(TaskStatusConflict) as error:
+            await service.cancel_task(
+                task_id="task-h3",
+                canceller_id="creator-1",
+                expected_status=TaskStatus.IN_PROGRESS,
+            )
+
+        assert error.value.actual == "submitted"
+        repo.compare_and_save.assert_not_awaited()
+
+    async def test_expected_status_lost_race_is_a_conflict(
+        self, service: TaskService, repo: AsyncMock
+    ) -> None:
+        task = _submitted_task(status=TaskStatus.IN_PROGRESS)
+        submitted = _submitted_task(status=TaskStatus.SUBMITTED)
+        repo.find_by_id.side_effect = [task, submitted]
+        repo.compare_and_save.return_value = False
+
+        with pytest.raises(TaskStatusConflict):
+            await service.cancel_task(
+                task_id="task-h3",
+                canceller_id="creator-1",
+                expected_status=TaskStatus.IN_PROGRESS,
+            )
 
 
 # ─────────────────────────────────────────────

@@ -897,6 +897,14 @@ class RedisTaskRepository(ITaskRepository):
         # Parse integers
         data["completed_count"] = int(data.get("completed_count", 0))
         data["active_participants_count"] = int(data.get("active_participants_count", 0))
+        # Redis hashes store every value as a string. Leaving this as text makes
+        # ``resubmit_count += 1`` raise TypeError.
+        raw_resubmit = data.get("resubmit_count")
+        if isinstance(raw_resubmit, str):
+            data["resubmit_count"] = int(raw_resubmit) if raw_resubmit else 0
+        raw_max_resubmit = data.get("max_resubmit_attempts")
+        if isinstance(raw_max_resubmit, str):
+            data["max_resubmit_attempts"] = int(raw_max_resubmit) if raw_max_resubmit else None
         # max_participants (new name); compat: fall back to max_completions
         raw_max = data.get("max_participants") or data.get("max_completions")
         data["max_participants"] = int(raw_max) if raw_max else (
