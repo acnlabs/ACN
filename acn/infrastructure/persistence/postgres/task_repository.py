@@ -688,6 +688,8 @@ class PostgresTaskRepository(ITaskRepository):
         self,
         participation_id: str,
         task_id: str,
+        *,
+        expected_status: str | None = None,
     ) -> None:
         now_iso = datetime.now(UTC).isoformat()
         async with self._session_factory() as session:
@@ -700,6 +702,8 @@ class PostgresTaskRepository(ITaskRepository):
                 row = result.scalar_one_or_none()
                 if not row:
                     raise ValueError("NOT_FOUND")
+                if expected_status is not None and row.status != expected_status:
+                    raise ValueError("Participation is no longer in the expected status")
                 if row.status in (ParticipationStatus.COMPLETED.value, ParticipationStatus.CANCELLED.value):
                     raise ValueError("CANNOT_CANCEL")
 

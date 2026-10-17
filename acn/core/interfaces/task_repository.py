@@ -236,6 +236,8 @@ class ITaskRepository(ABC):
         self,
         participation_id: str,
         task_id: str,
+        *,
+        expected_status: str | None = None,
     ) -> None:
         """
         Atomically cancel a participation and decrement active count.

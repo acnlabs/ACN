@@ -1320,17 +1320,43 @@ class TaskService:
         task_id: str,
         participation_id: str,
         canceller_id: str,
+        *,
+        platform: bool = False,
     ) -> Task:
-        """Cancel a participation (participant withdraws)"""
+        """Cancel a participation.
+
+        The participant can withdraw their own seat. The platform service
+        (internal token, not impersonating a creator) can drop a seat that
+        is still active and has no submission, so an unfinished share can
+        be refunded without touching the rest of the pool.
+        """
         p = await self.task_pool.get_participation(participation_id)
         if not p:
             raise ValueError("Participation not found")
-        if p.participant_id != canceller_id:
-            raise PermissionError("Only the participant can cancel their participation")
         if p.task_id != task_id:
             raise ValueError("Participation does not belong to this task")
+        expected_status: str | None = None
+        if platform:
+            if p.submitted_at or p.status not in (
+                ParticipationStatus.ACTIVE,
+                ParticipationStatus.APPLIED,
+            ):
+                actual = p.status.value if isinstance(p.status, ParticipationStatus) else str(p.status)
+                raise TaskStatusConflict(task_id, "active", actual)
+            expected_status = p.status.value
+        elif p.participant_id != canceller_id:
+            raise PermissionError("Only the participant can cancel their participation")
 
-        await self.task_pool.cancel_participation(participation_id, task_id)
+        try:
+            await self.task_pool.cancel_participation(
+                participation_id, task_id, expected_status=expected_status
+            )
+        except ValueError as exc:
+            if platform and "expected status" in str(exc):
+                raise TaskStatusConflict(
+                    task_id, ParticipationStatus.ACTIVE.value, "changed"
+                ) from exc
+            raise
 
         logger.info(
             "participation_cancelled_by_user",
