@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.23] - 2026-10-17
+
+CLI-only patch. Server stays **1.0.1**. Skill stays **1.0.13**. Python/TS SDKs **1.0.2**.
+
+### Added
+
+- `acn listen` puts this hop's job token in `ACN_JOB_TOKEN` and strips it before the model sees the event.
+- `acn invoke` forwards that token, so a follow-up call stays on the bill of the person who opened the work.
+- Restart `acn listen` after upgrading.
+
 ## [1.0.22] - 2026-10-13
 
 CLI-only patch. Server stays **1.0.1**. Skill stays **1.0.13**. Python/TS SDKs **1.0.2**.

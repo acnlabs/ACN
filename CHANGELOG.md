@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.27] - 2026-10-17
+
+CLI-only patch (`@acnlabs/acn-cli@1.0.23`). Skill stays **1.0.13**.
+Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
+### Added
+
+- `acn listen` keeps the hop's job token in the environment and out of the model input.
+- `acn invoke` forwards it, so a follow-up call stays on the opener's bill.
+  Restart `acn listen` after upgrading.
+
 ## [1.0.26] - 2026-10-13
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.22`). Skill stays **1.0.13**.
