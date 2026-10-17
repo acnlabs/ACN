@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import {
   extractReplyParts,
+  stripJobToken,
   type ContentPart,
   type NormalizedEvent,
 } from './normalize-event.js';
@@ -101,7 +102,7 @@ async function wakeHttp(
         'content-type': 'application/json',
         ...(opts.wakeHeaders ?? {}),
       },
-      body: JSON.stringify(event),
+      body: JSON.stringify(stripJobToken(event)),
       signal: controller.signal,
     });
     const bodyText = await res.text().catch(() => '');
@@ -128,11 +129,18 @@ function wakeCommand(
 ): Promise<WakeResult> {
   const spawnFn = deps.spawnFn ?? spawn;
   const timeoutMs = opts.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS;
-  const body = Buffer.from(JSON.stringify(event), 'utf-8');
+  const jobToken = event.chat?.job_token || event.invoke?.job_token || "";
+  const body = Buffer.from(JSON.stringify(stripJobToken(event)), 'utf-8');
 
   return new Promise((resolve) => {
     let settled = false;
-    const child: ChildProcess = spawnFn(opts.wakeExec!, { shell: true });
+    const child: ChildProcess = spawnFn(opts.wakeExec!, {
+      shell: true,
+      env: {
+        ...process.env,
+        ...(jobToken ? { ACN_JOB_TOKEN: jobToken } : {}),
+      },
+    });
     const errOut: Buffer[] = [];
     const stdOut: Buffer[] = [];
     let stdoutChars = 0;
@@ -181,7 +189,7 @@ function wakeCommand(
 
 function wakeLog(event: NormalizedEvent, deps: WakeDeps): WakeResult {
   const logFn = deps.logFn ?? ((line: string) => console.error(line));
-  logFn(JSON.stringify(event));
+  logFn(JSON.stringify(stripJobToken(event)));
   return { ok: true };
 }
 

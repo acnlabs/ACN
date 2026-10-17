@@ -73,6 +73,24 @@ export function invokeCommand(): Command {
           process.exit(1);
         }
         const message = parseMessage(opts);
+        const jobToken = (process.env.ACN_JOB_TOKEN || "").trim();
+        if (jobToken) {
+          const meta =
+            message.metadata &&
+            typeof message.metadata === "object" &&
+            !Array.isArray(message.metadata)
+              ? { ...(message.metadata as Record<string, unknown>) }
+              : {};
+          const ap =
+            meta.agentplanet &&
+            typeof meta.agentplanet === "object" &&
+            !Array.isArray(meta.agentplanet)
+              ? { ...(meta.agentplanet as Record<string, unknown>) }
+              : {};
+          ap.job_token = jobToken;
+          meta.agentplanet = ap;
+          message.metadata = meta;
+        }
         const body: Record<string, unknown> = { message };
         if (to) body.to = to;
         if (slot) body.slot = slot;

@@ -31,6 +31,7 @@ import type { NormalizedEvent } from './normalize-event.js';
 import {
   asHostInferenceUrl,
   isAllowedChatReplyPath,
+  stripJobToken,
 } from './normalize-event.js';
 import {
   canCompleteOfficialHop,
@@ -715,6 +716,8 @@ export function completeInferenceEnv(
     extra.ACN_HOST_INFERENCE_URL = chat.host_inference_url;
   }
   if (jwt) extra.ACN_AGENT_JWT = jwt;
+  const jobToken = event.chat?.job_token || event.invoke?.job_token;
+  if (jobToken) extra.ACN_JOB_TOKEN = jobToken;
   if (door?.baseUrl && jwt) {
     extra.OPENAI_BASE_URL = door.baseUrl;
     extra.OPENAI_API_KEY = jwt;
@@ -766,7 +769,7 @@ async function completeViaHttp(
     const res = await fetchFn(opts.completeUrl!, {
       method: 'POST',
       headers: completeInferenceHeaders(event, opts, jwt, door),
-      body: JSON.stringify(event),
+      body: JSON.stringify(stripJobToken(event)),
       signal: controller.signal,
     });
     const text = await res.text();
@@ -802,7 +805,8 @@ function spawnCompleteExec(
 > {
   const spawnFn = deps.spawnFn ?? spawn;
   const timeoutMs = opts.completeTimeoutMs ?? DEFAULT_COMPLETE_TIMEOUT_MS;
-  const body = Buffer.from(JSON.stringify(event), 'utf-8');
+  const stripped = stripJobToken(event);
+  const body = Buffer.from(JSON.stringify(stripped), 'utf-8');
 
   return new Promise((resolve) => {
     let settled = false;

@@ -145,4 +145,22 @@ describe('acn invoke', () => {
     expect(acnPost).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
+
+  it('forwards ACN_JOB_TOKEN and does not add a payer', async () => {
+    process.env.ACN_JOB_TOKEN = 'job_test_token';
+    try {
+      await runInvoke(['--to', 'agent-b', '--text', 'hello']);
+    } finally {
+      delete process.env.ACN_JOB_TOKEN;
+    }
+    expect(acnPost).toHaveBeenCalledWith('/invoke', {
+      to: 'agent-b',
+      message: {
+        text: 'hello',
+        metadata: { agentplanet: { job_token: 'job_test_token' } },
+      },
+    });
+    const body = vi.mocked(acnPost).mock.calls[0]?.[1] as { payer?: unknown };
+    expect(body.payer).toBeUndefined();
+  });
 });

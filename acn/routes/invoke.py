@@ -180,6 +180,120 @@ def _caller_chat_id(message: dict[str, Any]) -> str | None:
     return _safe_chat_id(ap.get("chat_id"))
 
 
+def _take_job_token(message: dict[str, Any]) -> str | None:
+    """Lift a job token out of the message so it is not left in model-visible text."""
+    meta = message.get("metadata")
+    if not isinstance(meta, dict):
+        return None
+    token = meta.pop("job_token", None)
+    ap = meta.get("agentplanet")
+    if isinstance(ap, dict):
+        nested = ap.pop("job_token", None)
+        if not token:
+            token = nested
+    if isinstance(token, str) and token.strip():
+        return token.strip()[:128]
+    return None
+
+
+def _attach_job_token(envelope: dict[str, Any], token: str) -> None:
+    meta = envelope.get("metadata")
+    if not isinstance(meta, dict):
+        meta = {}
+        envelope["metadata"] = meta
+    ap = meta.get("agentplanet")
+    if not isinstance(ap, dict):
+        ap = {}
+        meta["agentplanet"] = ap
+    ap["job_token"] = token
+
+
+async def _authorize_hop(
+    *,
+    hop_id: str,
+    callee: str,
+    caller_kind: str,
+    caller_agent_id: str | None,
+    payer_user_id: str | None,
+    job_token: str | None,
+) -> dict[str, Any]:
+    """Ask the ledger to freeze this hop. Missing backend config refuses delivery."""
+    settings = get_settings()
+    if not settings.backend_url or not settings.internal_api_token:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            503,
+            details={"reason": "backend_unconfigured"},
+        )
+    url = f"{settings.backend_url.rstrip('/')}/api/internal/agent-router/authorize"
+    payload: dict[str, Any] = {
+        "hop_id": hop_id,
+        "callee_agent_id": callee,
+    }
+    if caller_kind == "agent" and caller_agent_id:
+        payload["caller_agent_id"] = caller_agent_id
+    if caller_kind == "host" and payer_user_id:
+        payload["payer_user_id"] = payer_user_id
+    if caller_kind == "agent" and job_token:
+        payload["job_token"] = job_token
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                headers={"X-Internal-Token": settings.internal_api_token},
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("invoke_authorize_unreachable", error=str(exc), hop_id=hop_id)
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            503,
+            details={"reason": "backend_unreachable"},
+        ) from exc
+    if resp.status_code >= 400:
+        detail: dict[str, Any] = {"reason": "authorize_rejected"}
+        try:
+            body = resp.json()
+            if isinstance(body, dict):
+                inner = body.get("detail")
+                if isinstance(inner, dict):
+                    detail.update(inner)
+                elif isinstance(inner, str):
+                    detail["message"] = inner
+        except ValueError:
+            pass
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            resp.status_code if resp.status_code in (400, 402, 403, 404, 409, 422) else 502,
+            details=detail,
+        )
+    data = resp.json() if resp.content else {}
+    return data if isinstance(data, dict) else {}
+
+
+async def _release_hop(hop_id: str) -> None:
+    settings = get_settings()
+    if not settings.backend_url or not settings.internal_api_token:
+        return
+    url = f"{settings.backend_url.rstrip('/')}/api/internal/agent-router/release"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            await client.post(
+                url,
+                json={"hop_id": hop_id},
+                headers={"X-Internal-Token": settings.internal_api_token},
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("invoke_release_unreachable", error=str(exc), hop_id=hop_id)
+    meta = message.get("metadata")
+    if not isinstance(meta, dict):
+        return None
+    ap = meta.get("agentplanet")
+    if not isinstance(ap, dict):
+        return None
+    return _safe_chat_id(ap.get("chat_id"))
+
+
 def _invoke_envelope(
     *,
     body: InvokeRequest,
@@ -473,9 +587,34 @@ async def invoke(
     callee = candidates[0]
     result: Any = None
     chat_id = _caller_chat_id(body.message)
+    job_token = _take_job_token(body.message) if caller_kind == "agent" else None
+    payer_user_id = None
+    if caller_kind == "host":
+        if body.payer is None or not body.payer.user_id.strip():
+            raise ACNHTTPError(
+                ErrorCode.INVALID_REQUEST,
+                400,
+                details={"reason": "host_invoke_requires_human_payer"},
+            )
+        payer_user_id = body.payer.user_id.strip()
 
     for callee in candidates:
         hop_id = _invoke_hop_id(request_id, callee)
+        try:
+            auth = await _authorize_hop(
+                hop_id=hop_id,
+                callee=callee,
+                caller_kind=caller_kind,
+                caller_agent_id=from_agent if caller_kind == "agent" else None,
+                payer_user_id=payer_user_id,
+                job_token=job_token,
+            )
+        except ACNHTTPError as exc:
+            attempts.append({"to": callee, "status": "failed", "reason": "authorize_rejected"})
+            last_error = exc
+            if not allow_fallback:
+                raise
+            continue
         envelope = _invoke_envelope(
             body=body,
             request_id=request_id,
@@ -484,8 +623,10 @@ async def invoke(
             slot_id=slot_id,
             chat_id=chat_id,
         )
+        if auth.get("pass_job_token") and job_token:
+            _attach_job_token(envelope, job_token)
         if chat_id:
-            # Admit before delivery so a fast Mode B complete can upload.
+            # Admit only after the hop is funded, so a refusal never draws a waiting line.
             await _notify_host_chat_admit(
                 hop_id=hop_id,
                 callee=callee,
@@ -503,6 +644,7 @@ async def invoke(
             last_error = None
             break
         except (AgentNotFoundException, PolicyRejected) as exc:
+            await _release_hop(hop_id)
             reason = (
                 exc.reason
                 if isinstance(exc, PolicyRejected)
