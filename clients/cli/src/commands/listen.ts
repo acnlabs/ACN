@@ -12,6 +12,7 @@ import {
   type ChatWritebackOptions,
 } from './chat-writeback.js';
 import { DedupeStore } from './normalize-event.js';
+import { replayInbox } from './inbox-replay.js';
 import { dispatchLocalReceiver } from './local-receiver.js';
 import {
   DEFAULT_WAKE_TIMEOUT_MS,
@@ -239,7 +240,8 @@ async function handlePreferredModelApply(
  * other case emits a single ``a2a_response``. Pure except for the injected
  * ``fetch`` / ``spawn`` deps, so it is unit testable without a live socket.
  *
- * For ``--runtime``, the A2A response is emitted before wake completes.
+ * For a host-door ``--runtime``, the A2A response waits until wake finishes.
+ * Wake failure sends ``x-acn-park-inbox`` instead of accepted.
  */
 export async function dispatchA2aRequest(
   frame: A2aRequestFrame,
@@ -260,7 +262,7 @@ export async function dispatchA2aRequest(
     if (opts.runtime) {
       const store =
         deps.dedupeStore ?? new DedupeStore(opts.runtime.dedupeTtlSec);
-      dispatchLocalReceiver(
+      await dispatchLocalReceiver(
         frame.id,
         bodyBuf.toString('utf-8'),
         opts.runtime,
@@ -481,6 +483,8 @@ function runListener(cfg: ListenerConfig): void {
     });
     let keepalive: ReturnType<typeof setInterval> | undefined;
     let modelHeartbeat: ReturnType<typeof setInterval> | undefined;
+    let inboxReplay: ReturnType<typeof setInterval> | undefined;
+    let inboxReplayBusy = false;
 
     const sendModelHeartbeat = (): void => {
       if (stopped) return;
@@ -546,6 +550,23 @@ function runListener(cfg: ListenerConfig): void {
       // with neither --model nor --supported-models.
       sendModelHeartbeat();
       modelHeartbeat = setInterval(sendModelHeartbeat, MODEL_HEARTBEAT_INTERVAL_MS);
+      if (cfg.runtime) {
+        const drainInbox = (): void => {
+          if (inboxReplayBusy || stopped) return;
+          inboxReplayBusy = true;
+          void replayInbox({
+            baseUrl: cfg.baseUrl,
+            agentId: cfg.agentId,
+            apiKey: cfg.apiKey,
+            runtime: cfg.runtime!,
+            dedupeStore,
+          }).finally(() => {
+            inboxReplayBusy = false;
+          });
+        };
+        drainInbox();
+        inboxReplay = setInterval(drainInbox, 60_000);
+      }
     });
 
     ws.on('message', (data: WebSocket.RawData) => {
@@ -574,6 +595,7 @@ function runListener(cfg: ListenerConfig): void {
     ws.on('close', (code: number, reason: Buffer) => {
       if (keepalive) clearInterval(keepalive);
       if (modelHeartbeat) clearInterval(modelHeartbeat);
+      if (inboxReplay) clearInterval(inboxReplay);
       if (stopped) return;
       // 4401/4403 are auth failures (bad/mismatched API key) and 4429 is
       // "too many connections" — none are transient, so retrying forever

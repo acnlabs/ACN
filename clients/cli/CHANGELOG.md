@@ -4,6 +4,15 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.24] - 2026-10-18
+
+The matching server change is in the same commit. Deploy the server before this CLI. An older server treats the new "keep this letter" reply as delivery, and the sentence is still lost.
+
+### Fixed
+
+- `acn listen` answers only after the host door finishes. A failed wake keeps the letter in the inbox and retries it. A chat letter the door accepts logs `wake_wrote`.
+- Restart `acn listen` after upgrading.
+
 ## [1.0.23] - 2026-10-17
 
 CLI-only patch. Server stays **1.0.1**. Skill stays **1.0.13**. Python/TS SDKs **1.0.2**.

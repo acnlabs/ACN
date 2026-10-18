@@ -1,6 +1,8 @@
 /**
- * Built-in Mode B A2A receiver: answer JSON-RPC immediately, then wake runtime.
- * Does not bind a local HTTP port — replies go out over the relay WS.
+ * Built-in Mode B A2A receiver.
+ * A host-door wake answers only after the door finishes: success is accepted,
+ * failure asks ACN to keep the letter in the inbox. Chat writeback still
+ * answers first. Does not bind a local HTTP port — replies go out over the relay WS.
  */
 
 import { randomUUID } from 'crypto';
@@ -227,22 +229,76 @@ function formatWakeFailed(event: NormalizedEvent, reason: string): string {
   );
 }
 
+function formatWakeWrote(event: NormalizedEvent): string {
+  return `[acn listen] wake_wrote message_id=${event.message_id}`;
+}
+
 function formatDeduped(event: NormalizedEvent): string {
   return `[acn listen] deduped key=${dedupeKey(event)}`;
 }
 
+/** Ask ACN to park the original request in the inbox instead of treating it as delivered. */
+export function parkInboxResponse(correlationId: string): ReceiverResponseFrame {
+  return {
+    type: 'a2a_response',
+    id: correlationId,
+    status: 503,
+    headers: {
+      'content-type': 'application/json',
+      'x-acn-park-inbox': '1',
+    },
+    body: JSON.stringify({ error: 'host_unavailable' }),
+  };
+}
+
+function usesHostDoor(event: NormalizedEvent, opts: LocalReceiverOptions): boolean {
+  if (event.chat && opts.chatWriteback?.enabled) return false;
+  if (event.invoke && opts.chatWriteback?.enabled) return false;
+  return true;
+}
+
+/** Wake still in progress for a dedupe key. Same store the listener reuses. */
+const inflightWakes = new WeakMap<DedupeStore, Map<string, Promise<boolean>>>();
+
+function inflightMap(store: DedupeStore): Map<string, Promise<boolean>> {
+  let map = inflightWakes.get(store);
+  if (!map) {
+    map = new Map();
+    inflightWakes.set(store, map);
+  }
+  return map;
+}
+
+export function wakeInFlight(store: DedupeStore, key: string): boolean {
+  return inflightMap(store).has(key);
+}
+
+function claimInflight(store: DedupeStore, key: string | null): (ok: boolean) => void {
+  if (!key) return () => undefined;
+  let finish: (ok: boolean) => void = () => undefined;
+  const pending = new Promise<boolean>((resolve) => {
+    finish = resolve;
+  });
+  inflightMap(store).set(key, pending);
+  return (ok: boolean) => {
+    inflightMap(store).delete(key);
+    finish(ok);
+  };
+}
+
 /**
- * Answer A2A first via ``send``, then fire-and-forget wake.
- * Returns as soon as the A2A frame is emitted (wake is not awaited).
+ * Chat/invoke writeback still answers A2A first. A host-door wake
+ * answers only after the wake: success → accepted, failure →
+ * ``x-acn-park-inbox`` so ACN keeps the message in the inbox.
  */
-export function dispatchLocalReceiver(
+export async function dispatchLocalReceiver(
   correlationId: string,
   bodyText: string,
   opts: LocalReceiverOptions,
   dedupeStore: DedupeStore,
   send: (frame: ReceiverResponseFrame) => void,
   deps: LocalReceiverDeps = {}
-): void {
+): Promise<void> {
   const logFn = deps.logFn ?? ((line: string) => console.error(line));
   const result = processIncomingRequest(
     correlationId,
@@ -252,16 +308,28 @@ export function dispatchLocalReceiver(
     deps
   );
 
-  send(result.response);
+  const event = result.event;
+  if (result.dedupeHit && event && usesHostDoor(event, opts)) {
+    const pending = inflightMap(dedupeStore).get(dedupeKey(event));
+    if (pending) {
+      const ok = await pending;
+      send(ok ? result.response : parkInboxResponse(correlationId));
+      logFn(formatDeduped(event));
+      return;
+    }
+  }
+  const hostDoor = Boolean(
+    result.shouldWake && event && usesHostDoor(event, opts) && !result.dedupeHit
+  );
+  if (!hostDoor) send(result.response);
 
-  if (result.dedupeHit && result.event) {
-    logFn(formatDeduped(result.event));
+  if (result.dedupeHit && event) {
+    logFn(formatDeduped(event));
     return;
   }
 
-  if (!result.shouldWake || !result.event) return;
+  if (!result.shouldWake || !event) return;
 
-  const event = result.event;
   const key = opts.dedupe ? dedupeKey(event) : null;
 
   // Chat Gateway envelopes: complete host reply + writeback (not task wake).
@@ -297,21 +365,27 @@ export function dispatchLocalReceiver(
     return;
   }
 
-  void wakeRuntime(event, opts, deps)
-    .then(async (wake) => {
-      if (!wake.ok) {
-        // Release the slot so ACN at-least-once retries can wake again.
-        if (key) dedupeStore.forget(key);
-        logFn(formatWakeFailed(event, wake.reason));
-        return;
-      }
-      await deliverContentReply(event, wake.replyParts, opts, deps);
-    })
-    .catch((err: unknown) => {
+  const finishInflight = claimInflight(dedupeStore, hostDoor ? key : null);
+  try {
+    const wake = await wakeRuntime(event, opts, deps);
+    if (!wake.ok) {
       if (key) dedupeStore.forget(key);
-      const msg = err instanceof Error ? err.message : String(err);
-      logFn(formatWakeFailed(event, msg.slice(0, 200)));
-    });
+      finishInflight(false);
+      logFn(formatWakeFailed(event, wake.reason));
+      send(parkInboxResponse(correlationId));
+      return;
+    }
+    finishInflight(true);
+    if (event.chat) logFn(formatWakeWrote(event));
+    send(result.response);
+    await deliverContentReply(event, wake.replyParts, opts, deps);
+  } catch (err: unknown) {
+    if (key) dedupeStore.forget(key);
+    finishInflight(false);
+    const msg = err instanceof Error ? err.message : String(err);
+    logFn(formatWakeFailed(event, msg.slice(0, 200)));
+    send(parkInboxResponse(correlationId));
+  }
 }
 
 /** Awaitable variant for tests that need to observe wake completion. */
@@ -331,22 +405,35 @@ export async function dispatchLocalReceiverAndWaitWake(
     dedupeStore,
     deps
   );
-  send(result.response);
+  const event = result.event;
+  if (result.dedupeHit && event && usesHostDoor(event, opts)) {
+    const pending = inflightMap(dedupeStore).get(dedupeKey(event));
+    if (pending) {
+      const ok = await pending;
+      send(ok ? result.response : parkInboxResponse(correlationId));
+      logFn(formatDeduped(event));
+      return { dedupeHit: true, woke: ok };
+    }
+  }
+  const hostDoor = Boolean(
+    result.shouldWake && event && usesHostDoor(event, opts) && !result.dedupeHit
+  );
+  if (!hostDoor) send(result.response);
 
-  if (result.dedupeHit && result.event) {
-    logFn(formatDeduped(result.event));
+  if (result.dedupeHit && event) {
+    logFn(formatDeduped(event));
     return { dedupeHit: true, woke: false };
   }
-  if (!result.shouldWake || !result.event) {
+  if (!result.shouldWake || !event) {
     return { dedupeHit: false, woke: false };
   }
 
-  const key = opts.dedupe ? dedupeKey(result.event) : null;
+  const key = opts.dedupe ? dedupeKey(event) : null;
 
-  if (result.event.chat && opts.chatWriteback?.enabled) {
+  if (event.chat && opts.chatWriteback?.enabled) {
     try {
       const written = await handleChatWriteback(
-        result.event,
+        event,
         opts.chatWriteback,
         deps
       );
@@ -356,17 +443,17 @@ export async function dispatchLocalReceiverAndWaitWake(
       if (key) dedupeStore.forget(key);
       const msg = err instanceof Error ? err.message : String(err);
       logFn(
-        `[acn listen] chat_writeback_failed message_id=${result.event.message_id} ` +
+        `[acn listen] chat_writeback_failed message_id=${event.message_id} ` +
           `reason=${msg.slice(0, 200)}`
       );
       return { dedupeHit: false, woke: false };
     }
   }
 
-  if (result.event.invoke && opts.chatWriteback?.enabled) {
+  if (event.invoke && opts.chatWriteback?.enabled) {
     try {
       const written = await handleInvokeWriteback(
-        result.event,
+        event,
         opts.chatWriteback,
         deps
       );
@@ -376,26 +463,34 @@ export async function dispatchLocalReceiverAndWaitWake(
       if (key) dedupeStore.forget(key);
       const msg = err instanceof Error ? err.message : String(err);
       logFn(
-        `[acn listen] invoke_writeback_failed hop_id=${result.event.invoke.hop_id} ` +
+        `[acn listen] invoke_writeback_failed hop_id=${event.invoke.hop_id} ` +
           `reason=${msg.slice(0, 200)}`
       );
       return { dedupeHit: false, woke: false };
     }
   }
 
+  const finishInflight = claimInflight(dedupeStore, hostDoor ? key : null);
   try {
-    const wake = await wakeRuntime(result.event, opts, deps);
+    const wake = await wakeRuntime(event, opts, deps);
     if (!wake.ok) {
       if (key) dedupeStore.forget(key);
-      logFn(formatWakeFailed(result.event, wake.reason));
+      finishInflight(false);
+      logFn(formatWakeFailed(event, wake.reason));
+      if (hostDoor) send(parkInboxResponse(correlationId));
       return { dedupeHit: false, woke: false };
     }
-    await deliverContentReply(result.event, wake.replyParts, opts, deps);
+    finishInflight(true);
+    if (event.chat) logFn(formatWakeWrote(event));
+    if (hostDoor) send(result.response);
+    await deliverContentReply(event, wake.replyParts, opts, deps);
     return { dedupeHit: false, woke: true };
   } catch (err) {
     if (key) dedupeStore.forget(key);
+    finishInflight(false);
     const msg = err instanceof Error ? err.message : String(err);
-    logFn(formatWakeFailed(result.event, msg.slice(0, 200)));
+    logFn(formatWakeFailed(event, msg.slice(0, 200)));
+    if (hostDoor) send(parkInboxResponse(correlationId));
     return { dedupeHit: false, woke: false };
   }
 }

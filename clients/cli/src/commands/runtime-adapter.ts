@@ -1,6 +1,6 @@
 /**
  * Runtime wake adapters for `acn listen --runtime`.
- * CLI already answered A2A; these only notify the host agent.
+ * These notify the host agent. The listener answers A2A after the wake.
  */
 
 import { spawn } from 'child_process';

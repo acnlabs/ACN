@@ -60,6 +60,33 @@ async def test_relay_hit_returns_agent_response():
 
 
 @pytest.mark.asyncio
+async def test_host_unavailable_parks_instead_of_returning_the_error():
+    ws_manager = MagicMock()
+    ws_manager.relay_request_to_agent = AsyncMock(
+        return_value={
+            "status": 503,
+            "headers": {"x-acn-park-inbox": "1"},
+            "body": '{"error":"host_unavailable"}',
+        }
+    )
+    router = MagicMock()
+    router._store_inbox = AsyncMock()
+    with (
+        patch("acn.routes.dependencies.get_ws_manager", return_value=ws_manager),
+        patch("acn.routes.dependencies.get_router", return_value=router),
+    ):
+        resp = await _relay_or_inbox(
+            request=_make_request(),
+            agent_id="agent-target",
+            method="POST",
+            rest_path="",
+            caller=_caller(),
+        )
+    assert resp.status_code == 202
+    router._store_inbox.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_relay_timeout_returns_504():
     ws_manager = MagicMock()
     ws_manager.relay_request_to_agent = AsyncMock(side_effect=TimeoutError())
