@@ -70,7 +70,7 @@ describe('replayInbox', () => {
             status: wakes === 1 ? 200 : 502,
             headers: { get: () => null },
             text: async () => '',
-          } as Response;
+          } as unknown as Response;
         }) as unknown as typeof fetch,
       },
     });
@@ -90,9 +90,9 @@ describe('replayInbox', () => {
         status,
         headers: { get: () => null },
         text: async () => '',
-      } as Response;
+      } as unknown as Response;
     });
-    const fetchFn = vi.fn(async (url: string) => {
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url).includes('/ack')) {
         return { ok: true, status: 200, json: async () => ({}) };
       }
@@ -126,11 +126,11 @@ describe('replayInbox', () => {
     const downFetch = vi.fn(async () => {
       wakes += 1;
       if (wakes === 1) {
-        return { ok: true, status: 200, headers: { get: () => null }, text: async () => '' } as Response;
+        return { ok: true, status: 200, headers: { get: () => null }, text: async () => '' } as unknown as Response;
       }
       throw new Error('timeout');
     });
-    const downList = vi.fn(async (url: string) => {
+    const downList = vi.fn(async (url: string, _init?: RequestInit) => {
       if (String(url).includes('/ack')) {
         return { ok: true, status: 200, json: async () => ({}) };
       }
@@ -162,7 +162,7 @@ describe('replayInbox', () => {
     const store = new DedupeStore(3600);
     store.isDuplicate('t-live');
     const wakeFetch = vi.fn();
-    const fetchFn = vi.fn(async (url: string) => {
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url).includes('/ack')) {
         return { ok: true, status: 200, json: async () => ({}) };
       }
