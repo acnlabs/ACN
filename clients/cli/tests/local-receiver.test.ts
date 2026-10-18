@@ -164,7 +164,7 @@ describe('validateListenHandlerFlags', () => {
 });
 
 describe('wakeRuntime + dispatch order', () => {
-  it('answers A2A before a slow http wake completes', async () => {
+  it('holds the A2A answer until the host door finishes', async () => {
     let resolveFetch!: (v: Response) => void;
     const fetchFn = vi.fn(
       () =>
@@ -173,7 +173,6 @@ describe('wakeRuntime + dispatch order', () => {
         })
     );
     const frames: OutboundFrame[] = [];
-    const order: string[] = [];
 
     const dispatchPromise = dispatchA2aRequest(
       makeRequest(messageSendBody()),
@@ -188,7 +187,6 @@ describe('wakeRuntime + dispatch order', () => {
       },
       (f) => {
         frames.push(f);
-        order.push('a2a');
       },
       {
         fetchFn: fetchFn as unknown as typeof fetch,
@@ -196,22 +194,19 @@ describe('wakeRuntime + dispatch order', () => {
       }
     );
 
-    // dispatch returns immediately after send (wake is fire-and-forget)
-    await dispatchPromise;
-    expect(order).toEqual(['a2a']);
-    expect(frames).toHaveLength(1);
-    expect(JSON.parse((frames[0] as { body: string }).body).result.kind).toBe(
-      'message'
-    );
-
-    // wake still in flight
-    expect(fetchFn).toHaveBeenCalled();
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalled());
+    expect(frames).toHaveLength(0);
     resolveFetch({
       status: 200,
       headers: { get: () => null },
       text: async () => '',
       arrayBuffer: async () => new ArrayBuffer(0),
     } as unknown as Response);
+    await dispatchPromise;
+    expect(frames).toHaveLength(1);
+    expect(JSON.parse((frames[0] as { body: string }).body).result.kind).toBe(
+      'message'
+    );
   });
 
   function mockFetch(status: number) {
@@ -223,7 +218,7 @@ describe('wakeRuntime + dispatch order', () => {
     });
   }
 
-  it('logs wake_failed when http wake returns non-2xx but still accepted A2A', async () => {
+  it('parks the letter when the host door fails', async () => {
     const logs: string[] = [];
     const store = new DedupeStore(3600);
     const frames: OutboundFrame[] = [];
@@ -244,11 +239,46 @@ describe('wakeRuntime + dispatch order', () => {
       { fetchFn: fetchFn as unknown as typeof fetch, logFn: (l) => logs.push(l) }
     );
 
-    expect(JSON.parse((frames[0] as { body: string }).body).result.kind).toBe(
-      'message'
-    );
+    const frame = frames[0] as { headers: Record<string, string>; body: string };
+    expect(frame.headers['x-acn-park-inbox']).toBe('1');
+    expect(JSON.parse(frame.body).error).toBe('host_unavailable');
     expect(logs.some((l) => l.includes('wake_failed') && l.includes('http_502'))).toBe(
       true
+    );
+    expect(logs.some((l) => l.includes('wake_wrote'))).toBe(false);
+  });
+
+  it('logs wake_wrote when a chat letter is accepted', async () => {
+    const logs: string[] = [];
+    const frames: OutboundFrame[] = [];
+    const chatId = '11111111-1111-1111-1111-111111111111';
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-wrote',
+      messageSendBody({
+        messageId: 'm-wrote',
+        metadata: {
+          agentplanet: {
+            chat_id: chatId,
+            message_id: 'm-wrote',
+            reply_channel: 'agentplanet.chat',
+            reply_path: `/api/chats/${chatId}/agent-messages`,
+          },
+        },
+      }),
+      {
+        runtime: 'http',
+        wakeUrl: 'http://127.0.0.1:9/wake',
+        dedupe: true,
+        dedupeTtlSec: 3600,
+        wakeTimeoutMs: 1000,
+      },
+      new DedupeStore(3600),
+      (f) => frames.push(f),
+      { fetchFn: mockFetch(204) as unknown as typeof fetch, logFn: (l) => logs.push(l) }
+    );
+    expect(logs.some((l) => l.includes('wake_wrote') && l.includes('m-wrote'))).toBe(true);
+    expect((frames[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']).toBe(
+      undefined
     );
   });
 

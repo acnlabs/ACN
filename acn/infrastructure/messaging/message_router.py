@@ -153,6 +153,21 @@ MESSAGE_LOG_STREAM_MAXLEN = 100_000
 MAX_HANDLERS_PER_TYPE = 32
 
 
+def relay_response_requests_inbox(relayed: dict) -> bool:
+    """True when the agent asked ACN to keep the message in the inbox.
+
+    ``acn listen`` sends ``x-acn-park-inbox: 1`` when the host door did not
+    accept the message, so a live socket must not count as delivery.
+    """
+    headers = relayed.get("headers") or {}
+    if not isinstance(headers, dict):
+        return False
+    for key, value in headers.items():
+        if str(key).lower() == "x-acn-park-inbox" and str(value).strip() == "1":
+            return True
+    return False
+
+
 class MessageRouter:
     """
     ACN Message Router
@@ -819,6 +834,12 @@ class MessageRouter:
             except TimeoutError:
                 logger.warning(
                     f"[{route_id}] relay to {to_agent!r} timed out; parking in inbox"
+                )
+                relayed = None
+
+            if relayed is not None and relay_response_requests_inbox(relayed):
+                logger.info(
+                    f"[{route_id}] relay to {to_agent!r} asked to park; delivering to inbox"
                 )
                 relayed = None
 

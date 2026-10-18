@@ -260,6 +260,35 @@ class TestRelayDelivery:
         assert fake_pipe.zadd.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_host_unavailable_parks_in_inbox(
+        self, mock_agent_service, fake_redis, fake_pipe
+    ):
+        mock_agent_service.find_agent = AsyncMock(return_value=_relay_agent_info())
+        ws_manager = MagicMock()
+        ws_manager.relay_request_to_agent = AsyncMock(
+            return_value={
+                "status": 503,
+                "headers": {"x-acn-park-inbox": "1"},
+                "body": json.dumps({"error": "host_unavailable"}),
+                "body_encoding": "utf-8",
+            }
+        )
+        router = MessageRouter(
+            agent_service=mock_agent_service,
+            redis_client=fake_redis,
+            ws_manager=ws_manager,
+        )
+
+        result = await router.route(
+            from_agent="agent-a",
+            to_agent="agent-b",
+            message=create_text_message("ping"),
+        )
+
+        assert result["delivery_mode"] == "inbox"
+        assert fake_pipe.zadd.call_count == 1
+
+    @pytest.mark.asyncio
     async def test_no_ws_manager_falls_back_to_inbox(
         self, mock_agent_service, fake_redis, fake_pipe
     ):

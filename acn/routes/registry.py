@@ -2019,6 +2019,11 @@ async def _relay_or_inbox(
                 detail="Agent is connected but did not respond in time.",
             ) from None
 
+        from ..infrastructure.messaging.message_router import relay_response_requests_inbox
+
+        if relayed is not None and relay_response_requests_inbox(relayed):
+            relayed = None
+
         if relayed is not None:
             status_code = int(relayed.get("status", 200))
             resp_headers = relayed.get("headers") or {}

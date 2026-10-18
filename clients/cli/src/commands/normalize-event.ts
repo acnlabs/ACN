@@ -399,6 +399,13 @@ export class DedupeStore {
     this.map.delete(key);
   }
 
+  /** True when the key is still inside the window. Does not mark it. */
+  has(key: string, nowMs: number = Date.now()): boolean {
+    this.gc(nowMs);
+    const exp = this.map.get(key);
+    return exp !== undefined && exp > nowMs;
+  }
+
   /** Test helper — current window size after GC. */
   size(nowMs: number = Date.now()): number {
     this.gc(nowMs);
