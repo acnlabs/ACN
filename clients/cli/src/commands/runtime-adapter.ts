@@ -5,6 +5,8 @@
 
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
+import type { ChatWritebackOptions } from './chat-writeback.js';
+import { reasonWithProviderSignal } from './provider-failure.js';
 import {
   extractReplyParts,
   stripJobToken,
@@ -20,6 +22,8 @@ export interface RuntimeWakeOptions {
   wakeHeaders?: Record<string, string>;
   wakeExec?: string;
   wakeTimeoutMs?: number;
+  /** Set on every listen. Human chats use it for one official try. */
+  officialReply?: ChatWritebackOptions;
 }
 
 export type WakeResult =
@@ -175,11 +179,10 @@ function wakeCommand(
             : undefined;
         finish(replyParts ? { ok: true, replyParts } : { ok: true });
       } else {
-        const detail = Buffer.concat(errOut).toString('utf-8').slice(0, 80);
-        finish({
-          ok: false,
-          reason: detail ? `exit_${code}:${detail}` : `exit_${code}`,
-        });
+        const errText = Buffer.concat(errOut).toString('utf-8');
+        const detail = errText.trim().slice(0, 80);
+        const fallback = detail ? `exit_${code}:${detail}` : `exit_${code}`;
+        finish({ ok: false, reason: reasonWithProviderSignal(errText, fallback) });
       }
     });
 

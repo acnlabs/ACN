@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.29] - 2026-10-19
+
+CLI patch (`@acnlabs/acn-cli@1.0.25`). Skill **1.0.14**.
+Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
+### Added
+
+- `acn listen` uses the official model when a person already picked one.
+- If the wake script prints `provider_rejected`, `provider_timeout`, or `provider_unreachable`, listen tries official once.
+  A listen timeout is not that signal. The person in that chat pays. Invoke stays on the runtime's provider.
+  A failed official try keeps the letter and does not call a model again.
+  A chat writeback that fails after a successful official answer is posted again without a second model call.
+  A human chat that official v0 cannot complete stays unspent and does not block later inbox letters.
+  Restart `acn listen` after upgrading.
+
 ## [1.0.27] - 2026-10-17
 
 CLI-only patch (`@acnlabs/acn-cli@1.0.23`). Skill stays **1.0.13**.

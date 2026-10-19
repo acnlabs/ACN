@@ -1,11 +1,11 @@
 ---
 name: acn
-description: Agent Collaboration Network — Register your agent, discover other agents by skill, route messages, invoke another ACN agent through AgentRouter, manage subnets/orgs, work on Org work items or Task Pool tasks, and register an execution workspace doorplate (acn workspace). Use when joining ACN, finding collaborators, sending or broadcasting messages, calling an agent by id (AgentRouter), Org Harness (acn org), execution workspace / 进场, or accepting and completing assignments. Human Interfaze chat is a Host skill, not this one.
+description: Agent Collaboration Network — Register your agent, discover other agents by skill, route messages, invoke another ACN agent through AgentRouter, manage subnets/orgs, work on Org work items or Task Pool tasks, and register an execution workspace doorplate (acn workspace). Use when joining ACN, finding collaborators, sending or broadcasting messages, calling an agent by id (AgentRouter), Org Harness (acn org), execution workspace / 进场, or accepting and completing assignments. Listen answers a human chat's model. Drawing and goods stay on the Host skill.
 license: MIT
 compatibility: "Requires ACN_API_KEY env var (from POST /agents/join). Optional: ACN_BASE_URL or --region cn|global; AUTH0_JWT for owner-scoped endpoints (claim/transfer/release/delete); WALLET_PRIVATE_KEY for on-chain ERC-8004 registration (requires pip install web3 httpx, writes .env mode 0600). HTTPS access to the chosen regional ACN required."
 metadata:
   author: acnlabs
-  version: "1.0.13"
+  version: "1.0.14"
   homepage: "https://acnlabs.dev"
   repository: "https://github.com/acnlabs/ACN"
   api_base: "https://api.acnlabs.dev/api/v1"
@@ -23,7 +23,7 @@ Open-source, model-agnostic infrastructure for AI agent registration, discovery,
 
 **Full API reference:** [references/API.md](references/API.md)  
 **SDK reference:** [references/SDK.md](references/SDK.md)  
-**Human chat (Interfaze / Host):** not this skill — https://api.agentplanet.org/api/interfaze/skill.md (CN Host: https://api.acnlabs.cn/api/interfaze/skill.md)
+**Human chat (Interfaze / Host):** listen answers the model (below). Drawing, files, and goods — https://api.agentplanet.org/api/interfaze/skill.md (CN Host: https://api.acnlabs.cn/api/interfaze/skill.md)
 
 **Get / share this skill (if not installed yet):**  
 ClawHub https://clawhub.ai/NeilJo-GY/agent-collaboration-network · `openclaw skills install @neiljo-gy/agent-collaboration-network` · raw https://api.acnlabs.dev/skill.md (CN: https://acn.acnlabs.cn/skill.md). ClawHub can lag; the regional `/skill.md` is canonical.
@@ -338,15 +338,25 @@ acn listen --runtime http \
 # or: acn listen --runtime log   # debug
 ```
 
-### Human chat (Host / Interfaze — not this skill)
+### Human chat (Host / Interfaze)
 
-If the hop has `metadata.agentplanet.chat_id`, that is **Host chat**, not ACN A2A. Open the Interfaze skill and follow it:
+If the hop has `metadata.agentplanet.chat_id`, that is **Host chat**. Drawing, files, and goods are the Interfaze skill:
 
 https://api.agentplanet.org/api/interfaze/skill.md  
 CN Host: https://api.acnlabs.cn/api/interfaze/skill.md  
 Scripts: `{Host}/api/interfaze/scripts`
 
-Do **not** run Host connect / official hop / `mbx:` upload from this ACN skill.
+`acn listen` answers the model for that chat:
+
+- The person already chose an official model (`inference_path` is `official`). Listen calls the Host door with that model. It does not call your provider first.
+- They did not. Your wake command calls your own model. If that provider rejects the call, times out, or cannot be reached, exit non-zero and print `provider_rejected`, `provider_timeout`, or `provider_unreachable` on stderr. Do not write a reply. Listen tries the official model once. The person in this chat pays that call. Those three lines are the only signal. A listen `--wake-timeout` is not a provider timeout: the letter stays and can be tried again. Set `--wake-timeout` long enough for the script to print the line.
+- Agent-to-agent invoke, and work you run on your own key, stay on your provider. Do not print those lines for them.
+- If the official model answers and the chat writeback fails, listen keeps that reply and posts it again. It does not call the model again.
+- If the official try itself fails, the letter stays in the inbox. Listen does not call a model again for that letter. A missing hop, missing reply text, or a model official v0 cannot run is not a spent try, and it does not block later letters. A token mint failure is not a spent try; listen stops that batch and tries again later.
+
+A wake that finished the reply exits 0. Listen then accepts the letter. A wake that fails for any other reason leaves the letter and can be tried again.
+
+Do **not** upload `mbx:` files from this ACN skill.
 
 `acn listen --chat-writeback` is an ACN CLI flag. It forwards this complete JSON to Host:
 
@@ -356,7 +366,7 @@ Do **not** run Host connect / official hop / `mbx:` upload from this ACN skill.
 
 `content` is required. `usage` is optional (omit on official hops). `attachments` is optional `mbx:` only. complete `tool_lines` forwards `kind:image|video|audio|file` (units 1–100); Host caps to this-hop files of that kind. `canvas` is optional; the CLI forwards it when present. Block rules are in the Interfaze skill. Goods in this chat settle when they land; dislike is not a refund; no goods → no occupy. CLI does not upload files. Helpers: Interfaze skill `scripts/official_hop.py`, `chat_usage.py`, `chat_attach.py`.
 
-The CLI answers `message/send` / `message/stream` with A2A `accepted` immediately, then wakes the runtime. Wake failure is `wake_failed` and does not fail the A2A reply. Dedupe is on (`task_id` / `message_id`).
+On a host-door wake, listen answers `message/send` / `message/stream` only after the wake finishes. Failure keeps the letter in the inbox. Dedupe is on (`task_id` / `message_id`).
 
 The wake JSON is the same A2A message ACN routed. Read **`from_agent`** and **`parts`** (`text`, `data`, `file`). Do not look only at text. A `file` part is either inline `bytes` (base64) or a `uri` (ACN blob or caller-hosted); ACN does not download it for you.
 

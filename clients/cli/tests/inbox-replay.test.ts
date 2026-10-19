@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { inboxMessageToEvent, replayInbox } from '../src/commands/inbox-replay.js';
 import { DedupeStore } from '../src/commands/normalize-event.js';
+import { MemoryOfficialSpent } from '../src/commands/provider-failure.js';
 
 describe('inboxMessageToEvent', () => {
   it('wraps a stored A2A message', () => {
@@ -197,5 +198,99 @@ describe('replayInbox', () => {
     expect(wakeFetch).not.toHaveBeenCalled();
     const ackBody = JSON.parse(String(fetchFn.mock.calls[1]?.[1]?.body));
     expect(ackBody).toEqual({ route_ids: ['r-live'] });
+  });
+
+  it('skips a human chat official v0 cannot complete and still delivers the next letter', async () => {
+    const chatId = '11111111-1111-1111-1111-111111111111';
+    const chat = (messageId: string, extra: Record<string, unknown>) => ({
+      role: 'user',
+      messageId,
+      parts: [{ kind: 'text', text: '在吗' }],
+      metadata: {
+        agentplanet: {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_channel: 'agentplanet.chat',
+          reply_path: `/api/chats/${chatId}/agent-messages`,
+          inference_path: 'official',
+          host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+          ...extra,
+        },
+      },
+    });
+    const spent = new MemoryOfficialSpent();
+    const wakeFetch = vi.fn(async () => {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        text: async () => '',
+      } as unknown as Response;
+    });
+    const fetchFn = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (String(url).includes('/ack')) {
+        return { ok: true, status: 200, json: async () => ({}) };
+      }
+      if (String(url).includes('/chat/completions') || String(url).includes('/oauth/token')) {
+        throw new Error(`model called: ${url}`);
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          messages: [
+            {
+              route_id: 'r-think',
+              message: chat('m-think', {
+                hop_id: `hop:dialog:${chatId}:m-think:agent-1`,
+                requested_model: 'deepseek/deepseek-r1',
+              }),
+            },
+            {
+              route_id: 'r-nohop',
+              message: chat('m-nohop', { requested_model: 'moonshotai/kimi-k2.5' }),
+            },
+            {
+              route_id: 'r-ok',
+              message: { role: 'user', parts: [{ kind: 'text', text: 'plain' }] },
+            },
+          ],
+        }),
+      };
+    });
+    const opts = {
+      baseUrl: 'https://api.acnlabs.dev',
+      agentId: 'agent-1',
+      apiKey: 'acn_k',
+      runtime: {
+        runtime: 'http' as const,
+        wakeUrl: 'http://127.0.0.1/wake',
+        officialReply: {
+          enabled: true,
+          apiBase: 'https://api.agentplanet.org',
+          acnBaseUrl: 'https://api.acnlabs.dev',
+          apiKey: 'acn_k',
+          agentId: 'agent-1',
+          audience: 'https://api.agentplanet.org',
+        },
+      },
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => undefined,
+      wakeDeps: { fetchFn: wakeFetch as unknown as typeof fetch, spent },
+    };
+    const first = await replayInbox(opts);
+    expect(first).toEqual({ delivered: 1, waiting: 2 });
+    expect(wakeFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchFn.mock.calls[1]?.[1]?.body))).toEqual({
+      route_ids: ['r-ok'],
+    });
+
+    const second = await replayInbox(opts);
+    expect(second).toEqual({ delivered: 1, waiting: 2 });
+    expect(wakeFetch).toHaveBeenCalledTimes(2);
+    expect(spent.failed('m-think')).toBe(false);
+    expect(spent.failed('m-nohop')).toBe(false);
+    expect(spent.pending('m-think')).toBeNull();
+    expect(spent.delivered('m-think')).toBe(false);
   });
 });

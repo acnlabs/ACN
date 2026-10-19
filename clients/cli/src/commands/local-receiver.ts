@@ -20,6 +20,8 @@ import {
   type ChatWritebackOptions,
 } from './chat-writeback.js';
 import { handleInvokeWriteback } from './invoke-writeback.js';
+import { deliverHumanChat } from './human-chat-official.js';
+import type { OfficialSpentStore } from './provider-failure.js';
 import {
   wakeRuntime,
   type RuntimeWakeOptions,
@@ -56,6 +58,16 @@ export interface LocalReceiverDeps extends WakeDeps, ChatWritebackDeps {
   generateId?: () => string;
   now?: () => Date;
   logFn?: (line: string) => void;
+  spent?: OfficialSpentStore;
+}
+
+async function wakeHumanOrRuntime(
+  event: NormalizedEvent,
+  opts: LocalReceiverOptions,
+  deps: LocalReceiverDeps
+) {
+  if (event.chat && !event.invoke) return deliverHumanChat(event, opts, deps);
+  return wakeRuntime(event, opts, deps);
 }
 
 export interface ProcessIncomingResult {
@@ -367,7 +379,7 @@ export async function dispatchLocalReceiver(
 
   const finishInflight = claimInflight(dedupeStore, hostDoor ? key : null);
   try {
-    const wake = await wakeRuntime(event, opts, deps);
+    const wake = await wakeHumanOrRuntime(event, opts, deps);
     if (!wake.ok) {
       if (key) dedupeStore.forget(key);
       finishInflight(false);
@@ -472,7 +484,7 @@ export async function dispatchLocalReceiverAndWaitWake(
 
   const finishInflight = claimInflight(dedupeStore, hostDoor ? key : null);
   try {
-    const wake = await wakeRuntime(event, opts, deps);
+    const wake = await wakeHumanOrRuntime(event, opts, deps);
     if (!wake.ok) {
       if (key) dedupeStore.forget(key);
       finishInflight(false);
