@@ -44,6 +44,109 @@ export function resolveSupportedModels(opts?: {
   return out.length ? out : undefined;
 }
 
+export type ReportedModelPrice = {
+  model_id: string;
+  input_price_per_million: number;
+  output_price_per_million: number;
+};
+
+function finitePrice(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+function withProvider(modelId: string, provider: string): string {
+  const clean = modelId.trim();
+  if (!clean || !provider) return clean;
+  if (clean.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) return clean;
+  return `${provider}/${clean}`;
+}
+
+/** Prices this agent can report for the ids the price book missed. */
+export function pricesForModels(
+  modelIds: string[],
+  known: ReportedModelPrice[]
+): ReportedModelPrice[] {
+  const out: ReportedModelPrice[] = [];
+  const seen = new Set<string>();
+  for (const id of modelIds) {
+    const key = id.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    const row = known.find((item) => item.model_id.trim().toLowerCase() === key);
+    if (!row) continue;
+    seen.add(key);
+    out.push({
+      model_id: id.trim(),
+      input_price_per_million: row.input_price_per_million,
+      output_price_per_million: row.output_price_per_million,
+    });
+  }
+  return out;
+}
+
+/** ``ACN_MODEL_PRICES`` is a JSON list of model_id plus input and output per million. */
+export function pricesFromEnv(env?: NodeJS.ProcessEnv): ReportedModelPrice[] {
+  const raw = (env ?? process.env).ACN_MODEL_PRICES?.trim();
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: ReportedModelPrice[] = [];
+  for (const row of parsed) {
+    if (!row || typeof row !== 'object') continue;
+    const rec = row as {
+      model_id?: unknown;
+      input_price_per_million?: unknown;
+      output_price_per_million?: unknown;
+    };
+    const model_id = String(rec.model_id || '').trim().slice(0, 200);
+    const input = finitePrice(rec.input_price_per_million);
+    const output = finitePrice(rec.output_price_per_million);
+    if (!model_id || input == null || output == null) continue;
+    out.push({
+      model_id,
+      input_price_per_million: input,
+      output_price_per_million: output,
+    });
+  }
+  return out;
+}
+
+/** Provider model-list rows that already carry a per-million price. */
+export function pricesFromProviderCatalog(
+  body: unknown,
+  provider: string
+): ReportedModelPrice[] {
+  const rows =
+    body && typeof body === 'object' && Array.isArray((body as { data?: unknown }).data)
+      ? (body as { data: unknown[] }).data
+      : [];
+  const out: ReportedModelPrice[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const rec = row as {
+      id?: unknown;
+      input_price_per_million?: unknown;
+      output_price_per_million?: unknown;
+    };
+    const bare = String(rec.id || '').trim();
+    const input = finitePrice(rec.input_price_per_million);
+    const output = finitePrice(rec.output_price_per_million);
+    if (!bare || input == null || output == null) continue;
+    out.push({
+      model_id: withProvider(bare, provider),
+      input_price_per_million: input,
+      output_price_per_million: output,
+    });
+  }
+  return out;
+}
+
 /** POST /agents/{id}/heartbeat with optional preferred_model / supported_models. */
 export async function postAgentHeartbeat(opts: {
   baseUrl: string;
@@ -52,6 +155,7 @@ export async function postAgentHeartbeat(opts: {
   preferredModel?: string;
   /** Present (incl. ``[]``) → send field; omit → leave server value unchanged. */
   supportedModels?: string[];
+  modelPrices?: ReportedModelPrice[];
   fetchFn?: typeof fetch;
 }): Promise<
   | {
@@ -75,6 +179,9 @@ export async function postAgentHeartbeat(opts: {
   }
   if (opts.supportedModels != null) {
     payload.supported_models = opts.supportedModels;
+  }
+  if (opts.modelPrices != null) {
+    payload.model_prices = opts.modelPrices;
   }
   const body = Object.keys(payload).length ? JSON.stringify(payload) : undefined;
   try {

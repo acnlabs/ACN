@@ -63,6 +63,35 @@ export function isOwnerPreferredModelApplyFrame(frame: {
   );
 }
 
+/** Host asks the agent to price these models. ``error: price_required`` is the second ask. */
+export function parseQuoteModelPricesBody(
+  raw: string
+): { modelIds: string[]; retry: boolean } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const ids = (parsed as { quote_model_prices?: unknown }).quote_model_prices;
+  if (!Array.isArray(ids)) return null;
+  const modelIds: string[] = [];
+  const seen = new Set<string>();
+  for (const item of ids) {
+    const mid = String(item || '').trim().slice(0, 200);
+    if (!mid) continue;
+    const key = mid.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    modelIds.push(mid);
+    if (modelIds.length >= 50) break;
+  }
+  if (!modelIds.length) return null;
+  const err = String((parsed as { error?: unknown }).error || '').trim();
+  return { modelIds, retry: err === 'price_required' };
+}
+
 export function parsePreferredModelApplyBody(
   raw: string
 ): { ok: true; preferred_model: string } | { ok: false; reason: string } {

@@ -2646,6 +2646,55 @@ class HeartbeatBody(BaseModel):
                 break
         return out
 
+    model_prices: list[dict] | None = Field(
+        default=None,
+        description=(
+            "Prices this agent reports for models the price book missed. "
+            "Each item is model_id plus input and output per million tokens. "
+            "Omit to leave unchanged."
+        ),
+    )
+
+    @field_validator("model_prices")
+    @classmethod
+    def _model_prices(cls, v: list[dict] | None) -> list[dict] | None:
+        return _normalize_reported_model_prices(v)
+
+
+def _normalize_reported_model_prices(raw: list[dict] | None) -> list[dict] | None:
+    """Keep reported prices. None means omit. An empty list clears nothing by itself."""
+    if raw is None:
+        return None
+    out: list[dict] = []
+    seen: set[str] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        mid = str(row.get("model_id") or "").strip()[:200]
+        if not mid:
+            continue
+        key = mid.lower()
+        if key in seen:
+            continue
+        try:
+            inp = float(row.get("input_price_per_million"))
+            output = float(row.get("output_price_per_million"))
+        except (TypeError, ValueError):
+            continue
+        if inp < 0 or output < 0:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "model_id": mid,
+                "input_price_per_million": inp,
+                "output_price_per_million": output,
+            }
+        )
+        if len(out) >= 50:
+            break
+    return out
+
 
 @router.post("/{agent_id}/heartbeat")
 @limiter.limit("30/minute")
@@ -2666,8 +2715,9 @@ async def agent_heartbeat(
 
     - ``preferred_model`` → ``metadata.preferred_model`` (current)
     - ``supported_models`` → ``metadata.supported_models`` (capability list)
+    - ``model_prices`` → ``metadata.model_prices`` (quotes the price book missed)
 
-    Both are **self-reported, not verified**.
+    These are **self-reported, not verified**.
 
     Clean Architecture: Route → AgentService → Repository
     """
@@ -2681,10 +2731,18 @@ async def agent_heartbeat(
             },
         )
     try:
+        # Omit model_prices when the body left it out, so a normal heartbeat
+        # does not touch quotes already stored on the agent.
+        quote_update = (
+            {"model_prices": body.model_prices}
+            if "model_prices" in body.model_fields_set
+            else {}
+        )
         agent = await agent_service.update_heartbeat(
             agent_id,
             preferred_model=body.preferred_model,
             supported_models=body.supported_models,
+            **quote_update,
         )
         meta = (
             agent.metadata
@@ -2698,6 +2756,8 @@ async def agent_heartbeat(
         }
         if body.supported_models is not None:
             payload["supported_models"] = meta.get("supported_models") or body.supported_models
+        if body.model_prices is not None:
+            payload["model_prices"] = meta.get("model_prices") or body.model_prices
         desired = meta.get("desired_preferred_model")
         if isinstance(desired, str) and desired.strip():
             payload["desired_preferred_model"] = desired.strip()
@@ -2708,6 +2768,107 @@ async def agent_heartbeat(
             404,
             details={"agent_id": agent_id},
         ) from e
+
+
+def _relayed_json_body(relayed: dict[str, Any]) -> dict[str, Any]:
+    raw_body = relayed.get("body") or ""
+    if relayed.get("body_encoding") == "base64":
+        try:
+            raw_body = base64.b64decode(raw_body).decode("utf-8")
+        except Exception:
+            return {}
+    if not isinstance(raw_body, str) or not raw_body.strip():
+        return {}
+    try:
+        parsed = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+class QuoteModelPricesBody(BaseModel):
+    """A list asks the agent to price those models."""
+
+    quote_model_prices: list[str] | None = None
+    error: str | None = None
+
+
+@router.post("/{agent_id}/refresh-supported-models")
+@limiter.limit("30/minute")
+async def refresh_supported_models(
+    request: Request,
+    agent_id: AgentIdPath,
+    _caller: OwnerOrInternalDep,
+    agent_service: AgentServiceDep = None,
+    body: QuoteModelPricesBody = QuoteModelPricesBody(),
+):
+    """Ask the connected agent for prices, then store them on the agent."""
+    del request, _caller
+    try:
+        await agent_service.get_agent(agent_id)
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+
+    try:
+        from .dependencies import get_ws_manager
+
+        ws_manager = get_ws_manager()
+    except Exception:  # noqa: BLE001 — uninitialized manager == offline
+        ws_manager = None
+    if ws_manager is None:
+        raise HTTPException(status_code=503, detail="Agent is not connected.")
+
+    quote_ids: list[str] = []
+    seen_quotes: set[str] = set()
+    for raw in body.quote_model_prices or []:
+        if not isinstance(raw, str):
+            continue
+        mid = raw.strip()[:200]
+        if not mid:
+            continue
+        key = mid.lower()
+        if key in seen_quotes:
+            continue
+        seen_quotes.add(key)
+        quote_ids.append(mid)
+        if len(quote_ids) >= 50:
+            break
+    if not quote_ids:
+        raise HTTPException(status_code=400, detail="No models to quote.")
+    relay_payload: dict[str, object] = {
+        "quote_model_prices": quote_ids,
+        **({"error": "price_required"} if (body.error or "").strip() == "price_required" else {}),
+    }
+    try:
+        relayed = await ws_manager.relay_request_to_agent(
+            agent_id,
+            method="POST",
+            path=RUNTIME_APPLY_PATH,
+            headers=dict(_RUNTIME_APPLY_HEADERS),
+            body=json.dumps(relay_payload),
+            timeout=_PREFERRED_MODEL_RELAY_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="Agent is connected but did not report.",
+        ) from None
+    if not relayed or int(relayed.get("status", 200)) != 200:
+        raise HTTPException(status_code=503, detail="Agent did not report its models.")
+
+    parsed = _relayed_json_body(relayed)
+    prices = _normalize_reported_model_prices(
+        parsed.get("model_prices") if isinstance(parsed.get("model_prices"), list) else []
+    ) or []
+    wanted = {mid.lower() for mid in quote_ids}
+    prices = [row for row in prices if str(row.get("model_id") or "").lower() in wanted]
+    if prices:
+        await agent_service.update_heartbeat(agent_id, model_prices=prices)
+    return {"status": "ok", "agent_id": agent_id, "model_prices": prices}
 
 
 class PreferredModelBody(BaseModel):
