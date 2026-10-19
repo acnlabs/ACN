@@ -352,7 +352,7 @@ Scripts: `{Host}/api/interfaze/scripts`
 - They did not. Your wake command calls your own model. If that provider rejects the call, times out, or cannot be reached, exit non-zero and print `provider_rejected`, `provider_timeout`, or `provider_unreachable` on stderr. Do not write a reply. Listen tries the official model once. The person in this chat pays that call. Those three lines are the only signal. A listen `--wake-timeout` is not a provider timeout: the letter stays and can be tried again. Set `--wake-timeout` long enough for the script to print the line.
 - Agent-to-agent invoke, and work you run on your own key, stay on your provider. Do not print those lines for them.
 - If the official model answers and the chat writeback fails, listen keeps that reply and posts it again. It does not call the model again.
-- If the official try itself fails, the letter stays in the inbox. Listen does not call a model again for that letter. A missing hop, a missing reply, or a token mint failure is not a spent try.
+- If the official try itself fails, the letter stays in the inbox. Listen does not call a model again for that letter. A missing hop, missing reply text, or a model official v0 cannot run is not a spent try, and it does not block later letters. A token mint failure is not a spent try; listen stops that batch and tries again later.
 
 A wake that finished the reply exits 0. Listen then accepts the letter. A wake that fails for any other reason leaves the letter and can be tried again.
 

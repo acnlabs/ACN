@@ -12,6 +12,7 @@ import {
   type NormalizedEvent,
 } from './normalize-event.js';
 import { deliverHumanChat } from './human-chat-official.js';
+import type { OfficialSpentStore } from './provider-failure.js';
 import { wakeRuntime, type RuntimeWakeOptions, type WakeDeps } from './runtime-adapter.js';
 
 interface InboxMessage {
@@ -44,11 +45,16 @@ function looksLikeJsonRpc(record: Record<string, unknown>): boolean {
 }
 
 /**
- * Keep going through the inbox. A timeout or a dead door stops the batch.
- * A letter that already used its official try stays, without blocking the rest.
+ * This letter stays. Later letters in the batch still run.
+ * A timeout or a dead door stops the batch.
+ * official_complete_skipped is not spent: a later envelope can still be tried.
  */
-function hostRefusedOneLetter(reason: string): boolean {
-  return reason === 'official_spent' || /^http_\d+$/.test(reason);
+function continuesPastLetter(reason: string): boolean {
+  return (
+    reason === 'official_spent' ||
+    reason === 'official_complete_skipped' ||
+    /^http_\d+$/.test(reason)
+  );
 }
 
 export async function replayInbox(opts: {
@@ -58,7 +64,7 @@ export async function replayInbox(opts: {
   runtime: RuntimeWakeOptions;
   fetchFn?: typeof fetch;
   logFn?: (line: string) => void;
-  wakeDeps?: WakeDeps;
+  wakeDeps?: WakeDeps & { spent?: OfficialSpentStore };
   dedupeStore?: DedupeStore;
 }): Promise<{ delivered: number; waiting: number }> {
   const fetchFn = opts.fetchFn ?? fetch;
@@ -110,7 +116,7 @@ export async function replayInbox(opts: {
     if (!wake.ok) {
       logFn(`[acn listen] inbox replay waiting route_id=${routeId} reason=${wake.reason}`);
       waiting += 1;
-      if (!hostRefusedOneLetter(wake.reason)) break;
+      if (!continuesPastLetter(wake.reason)) break;
       continue;
     }
     opts.dedupeStore?.isDuplicate(key);
