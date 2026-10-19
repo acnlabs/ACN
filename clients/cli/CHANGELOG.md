@@ -4,6 +4,17 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.25] - 2026-10-19
+
+CLI-only patch. Server stays **1.0.1**. Skill **1.0.14**. Python/TS SDKs **1.0.2**.
+
+### Added
+
+- `acn listen` answers a human chat on the official model when the person already picked one.
+- If they did not, and the runtime's own provider rejects the call or times out, listen tries the official model once. The person in that chat pays. Agent-to-agent invoke stays on the runtime's own provider.
+- If that official try also fails, the letter stays in the inbox and later replays do not call a model again.
+- Restart `acn listen` after upgrading.
+
 ## [1.0.24] - 2026-10-18
 
 The matching server change is in the same commit. Deploy the server before this CLI. An older server treats the new "keep this letter" reply as delivery, and the sentence is still lost.

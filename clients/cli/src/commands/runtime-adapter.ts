@@ -5,6 +5,7 @@
 
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
+import type { ChatWritebackOptions } from './chat-writeback.js';
 import {
   extractReplyParts,
   stripJobToken,
@@ -20,6 +21,8 @@ export interface RuntimeWakeOptions {
   wakeHeaders?: Record<string, string>;
   wakeExec?: string;
   wakeTimeoutMs?: number;
+  /** Set on every listen. Human chats use it for one official try. */
+  officialReply?: ChatWritebackOptions;
 }
 
 export type WakeResult =

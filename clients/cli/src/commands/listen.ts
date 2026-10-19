@@ -6,6 +6,7 @@ import { acnGet } from '../api.js';
 import { loadConfig } from '../config.js';
 import {
   buildChatWritebackOptions,
+  DEFAULT_CHAT_JWT_AUDIENCE,
   DEFAULT_COMPLETE_TIMEOUT_MS,
   DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS,
   validateChatWritebackOptions,
@@ -122,6 +123,7 @@ export interface RuntimeHandlerOptions {
   dedupe: boolean;
   dedupeTtlSec: number;
   chatWriteback?: ChatWritebackOptions;
+  officialReply?: ChatWritebackOptions;
   sender?: {
     agentId: string;
     apiKey: string;
@@ -712,6 +714,18 @@ export function validateListenHandlerFlags(opts: {
   });
 }
 
+function defaultChatApiBase(acnBaseUrl: string): string {
+  try {
+    const host = new URL(acnBaseUrl).hostname.toLowerCase();
+    if (host === 'acn.acnlabs.cn' || host.endsWith('.acnlabs.cn')) {
+      return 'https://api.acnlabs.cn';
+    }
+  } catch {
+    /* global host */
+  }
+  return DEFAULT_CHAT_JWT_AUDIENCE;
+}
+
 export function listenCommand(): Command {
   const cmd = new Command('listen')
     .description(
@@ -919,6 +933,18 @@ export function listenCommand(): Command {
           process.exit(1);
         }
 
+        const officialReply = buildChatWritebackOptions({
+          chatWriteback: true,
+          chatApiBase:
+            chatApiBase?.trim() || defaultChatApiBase(config.base_url),
+          acnBaseUrl: config.base_url,
+          apiKey: apiKey!,
+          agentId,
+          audience:
+            process.env.ACN_CHAT_JWT_AUDIENCE?.trim() ||
+            process.env.AGENTPLANET_JWT_AUDIENCE?.trim(),
+        });
+
         const chatWriteback = buildChatWritebackOptions({
           chatWriteback: opts.chatWriteback,
           chatApiBase,
@@ -976,6 +1002,7 @@ export function listenCommand(): Command {
                 dedupe: opts.dedupe !== false,
                 dedupeTtlSec,
                 chatWriteback,
+                officialReply,
                 sender: {
                   agentId,
                   apiKey: apiKey!,

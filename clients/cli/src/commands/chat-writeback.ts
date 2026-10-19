@@ -38,6 +38,12 @@ import {
   startOfficialHopDoor,
   type OfficialHopDoor,
 } from './official-hop-door.js';
+import {
+  OFFICIAL_FALLBACK_MODEL,
+  fileOfficialSpent,
+  providerGaveUp,
+  type OfficialSpentStore,
+} from './provider-failure.js';
 
 export interface ChatWritebackOptions {
   enabled: boolean;
@@ -893,6 +899,142 @@ export function officialCompleteFailureContent(
   return `Official hop failed (${reason}). Try kimi or another chat model.`;
 }
 
+function modelForOfficialTry(
+  chat: NonNullable<NormalizedEvent['chat']>
+): string | null {
+  const requested = (chat.requested_model || '').trim();
+  const lower = requested.toLowerCase();
+  const ownProvider = lower.startsWith('tencenttokenplan/');
+  if (chat.inference_path === 'official') {
+    if (!requested || ownProvider || !officialV0SupportsModel(requested)) return null;
+    return requested.slice(0, 200);
+  }
+  if (requested.includes('/') && !ownProvider && officialV0SupportsModel(requested)) {
+    return requested.slice(0, 200);
+  }
+  return officialV0SupportsModel(OFFICIAL_FALLBACK_MODEL) ? OFFICIAL_FALLBACK_MODEL : null;
+}
+
+function hostBaseForOfficialTry(
+  chat: NonNullable<NormalizedEvent['chat']>,
+  apiBase: string
+): string | null {
+  const attached = asHostInferenceUrl(chat.host_inference_url);
+  if (attached) return attached;
+  const origin = apiBase.trim().replace(/\/+$/, '');
+  if (!origin) return null;
+  return asHostInferenceUrl(`${origin}/api/inference/v1`);
+}
+
+/**
+ * One Host completion for a human chat, then writeback.
+ * A failed try is remembered so a later replay does not call a model again.
+ */
+export async function tryOfficialHumanReply(
+  event: NormalizedEvent,
+  opts: ChatWritebackOptions,
+  deps: ChatWritebackDeps = {},
+  spent?: OfficialSpentStore
+): Promise<ChatWritebackResult> {
+  const chat = event.chat;
+  if (!chat || event.invoke) return { ok: false, reason: 'not_human_chat' };
+  const id = (chat.gateway_message_id || event.message_id || '').trim();
+  const store = spent ?? fileOfficialSpent(opts.agentId);
+  if (id && store.has(id)) return { ok: false, reason: 'official_spent' };
+
+  const model = modelForOfficialTry(chat);
+  const base = hostBaseForOfficialTry(chat, opts.apiBase);
+  const text = chat.user_text?.trim();
+  const hopId = chat.hop_id?.trim();
+  if (!model || !base || !hopId || !text) {
+    if (id) store.remember(id);
+    return { ok: false, reason: 'official_complete_skipped' };
+  }
+
+  const minted = await mintAgentJwt(opts, deps.fetchFn ?? fetch);
+  if (!minted.ok) {
+    if (id) store.remember(id);
+    return { ok: false, reason: minted.reason };
+  }
+
+  const logFn = deps.logFn ?? ((line: string) => console.error(line));
+  logFn(`[acn listen] official_once chat_id=${chat.chat_id} model=${model}`);
+  const completed = await postOfficialCompletion({
+    base,
+    hopId,
+    agentId: opts.agentId,
+    jwt: minted.token,
+    model,
+    text,
+    maxTokens: chat.max_output_tokens,
+    fetchFn: deps.fetchFn ?? fetch,
+    timeoutMs: opts.completeTimeoutMs,
+  });
+  if (!completed.ok) {
+    if (id) store.remember(id);
+    logFn(
+      `[acn listen] official_stopped chat_id=${chat.chat_id} reason=${completed.reason}`
+    );
+    return { ok: false, reason: completed.reason };
+  }
+  return postWriteback(event, { content: completed.content }, opts, deps);
+}
+
+async function postOfficialCompletion(args: {
+  base: string;
+  hopId: string;
+  agentId: string;
+  jwt: string;
+  model: string;
+  text: string;
+  maxTokens?: number | null;
+  fetchFn: typeof fetch;
+  timeoutMs?: number;
+}): Promise<{ ok: true; content: string } | { ok: false; reason: string }> {
+  const timeoutMs = args.timeoutMs ?? DEFAULT_OFFICIAL_COMPLETE_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await args.fetchFn(`${args.base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${args.jwt}`,
+        'content-type': 'application/json',
+        'X-Hop-Id': args.hopId,
+        'X-Agent-Id': args.agentId,
+      },
+      body: JSON.stringify({
+        model: args.model,
+        messages: [{ role: 'user', content: args.text }],
+        hop_id: args.hopId,
+        ...(args.maxTokens && args.maxTokens > 0 ? { max_tokens: args.maxTokens } : {}),
+      }),
+      signal: controller.signal,
+    });
+    const raw = await res.text();
+    if (res.status < 200 || res.status >= 300) {
+      return { ok: false, reason: `official_complete_http_${res.status}` };
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw) as unknown;
+    } catch {
+      return { ok: false, reason: 'official_complete_invalid_json' };
+    }
+    const content = extractChatCompletionContent(payload);
+    if (!content) return { ok: false, reason: 'official_complete_missing_content' };
+    return { ok: true, content };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (controller.signal.aborted || /abort|timeout/i.test(msg)) {
+      return { ok: false, reason: 'official_complete_timeout' };
+    }
+    return { ok: false, reason: msg.slice(0, 200) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function completeOfficialViaHost(
   event: NormalizedEvent,
   opts: ChatWritebackOptions,
@@ -1313,6 +1455,13 @@ export async function handleChatWriteback(
       `[acn listen] chat_complete_failed chat_id=${event.chat.chat_id} ` +
         `message_id=${event.message_id} reason=${completed.reason}`
     );
+    if (
+      event.chat.inference_path !== 'official' &&
+      providerGaveUp(completed.reason)
+    ) {
+      const fallback = await tryOfficialHumanReply(event, opts, deps);
+      if (fallback.ok) return fallback;
+    }
     if (event.chat.inference_path === 'official') {
       const written = await postWriteback(
         event,

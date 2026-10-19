@@ -11,6 +11,7 @@ import {
   type DedupeStore,
   type NormalizedEvent,
 } from './normalize-event.js';
+import { deliverHumanChat } from './human-chat-official.js';
 import { wakeRuntime, type RuntimeWakeOptions, type WakeDeps } from './runtime-adapter.js';
 
 interface InboxMessage {
@@ -42,9 +43,12 @@ function looksLikeJsonRpc(record: Record<string, unknown>): boolean {
   return record.method === 'message/send' || record.method === 'message/stream';
 }
 
-/** The door answered and refused this letter. A timeout or a dead door stops the batch. */
+/**
+ * Keep going through the inbox. A timeout or a dead door stops the batch.
+ * A letter that already used its official try stays, without blocking the rest.
+ */
 function hostRefusedOneLetter(reason: string): boolean {
-  return /^http_\d+$/.test(reason);
+  return reason === 'official_spent' || /^http_\d+$/.test(reason);
 }
 
 export async function replayInbox(opts: {
@@ -99,7 +103,10 @@ export async function replayInbox(opts: {
       acked.push(routeId);
       continue;
     }
-    const wake = await wakeRuntime(event, opts.runtime, opts.wakeDeps ?? {});
+    const wake =
+      event.chat && !event.invoke
+        ? await deliverHumanChat(event, opts.runtime, opts.wakeDeps ?? {})
+        : await wakeRuntime(event, opts.runtime, opts.wakeDeps ?? {});
     if (!wake.ok) {
       logFn(`[acn listen] inbox replay waiting route_id=${routeId} reason=${wake.reason}`);
       waiting += 1;

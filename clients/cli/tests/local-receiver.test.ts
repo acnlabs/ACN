@@ -5,6 +5,7 @@
 import { EventEmitter } from 'events';
 import { describe, expect, it, vi } from 'vitest';
 
+import { clearAgentJwtCache } from '../src/commands/chat-writeback.js';
 import {
   dispatchA2aRequest,
   handleA2aRequest,
@@ -16,6 +17,7 @@ import {
   dispatchLocalReceiverAndWaitWake,
   processIncomingRequest,
 } from '../src/commands/local-receiver.js';
+import { MemoryOfficialSpent } from '../src/commands/provider-failure.js';
 import {
   DedupeStore,
   normalizeEvent,
@@ -523,5 +525,154 @@ describe('content parts on the wake, file reply as a later message', () => {
     expect(body.from_agent).toBe('agent-b');
     expect(body.target_agent).toBe('agent-a');
     expect(body.message.parts[0].file.uri).toBe('https://example.com/a.png');
+  });
+});
+
+describe('human chat official try', () => {
+  const chatId = '11111111-1111-1111-1111-111111111111';
+  const hop = `hop:dialog:${chatId}:m-person:agent-1`;
+  const officialReply = {
+    enabled: true,
+    apiBase: 'https://api.agentplanet.org',
+    acnBaseUrl: 'https://api.acnlabs.dev',
+    apiKey: 'acn_test',
+    agentId: 'agent-1',
+    audience: 'https://api.agentplanet.org',
+  };
+
+  function chatBody(extra: Record<string, unknown>): string {
+    return messageSendBody({
+      messageId: 'm-person',
+      parts: [{ kind: 'text', text: '在吗' }],
+      metadata: {
+        agentplanet: {
+          chat_id: chatId,
+          message_id: 'm-person',
+          reply_channel: 'agentplanet.chat',
+          reply_path: `/api/chats/${chatId}/agent-messages`,
+          hop_id: hop,
+          ...extra,
+        },
+      },
+    });
+  }
+
+  function jsonResponse(status: number, body: unknown) {
+    return {
+      status,
+      headers: { get: () => null },
+      text: async () => JSON.stringify(body),
+      arrayBuffer: async () => new ArrayBuffer(0),
+    };
+  }
+
+  function routedFetch(wakeStatus: number, completionStatus = 200) {
+    const urls: string[] = [];
+    const fetchFn = vi.fn(async (url: string) => {
+      const target = String(url);
+      urls.push(target);
+      if (target.endsWith('/oauth/token')) {
+        return jsonResponse(200, { access_token: 'jwt-1', expires_in: 1800 });
+      }
+      if (target.endsWith('/chat/completions')) {
+        if (completionStatus >= 400) return jsonResponse(completionStatus, {});
+        return jsonResponse(200, {
+          choices: [{ message: { content: '在的' } }],
+        });
+      }
+      if (target.includes('/agent-messages')) return jsonResponse(201, {});
+      if (target.includes('/wake')) return jsonResponse(wakeStatus, {});
+      return jsonResponse(500, {});
+    });
+    return { fetchFn, urls };
+  }
+
+  it('calls the official model first when the person already picked it', async () => {
+    clearAgentJwtCache();
+    const { fetchFn, urls } = routedFetch(500);
+    const frames: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-off',
+      chatBody({
+        inference_path: 'official',
+        requested_model: 'moonshotai/kimi-k2.5',
+        host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+      }),
+      {
+        runtime: 'http',
+        wakeUrl: 'http://127.0.0.1:9/wake',
+        dedupe: true,
+        dedupeTtlSec: 3600,
+        wakeTimeoutMs: 1000,
+        officialReply,
+      },
+      new DedupeStore(3600),
+      (f) => frames.push(f),
+      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => undefined }
+    );
+    expect(urls.some((url) => url.includes('/wake'))).toBe(false);
+    expect(urls.some((url) => url.endsWith('/chat/completions'))).toBe(true);
+    expect(
+      (frames[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
+    ).toBe(undefined);
+  });
+
+  it('tries official once after a provider rejection, and does not call again', async () => {
+    clearAgentJwtCache();
+    const spent = new MemoryOfficialSpent();
+    const first = routedFetch(403, 502);
+    const frames: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-byo',
+      chatBody({ inference_path: 'byo', requested_model: 'tencenttokenplan/kimi-k2.5' }),
+      {
+        runtime: 'http',
+        wakeUrl: 'http://127.0.0.1:9/wake',
+        dedupe: true,
+        dedupeTtlSec: 3600,
+        wakeTimeoutMs: 1000,
+        officialReply,
+      },
+      new DedupeStore(3600),
+      (f) => frames.push(f),
+      {
+        fetchFn: first.fetchFn as unknown as typeof fetch,
+        logFn: () => undefined,
+        spent,
+      }
+    );
+    expect(first.urls.filter((url) => url.includes('/wake'))).toHaveLength(1);
+    expect(first.urls.filter((url) => url.endsWith('/chat/completions'))).toHaveLength(1);
+    expect(
+      (frames[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
+    ).toBe('1');
+
+    clearAgentJwtCache();
+    const second = routedFetch(403, 502);
+    const again: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-byo-2',
+      chatBody({ inference_path: 'byo', requested_model: 'tencenttokenplan/kimi-k2.5' }),
+      {
+        runtime: 'http',
+        wakeUrl: 'http://127.0.0.1:9/wake',
+        dedupe: false,
+        dedupeTtlSec: 3600,
+        wakeTimeoutMs: 1000,
+        officialReply,
+      },
+      new DedupeStore(3600),
+      (f) => again.push(f),
+      {
+        fetchFn: second.fetchFn as unknown as typeof fetch,
+        logFn: () => undefined,
+        spent,
+      }
+    );
+    expect(second.urls.filter((url) => url.includes('/wake'))).toHaveLength(0);
+    expect(second.urls.filter((url) => url.endsWith('/chat/completions'))).toHaveLength(0);
+    expect(
+      (again[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
+    ).toBe('1');
   });
 });
