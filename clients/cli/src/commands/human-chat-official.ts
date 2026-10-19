@@ -23,7 +23,11 @@ export async function deliverHumanChat(
   }
   const id = (chat.gateway_message_id || event.message_id || '').trim();
   const store = deps.spent ?? fileOfficialSpent(reply.agentId);
-  if (id && store.has(id)) return { ok: false, reason: 'official_spent' };
+  if (id && store.failed(id)) return { ok: false, reason: 'official_spent' };
+  if (id && (store.delivered(id) || store.pending(id))) {
+    const written = await tryOfficialHumanReply(event, reply, deps, store);
+    return written.ok ? { ok: true } : { ok: false, reason: written.reason };
+  }
 
   if (chat.inference_path === 'official') {
     const written = await tryOfficialHumanReply(event, reply, deps, store);

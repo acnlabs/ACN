@@ -15,9 +15,10 @@ Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
 ### Added
 
 - `acn listen` uses the official model when a person already picked one.
-- If their own provider rejects the call or times out, listen tries official once.
-  The person in that chat pays. Invoke stays on the runtime's provider.
+- If the wake script prints `provider_rejected`, `provider_timeout`, or `provider_unreachable`, listen tries official once.
+  A listen timeout is not that signal. The person in that chat pays. Invoke stays on the runtime's provider.
   A failed official try keeps the letter and does not call a model again.
+  A chat writeback that fails after a successful official answer is posted again without a second model call.
   Restart `acn listen` after upgrading.
 
 ## [1.0.27] - 2026-10-17

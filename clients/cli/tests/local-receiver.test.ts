@@ -17,7 +17,7 @@ import {
   dispatchLocalReceiverAndWaitWake,
   processIncomingRequest,
 } from '../src/commands/local-receiver.js';
-import { MemoryOfficialSpent } from '../src/commands/provider-failure.js';
+import { MemoryOfficialSpent, providerGaveUp } from '../src/commands/provider-failure.js';
 import {
   DedupeStore,
   normalizeEvent,
@@ -608,7 +608,11 @@ describe('human chat official try', () => {
       },
       new DedupeStore(3600),
       (f) => frames.push(f),
-      { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => undefined }
+      {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        logFn: () => undefined,
+        spent: new MemoryOfficialSpent(),
+      }
     );
     expect(urls.some((url) => url.includes('/wake'))).toBe(false);
     expect(urls.some((url) => url.endsWith('/chat/completions'))).toBe(true);
@@ -617,62 +621,276 @@ describe('human chat official try', () => {
     ).toBe(undefined);
   });
 
-  it('tries official once after a provider rejection, and does not call again', async () => {
+  function byoOpts(extra: Record<string, unknown> = {}) {
+    return {
+      runtime: 'command' as const,
+      wakeExec: 'wake',
+      dedupe: false,
+      dedupeTtlSec: 3600,
+      wakeTimeoutMs: 1000,
+      officialReply,
+      ...extra,
+    };
+  }
+
+  function wakeScript(stderr: string, code: number) {
+    return vi.fn(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        stdin: { end: () => void };
+        kill: () => void;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => undefined;
+      child.stdin = {
+        end: () => {
+          queueMicrotask(() => {
+            if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+            child.emit('close', code);
+          });
+        },
+      };
+      return child;
+    });
+  }
+
+  it('tries official once after the wake script reports a provider rejection', async () => {
+    expect(providerGaveUp('timeout')).toBe(false);
+    expect(providerGaveUp('http_403')).toBe(false);
+    expect(providerGaveUp('exit_1:provider_rejected')).toBe(true);
     clearAgentJwtCache();
     const spent = new MemoryOfficialSpent();
-    const first = routedFetch(403, 502);
+    const first = routedFetch(500, 502);
+    const spawnFn = wakeScript(`${'log line\n'.repeat(40)}provider_rejected\n`, 1);
     const frames: OutboundFrame[] = [];
     await dispatchLocalReceiverAndWaitWake(
       'corr-byo',
       chatBody({ inference_path: 'byo', requested_model: 'tencenttokenplan/kimi-k2.5' }),
-      {
-        runtime: 'http',
-        wakeUrl: 'http://127.0.0.1:9/wake',
-        dedupe: true,
-        dedupeTtlSec: 3600,
-        wakeTimeoutMs: 1000,
-        officialReply,
-      },
+      byoOpts(),
       new DedupeStore(3600),
       (f) => frames.push(f),
       {
         fetchFn: first.fetchFn as unknown as typeof fetch,
+        spawnFn: spawnFn as never,
         logFn: () => undefined,
         spent,
       }
     );
-    expect(first.urls.filter((url) => url.includes('/wake'))).toHaveLength(1);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
     expect(first.urls.filter((url) => url.endsWith('/chat/completions'))).toHaveLength(1);
     expect(
       (frames[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
     ).toBe('1');
 
     clearAgentJwtCache();
-    const second = routedFetch(403, 502);
+    const second = routedFetch(500, 502);
+    const againSpawn = wakeScript('provider_rejected', 1);
     const again: OutboundFrame[] = [];
     await dispatchLocalReceiverAndWaitWake(
       'corr-byo-2',
       chatBody({ inference_path: 'byo', requested_model: 'tencenttokenplan/kimi-k2.5' }),
-      {
-        runtime: 'http',
-        wakeUrl: 'http://127.0.0.1:9/wake',
-        dedupe: false,
-        dedupeTtlSec: 3600,
-        wakeTimeoutMs: 1000,
-        officialReply,
-      },
+      byoOpts(),
       new DedupeStore(3600),
       (f) => again.push(f),
       {
         fetchFn: second.fetchFn as unknown as typeof fetch,
+        spawnFn: againSpawn as never,
         logFn: () => undefined,
         spent,
       }
     );
-    expect(second.urls.filter((url) => url.includes('/wake'))).toHaveLength(0);
+    expect(againSpawn).not.toHaveBeenCalled();
     expect(second.urls.filter((url) => url.endsWith('/chat/completions'))).toHaveLength(0);
     expect(
       (again[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
     ).toBe('1');
+  });
+
+  it('does not call official when the listen deadline kills the wake', async () => {
+    clearAgentJwtCache();
+    const spent = new MemoryOfficialSpent();
+    let wakes = 0;
+    const fetchFn = vi.fn(async (url: string, init?: { signal?: AbortSignal }) => {
+      const target = String(url);
+      if (target.includes('/wake')) {
+        wakes += 1;
+        await new Promise<void>((_resolve, reject) => {
+          const abort = () => reject(new Error('The operation was aborted'));
+          if (init?.signal?.aborted) abort();
+          else init?.signal?.addEventListener('abort', abort);
+        });
+      }
+      return jsonResponse(500, {});
+    });
+    const run = () =>
+      dispatchLocalReceiverAndWaitWake(
+        'corr-slow',
+        chatBody({ inference_path: 'byo', requested_model: 'tencenttokenplan/kimi-k2.5' }),
+        {
+          runtime: 'http',
+          wakeUrl: 'http://127.0.0.1:9/wake',
+          dedupe: false,
+          dedupeTtlSec: 3600,
+          wakeTimeoutMs: 30,
+          officialReply,
+        },
+        new DedupeStore(3600),
+        () => undefined,
+        { fetchFn: fetchFn as unknown as typeof fetch, logFn: () => undefined, spent }
+      );
+    await run();
+    await run();
+    expect(wakes).toBe(2);
+    expect(fetchFn.mock.calls.some((call) => String(call[0]).endsWith('/chat/completions'))).toBe(
+      false
+    );
+  });
+
+  it('posts a saved official reply again without calling the model', async () => {
+    clearAgentJwtCache();
+    const spent = new MemoryOfficialSpent();
+    const writebacks: number[] = [];
+    const fetchFn = vi.fn(async (url: string) => {
+      const target = String(url);
+      if (target.endsWith('/oauth/token')) {
+        return jsonResponse(200, { access_token: 'jwt-1', expires_in: 1800 });
+      }
+      if (target.endsWith('/chat/completions')) {
+        return jsonResponse(200, { choices: [{ message: { content: '在的' } }] });
+      }
+      if (target.includes('/agent-messages')) {
+        writebacks.push(writebacks.length);
+        return jsonResponse(writebacks.length === 1 ? 500 : 201, {});
+      }
+      return jsonResponse(500, {});
+    });
+    const spawnFn = wakeScript('provider_timeout', 1);
+    const opts = byoOpts();
+    const body = chatBody({ inference_path: 'byo', requested_model: 'tencenttokenplan/kimi-k2.5' });
+    const deps = {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      spawnFn: spawnFn as never,
+      logFn: () => undefined,
+      spent,
+    };
+    const first: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-wb-1',
+      body,
+      opts,
+      new DedupeStore(3600),
+      (f) => first.push(f),
+      deps
+    );
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(
+      (first[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
+    ).toBe('1');
+
+    clearAgentJwtCache();
+    const second: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-wb-2',
+      body,
+      opts,
+      new DedupeStore(3600),
+      (f) => second.push(f),
+      deps
+    );
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(
+      (second[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
+    ).toBe(undefined);
+    const completions = fetchFn.mock.calls.filter((call) =>
+      String(call[0]).endsWith('/chat/completions')
+    );
+    expect(completions).toHaveLength(1);
+    expect(writebacks).toHaveLength(2);
+
+    const third: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-wb-3',
+      body,
+      opts,
+      new DedupeStore(3600),
+      (f) => third.push(f),
+      deps
+    );
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(writebacks).toHaveLength(2);
+    expect(
+      (third[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
+    ).toBe(undefined);
+  });
+
+  it('does not spend the letter when the token mint fails', async () => {
+    clearAgentJwtCache();
+    const spent = new MemoryOfficialSpent();
+    let oauthFails = true;
+    const fetchFn = vi.fn(async (url: string) => {
+      const target = String(url);
+      if (target.endsWith('/oauth/token')) {
+        if (oauthFails) return jsonResponse(503, {});
+        return jsonResponse(200, { access_token: 'jwt-1', expires_in: 1800 });
+      }
+      if (target.endsWith('/chat/completions')) {
+        return jsonResponse(200, { choices: [{ message: { content: '在的' } }] });
+      }
+      if (target.includes('/agent-messages')) return jsonResponse(201, {});
+      return jsonResponse(500, {});
+    });
+    const body = chatBody({
+      inference_path: 'official',
+      requested_model: 'moonshotai/kimi-k2.5',
+      host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+    });
+    const opts = {
+      runtime: 'http' as const,
+      wakeUrl: 'http://127.0.0.1:9/wake',
+      dedupe: false,
+      dedupeTtlSec: 3600,
+      wakeTimeoutMs: 1000,
+      officialReply,
+    };
+    const deps = {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => undefined,
+      spent,
+    };
+    const first: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-mint-1',
+      body,
+      opts,
+      new DedupeStore(3600),
+      (f) => first.push(f),
+      deps
+    );
+    expect(
+      (first[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
+    ).toBe('1');
+    expect(fetchFn.mock.calls.some((call) => String(call[0]).endsWith('/chat/completions'))).toBe(
+      false
+    );
+
+    oauthFails = false;
+    clearAgentJwtCache();
+    const second: OutboundFrame[] = [];
+    await dispatchLocalReceiverAndWaitWake(
+      'corr-mint-2',
+      body,
+      opts,
+      new DedupeStore(3600),
+      (f) => second.push(f),
+      deps
+    );
+    expect(fetchFn.mock.calls.filter((call) => String(call[0]).endsWith('/chat/completions'))).toHaveLength(
+      1
+    );
+    expect(
+      (second[0] as { headers: Record<string, string> }).headers['x-acn-park-inbox']
+    ).toBe(undefined);
   });
 });

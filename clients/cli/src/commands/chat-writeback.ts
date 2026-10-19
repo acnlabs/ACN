@@ -42,6 +42,7 @@ import {
   OFFICIAL_FALLBACK_MODEL,
   fileOfficialSpent,
   providerGaveUp,
+  reasonWithProviderSignal,
   type OfficialSpentStore,
 } from './provider-failure.js';
 
@@ -846,11 +847,10 @@ function spawnCompleteExec(
     );
     child.on('close', (code: number | null) => {
       if (code !== 0) {
-        const detail = Buffer.concat(stderr).toString('utf-8').slice(0, 80);
-        finish({
-          ok: false,
-          reason: detail ? `complete_exit_${code}:${detail}` : `complete_exit_${code}`,
-        });
+        const errText = Buffer.concat(stderr).toString('utf-8');
+        const detail = errText.slice(0, 80);
+        const fallback = detail ? `complete_exit_${code}:${detail}` : `complete_exit_${code}`;
+        finish({ ok: false, reason: reasonWithProviderSignal(errText, fallback) });
         return;
       }
       const text = Buffer.concat(stdout).toString('utf-8').trim();
@@ -940,22 +940,27 @@ export async function tryOfficialHumanReply(
   if (!chat || event.invoke) return { ok: false, reason: 'not_human_chat' };
   const id = (chat.gateway_message_id || event.message_id || '').trim();
   const store = spent ?? fileOfficialSpent(opts.agentId);
-  if (id && store.has(id)) return { ok: false, reason: 'official_spent' };
+  if (id && store.delivered(id)) return { ok: true, httpStatus: 200 };
+  if (id) {
+    const saved = store.pending(id);
+    if (saved) {
+      const written = await postWriteback(event, { content: saved }, opts, deps);
+      if (written.ok) noteLetter(id, () => store.markDelivered(id));
+      return written;
+    }
+    if (store.failed(id)) return { ok: false, reason: 'official_spent' };
+  }
 
   const model = modelForOfficialTry(chat);
   const base = hostBaseForOfficialTry(chat, opts.apiBase);
   const text = chat.user_text?.trim();
   const hopId = chat.hop_id?.trim();
   if (!model || !base || !hopId || !text) {
-    if (id) store.remember(id);
     return { ok: false, reason: 'official_complete_skipped' };
   }
 
   const minted = await mintAgentJwt(opts, deps.fetchFn ?? fetch);
-  if (!minted.ok) {
-    if (id) store.remember(id);
-    return { ok: false, reason: minted.reason };
-  }
+  if (!minted.ok) return { ok: false, reason: minted.reason };
 
   const logFn = deps.logFn ?? ((line: string) => console.error(line));
   logFn(`[acn listen] official_once chat_id=${chat.chat_id} model=${model}`);
@@ -971,13 +976,28 @@ export async function tryOfficialHumanReply(
     timeoutMs: opts.completeTimeoutMs,
   });
   if (!completed.ok) {
-    if (id) store.remember(id);
+    noteLetter(id, () => store.markFailed(id));
     logFn(
       `[acn listen] official_stopped chat_id=${chat.chat_id} reason=${completed.reason}`
     );
     return { ok: false, reason: completed.reason };
   }
-  return postWriteback(event, { content: completed.content }, opts, deps);
+  const written = await postWriteback(event, { content: completed.content }, opts, deps);
+  if (!written.ok) {
+    noteLetter(id, () => store.markPending(id, completed.content));
+    return written;
+  }
+  noteLetter(id, () => store.markDelivered(id));
+  return written;
+}
+
+function noteLetter(id: string, mark: () => void): void {
+  if (!id) return;
+  try {
+    mark();
+  } catch {
+    /* Bookkeeping must not turn a finished reply into another model call. */
+  }
 }
 
 async function postOfficialCompletion(args: {

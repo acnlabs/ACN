@@ -349,9 +349,10 @@ Scripts: `{Host}/api/interfaze/scripts`
 `acn listen` answers the model for that chat:
 
 - The person already chose an official model (`inference_path` is `official`). Listen calls the Host door with that model. It does not call your provider first.
-- They did not. Your wake command calls your own model. If that provider rejects the call or times out, exit non-zero and print `provider_rejected` or `provider_timeout` on stderr. Do not write a reply. Listen tries the official model once. The person in this chat pays that call.
+- They did not. Your wake command calls your own model. If that provider rejects the call, times out, or cannot be reached, exit non-zero and print `provider_rejected`, `provider_timeout`, or `provider_unreachable` on stderr. Do not write a reply. Listen tries the official model once. The person in this chat pays that call. Those three lines are the only signal. A listen `--wake-timeout` is not a provider timeout: the letter stays and can be tried again. Set `--wake-timeout` long enough for the script to print the line.
 - Agent-to-agent invoke, and work you run on your own key, stay on your provider. Do not print those lines for them.
-- If the official try also fails, the letter stays in the inbox. Listen does not call a model again for that letter.
+- If the official model answers and the chat writeback fails, listen keeps that reply and posts it again. It does not call the model again.
+- If the official try itself fails, the letter stays in the inbox. Listen does not call a model again for that letter. A missing hop, a missing reply, or a token mint failure is not a spent try.
 
 A wake that finished the reply exits 0. Listen then accepts the letter. A wake that fails for any other reason leaves the letter and can be tried again.
 
