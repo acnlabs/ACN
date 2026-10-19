@@ -217,6 +217,38 @@ class TestAgentService:
         assert "supported_models" not in (agent.metadata or {})
 
     @pytest.mark.asyncio
+    async def test_update_heartbeat_stores_quoted_prices(
+        self, mock_agent_repository, sample_agent
+    ):
+        """A quote for a model the price book missed stays on the agent."""
+        sample_agent.metadata = {
+            "model_prices": [
+                {
+                    "model_id": "tencenttokenplan/kimi-k2.5",
+                    "input_price_per_million": 9.0,
+                    "output_price_per_million": 9.0,
+                }
+            ]
+        }
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            model_prices=[
+                {
+                    "model_id": "tencenttokenplan/deepseek-v4-flash-202605",
+                    "input_price_per_million": 0.2,
+                    "output_price_per_million": 0.4,
+                }
+            ],
+        )
+
+        stored = {row["model_id"]: row for row in agent.metadata["model_prices"]}
+        assert stored["tencenttokenplan/deepseek-v4-flash-202605"]["input_price_per_million"] == 0.2
+        assert stored["tencenttokenplan/kimi-k2.5"]["output_price_per_million"] == 9.0
+
+    @pytest.mark.asyncio
     async def test_update_heartbeat_clears_desired_preferred_when_matched(
         self, mock_agent_repository, sample_agent
     ):

@@ -359,6 +359,59 @@ describe('preferred-model apply intercept', () => {
     else process.env.ACN_PREFERRED_MODEL = prev;
   });
 
+  it('heartbeats prices for the models the price book missed', async () => {
+    const prev = process.env.ACN_MODEL_PRICES;
+    process.env.ACN_MODEL_PRICES = JSON.stringify([
+      {
+        model_id: 'tencenttokenplan/kimi-k2.5',
+        input_price_per_million: 0.4,
+        output_price_per_million: 1.2,
+      },
+    ]);
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ status: 'ok' }),
+    } as unknown as Response);
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        path: '/acn/v1/runtime',
+        body: JSON.stringify({
+          quote_model_prices: ['tencenttokenplan/kimi-k2.5', 'tencenttokenplan/glm-5'],
+          error: 'price_required',
+        }),
+        headers: {
+          'content-type': 'application/json',
+          'x-acn-runtime-apply': '1',
+        },
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+      },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
+    const body = JSON.parse(String((frames[0] as { body?: string }).body));
+    expect(body.model_prices).toEqual([
+      {
+        model_id: 'tencenttokenplan/kimi-k2.5',
+        input_price_per_million: 0.4,
+        output_price_per_million: 1.2,
+      },
+    ]);
+    const heartbeat = fetchFn.mock.calls.find((c) => String(c[0]).includes('/heartbeat'));
+    expect(heartbeat).toBeTruthy();
+    const sent = JSON.parse(String((heartbeat?.[1] as { body?: string } | undefined)?.body));
+    expect(sent.model_prices).toEqual(body.model_prices);
+    if (prev === undefined) delete process.env.ACN_MODEL_PRICES;
+    else process.env.ACN_MODEL_PRICES = prev;
+  });
+
   it('intercepts POST /acn/v1/runtime with the runtime marker', async () => {
     const fetchFn = vi.fn().mockResolvedValue({
       ok: true,

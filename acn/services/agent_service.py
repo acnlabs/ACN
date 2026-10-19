@@ -842,6 +842,7 @@ class AgentService:
         *,
         preferred_model: str | None = None,
         supported_models: list[str] | None = None,
+        model_prices: list[dict] | None = None,
     ) -> Agent:
         """
         Update agent heartbeat
@@ -882,6 +883,24 @@ class AgentService:
                 meta["supported_models"] = normalized
             else:
                 meta.pop("supported_models", None)
+            meta_dirty = True
+        if model_prices is not None:
+            previous = meta.get("model_prices")
+            merged: list[dict] = []
+            seen: set[str] = set()
+            for row in list(model_prices) + (previous if isinstance(previous, list) else []):
+                if not isinstance(row, dict):
+                    continue
+                mid = str(row.get("model_id") or "").strip()
+                key = mid.lower()
+                if not mid or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(row)
+            if merged:
+                meta["model_prices"] = merged[:50]
+            else:
+                meta.pop("model_prices", None)
             meta_dirty = True
         if meta_dirty:
             agent.metadata = meta

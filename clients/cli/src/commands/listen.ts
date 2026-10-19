@@ -24,6 +24,9 @@ import {
 import {
   formatModelHeartbeatLog,
   postAgentHeartbeat,
+  pricesForModels,
+  pricesFromEnv,
+  pricesFromProviderCatalog,
   resolvePreferredModel,
   resolveSupportedModels,
 } from './model-heartbeat.js';
@@ -32,6 +35,7 @@ import {
   isOwnerPreferredModelApplyFrame,
   isPreferredModelApplyPath,
   parsePreferredModelApplyBody,
+  parseQuoteModelPricesBody,
 } from './preferred-model-apply.js';
 
 /** Re-export model heartbeat helpers (tests historically imported from listen). */
@@ -188,6 +192,58 @@ function errorResponse(id: string, status: number, detail: string): A2aResponseF
   };
 }
 
+async function handleQuoteModelPrices(
+  frame: A2aRequestFrame,
+  opts: HandlerOptions,
+  deps: HandlerDeps,
+  ask: { modelIds: string[]; retry: boolean }
+): Promise<A2aResponseFrame> {
+  const agentId = opts.agentId?.trim();
+  const apiKey = opts.apiKey?.trim();
+  const baseUrl = opts.baseUrl?.trim();
+  if (!agentId || !apiKey || !baseUrl) {
+    return errorResponse(frame.id, 500, 'listen_not_configured');
+  }
+  const env = process.env;
+  const known = pricesFromEnv(env);
+  const url = (env.ACN_PROVIDER_MODELS_URL || '').trim();
+  const key = (env.ACN_PROVIDER_API_KEY || '').trim();
+  const provider = (env.ACN_PROVIDER || '').trim();
+  if (url && key) {
+    try {
+      const fetchFn = deps.fetchFn ?? fetch;
+      const res = await fetchFn(url, { headers: { Authorization: `Bearer ${key}` } });
+      if (res.ok) {
+        known.push(...pricesFromProviderCatalog(await res.json(), provider));
+      }
+    } catch {
+      /* a failed provider ask leaves the prices the agent already declared */
+    }
+  }
+  const prices = pricesForModels(ask.modelIds, known);
+  if (ask.retry && !prices.length) {
+    deps.logFn?.(`price_required ${ask.modelIds.join(',')}`);
+  }
+  if (prices.length) {
+    const beat = await postAgentHeartbeat({
+      baseUrl,
+      agentId,
+      apiKey,
+      preferredModel: opts.preferredModel,
+      modelPrices: prices,
+      fetchFn: deps.fetchFn,
+    });
+    if (!beat.ok) return errorResponse(frame.id, 502, beat.reason);
+  }
+  return {
+    type: 'a2a_response',
+    id: frame.id,
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ok: true, model_prices: prices }),
+  };
+}
+
 async function handlePreferredModelApply(
   frame: A2aRequestFrame,
   opts: HandlerOptions,
@@ -256,6 +312,12 @@ export async function dispatchA2aRequest(
     if (isPreferredModelApplyPath(frame.path)) {
       if (!isOwnerPreferredModelApplyFrame(frame)) {
         send(errorResponse(frame.id, 403, 'runtime_owner_only'));
+        return;
+      }
+      const rawBody = bodyBuf.toString('utf-8');
+      const quote = parseQuoteModelPricesBody(rawBody);
+      if (quote) {
+        send(await handleQuoteModelPrices(frame, opts, deps, quote));
         return;
       }
       send(await handlePreferredModelApply(frame, opts, bodyBuf, deps));
