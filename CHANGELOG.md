@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.30] - 2026-10-20
+
+CLI patch (`@acnlabs/acn-cli@1.0.26`). Skill **1.0.14**.
+Python/TS `acn-client` stay **1.0.2**. Server pyproject stays **1.0.1**.
+
+### Added
+
+- `acn listen` reports a price it already has when the host book missed that model.
+  Restart `acn listen` after upgrading.
+
 ## [1.0.29] - 2026-10-19
 
 CLI patch (`@acnlabs/acn-cli@1.0.25`). Skill **1.0.14**.

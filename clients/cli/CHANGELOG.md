@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.26] - 2026-10-20
+
+CLI-only patch. Server stays **1.0.1**. Skill **1.0.14**. Python/TS SDKs **1.0.2**.
+
+### Added
+
+- `acn listen` answers a price ask for models the host book missed, using a price it already has. It does not invent one.
+- Those prices go out on the heartbeat, so the host can charge them with the existing markup and usage fee.
+- Restart `acn listen` after upgrading.
+
 ## [1.0.25] - 2026-10-19
 
 CLI-only patch. Server stays **1.0.1**. Skill **1.0.14**. Python/TS SDKs **1.0.2**.
