@@ -2731,11 +2731,18 @@ async def agent_heartbeat(
             },
         )
     try:
+        # Omit model_prices when the body left it out, so a normal heartbeat
+        # does not touch quotes already stored on the agent.
+        quote_update = (
+            {"model_prices": body.model_prices}
+            if "model_prices" in body.model_fields_set
+            else {}
+        )
         agent = await agent_service.update_heartbeat(
             agent_id,
             preferred_model=body.preferred_model,
             supported_models=body.supported_models,
-            model_prices=body.model_prices,
+            **quote_update,
         )
         meta = (
             agent.metadata
