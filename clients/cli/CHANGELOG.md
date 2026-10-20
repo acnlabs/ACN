@@ -4,6 +4,23 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.27] - 2026-10-20
+
+Collaboration graph: bind Interfaze `chat_id` on billable invoke and merge
+`orchestration.callees` on writeback without relying on the LLM.
+
+### Added
+
+- `ACN_CHAT_ID` on `--chat-complete-exec` / writeback env; `acn invoke` injects
+  `metadata.agentplanet.chat_id` when set.
+- Pending invoke receipts under `~/.acn/pending-callees/` (override with
+  `ACN_PENDING_CALLEES_DIR`); merged into writeback `orchestration.callees` by
+  `hop_id`.
+
+### Changed
+
+- Restart `acn listen` after upgrading so writeback picks up pending callees.
+
 ## [1.0.26] - 2026-10-20
 
 CLI-only patch. Server stays **1.0.1**. Skill **1.0.14**. Python/TS SDKs **1.0.2**.

@@ -100,6 +100,24 @@ describe('acn invoke', () => {
     });
   });
 
+  it('injects chat_id when ACN_CHAT_ID is set', async () => {
+    const prev = process.env.ACN_CHAT_ID;
+    process.env.ACN_CHAT_ID = '654927f2-370b-49ca-805c-71516a0627d8';
+    try {
+      await runInvoke(['--to', 'agent-b', '--text', 'hello']);
+      expect(acnPost).toHaveBeenCalledWith('/invoke', {
+        to: 'agent-b',
+        message: {
+          text: 'hello',
+          metadata: { agentplanet: { chat_id: '654927f2-370b-49ca-805c-71516a0627d8' } },
+        },
+      });
+    } finally {
+      if (prev === undefined) delete process.env.ACN_CHAT_ID;
+      else process.env.ACN_CHAT_ID = prev;
+    }
+  });
+
   it('parses --message JSON and does not call Host', async () => {
     await runInvoke(['--to', 'agent-b', '--message', '{"text":"raw"}']);
 
