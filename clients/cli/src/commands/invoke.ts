@@ -2,6 +2,11 @@ import { Command } from 'commander';
 import { acnPost } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
+import {
+  chatIdFromEnv,
+  injectChatIdIntoInvokeMessage,
+  recordPendingCallee,
+} from './invoke-chat-context.js';
 
 interface InvokeResponse {
   request_id?: string;
@@ -91,6 +96,8 @@ export function invokeCommand(): Command {
           meta.agentplanet = ap;
           message.metadata = meta;
         }
+        const chatId = chatIdFromEnv();
+        if (chatId) injectChatIdIntoInvokeMessage(message, chatId);
         const body: Record<string, unknown> = { message };
         if (to) body.to = to;
         if (slot) body.slot = slot;
@@ -98,6 +105,13 @@ export function invokeCommand(): Command {
 
         try {
           const res = await acnPost<InvokeResponse>('/invoke', body);
+          if (chatId && res.hop_id && res.to) {
+            recordPendingCallee(chatId, {
+              to: res.to,
+              hopId: res.hop_id,
+              status: res.status,
+            });
+          }
           const hop = res.hop_id ? ` hop=${res.hop_id}` : '';
           const status = res.status ? ` status=${res.status}` : '';
           const winner = res.to ? ` to=${res.to}` : '';

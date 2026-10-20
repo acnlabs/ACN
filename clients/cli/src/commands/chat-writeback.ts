@@ -34,6 +34,10 @@ import {
   stripJobToken,
 } from './normalize-event.js';
 import {
+  ACN_CHAT_ID_ENV,
+  mergeOrchestrationWithPending,
+} from './invoke-chat-context.js';
+import {
   canCompleteOfficialHop,
   startOfficialHopDoor,
   type OfficialHopDoor,
@@ -716,6 +720,7 @@ export function completeInferenceEnv(
 ): NodeJS.ProcessEnv {
   const extra: Record<string, string> = { ACN_AGENT_ID: opts.agentId };
   const chat = event.chat;
+  if (chat?.chat_id) extra[ACN_CHAT_ID_ENV] = chat.chat_id;
   if (chat?.hop_id) extra.ACN_CHAT_HOP_ID = chat.hop_id;
   extra.ACN_REQUESTED_MODEL = chat?.requested_model ?? '';
   if (chat?.inference_path) extra.ACN_INFERENCE_PATH = chat.inference_path;
@@ -1317,14 +1322,22 @@ async function postWriteback(
   if (complete.tool_lines?.length) {
     body.tool_lines = complete.tool_lines;
   }
+  const mergedOrch =
+    event.chat?.chat_id != null
+      ? mergeOrchestrationWithPending(
+          event.chat.chat_id,
+          complete.orchestration as Record<string, unknown> | undefined
+        )
+      : complete.orchestration;
   if (
-    complete.orchestration?.callees?.length ||
-    complete.orchestration?.propose_group ||
-    complete.orchestration?.propose_task ||
-    complete.orchestration?.decide ||
-    complete.orchestration?.plan
+    mergedOrch &&
+    ((mergedOrch as { callees?: unknown[] }).callees?.length ||
+      (mergedOrch as { propose_group?: unknown }).propose_group ||
+      (mergedOrch as { propose_task?: unknown }).propose_task ||
+      (mergedOrch as { decide?: unknown }).decide ||
+      (mergedOrch as { plan?: unknown }).plan)
   ) {
-    body.orchestration = complete.orchestration;
+    body.orchestration = mergedOrch;
   }
   if (complete.canvas?.blocks.length) {
     body.canvas = complete.canvas;
