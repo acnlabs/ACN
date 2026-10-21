@@ -5270,13 +5270,17 @@ async def create_transfer_invite(
     request: Request,
     agent_id: AgentIdPath,
     body: AgentTransferInviteRequest,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(verify_token),
     agent_service: AgentServiceDep = None,
 ):
     """Create a one-time transfer invite (P3 free gift).
 
     Owner remains the current user until the recipient claims with the returned token.
     Sets claim_status to ``pending_transfer``.
+
+    Auth: human JWT via ``verify_token`` (same as claim / release) — ``acn:write``
+    is not required so AgentPlanet / Interfaze SPAs with ``openid profile email``
+    can gift. Ownership is enforced by ``sub == agent.owner`` in the service layer.
     """
     token_owner: str = payload.get("sub", "")
 
@@ -5319,10 +5323,13 @@ async def create_transfer_invite(
 async def cancel_transfer_invite(
     request: Request,
     agent_id: AgentIdPath,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(verify_token),
     agent_service: AgentServiceDep = None,
 ):
-    """Cancel a pending transfer invite and restore claimed state."""
+    """Cancel a pending transfer invite and restore claimed state.
+
+    Auth: human JWT via ``verify_token`` — ``acn:write`` not required; owner-only.
+    """
     token_owner: str = payload.get("sub", "")
 
     try:
