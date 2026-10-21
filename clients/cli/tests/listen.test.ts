@@ -15,18 +15,23 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   dispatchA2aRequest,
   handleA2aRequest,
-  listenReceptionWarning,
   postAgentHeartbeat,
   resolvePreferredModel,
   resolveSupportedModels,
   toWebsocketUrl,
-  warnIfNotReceivingPushes,
   type A2aRequestFrame,
   type A2aStreamChunkFrame,
   type A2aStreamEndFrame,
   type OutboundFrame,
 } from '../src/commands/listen.js';
-import { formatModelHeartbeatLog } from '../src/commands/model-heartbeat.js';
+import {
+  collapseModelSpellings,
+  formatModelHeartbeatLog,
+  fetchRuntimeModelReport,
+  providerModelsFromListBody,
+  rowKeyAuthorized,
+  supportedModelsToReport,
+} from '../src/commands/model-heartbeat.js';
 
 function ownerApplyRequest(overrides: Partial<A2aRequestFrame> = {}): A2aRequestFrame {
   const { headers, ...rest } = overrides;
@@ -412,6 +417,338 @@ describe('preferred-model apply intercept', () => {
     else process.env.ACN_MODEL_PRICES = prev;
   });
 
+  it('heartbeats the current model list when asked to report again', async () => {
+    const prev = process.env.ACN_SUPPORTED_MODELS;
+    const prevHub = process.env.ACN_PROVIDER_API_KEY;
+    const prevUrl = process.env.ACN_PROVIDER_MODELS_URL;
+    delete process.env.ACN_SUPPORTED_MODELS;
+    delete process.env.ACN_PROVIDER_API_KEY;
+    delete process.env.ACN_PROVIDER_MODELS_URL;
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          status: 'ok',
+          supported_models: ['moonshot/kimi-k2', 'moonshot/kimi-k2.6'],
+        }),
+    } as unknown as Response);
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        path: '/acn/v1/runtime',
+        body: JSON.stringify({ refresh_supported_models: true }),
+        headers: {
+          'content-type': 'application/json',
+          'x-acn-runtime-apply': '1',
+        },
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+        supportedModels: ['moonshot/kimi-k2', 'moonshot/kimi-k2.6'],
+      },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
+    const body = JSON.parse(String((frames[0] as { body?: string }).body));
+    expect(body.supported_models).toEqual(['moonshot/kimi-k2', 'moonshot/kimi-k2.6']);
+    const urls = fetchFn.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes('/heartbeat'))).toBe(true);
+    expect(urls.every((u) => !u.includes('localhost:8080'))).toBe(true);
+    if (prev === undefined) delete process.env.ACN_SUPPORTED_MODELS;
+    else process.env.ACN_SUPPORTED_MODELS = prev;
+    if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
+    else process.env.ACN_PROVIDER_API_KEY = prevHub;
+    if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
+    else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
+  });
+
+  it('reports the model list from the provider the agent is using', async () => {
+    const prevHub = process.env.ACN_PROVIDER_API_KEY;
+    const prevUrl = process.env.ACN_PROVIDER_MODELS_URL;
+    const prevProvider = process.env.ACN_PROVIDER;
+    process.env.ACN_PROVIDER_API_KEY = 'catalog-key';
+    process.env.ACN_PROVIDER_MODELS_URL = 'https://provider.example/v1/models';
+    process.env.ACN_PROVIDER = 'tencenttokenplan';
+    const fetchFn = vi.fn(async (url: string) => {
+      if (String(url).includes('provider.example')) {
+        return {
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              data: [
+                { id: 'deepseek-v4-flash-202605' },
+                { id: 'deepseek/deepseek-flash' },
+                { id: 'kimi-k2.5', status: 'offline' },
+              ],
+            }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ status: 'ok' }),
+      } as unknown as Response;
+    });
+    const frames: OutboundFrame[] = [];
+    const configured = [
+      'tencenttokenplan/kimi-k2.5',
+      'tencenttokenplan/deepseek-v4-flash-202605',
+      'tencenttokenplan/deepseek/deepseek-flash',
+      'moonshot/kimi-k2',
+    ];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        path: '/acn/v1/runtime',
+        body: JSON.stringify({ refresh_supported_models: true }),
+        headers: {
+          'content-type': 'application/json',
+          'x-acn-runtime-apply': '1',
+        },
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+        supportedModels: configured,
+      },
+      (f) => frames.push(f),
+      { fetchFn }
+    );
+    const body = JSON.parse(String((frames[0] as { body?: string }).body));
+    expect(body.supported_models).toEqual([
+      'tencenttokenplan/deepseek-v4-flash-202605',
+      'tencenttokenplan/deepseek/deepseek-flash',
+    ]);
+    const heartbeat = fetchFn.mock.calls.find((c) => String(c[0]).includes('/heartbeat'));
+    const sent = JSON.parse(String((heartbeat?.[1] as { body?: string } | undefined)?.body));
+    expect(sent.supported_models).toEqual(body.supported_models);
+    if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
+    else process.env.ACN_PROVIDER_API_KEY = prevHub;
+    if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
+    else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
+    if (prevProvider === undefined) delete process.env.ACN_PROVIDER;
+    else process.env.ACN_PROVIDER = prevProvider;
+  });
+
+  it('keeps one id when a provider lists the same model twice', () => {
+    expect(
+      collapseModelSpellings([
+        'glm-5.3',
+        'glm-5-3',
+        'minimax-m2.7',
+        'minimax-m-2-7',
+        'glm-5-0',
+        'glm-5',
+        'deepseek-v4-flash-202605',
+        'deepseek/deepseek-v4-flash',
+      ])
+    ).toEqual([
+      'glm-5.3',
+      'minimax-m2.7',
+      'glm-5',
+      'deepseek-v4-flash-202605',
+      'deepseek/deepseek-v4-flash',
+    ]);
+  });
+
+  it('keeps the configured list when the catalog ask fails', async () => {
+    const configured = ['tencenttokenplan/kimi-k2.5', 'tencenttokenplan/glm-5'];
+    const kept = await supportedModelsToReport({
+      configured,
+      env: {
+        ACN_PROVIDER_API_KEY: 'catalog-key',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+      },
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({}),
+      }),
+    });
+    expect(kept).toEqual(configured);
+    const noKey = await supportedModelsToReport({
+      configured,
+      env: {},
+      fetchFn: vi.fn(),
+    });
+    expect(noKey).toEqual(configured);
+  });
+
+  it('does not treat catalog available:true as Key scope without TRUST flag', async () => {
+    const parsed = providerModelsFromListBody({
+      data: [
+        { id: 'kimi-k2.5', available: true },
+        { id: 'kimi-k3', available: true },
+      ],
+    });
+    expect(parsed.hadKeyScopeHints).toBe(false);
+    expect(parsed.keyScopedIds).toEqual([]);
+    expect(parsed.catalogOnlineIds).toEqual(['kimi-k2.5', 'kimi-k3']);
+  });
+
+  it('heartbeats only key-authorized SKUs when the provider exposes scope', async () => {
+    expect(rowKeyAuthorized({ id: 'kimi-k2.5', authorized: false })).toBe(false);
+    expect(rowKeyAuthorized({ id: 'kimi-k3', authorized: true })).toBe(true);
+    const parsed = providerModelsFromListBody({
+      data: [
+        { id: 'kimi-k2.5', authorized: false },
+        { id: 'kimi-k3', authorized: true },
+        { id: 'deepseek-v4-flash-202605', authorized: true },
+      ],
+    });
+    expect(parsed.hadKeyScopeHints).toBe(true);
+    expect(parsed.keyScopedIds).toEqual(['kimi-k3', 'deepseek-v4-flash-202605']);
+    const report = await fetchRuntimeModelReport({
+      configured: ['tencenttokenplan/kimi-k2.5', 'tencenttokenplan/kimi-k3'],
+      env: {
+        ACN_PROVIDER_API_KEY: 'catalog-key',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            data: [
+              { id: 'kimi-k2.5', authorized: false },
+              { id: 'kimi-k3', authorized: true },
+            ],
+          }),
+      }),
+    });
+    expect(report.supportedModels).toEqual(['tencenttokenplan/kimi-k3']);
+  });
+
+  it('merges key-allowed SKUs with allowlisted no-hint catalog rows', async () => {
+    const configured = [
+      'tencenttokenplan/kimi-k2.5',
+      'tencenttokenplan/kimi-k3',
+      'tencenttokenplan/glm-5.1',
+    ];
+    const report = await fetchRuntimeModelReport({
+      configured,
+      env: {
+        ACN_PROVIDER_API_KEY: 'catalog-key',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              { id: 'kimi-k2.5', authorized: false },
+              { id: 'kimi-k3', authorized: true },
+              { id: 'glm-5.1' },
+            ],
+          }),
+      }),
+    });
+    expect(report.supportedModels).toEqual([
+      'tencenttokenplan/kimi-k3',
+      'tencenttokenplan/glm-5.1',
+    ]);
+  });
+
+  it('does not heartbeat key-allowed SKUs omitted from the runtime allowlist', async () => {
+    const report = await fetchRuntimeModelReport({
+      configured: ['tencenttokenplan/glm-5.1'],
+      env: {
+        ACN_PROVIDER_API_KEY: 'catalog-key',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              { id: 'kimi-k3', authorized: true },
+              { id: 'glm-5.1', authorized: true },
+            ],
+          }),
+      }),
+    });
+    expect(report.supportedModels).toEqual(['tencenttokenplan/glm-5.1']);
+  });
+
+  it('does not heartbeat allowlisted ids the provider denied for this key', async () => {
+    const configured = ['tencenttokenplan/kimi-k2.5'];
+    const report = await fetchRuntimeModelReport({
+      configured,
+      env: {
+        ACN_PROVIDER_API_KEY: 'k',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [{ id: 'kimi-k2.5', authorized: false }],
+          }),
+      }),
+    });
+    expect(report.supportedModels).toEqual([]);
+  });
+
+  it('falls back to configured allowlist when Key scope hints yield zero ids', async () => {
+    const configured = ['tencenttokenplan/minimax-m2.7'];
+    const report = await fetchRuntimeModelReport({
+      configured,
+      env: {
+        ACN_PROVIDER_API_KEY: 'k',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [{ id: 'kimi-k2.5', authorized: false }],
+          }),
+      }),
+    });
+    expect(report.supportedModels).toEqual(configured);
+  });
+
+  it('does not heartbeat catalog SKUs the listen allowlist omitted', async () => {
+    const configured = [
+      'tencenttokenplan/minimax-m2.7',
+      'tencenttokenplan/deepseek-v4-flash-202605',
+    ];
+    const reported = await supportedModelsToReport({
+      configured,
+      env: {
+        ACN_PROVIDER_API_KEY: 'catalog-key',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            data: [
+              { id: 'minimax-m2.7' },
+              { id: 'deepseek-v4-flash-202605' },
+              { id: 'kimi-k2.5' },
+              { id: 'glm-5.1' },
+            ],
+          }),
+      }),
+    });
+    expect(reported).toEqual(configured);
+  });
+
   it('intercepts POST /acn/v1/runtime with the runtime marker', async () => {
     const fetchFn = vi.fn().mockResolvedValue({
       ok: true,
@@ -545,40 +882,5 @@ describe('preferred-model apply intercept', () => {
     );
     expect(frames[0]).toMatchObject({ status: 403 });
     expect(fetchFn).not.toHaveBeenCalled();
-  });
-});
-
-describe('listen reception warning', () => {
-  it('speaks when the agent is manifest or closed', () => {
-    expect(listenReceptionWarning({ communication_mode: 'open', delivery: 'relay' })).toBeNull();
-    expect(listenReceptionWarning({ communication_mode: 'manifest', delivery: 'none' })).toMatch(
-      /manifest/
-    );
-    expect(listenReceptionWarning({ communication_mode: 'closed', delivery: 'none' })).toMatch(
-      /closed/
-    );
-  });
-
-  it('logs the warning and still resolves when the profile says manifest', async () => {
-    const lines: string[] = [];
-    await warnIfNotReceivingPushes({
-      agentId: 'ag1',
-      logFn: (line) => lines.push(line),
-      getDelivery: async () => ({ communication_mode: 'manifest', delivery: 'none' }),
-    });
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/manifest/);
-  });
-
-  it('stays quiet when the profile cannot be read', async () => {
-    const lines: string[] = [];
-    await warnIfNotReceivingPushes({
-      agentId: 'ag1',
-      logFn: (line) => lines.push(line),
-      getDelivery: async () => {
-        throw new Error('offline');
-      },
-    });
-    expect(lines).toEqual([]);
   });
 });

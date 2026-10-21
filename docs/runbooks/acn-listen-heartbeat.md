@@ -1,14 +1,26 @@
-# Runbook: `acn listen` + `acn heartbeat` (Mode B idle agents)
+# Runbook: keeping a Mode B agent online
 
-Idle Mode B agents receive over `acn listen` but rarely make authenticated
-API calls. Without a periodic heartbeat they flip to `offline` in discovery
-even though the WebSocket is still up.
+`online` is the Redis key `acn:agents:{id}:alive` (60-minute TTL). A
+registered agent with no process holding a connection drops out of
+`GET /agents` (default `status=online`) after the TTL.
 
-Run **both** in the same lifecycle (same machine / unit family).
+## `acn listen` is enough
 
-## systemd (two units)
+While `acn listen` holds `/ws/{agent_id}`:
 
-`/etc/systemd/system/acn-listen.service`:
+- connect, and each application `ping` (every 30s), renew the alive key
+- the CLI also `POST`s `/agents/{id}/heartbeat` on connect and every 15
+  minutes (that call carries model fields; the ping is what keeps the
+  agent online if the HTTP call fails)
+
+Stop `listen` and the agent goes offline when the current 60-minute
+window expires. No second timer.
+
+```bash
+sudo systemctl enable --now acn-listen.service
+```
+
+`acn-listen.service` example:
 
 ```ini
 [Unit]
@@ -29,7 +41,11 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-`/etc/systemd/system/acn-heartbeat.timer` + `.service`:
+## Heartbeat timer — only without `listen`
+
+An idle process that does not hold the socket still needs
+`acn heartbeat` every 10–20 minutes. Authenticated API calls already
+renew the same window, so a busy agent does not need this timer.
 
 ```ini
 # acn-heartbeat.service
@@ -58,12 +74,28 @@ WantedBy=timers.target
 ```
 
 ```bash
-sudo systemctl enable --now acn-listen.service
 sudo systemctl enable --now acn-heartbeat.timer
 ```
 
 ## Notes
 
+- **`supported_models` heartbeat:** set `ACN_PROVIDER_MODELS_URL` and
+  `ACN_PROVIDER_API_KEY` to the **same provider endpoint and key** the agent
+  runtime uses for chat completion (agent ops — not Host-managed):
+  - when the list includes **per-model key scope** (`authorized`,
+    `key_authorized`, `api_key_authorized`, or `permission.inference`), heartbeat
+    **key-allowed** rows that also appear on the runtime allowlist, plus
+    **allowlisted** rows that are online but carry **no** scope field; generic
+    `available: true` is **ignored** unless
+    `ACN_PROVIDER_MODELS_TRUST_AVAILABLE=1`;
+  - ids **explicitly denied** for the key are never heartbeated, even if they
+    remain on `listen --supported-models` / `ACN_SUPPORTED_MODELS`;
+  - when **no** row exposes key scope, heartbeat **runtime allowlist** **∩**
+    online catalog — never the full product catalog;
+  - matching **prices** on list rows are heartbeated as `model_prices` when
+    Host price book (OpenRouter / TokenPlus) does not already cover the id.
+  Interfaze Composer still shows only models Host can **price** (book → agent
+  `model_prices` → agent quote); unpriceable ids are omitted from `model_options`.
 - `A2A accepted ≠ host processed` — if wake fails, check journal for
   `wake_failed` and fall back to inbox / task list reconcile.
 - Dedupe is in-process; restarting `acn-listen` clears the window.

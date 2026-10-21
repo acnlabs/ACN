@@ -44,6 +44,307 @@ export function resolveSupportedModels(opts?: {
   return out.length ? out : undefined;
 }
 
+function bareModelId(modelId: string): string {
+  const slash = modelId.lastIndexOf("/");
+  return (slash >= 0 ? modelId.slice(slash + 1) : modelId).trim().toLowerCase();
+}
+
+/** A catalog row matches a model this agent configured, including ids that contain a slash. */
+export function reportedStillListed(reportedId: string, liveId: string): boolean {
+  const reported = reportedId.trim().toLowerCase();
+  const live = liveId.trim().toLowerCase();
+  if (!reported || !live) return false;
+  if (reported === live || reported.endsWith(`/${live}`)) return true;
+  return !live.includes("/") && bareModelId(reported) === live;
+}
+
+/** Keep the agent's own order. Models the catalog does not list are dropped. */
+export function intersectSupportedModels(reported: string[], liveIds: string[]): string[] {
+  return reported.filter((id) => liveIds.some((live) => reportedStillListed(id, live)));
+}
+
+function providerListRows(body: unknown): Record<string, unknown>[] {
+  if (!body || typeof body !== "object") return [];
+  const data = (body as { data?: unknown }).data;
+  if (!Array.isArray(data)) return [];
+  return data.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
+}
+
+function boolishField(value: unknown): boolean | null {
+  if (value === true || value === 1 || value === "true" || value === "1") return true;
+  if (value === false || value === 0 || value === "false" || value === "0") return false;
+  return null;
+}
+
+function trustLooseProviderAuthFields(env?: NodeJS.ProcessEnv): boolean {
+  const raw = (env ?? process.env).ACN_PROVIDER_MODELS_TRUST_AVAILABLE?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/** Per-row Key invoke permission when the provider exposes it on the model list. */
+export function rowKeyAuthorized(
+  rec: Record<string, unknown>,
+  env?: NodeJS.ProcessEnv
+): boolean | null {
+  const keys = [
+    "authorized",
+    "key_authorized",
+    "keyAuthorized",
+    "api_key_authorized",
+  ];
+  if (trustLooseProviderAuthFields(env)) {
+    keys.push("available", "available_for_inference", "inference_enabled", "enabled");
+  }
+  let sawHint = false;
+  for (const key of keys) {
+    if (!(key in rec)) continue;
+    sawHint = true;
+    const b = boolishField(rec[key]);
+    if (b === false) return false;
+    if (b === true) return true;
+  }
+  const perm = rec.permission;
+  if (perm && typeof perm === "object") {
+    sawHint = true;
+    for (const key of ["inference", "chat", "invoke"]) {
+      if (!(key in (perm as Record<string, unknown>))) continue;
+      const b = boolishField((perm as Record<string, unknown>)[key]);
+      if (b === false) return false;
+      if (b === true) return true;
+    }
+  }
+  return sawHint ? false : null;
+}
+
+export type ProviderListParse = {
+  /** Models this API key may invoke (provider returned explicit allow hints). */
+  keyScopedIds: string[];
+  /** Online rows with no per-key hint (allowlist may still admit them). */
+  noHintOnlineIds: string[];
+  /** Online ids explicitly denied for this API key. */
+  keyDeniedIds: string[];
+  /** Online product-catalog ids (non-denied). */
+  catalogOnlineIds: string[];
+  /** True when at least one row carried key-scope hints. */
+  hadKeyScopeHints: boolean;
+};
+
+export function providerModelsFromListBody(
+  body: unknown,
+  env?: NodeJS.ProcessEnv
+): ProviderListParse {
+  const keyScopedIds: string[] = [];
+  const noHintOnlineIds: string[] = [];
+  const keyDeniedIds: string[] = [];
+  const catalogOnlineIds: string[] = [];
+  let hadKeyScopeHints = false;
+  for (const rec of providerListRows(body)) {
+    if (String(rec.status || "online").toLowerCase() === "offline") continue;
+    const id = String(rec.id || "").trim();
+    if (!id) continue;
+    const auth = rowKeyAuthorized(rec, env);
+    if (auth !== null) hadKeyScopeHints = true;
+    if (auth === false) {
+      keyDeniedIds.push(id);
+      continue;
+    }
+    catalogOnlineIds.push(id);
+    if (auth === true) keyScopedIds.push(id);
+    else noHintOnlineIds.push(id);
+  }
+  return {
+    keyScopedIds: collapseModelSpellings(keyScopedIds),
+    noHintOnlineIds: collapseModelSpellings(noHintOnlineIds),
+    keyDeniedIds: collapseModelSpellings(keyDeniedIds),
+    catalogOnlineIds: collapseModelSpellings(catalogOnlineIds),
+    hadKeyScopeHints,
+  };
+}
+
+/** Online model ids from a provider ``/models``-style list (legacy helper). */
+export function catalogModelIds(body: unknown): string[] {
+  return providerModelsFromListBody(body).catalogOnlineIds;
+}
+
+/** Drop configured ids the provider explicitly denied for this key. */
+export function configuredWithoutKeyDenied(
+  configured: string[],
+  deniedBareIds: string[],
+  provider: string
+): string[] {
+  if (!deniedBareIds.length) return configured;
+  const deniedPrefixed = prefixProviderIds(deniedBareIds, provider);
+  return configured.filter(
+    (id) => !deniedPrefixed.some((denied) => reportedStillListed(id, denied))
+  );
+}
+
+function uniqueModelIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    const mark = id.trim().toLowerCase();
+    if (!mark || seen.has(mark)) continue;
+    seen.add(mark);
+    out.push(id.trim());
+  }
+  return out;
+}
+
+function prefixProviderIds(ids: string[], provider: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    const named = withProvider(id, provider);
+    const mark = named.toLowerCase();
+    if (!named || seen.has(mark)) continue;
+    seen.add(mark);
+    out.push(named);
+  }
+  return out;
+}
+
+export type RuntimeModelReport = {
+  supportedModels?: string[];
+  modelPrices?: ReportedModelPrice[];
+};
+
+/**
+ * Resolve what the runtime should heartbeat: provider Key scope when exposed,
+ * otherwise runtime allowlist ∩ online catalog. Never publishes a full product
+ * catalog when Key scope is unknown and no allowlist was declared.
+ */
+export function runtimeModelReportFromProviderBody(
+  body: unknown,
+  opts: { configured?: string[]; provider: string; env?: NodeJS.ProcessEnv }
+): RuntimeModelReport {
+  const configured = opts.configured ?? [];
+  const parsed = providerModelsFromListBody(body, opts.env);
+  const keyScoped = prefixProviderIds(parsed.keyScopedIds, opts.provider);
+  const catalogOnline = prefixProviderIds(parsed.catalogOnlineIds, opts.provider);
+
+  let supportedModels: string[] | undefined;
+  if (parsed.hadKeyScopeHints) {
+    const keyAllowed =
+      configured.length > 0
+        ? intersectSupportedModels(configured, keyScoped)
+        : keyScoped;
+    const fromNoHint =
+      configured.length > 0
+        ? intersectSupportedModels(
+            configured,
+            prefixProviderIds(parsed.noHintOnlineIds, opts.provider)
+          )
+        : [];
+    const merged = uniqueModelIds([...keyAllowed, ...fromNoHint]);
+    if (merged.length > 0) {
+      supportedModels = merged;
+    } else if (configured.length > 0) {
+      const withoutDenied = configuredWithoutKeyDenied(
+        configured,
+        parsed.keyDeniedIds,
+        opts.provider
+      );
+      supportedModels = withoutDenied.length > 0 ? withoutDenied : [];
+    } else {
+      supportedModels = undefined;
+    }
+  } else if (configured.length > 0) {
+    const intersected = intersectSupportedModels(configured, catalogOnline);
+    supportedModels = intersected.length > 0 ? intersected : configured;
+  } else {
+    supportedModels = undefined;
+  }
+
+  const priceRows = [
+    ...pricesFromEnv(opts.env),
+    ...pricesFromProviderCatalog(body, opts.provider),
+  ];
+  const modelPrices =
+    supportedModels && supportedModels.length
+      ? pricesForModels(supportedModels, priceRows)
+      : undefined;
+
+  return { supportedModels, modelPrices };
+}
+
+export async function fetchRuntimeModelReport(opts: {
+  configured?: string[];
+  env?: NodeJS.ProcessEnv;
+  fetchFn?: typeof fetch;
+}): Promise<RuntimeModelReport> {
+  const configured = opts.configured;
+  const env = opts.env ?? process.env;
+  const url = (env.ACN_PROVIDER_MODELS_URL || "").trim();
+  const key = (env.ACN_PROVIDER_API_KEY || "").trim();
+  const provider = (env.ACN_PROVIDER || "").trim();
+  if (!url || !key) {
+    return { supportedModels: configured ?? undefined };
+  }
+  const fetchFn = opts.fetchFn ?? fetch;
+  try {
+    const res = await fetchFn(url, { headers: { Authorization: `Bearer ${key}` } });
+    if (!res.ok) return { supportedModels: configured ?? undefined };
+    const body = await res.json();
+    const report = runtimeModelReportFromProviderBody(body, {
+      configured: configured ?? [],
+      provider,
+      env,
+    });
+    if (report.supportedModels !== undefined) return report;
+    return { supportedModels: configured ?? undefined };
+  } catch {
+    return { supportedModels: configured ?? undefined };
+  }
+}
+
+/** Same model written with different punctuation, including a trailing ".0". */
+export function spellingKey(modelId: string): string {
+  let text = modelId.trim().toLowerCase();
+  text = text.replace(/[._]/g, "-");
+  text = text.replace(/([a-z])(\d)/g, "$1-$2");
+  text = text.replace(/(\d)([a-z])/g, "$1-$2");
+  text = text.replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return text.replace(/-0$/, "");
+}
+
+/** One id per spelling. The shorter id is the one a caller should send. */
+export function collapseModelSpellings(ids: string[]): string[] {
+  const groups = new Map<string, string[]>();
+  const order: string[] = [];
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id) continue;
+    const key = spellingKey(id);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(id);
+  }
+  return order.map((key) => {
+    const choices = groups.get(key) || [];
+    return choices.slice().sort((left, right) => left.length - right.length)[0];
+  });
+}
+
+function withProvider(modelId: string, provider: string): string {
+  const clean = modelId.trim();
+  if (!clean || !provider) return clean;
+  if (clean.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) return clean;
+  return `${provider}/${clean}`;
+}
+
+/** Supported models only (see ``fetchRuntimeModelReport`` for prices). */
+export async function supportedModelsToReport(opts: {
+  configured?: string[];
+  env?: NodeJS.ProcessEnv;
+  fetchFn?: typeof fetch;
+}): Promise<string[] | undefined> {
+  const report = await fetchRuntimeModelReport(opts);
+  return report.supportedModels;
+}
+
 export type ReportedModelPrice = {
   model_id: string;
   input_price_per_million: number;
@@ -56,13 +357,6 @@ function finitePrice(value: unknown): number | null {
   return n;
 }
 
-function withProvider(modelId: string, provider: string): string {
-  const clean = modelId.trim();
-  if (!clean || !provider) return clean;
-  if (clean.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) return clean;
-  return `${provider}/${clean}`;
-}
-
 /** Prices this agent can report for the ids the price book missed. */
 export function pricesForModels(
   modelIds: string[],
@@ -73,7 +367,7 @@ export function pricesForModels(
   for (const id of modelIds) {
     const key = id.trim().toLowerCase();
     if (!key || seen.has(key)) continue;
-    const row = known.find((item) => item.model_id.trim().toLowerCase() === key);
+    const row = known.find((item) => reportedStillListed(id, item.model_id));
     if (!row) continue;
     seen.add(key);
     out.push({

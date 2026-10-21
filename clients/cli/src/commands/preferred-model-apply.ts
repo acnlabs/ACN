@@ -92,6 +92,18 @@ export function parseQuoteModelPricesBody(
   return { modelIds, retry: err === 'price_required' };
 }
 
+/** Host asks the agent to re-fetch provider model scope and heartbeat. */
+export function isRefreshSupportedModelsBody(raw: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object') return false;
+  return (parsed as { refresh_supported_models?: unknown }).refresh_supported_models === true;
+}
+
 export function parsePreferredModelApplyBody(
   raw: string
 ): { ok: true; preferred_model: string } | { ok: false; reason: string } {
