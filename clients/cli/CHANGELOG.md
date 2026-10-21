@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.28] - 2026-10-21
+
+### Changed
+
+- `acn listen` and `acn heartbeat` heartbeats `supported_models` from the agent
+  provider model list (same API key as inference): key-allowed SKUs intersect the
+  runtime allowlist, mixed scope merges allowlisted no-hint rows, and explicitly
+  denied SKUs are dropped (`[]` clears stale registry entries). Host
+  `refresh_supported_models` uses the same resolver.
+
 ## [1.0.27] - 2026-10-20
 
 Collaboration graph: bind Interfaze `chat_id` on billable invoke and merge

@@ -29,11 +29,13 @@ import {
   pricesFromProviderCatalog,
   resolvePreferredModel,
   resolveSupportedModels,
+  fetchRuntimeModelReport,
 } from './model-heartbeat.js';
 import {
   applyPreferredModelOnListen,
   isOwnerPreferredModelApplyFrame,
   isPreferredModelApplyPath,
+  isRefreshSupportedModelsBody,
   parsePreferredModelApplyBody,
   parseQuoteModelPricesBody,
 } from './preferred-model-apply.js';
@@ -244,6 +246,46 @@ async function handleQuoteModelPrices(
   };
 }
 
+async function handleRefreshSupportedModels(
+  frame: A2aRequestFrame,
+  opts: HandlerOptions,
+  deps: HandlerDeps
+): Promise<A2aResponseFrame> {
+  const agentId = opts.agentId?.trim();
+  const apiKey = opts.apiKey?.trim();
+  const baseUrl = opts.baseUrl?.trim();
+  if (!agentId || !apiKey || !baseUrl) {
+    return errorResponse(frame.id, 500, 'listen_not_configured');
+  }
+  const fromEnv = resolveSupportedModels();
+  const configured = fromEnv ?? opts.supportedModels;
+  opts.supportedModels = configured;
+  const report = await fetchRuntimeModelReport({
+    configured,
+    fetchFn: deps.fetchFn,
+  });
+  const beat = await postAgentHeartbeat({
+    baseUrl,
+    agentId,
+    apiKey,
+    preferredModel: opts.preferredModel,
+    supportedModels: report.supportedModels,
+    modelPrices: report.modelPrices,
+    fetchFn: deps.fetchFn,
+  });
+  if (!beat.ok) return errorResponse(frame.id, 502, beat.reason);
+  return {
+    type: 'a2a_response',
+    id: frame.id,
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ok: true,
+      supported_models: report.supportedModels ?? [],
+    }),
+  };
+}
+
 async function handlePreferredModelApply(
   frame: A2aRequestFrame,
   opts: HandlerOptions,
@@ -318,6 +360,10 @@ export async function dispatchA2aRequest(
       const quote = parseQuoteModelPricesBody(rawBody);
       if (quote) {
         send(await handleQuoteModelPrices(frame, opts, deps, quote));
+        return;
+      }
+      if (isRefreshSupportedModelsBody(rawBody)) {
+        send(await handleRefreshSupportedModels(frame, opts, deps));
         return;
       }
       send(await handlePreferredModelApply(frame, opts, bodyBuf, deps));
@@ -552,13 +598,16 @@ function runListener(cfg: ListenerConfig): void {
 
     const sendModelHeartbeat = (): void => {
       if (stopped) return;
-      void postAgentHeartbeat({
-        baseUrl: cfg.baseUrl,
-        agentId: cfg.agentId,
-        apiKey: cfg.apiKey,
-        preferredModel: cfg.preferredModel,
-        supportedModels: cfg.supportedModels,
-      }).then(async (r) => {
+      void fetchRuntimeModelReport({ configured: cfg.supportedModels }).then((report) =>
+        postAgentHeartbeat({
+          baseUrl: cfg.baseUrl,
+          agentId: cfg.agentId,
+          apiKey: cfg.apiKey,
+          preferredModel: cfg.preferredModel,
+          supportedModels: report.supportedModels,
+          modelPrices: report.modelPrices,
+        })
+      ).then(async (r) => {
         if (!r.ok) {
           console.error(`[acn listen] model heartbeat failed: ${r.reason}`);
           return;

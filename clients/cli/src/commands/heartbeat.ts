@@ -3,6 +3,7 @@ import { acnPost } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 import {
+  fetchRuntimeModelReport,
   resolvePreferredModel,
   resolveSupportedModels,
 } from './model-heartbeat.js';
@@ -47,13 +48,20 @@ export function heartbeatCommand(): Command {
           process.exit(1);
         }
         const preferred = resolvePreferredModel({ model: opts.model });
-        const supported = resolveSupportedModels({
+        const configured = resolveSupportedModels({
           models: opts.supportedModels,
           clear: !!opts.clearSupportedModels,
         });
+        const report =
+          configured === undefined || configured.length === 0
+            ? { supportedModels: configured, modelPrices: undefined }
+            : await fetchRuntimeModelReport({ configured });
         const body: Record<string, unknown> = {};
         if (preferred) body.preferred_model = preferred;
-        if (supported !== undefined) body.supported_models = supported;
+        if (report.supportedModels !== undefined) {
+          body.supported_models = report.supportedModels;
+        }
+        if (report.modelPrices?.length) body.model_prices = report.modelPrices;
         const res = await acnPost<{
           status?: string;
           preferred_model?: string;
