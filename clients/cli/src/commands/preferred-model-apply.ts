@@ -10,7 +10,11 @@ import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
 
-import { postAgentHeartbeat } from './model-heartbeat.js';
+import {
+  fetchRuntimeModelReport,
+  postAgentHeartbeat,
+  type ReportedProvider,
+} from './model-heartbeat.js';
 
 export const RUNTIME_APPLY_PATH = '/acn/v1/runtime';
 export const PREFERRED_MODEL_APPLY_PATH = '/acn/v1/preferred-model';
@@ -172,12 +176,28 @@ export function runPreferredModelHook(
   });
 }
 
+function providersForAppliedModel(
+  providers: ReportedProvider[] | undefined,
+  modelId: string,
+): ReportedProvider[] | undefined {
+  if (!providers?.length) return undefined;
+  const want = modelId.trim().toLowerCase();
+  let marked = false;
+  return providers.map((row) => {
+    const hit =
+      !marked && row.models.some((id) => id.trim().toLowerCase() === want);
+    if (hit) marked = true;
+    return { ...row, current: hit };
+  });
+}
+
 export async function applyPreferredModelOnListen(opts: {
   modelId: string;
   agentId: string;
   apiKey: string;
   baseUrl: string;
   supportedModels?: string[];
+  providers?: ReportedProvider[];
   onSetPreferredModel?: string;
   spawnFn?: typeof spawn;
   heartbeatFn?: typeof postAgentHeartbeat;
@@ -188,9 +208,14 @@ export async function applyPreferredModelOnListen(opts: {
 > {
   const mid = opts.modelId.trim().slice(0, 200);
   if (!mid) return { ok: false, reason: 'preferred_model_required', status: 400 };
-  if (!modelAllowedBySupported(mid, opts.supportedModels)) {
+  if (!opts.providers) {
+    return { ok: false, reason: 'provider_list_unavailable', status: 503 };
+  }
+  const declaredIds = opts.providers.flatMap((row) => row.models);
+  if (!declaredIds.some((id) => id.trim().toLowerCase() === mid.toLowerCase())) {
     return { ok: false, reason: 'unsupported_model', status: 400 };
   }
+  const providers = providersForAppliedModel(opts.providers, mid);
   if (opts.onSetPreferredModel?.trim()) {
     const hooked = await runPreferredModelHook(
       opts.onSetPreferredModel,
@@ -208,6 +233,7 @@ export async function applyPreferredModelOnListen(opts: {
     apiKey: opts.apiKey,
     preferredModel: mid,
     supportedModels: opts.supportedModels,
+    providers,
   });
   if (!hb.ok) {
     return { ok: false, reason: `heartbeat_${hb.reason}`, status: 502 };
@@ -278,6 +304,8 @@ export async function handleRuntimeApplyHttp(opts: {
   spawnFn?: typeof spawn;
   heartbeatFn?: typeof postAgentHeartbeat;
   logFn?: (line: string) => void;
+  /** Tests pass an empty env so a developer shell cannot turn this into a live fetch. */
+  modelEnv?: NodeJS.ProcessEnv;
 }): Promise<{ status: number; body: string }> {
   const token = (opts.authorization || '').replace(/^Bearer\s+/i, '').trim();
   if (!token) {
@@ -298,12 +326,19 @@ export async function handleRuntimeApplyHttp(opts: {
   if (!verified.ok) {
     return { status: 401, body: JSON.stringify({ error: verified.reason }) };
   }
+  const report = await fetchRuntimeModelReport({
+    env: opts.modelEnv,
+  });
+  if (!report.providers) {
+    return { status: 503, body: JSON.stringify({ error: 'provider_list_unavailable' }) };
+  }
   const applied = await applyPreferredModelOnListen({
     modelId: parsed.preferred_model,
     agentId: opts.agentId,
     apiKey: opts.apiKey,
     baseUrl: opts.baseUrl,
-    supportedModels: opts.supportedModels,
+    supportedModels: report.supportedModels,
+    providers: report.providers,
     onSetPreferredModel: opts.onSetPreferredModel,
     spawnFn: opts.spawnFn,
     heartbeatFn: opts.heartbeatFn,

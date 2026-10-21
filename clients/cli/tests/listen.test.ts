@@ -26,6 +26,7 @@ import {
 } from '../src/commands/listen.js';
 import {
   collapseModelSpellings,
+  declarationHeartbeatFields,
   formatModelHeartbeatLog,
   fetchRuntimeModelReport,
   providerModelsFromListBody,
@@ -322,20 +323,78 @@ describe('formatModelHeartbeatLog', () => {
       })
     ).toBe(' preferred_model=openai/gpt-4o-mini supported_models=a/b');
   });
+
+  it('does not invent a model list when the server omitted one', () => {
+    expect(formatModelHeartbeatLog({ preferred: 'openai/gpt-4o-mini' })).toBe(
+      ' preferred_model=openai/gpt-4o-mini'
+    );
+  });
+
+  it('names a cleared declaration instead of falling back to a handwritten list', () => {
+    expect(formatModelHeartbeatLog({ supported: [] })).toBe(
+      ' supported_models=(cleared)'
+    );
+  });
+});
+
+describe('declarationHeartbeatFields', () => {
+  it('clears providers and the derived union without reading a handwritten list', () => {
+    expect(
+      declarationHeartbeatFields({
+        clear: true,
+        report: {
+          supportedModels: ['tencenttokenplan/glm-5'],
+          providers: [{ id: 'tencenttokenplan', models: ['tencenttokenplan/glm-5'], current: true }],
+        },
+      })
+    ).toEqual({
+      supportedModels: [],
+      providers: [],
+      modelPrices: undefined,
+    });
+  });
+
+  it('sends nothing when a provider list could not be read', () => {
+    expect(declarationHeartbeatFields({ clear: false, report: {} })).toEqual({});
+  });
+
+  it('sends the provider rows when every list was read', () => {
+    const report = {
+      supportedModels: ['tencenttokenplan/glm-5'],
+      providers: [{ id: 'tencenttokenplan', models: ['tencenttokenplan/glm-5'], current: true }],
+      modelPrices: [{ model_id: 'tencenttokenplan/glm-5', input_price_per_million: 1, output_price_per_million: 2 }],
+    };
+    expect(declarationHeartbeatFields({ clear: false, report })).toEqual(report);
+  });
 });
 
 describe('preferred-model apply intercept', () => {
   it('applies before --forward and heartbeats the new default', async () => {
     const prev = process.env.ACN_PREFERRED_MODEL;
-    const fetchFn = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          status: 'ok',
-          preferred_model: 'minimax/minimax-m2.5',
-        }),
-    } as unknown as Response);
+    const prevHub = process.env.ACN_PROVIDER_API_KEY;
+    const prevUrl = process.env.ACN_PROVIDER_MODELS_URL;
+    const prevProvider = process.env.ACN_PROVIDER;
+    process.env.ACN_PROVIDER = 'minimax';
+    process.env.ACN_PROVIDER_MODELS_URL = 'https://provider.example/v1/models';
+    process.env.ACN_PROVIDER_API_KEY = 'k';
+    const fetchFn = vi.fn(async (url: string) => {
+      if (String(url).includes('provider.example')) {
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ data: [{ id: 'minimax-m2.5' }] }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            status: 'ok',
+            preferred_model: 'minimax/minimax-m2.5',
+          }),
+      } as Response;
+    });
     const frames: OutboundFrame[] = [];
     const opts = {
       forward: 'http://localhost:8080',
@@ -362,6 +421,78 @@ describe('preferred-model apply intercept', () => {
     expect(urls.every((u) => !u.includes('localhost:8080'))).toBe(true);
     if (prev === undefined) delete process.env.ACN_PREFERRED_MODEL;
     else process.env.ACN_PREFERRED_MODEL = prev;
+    if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
+    else process.env.ACN_PROVIDER_API_KEY = prevHub;
+    if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
+    else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
+    if (prevProvider === undefined) delete process.env.ACN_PROVIDER;
+    else process.env.ACN_PROVIDER = prevProvider;
+  });
+
+  it('applies a catalog model the hand allowlist does not name', async () => {
+    const prevHub = process.env.ACN_PROVIDER_API_KEY;
+    const prevUrl = process.env.ACN_PROVIDER_MODELS_URL;
+    const prevProvider = process.env.ACN_PROVIDER;
+    const prevModels = process.env.ACN_SUPPORTED_MODELS;
+    process.env.ACN_PROVIDER_API_KEY = 'catalog-key';
+    process.env.ACN_PROVIDER_MODELS_URL = 'https://provider.example/v1/models';
+    process.env.ACN_PROVIDER = 'tencenttokenplan';
+    delete process.env.ACN_SUPPORTED_MODELS;
+    const fetchFn = vi.fn(async (url: string) => {
+      if (String(url).includes('provider.example')) {
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ data: [{ id: 'glm-5' }, { id: 'glm-5.1' }] }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ status: 'ok', preferred_model: 'tencenttokenplan/glm-5' }),
+      } as Response;
+    });
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        body: JSON.stringify({ preferred_model: 'tencenttokenplan/glm-5' }),
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+        preferredModel: 'tencenttokenplan/glm-5.1',
+        supportedModels: ['tencenttokenplan/deepseek-v4-flash-202605'],
+      },
+      (f) => frames.push(f),
+      { fetchFn: fetchFn as unknown as typeof fetch }
+    );
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
+    const heartbeat = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/heartbeat')
+    ) as [string, RequestInit] | undefined;
+    const sent = JSON.parse(String(heartbeat?.[1]?.body ?? '{}'));
+    expect(sent.preferred_model).toBe('tencenttokenplan/glm-5');
+    expect(sent.providers).toEqual([
+      {
+        id: 'tencenttokenplan',
+        models: ['tencenttokenplan/glm-5', 'tencenttokenplan/glm-5.1'],
+        current: true,
+      },
+    ]);
+    expect(sent.supported_models).toEqual([
+      'tencenttokenplan/glm-5',
+      'tencenttokenplan/glm-5.1',
+    ]);
+    if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
+    else process.env.ACN_PROVIDER_API_KEY = prevHub;
+    if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
+    else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
+    if (prevProvider === undefined) delete process.env.ACN_PROVIDER;
+    else process.env.ACN_PROVIDER = prevProvider;
+    if (prevModels === undefined) delete process.env.ACN_SUPPORTED_MODELS;
+    else process.env.ACN_SUPPORTED_MODELS = prevModels;
   });
 
   it('heartbeats prices for the models the price book missed', async () => {
@@ -453,12 +584,13 @@ describe('preferred-model apply intercept', () => {
       (f) => frames.push(f),
       { fetchFn }
     );
-    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
-    const body = JSON.parse(String((frames[0] as { body?: string }).body));
-    expect(body.supported_models).toEqual(['moonshot/kimi-k2', 'moonshot/kimi-k2.6']);
+    expect(frames[0]).toMatchObject({
+      type: 'a2a_response',
+      status: 503,
+      body: expect.stringContaining('provider_list_unavailable'),
+    });
     const urls = fetchFn.mock.calls.map((c) => String(c[0]));
-    expect(urls.some((u) => u.includes('/heartbeat'))).toBe(true);
-    expect(urls.every((u) => !u.includes('localhost:8080'))).toBe(true);
+    expect(urls.some((u) => u.includes('/heartbeat'))).toBe(false);
     if (prev === undefined) delete process.env.ACN_SUPPORTED_MODELS;
     else process.env.ACN_SUPPORTED_MODELS = prev;
     if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
@@ -560,13 +692,13 @@ describe('preferred-model apply intercept', () => {
     ]);
   });
 
-  it('keeps the configured list when the catalog ask fails', async () => {
-    const configured = ['tencenttokenplan/kimi-k2.5', 'tencenttokenplan/glm-5'];
+  it('leaves the stored declaration alone when a provider list cannot be read', async () => {
     const kept = await supportedModelsToReport({
-      configured,
       env: {
+        ACN_PROVIDER: 'tencenttokenplan',
         ACN_PROVIDER_API_KEY: 'catalog-key',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_SUPPORTED_MODELS: 'tencenttokenplan/kimi-k2.5,tencenttokenplan/glm-5',
       },
       fetchFn: vi.fn().mockResolvedValue({
         ok: false,
@@ -574,13 +706,42 @@ describe('preferred-model apply intercept', () => {
         json: () => Promise.resolve({}),
       }),
     });
-    expect(kept).toEqual(configured);
+    expect(kept).toBeUndefined();
     const noKey = await supportedModelsToReport({
-      configured,
-      env: {},
+      env: {
+        ACN_SUPPORTED_MODELS: 'tencenttokenplan/kimi-k2.5,tencenttokenplan/glm-5',
+      },
       fetchFn: vi.fn(),
     });
-    expect(noKey).toEqual(configured);
+    expect(noKey).toBeUndefined();
+  });
+
+  it('does not publish a partial provider list', async () => {
+    const report = await fetchRuntimeModelReport({
+      env: {
+        ACN_PROVIDER: 'tencenttokenplan',
+        ACN_PROVIDER_MODELS_URL: 'https://tencent.example/models',
+        ACN_PROVIDER_API_KEY: 't-key',
+        ACN_PROVIDERS: JSON.stringify([
+          {
+            id: 'openrouter',
+            models_url: 'https://openrouter.example/models',
+            api_key: 'o-key',
+          },
+        ]),
+      },
+      fetchFn: vi.fn(async (url: string) => {
+        if (String(url).includes('tencent.example')) {
+          return {
+            ok: true,
+            json: async () => ({ data: [{ id: 'glm-5' }] }),
+          } as Response;
+        }
+        return { ok: false, status: 503, json: async () => ({}) } as Response;
+      }),
+    });
+    expect(report.providers).toBeUndefined();
+    expect(report.supportedModels).toBeUndefined();
   });
 
   it('does not treat catalog available:true as Key scope without TRUST flag', async () => {
@@ -608,7 +769,6 @@ describe('preferred-model apply intercept', () => {
     expect(parsed.hadKeyScopeHints).toBe(true);
     expect(parsed.keyScopedIds).toEqual(['kimi-k3', 'deepseek-v4-flash-202605']);
     const report = await fetchRuntimeModelReport({
-      configured: ['tencenttokenplan/kimi-k2.5', 'tencenttokenplan/kimi-k3'],
       env: {
         ACN_PROVIDER_API_KEY: 'catalog-key',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
@@ -627,16 +787,13 @@ describe('preferred-model apply intercept', () => {
       }),
     });
     expect(report.supportedModels).toEqual(['tencenttokenplan/kimi-k3']);
+    expect(report.providers).toEqual([
+      { id: 'tencenttokenplan', models: ['tencenttokenplan/kimi-k3'], current: true },
+    ]);
   });
 
-  it('merges key-allowed SKUs with allowlisted no-hint catalog rows', async () => {
-    const configured = [
-      'tencenttokenplan/kimi-k2.5',
-      'tencenttokenplan/kimi-k3',
-      'tencenttokenplan/glm-5.1',
-    ];
+  it('keeps key-allowed SKUs and online rows that carry no scope field', async () => {
     const report = await fetchRuntimeModelReport({
-      configured,
       env: {
         ACN_PROVIDER_API_KEY: 'catalog-key',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
@@ -660,9 +817,8 @@ describe('preferred-model apply intercept', () => {
     ]);
   });
 
-  it('does not heartbeat key-allowed SKUs omitted from the runtime allowlist', async () => {
+  it('heartbeats every key-allowed SKU of this provider', async () => {
     const report = await fetchRuntimeModelReport({
-      configured: ['tencenttokenplan/glm-5.1'],
       env: {
         ACN_PROVIDER_API_KEY: 'catalog-key',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
@@ -679,13 +835,14 @@ describe('preferred-model apply intercept', () => {
           }),
       }),
     });
-    expect(report.supportedModels).toEqual(['tencenttokenplan/glm-5.1']);
+    expect(report.supportedModels).toEqual([
+      'tencenttokenplan/kimi-k3',
+      'tencenttokenplan/glm-5.1',
+    ]);
   });
 
-  it('does not heartbeat allowlisted ids the provider denied for this key', async () => {
-    const configured = ['tencenttokenplan/kimi-k2.5'];
+  it('omits models the provider key explicitly denied', async () => {
     const report = await fetchRuntimeModelReport({
-      configured,
       env: {
         ACN_PROVIDER_API_KEY: 'k',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
@@ -702,10 +859,8 @@ describe('preferred-model apply intercept', () => {
     expect(report.supportedModels).toEqual([]);
   });
 
-  it('falls back to configured allowlist when Key scope hints yield zero ids', async () => {
-    const configured = ['tencenttokenplan/minimax-m2.7'];
+  it('reports an empty provider row when every listed model is denied', async () => {
     const report = await fetchRuntimeModelReport({
-      configured,
       env: {
         ACN_PROVIDER_API_KEY: 'k',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
@@ -719,16 +874,11 @@ describe('preferred-model apply intercept', () => {
           }),
       }),
     });
-    expect(report.supportedModels).toEqual(configured);
+    expect(report.supportedModels).toEqual([]);
   });
 
-  it('does not heartbeat catalog SKUs the listen allowlist omitted', async () => {
-    const configured = [
-      'tencenttokenplan/minimax-m2.7',
-      'tencenttokenplan/deepseek-v4-flash-202605',
-    ];
+  it('reports every online model from the provider list', async () => {
     const reported = await supportedModelsToReport({
-      configured,
       env: {
         ACN_PROVIDER_API_KEY: 'catalog-key',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
@@ -748,15 +898,106 @@ describe('preferred-model apply intercept', () => {
           }),
       }),
     });
-    expect(reported).toEqual(configured);
+    expect(reported).toEqual([
+      'tencenttokenplan/minimax-m2.7',
+      'tencenttokenplan/deepseek-v4-flash-202605',
+      'tencenttokenplan/kimi-k2.5',
+      'tencenttokenplan/glm-5.1',
+    ]);
+  });
+
+  it('reads the provider list when no handwritten model list is set', async () => {
+    const report = await fetchRuntimeModelReport({
+      env: {
+        ACN_PROVIDER_API_KEY: 'catalog-key',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            data: [{ id: 'glm-5' }, { id: 'glm-5.1' }],
+          }),
+      }),
+    });
+    expect(report.supportedModels).toEqual([
+      'tencenttokenplan/glm-5',
+      'tencenttokenplan/glm-5.1',
+    ]);
+    expect(report.providers).toEqual([
+      {
+        id: 'tencenttokenplan',
+        models: ['tencenttokenplan/glm-5', 'tencenttokenplan/glm-5.1'],
+        current: true,
+      },
+    ]);
+  });
+
+  it('reports every configured provider and marks the one in use', async () => {
+    const report = await fetchRuntimeModelReport({
+      env: {
+        ACN_PROVIDER: 'tencenttokenplan',
+        ACN_PROVIDER_MODELS_URL: 'https://tencent.example/models',
+        ACN_PROVIDER_API_KEY: 't-key',
+        ACN_PROVIDERS: JSON.stringify([
+          {
+            id: 'openrouter',
+            models_url: 'https://openrouter.example/models',
+            api_key: 'o-key',
+          },
+        ]),
+      },
+      fetchFn: vi.fn(async (url: string, init?: RequestInit) => {
+        const href = String(url);
+        const headers = (init?.headers || {}) as Record<string, string>;
+        const auth = String(headers.Authorization || '');
+        if (href.includes('tencent.example')) {
+          expect(auth).toBe('Bearer t-key');
+          return {
+            ok: true,
+            json: async () => ({ data: [{ id: 'glm-5' }] }),
+          } as Response;
+        }
+        expect(auth).toBe('Bearer o-key');
+        return {
+          ok: true,
+          json: async () => ({ data: [{ id: 'gpt-4o-mini' }] }),
+        } as Response;
+      }),
+    });
+    expect(report.providers).toEqual([
+      { id: 'tencenttokenplan', models: ['tencenttokenplan/glm-5'], current: true },
+      { id: 'openrouter', models: ['openrouter/gpt-4o-mini'], current: false },
+    ]);
+    expect(report.supportedModels).toEqual([
+      'tencenttokenplan/glm-5',
+      'openrouter/gpt-4o-mini',
+    ]);
   });
 
   it('intercepts POST /acn/v1/runtime with the runtime marker', async () => {
-    const fetchFn = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ status: 'ok' }),
-    } as unknown as Response);
+    const prevHub = process.env.ACN_PROVIDER_API_KEY;
+    const prevUrl = process.env.ACN_PROVIDER_MODELS_URL;
+    const prevProvider = process.env.ACN_PROVIDER;
+    process.env.ACN_PROVIDER = 'minimax';
+    process.env.ACN_PROVIDER_MODELS_URL = 'https://provider.example/v1/models';
+    process.env.ACN_PROVIDER_API_KEY = 'k';
+    const fetchFn = vi.fn(async (url: string) => {
+      if (String(url).includes('provider.example')) {
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ data: [{ id: 'minimax-m2.5' }] }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ status: 'ok' }),
+      } as Response;
+    });
     const frames: OutboundFrame[] = [];
     await dispatchA2aRequest(
       ownerApplyRequest({
@@ -781,10 +1022,26 @@ describe('preferred-model apply intercept', () => {
     expect(fetchFn.mock.calls.some((c) => String(c[0]).includes('/heartbeat'))).toBe(
       true
     );
+    if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
+    else process.env.ACN_PROVIDER_API_KEY = prevHub;
+    if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
+    else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
+    if (prevProvider === undefined) delete process.env.ACN_PROVIDER;
+    else process.env.ACN_PROVIDER = prevProvider;
   });
 
-  it('rejects a model not on supported_models', async () => {
-    const fetchFn = vi.fn();
+  it('rejects a model the provider list does not include', async () => {
+    const prevHub = process.env.ACN_PROVIDER_API_KEY;
+    const prevUrl = process.env.ACN_PROVIDER_MODELS_URL;
+    const prevProvider = process.env.ACN_PROVIDER;
+    process.env.ACN_PROVIDER = 'minimax';
+    process.env.ACN_PROVIDER_MODELS_URL = 'https://provider.example/v1/models';
+    process.env.ACN_PROVIDER_API_KEY = 'k';
+    const fetchFn = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ data: [{ id: 'minimax-m2.5' }] }),
+    }) as Response);
     const frames: OutboundFrame[] = [];
     await dispatchA2aRequest(
       ownerApplyRequest({
@@ -795,16 +1052,22 @@ describe('preferred-model apply intercept', () => {
         agentId: 'ag1',
         apiKey: 'k',
         baseUrl: 'https://api.acnlabs.dev',
-        supportedModels: ['minimax/minimax-m2.5'],
+        supportedModels: ['openai/gpt-4o'],
       },
       (f) => frames.push(f),
-      { fetchFn }
+      { fetchFn: fetchFn as unknown as typeof fetch }
     );
     expect(frames[0]).toMatchObject({
       status: 400,
       body: expect.stringContaining('unsupported_model'),
     });
-    expect(fetchFn).not.toHaveBeenCalled();
+    expect(fetchFn.mock.calls.some((c) => String(c[0]).includes('/heartbeat'))).toBe(false);
+    if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
+    else process.env.ACN_PROVIDER_API_KEY = prevHub;
+    if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
+    else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
+    if (prevProvider === undefined) delete process.env.ACN_PROVIDER;
+    else process.env.ACN_PROVIDER = prevProvider;
   });
 
   it('does not intercept a suffixed lookalike path', async () => {

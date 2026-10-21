@@ -217,6 +217,33 @@ class TestAgentService:
         assert "supported_models" not in (agent.metadata or {})
 
     @pytest.mark.asyncio
+    async def test_update_heartbeat_derives_models_from_providers(
+        self, mock_agent_repository, sample_agent
+    ):
+        sample_agent.metadata = {"supported_models": ["hand/allowlist"]}
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            providers=[
+                {
+                    "id": "tencenttokenplan",
+                    "models": ["tencenttokenplan/glm-5", "tencenttokenplan/glm-5"],
+                    "current": True,
+                },
+                {"id": "other", "models": ["other/m1"], "current": False},
+            ],
+            supported_models=["hand/allowlist"],
+        )
+
+        assert agent.metadata["providers"][0]["current"] is True
+        assert agent.metadata["supported_models"] == [
+            "tencenttokenplan/glm-5",
+            "other/m1",
+        ]
+
+    @pytest.mark.asyncio
     async def test_update_heartbeat_stores_quoted_prices(
         self, mock_agent_repository, sample_agent
     ):
