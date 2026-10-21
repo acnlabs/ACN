@@ -119,7 +119,7 @@ export function rowKeyAuthorized(
 export type ProviderListParse = {
   /** Models this API key may invoke (provider returned explicit allow hints). */
   keyScopedIds: string[];
-  /** Online rows with no per-key hint (allowlist may still admit them). */
+  /** Online rows with no per-key hint. Included in the declaration; not filtered by a hand allowlist. */
   noHintOnlineIds: string[];
   /** Online ids explicitly denied for this API key. */
   keyDeniedIds: string[];
@@ -166,19 +166,6 @@ export function catalogModelIds(body: unknown): string[] {
   return providerModelsFromListBody(body).catalogOnlineIds;
 }
 
-/** Drop configured ids the provider explicitly denied for this key. */
-export function configuredWithoutKeyDenied(
-  configured: string[],
-  deniedBareIds: string[],
-  provider: string
-): string[] {
-  if (!deniedBareIds.length) return configured;
-  const deniedPrefixed = prefixProviderIds(deniedBareIds, provider);
-  return configured.filter(
-    (id) => !deniedPrefixed.some((denied) => reportedStillListed(id, denied))
-  );
-}
-
 function uniqueModelIds(ids: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -204,57 +191,43 @@ function prefixProviderIds(ids: string[], provider: string): string[] {
   return out;
 }
 
+export type ReportedProvider = {
+  id: string;
+  models: string[];
+  current: boolean;
+};
+
 export type RuntimeModelReport = {
+  /** Derived union. Present so older servers still store a flat list. */
   supportedModels?: string[];
+  /** Declaration: every provider this runtime supports, and which is current. */
+  providers?: ReportedProvider[];
   modelPrices?: ReportedModelPrice[];
 };
 
+/** A provider `/models` body is a list only when `data` is an array. */
+export function providerBodyHasModelList(body: unknown): boolean {
+  return !!body && typeof body === "object" && Array.isArray((body as { data?: unknown }).data);
+}
+
 /**
- * Resolve what the runtime should heartbeat: provider Key scope when exposed,
- * otherwise runtime allowlist ∩ online catalog. Never publishes a full product
- * catalog when Key scope is unknown and no allowlist was declared.
+ * Models this provider supports for the key that fetched the list.
+ * Explicit key denies are omitted. An empty list means the key can run nothing.
  */
 export function runtimeModelReportFromProviderBody(
   body: unknown,
-  opts: { configured?: string[]; provider: string; env?: NodeJS.ProcessEnv }
+  opts: { provider: string; env?: NodeJS.ProcessEnv }
 ): RuntimeModelReport {
-  const configured = opts.configured ?? [];
   const parsed = providerModelsFromListBody(body, opts.env);
   const keyScoped = prefixProviderIds(parsed.keyScopedIds, opts.provider);
   const catalogOnline = prefixProviderIds(parsed.catalogOnlineIds, opts.provider);
 
-  let supportedModels: string[] | undefined;
-  if (parsed.hadKeyScopeHints) {
-    const keyAllowed =
-      configured.length > 0
-        ? intersectSupportedModels(configured, keyScoped)
-        : keyScoped;
-    const fromNoHint =
-      configured.length > 0
-        ? intersectSupportedModels(
-            configured,
-            prefixProviderIds(parsed.noHintOnlineIds, opts.provider)
-          )
-        : [];
-    const merged = uniqueModelIds([...keyAllowed, ...fromNoHint]);
-    if (merged.length > 0) {
-      supportedModels = merged;
-    } else if (configured.length > 0) {
-      const withoutDenied = configuredWithoutKeyDenied(
-        configured,
-        parsed.keyDeniedIds,
-        opts.provider
-      );
-      supportedModels = withoutDenied.length > 0 ? withoutDenied : [];
-    } else {
-      supportedModels = undefined;
-    }
-  } else if (configured.length > 0) {
-    const intersected = intersectSupportedModels(configured, catalogOnline);
-    supportedModels = intersected.length > 0 ? intersected : configured;
-  } else {
-    supportedModels = undefined;
-  }
+  const supportedModels = parsed.hadKeyScopeHints
+    ? uniqueModelIds([
+        ...keyScoped,
+        ...prefixProviderIds(parsed.noHintOnlineIds, opts.provider),
+      ])
+    : catalogOnline;
 
   const priceRows = [
     ...pricesFromEnv(opts.env),
@@ -265,37 +238,116 @@ export function runtimeModelReportFromProviderBody(
       ? pricesForModels(supportedModels, priceRows)
       : undefined;
 
-  return { supportedModels, modelPrices };
+  const providerId = opts.provider.trim();
+  const providers: ReportedProvider[] | undefined =
+    providerId && supportedModels
+      ? [{ id: providerId, models: supportedModels, current: true }]
+      : undefined;
+
+  return { supportedModels, providers, modelPrices };
+}
+
+export type ProviderEndpoint = {
+  id: string;
+  modelsUrl: string;
+  apiKey: string;
+  current: boolean;
+};
+
+function providerEndpointsFromEnv(env: NodeJS.ProcessEnv): ProviderEndpoint[] {
+  const rows: ProviderEndpoint[] = [];
+  const raw = (env.ACN_PROVIDERS || "").trim();
+  if (raw) {
+    try {
+      const data = JSON.parse(raw) as unknown;
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          if (!item || typeof item !== "object") continue;
+          const rec = item as Record<string, unknown>;
+          const id = String(rec.id || "").trim().slice(0, 80);
+          const modelsUrl = String(rec.models_url || rec.modelsUrl || "").trim();
+          const inlineKey = String(rec.api_key || rec.apiKey || "").trim();
+          const keyEnv = String(rec.api_key_env || rec.apiKeyEnv || "").trim();
+          const apiKey = inlineKey || (keyEnv ? String(env[keyEnv] || "").trim() : "");
+          if (!id || !modelsUrl || !apiKey) continue;
+          if (rows.some((row) => row.id.toLowerCase() === id.toLowerCase())) continue;
+          rows.push({ id, modelsUrl, apiKey, current: rec.current === true });
+          if (rows.length >= 20) break;
+        }
+      }
+    } catch {
+      /* a bad extra list does not hide the current provider triple */
+    }
+  }
+  const id = (env.ACN_PROVIDER || "").trim();
+  const modelsUrl = (env.ACN_PROVIDER_MODELS_URL || "").trim();
+  const apiKey = (env.ACN_PROVIDER_API_KEY || "").trim();
+  if (id && modelsUrl && apiKey) {
+    const existing = rows.find((row) => row.id.toLowerCase() === id.toLowerCase());
+    if (existing) {
+      if (!existing.modelsUrl) existing.modelsUrl = modelsUrl;
+      if (!existing.apiKey) existing.apiKey = apiKey;
+    } else {
+      rows.unshift({ id, modelsUrl, apiKey, current: false });
+    }
+  }
+  const usable = rows.filter((row) => row.id && row.modelsUrl && row.apiKey).slice(0, 20);
+  if (usable.length && !usable.some((row) => row.current)) {
+    const primary = usable.find((row) => row.id.toLowerCase() === id.toLowerCase());
+    (primary ?? usable[0]).current = true;
+  }
+  let marked = false;
+  for (const row of usable) {
+    if (!row.current) continue;
+    if (marked) row.current = false;
+    else marked = true;
+  }
+  return usable;
 }
 
 export async function fetchRuntimeModelReport(opts: {
-  configured?: string[];
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
 }): Promise<RuntimeModelReport> {
-  const configured = opts.configured;
   const env = opts.env ?? process.env;
-  const url = (env.ACN_PROVIDER_MODELS_URL || "").trim();
-  const key = (env.ACN_PROVIDER_API_KEY || "").trim();
-  const provider = (env.ACN_PROVIDER || "").trim();
-  if (!url || !key) {
-    return { supportedModels: configured ?? undefined };
-  }
+  const endpoints = providerEndpointsFromEnv(env);
+  if (!endpoints.length) return {};
   const fetchFn = opts.fetchFn ?? fetch;
-  try {
-    const res = await fetchFn(url, { headers: { Authorization: `Bearer ${key}` } });
-    if (!res.ok) return { supportedModels: configured ?? undefined };
-    const body = await res.json();
-    const report = runtimeModelReportFromProviderBody(body, {
-      configured: configured ?? [],
-      provider,
-      env,
-    });
-    if (report.supportedModels !== undefined) return report;
-    return { supportedModels: configured ?? undefined };
-  } catch {
-    return { supportedModels: configured ?? undefined };
+  const providers: ReportedProvider[] = [];
+  const priceRows: ReportedModelPrice[] = [];
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetchFn(endpoint.modelsUrl, {
+        headers: { Authorization: `Bearer ${endpoint.apiKey}` },
+      });
+      if (!res.ok) return {};
+      const body = await res.json();
+      if (!providerBodyHasModelList(body)) return {};
+      const report = runtimeModelReportFromProviderBody(body, {
+        provider: endpoint.id,
+        env,
+      });
+      providers.push({
+        id: endpoint.id,
+        models: report.supportedModels ?? [],
+        current: endpoint.current,
+      });
+      if (report.modelPrices?.length) priceRows.push(...report.modelPrices);
+    } catch {
+      return {};
+    }
   }
+  if (!providers.length) return {};
+  if (!providers.some((row) => row.current)) providers[0].current = true;
+  const supportedModels = uniqueModelIds(providers.flatMap((row) => row.models));
+  const modelPrices = supportedModels.length
+    ? pricesForModels(supportedModels, priceRows)
+    : undefined;
+  return {
+    supportedModels,
+    providers,
+    modelPrices: modelPrices?.length ? modelPrices : undefined,
+  };
 }
 
 /** Same model written with different punctuation, including a trailing ".0". */
@@ -337,7 +389,6 @@ function withProvider(modelId: string, provider: string): string {
 
 /** Supported models only (see ``fetchRuntimeModelReport`` for prices). */
 export async function supportedModelsToReport(opts: {
-  configured?: string[];
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
 }): Promise<string[] | undefined> {
@@ -449,6 +500,7 @@ export async function postAgentHeartbeat(opts: {
   preferredModel?: string;
   /** Present (incl. ``[]``) → send field; omit → leave server value unchanged. */
   supportedModels?: string[];
+  providers?: ReportedProvider[];
   modelPrices?: ReportedModelPrice[];
   fetchFn?: typeof fetch;
 }): Promise<
@@ -470,6 +522,9 @@ export async function postAgentHeartbeat(opts: {
   const payload: Record<string, unknown> = {};
   if (opts.preferredModel && opts.preferredModel.trim()) {
     payload.preferred_model = opts.preferredModel.trim().slice(0, 200);
+  }
+  if (opts.providers != null) {
+    payload.providers = opts.providers;
   }
   if (opts.supportedModels != null) {
     payload.supported_models = opts.supportedModels;
@@ -514,16 +569,38 @@ export async function postAgentHeartbeat(opts: {
   }
 }
 
+/** Fields to send for the model declaration. A failed read sends nothing. */
+export function declarationHeartbeatFields(opts: {
+  clear: boolean;
+  report: RuntimeModelReport;
+}): Pick<RuntimeModelReport, 'supportedModels' | 'providers' | 'modelPrices'> {
+  if (opts.clear) {
+    return { supportedModels: [], providers: [], modelPrices: undefined };
+  }
+  if (!opts.report.providers) return {};
+  return {
+    supportedModels: opts.report.supportedModels,
+    providers: opts.report.providers,
+    modelPrices: opts.report.modelPrices,
+  };
+}
+
 /** Format model heartbeat log bits (parentheses required for ?? vs ?:). */
 export function formatModelHeartbeatLog(opts: {
   preferred?: string | null;
   supported?: string[] | null;
 }): string {
   const preferred = (opts.preferred ?? '').trim();
-  const supported = opts.supported ?? [];
+  const supported = opts.supported;
+  const supportedNote =
+    supported == null
+      ? ''
+      : supported.length
+        ? `supported_models=${supported.join(',')}`
+        : 'supported_models=(cleared)';
   const bits = [
     preferred ? `preferred_model=${preferred}` : '',
-    supported.length ? `supported_models=${supported.join(',')}` : '',
+    supportedNote,
   ].filter(Boolean);
   return bits.length ? ` ${bits.join(' ')}` : '';
 }

@@ -79,23 +79,42 @@ sudo systemctl enable --now acn-heartbeat.timer
 
 ## Notes
 
-- **`supported_models` heartbeat:** set `ACN_PROVIDER_MODELS_URL` and
-  `ACN_PROVIDER_API_KEY` to the **same provider endpoint and key** the agent
-  runtime uses for chat completion (agent ops — not Host-managed):
+- **Provider declaration** is `metadata.providers`: every provider this
+  runtime can call, the models on that provider's own list, and `current: true`
+  on the one in use. `metadata.supported_models` is only the derived union of
+  those rows. It is not a second allowlist. An empty `providers` list clears
+  both.
+- Set `ACN_PROVIDER`, `ACN_PROVIDER_MODELS_URL`, and `ACN_PROVIDER_API_KEY` to
+  the endpoint and key the runtime uses for chat completion (agent ops — not
+  Host-managed). That triple is one provider row. It is current unless
+  `ACN_PROVIDERS` marks another row `current: true`. Extra providers are a JSON
+  array of `{id, models_url, api_key}` or `{id, models_url, api_key_env}`.
+  Each row is that provider's own list for its own key.
+  `ACN_SUPPORTED_MODELS` and `--supported-models` are ignored.
+  - the models are that provider's online list for this key;
   - when the list includes **per-model key scope** (`authorized`,
-    `key_authorized`, `api_key_authorized`, or `permission.inference`), heartbeat
-    **key-allowed** rows that also appear on the runtime allowlist, plus
-    **allowlisted** rows that are online but carry **no** scope field; generic
-    `available: true` is **ignored** unless
+    `key_authorized`, `api_key_authorized`, or `permission.inference`), the row
+    keeps key-allowed models plus online rows that carry **no** scope field.
+    Generic `available: true` is **ignored** unless
     `ACN_PROVIDER_MODELS_TRUST_AVAILABLE=1`;
-  - ids **explicitly denied** for the key are never heartbeated, even if they
-    remain on `listen --supported-models` / `ACN_SUPPORTED_MODELS`;
-  - when **no** row exposes key scope, heartbeat **runtime allowlist** **∩**
-    online catalog — never the full product catalog;
-  - matching **prices** on list rows are heartbeated as `model_prices` when
-    Host price book (OpenRouter / TokenPlus) does not already cover the id.
-  Interfaze Composer still shows only models Host can **price** (book → agent
-  `model_prices` → agent quote); unpriceable ids are omitted from `model_options`.
+  - ids **explicitly denied** for the key are omitted;
+  - if any configured provider list cannot be read, that heartbeat does not
+    send `providers` or `supported_models`, so the stored declaration stays;
+  - an empty `data` array is a successful read of no models;
+  - `--clear-supported-models` on `acn heartbeat` sends `providers: []`.
+    On `acn listen` the first heartbeat does the same clear, and later
+    heartbeats read the provider lists again.
+- Applying a new preferred model checks the provider rows just read. If any
+  list was missing, apply does not run and does not write a model list. The
+  follow-up heartbeat sends those same rows and moves `current` onto the
+  provider that owns the model.
+- Matching **prices** on list rows are heartbeated as `model_prices`. Pricing
+  does not shrink the declaration. Interfaze Composer shows a model only when
+  Host can **price** it (official book → agent `model_prices` → agent quote).
+  Unpriceable ids stay on `providers`. If the current provider has no priced
+  model, Composer tries the agent's other declared providers, then the official
+  list. Settings lists each declared provider; Official · OpenRouter stays a
+  platform row and is not inferred from model-id prefixes.
 - `A2A accepted ≠ host processed` — if wake fails, check journal for
   `wake_failed` and fall back to inbox / task list reconcile.
 - Dedupe is in-process; restarting `acn-listen` clears the window.

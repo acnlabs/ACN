@@ -30,6 +30,50 @@ ALIVE_RENEW_TTL = 3600  # 60 min — renewed on each heartbeat call
 _SUPPORTED_MODELS_MAX = 50
 
 
+def _normalize_reported_providers(raw: list[dict] | None) -> list[dict] | None:
+    """Agent declaration: each provider, its models, and which one is current.
+
+    ``None`` means the heartbeat omitted the field. ``[]`` clears it.
+    ``supported_models`` is derived from this list and is not a second allowlist.
+    """
+    if raw is None:
+        return None
+    out: list[dict] = []
+    seen: set[str] = set()
+    current_set = False
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        pid = str(row.get("id") or "").strip()[:80]
+        if not pid:
+            continue
+        key = pid.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        models = _normalize_supported_model_ids(
+            row.get("models") if isinstance(row.get("models"), list) else []
+        )
+        current = row.get("current") is True and not current_set
+        if current:
+            current_set = True
+        out.append({"id": pid, "models": models, "current": current})
+        if len(out) >= 20:
+            break
+    if out and not current_set:
+        out[0]["current"] = True
+    return out
+
+
+def _models_from_providers(providers: list[dict]) -> list[str]:
+    merged: list[str] = []
+    for row in providers:
+        models = row.get("models")
+        if isinstance(models, list):
+            merged.extend(str(item) for item in models if isinstance(item, str))
+    return _normalize_supported_model_ids(merged)
+
+
 def _normalize_supported_model_ids(models: list[str] | None) -> list[str]:
     """Dedupe + trim Host Catalog model ids from heartbeat self-report."""
     if not models:
@@ -842,6 +886,7 @@ class AgentService:
         *,
         preferred_model: str | None = None,
         supported_models: list[str] | None = None,
+        providers: list[dict] | None = None,
         model_prices: list[dict] | None = None,
     ) -> Agent:
         """
@@ -852,10 +897,13 @@ class AgentService:
             preferred_model: Optional Host Catalog model id the runtime
                 currently uses. Stored on ``metadata.preferred_model`` for
                 Host Pricing prefill — **self-reported, not verified**.
-            supported_models: Optional list of Host Catalog model ids this
-                runtime can run (Interfaze composer dropdown). Stored on
-                ``metadata.supported_models`` — **self-reported**. ``None``
-                leaves prior value unchanged; ``[]`` clears it.
+            supported_models: Flat list for clients that do not send
+                ``providers``. ``None`` leaves prior value unchanged; ``[]``
+                clears it. When ``providers`` is present, this argument is
+                ignored and ``metadata.supported_models`` is the derived union.
+            providers: Providers this agent supports. Each item is id, models,
+                and current. ``None`` leaves prior value unchanged; ``[]``
+                clears providers and the derived union.
 
         Returns:
             Updated agent entity
@@ -877,7 +925,20 @@ class AgentService:
             else:
                 meta.pop("preferred_model", None)
             meta_dirty = True
-        if supported_models is not None:
+        if providers is not None:
+            normalized_providers = _normalize_reported_providers(providers) or []
+            if normalized_providers:
+                meta["providers"] = normalized_providers
+                derived = _models_from_providers(normalized_providers)
+                if derived:
+                    meta["supported_models"] = derived
+                else:
+                    meta.pop("supported_models", None)
+            else:
+                meta.pop("providers", None)
+                meta.pop("supported_models", None)
+            meta_dirty = True
+        elif supported_models is not None:
             normalized = _normalize_supported_model_ids(supported_models)
             if normalized:
                 meta["supported_models"] = normalized

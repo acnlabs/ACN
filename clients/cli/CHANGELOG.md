@@ -4,6 +4,21 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.29] - 2026-10-21
+
+### Changed
+
+- A heartbeat declares every configured provider and that provider's own model
+  list, and marks which provider is current. `supported_models` is only the
+  derived union. `ACN_SUPPORTED_MODELS` and `--supported-models` are ignored.
+- If any configured provider list cannot be read, that heartbeat does not send
+  `providers` or `supported_models`, so the stored declaration stays.
+- `acn listen --clear-supported-models` clears providers and the derived union
+  on the first successful heartbeat, the same way `acn heartbeat --clear-supported-models`
+  does. Later listen heartbeats read the provider lists again.
+- Listen logs print the server's model list. They do not print a handwritten
+  env list.
+
 ## [1.0.28] - 2026-10-21
 
 ### Changed

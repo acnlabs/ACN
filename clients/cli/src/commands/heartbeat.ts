@@ -3,9 +3,9 @@ import { acnPost } from '../api.js';
 import { loadConfig } from '../config.js';
 import { output, handleError } from '../output.js';
 import {
+  declarationHeartbeatFields,
   fetchRuntimeModelReport,
   resolvePreferredModel,
-  resolveSupportedModels,
 } from './model-heartbeat.js';
 
 export function heartbeatCommand(): Command {
@@ -19,11 +19,11 @@ export function heartbeatCommand(): Command {
     )
     .option(
       '--supported-models <ids>',
-      'Comma-separated models this runtime can run (Interfaze composer; env: ACN_SUPPORTED_MODELS)',
+      'Ignored. Models come from each configured provider list, not a handwritten list',
     )
     .option(
       '--clear-supported-models',
-      'Clear metadata.supported_models on the server (sends empty list)',
+      'Clear providers and the derived model union on the server',
     )
     .action(
       async (opts: {
@@ -48,20 +48,20 @@ export function heartbeatCommand(): Command {
           process.exit(1);
         }
         const preferred = resolvePreferredModel({ model: opts.model });
-        const configured = resolveSupportedModels({
-          models: opts.supportedModels,
-          clear: !!opts.clearSupportedModels,
-        });
-        const report =
-          configured === undefined || configured.length === 0
-            ? { supportedModels: configured, modelPrices: undefined }
-            : await fetchRuntimeModelReport({ configured });
+        // Clear wipes providers and the derived union together. A normal
+        // heartbeat publishes provider lists only when every one was read.
+        const clear = !!opts.clearSupportedModels;
+        const report = clear ? {} : await fetchRuntimeModelReport({});
+        const declared = declarationHeartbeatFields({ clear, report });
         const body: Record<string, unknown> = {};
         if (preferred) body.preferred_model = preferred;
-        if (report.supportedModels !== undefined) {
-          body.supported_models = report.supportedModels;
+        if (declared.providers !== undefined) {
+          body.providers = declared.providers;
         }
-        if (report.modelPrices?.length) body.model_prices = report.modelPrices;
+        if (declared.supportedModels !== undefined) {
+          body.supported_models = declared.supportedModels;
+        }
+        if (declared.modelPrices?.length) body.model_prices = declared.modelPrices;
         const res = await acnPost<{
           status?: string;
           preferred_model?: string;

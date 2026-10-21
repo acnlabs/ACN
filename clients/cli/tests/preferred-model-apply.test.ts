@@ -175,9 +175,10 @@ describe('verifyRuntimeCommand / handleRuntimeApplyHttp', () => {
       apiKey: 'k',
       baseUrl: 'https://acn.test',
       heartbeatFn,
+      modelEnv: {},
     });
-    expect(out.status).toBe(200);
-    expect(JSON.parse(out.body).preferred_model).toBe(patch.preferred_model);
+    expect(out.status).toBe(503);
+    expect(JSON.parse(out.body).error).toBe('provider_list_unavailable');
   });
 
   it('401s without a bearer token', async () => {

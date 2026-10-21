@@ -22,6 +22,7 @@ import {
   type RuntimeId,
 } from './runtime-adapter.js';
 import {
+  declarationHeartbeatFields,
   formatModelHeartbeatLog,
   postAgentHeartbeat,
   pricesForModels,
@@ -257,19 +258,19 @@ async function handleRefreshSupportedModels(
   if (!agentId || !apiKey || !baseUrl) {
     return errorResponse(frame.id, 500, 'listen_not_configured');
   }
-  const fromEnv = resolveSupportedModels();
-  const configured = fromEnv ?? opts.supportedModels;
-  opts.supportedModels = configured;
   const report = await fetchRuntimeModelReport({
-    configured,
     fetchFn: deps.fetchFn,
   });
+  if (!report.providers) {
+    return errorResponse(frame.id, 503, 'provider_list_unavailable');
+  }
   const beat = await postAgentHeartbeat({
     baseUrl,
     agentId,
     apiKey,
     preferredModel: opts.preferredModel,
     supportedModels: report.supportedModels,
+    providers: report.providers,
     modelPrices: report.modelPrices,
     fetchFn: deps.fetchFn,
   });
@@ -302,12 +303,19 @@ async function handlePreferredModelApply(
   if (!agentId || !apiKey || !baseUrl) {
     return errorResponse(frame.id, 500, 'listen_not_configured');
   }
+  const report = await fetchRuntimeModelReport({
+    fetchFn: deps.fetchFn,
+  });
+  if (!report.providers) {
+    return errorResponse(frame.id, 503, 'provider_list_unavailable');
+  }
   const applied = await applyPreferredModelOnListen({
     modelId: parsed.preferred_model,
     agentId,
     apiKey,
     baseUrl,
-    supportedModels: opts.supportedModels,
+    supportedModels: report.supportedModels,
+    providers: report.providers,
     onSetPreferredModel: opts.onSetPreferredModel,
     spawnFn: deps.spawnFn,
     logFn: deps.logFn,
@@ -566,11 +574,8 @@ interface ListenerConfig extends HandlerOptions {
   baseUrl: string;
   /** Host Catalog model id — self-reported via REST heartbeat while listening. */
   preferredModel?: string;
-  /**
-   * Models this runtime can run — self-reported for Interfaze composer.
-   * ``[]`` clears server metadata; ``undefined`` leaves unchanged.
-   */
-  supportedModels?: string[];
+  /** One startup heartbeat clears providers and the derived union, then normal reads resume. */
+  clearDeclaration?: boolean;
 }
 
 const KEEPALIVE_INTERVAL_MS = 30_000;
@@ -598,29 +603,40 @@ function runListener(cfg: ListenerConfig): void {
 
     const sendModelHeartbeat = (): void => {
       if (stopped) return;
-      void fetchRuntimeModelReport({ configured: cfg.supportedModels }).then((report) =>
-        postAgentHeartbeat({
+      const clear = cfg.clearDeclaration === true;
+      void (async () => {
+        const report = clear ? {} : await fetchRuntimeModelReport({});
+        const declared = declarationHeartbeatFields({ clear, report });
+        const r = await postAgentHeartbeat({
           baseUrl: cfg.baseUrl,
           agentId: cfg.agentId,
           apiKey: cfg.apiKey,
           preferredModel: cfg.preferredModel,
-          supportedModels: report.supportedModels,
-          modelPrices: report.modelPrices,
-        })
-      ).then(async (r) => {
+          supportedModels: declared.supportedModels,
+          providers: declared.providers,
+          modelPrices: declared.modelPrices,
+        });
         if (!r.ok) {
           console.error(`[acn listen] model heartbeat failed: ${r.reason}`);
           return;
         }
+        if (clear) cfg.clearDeclaration = false;
         const desired = String(r.desired_preferred_model || '').trim();
         const local = String(cfg.preferredModel || '').trim();
-        if (desired && desired.toLowerCase() !== local.toLowerCase()) {
+        // A clear beat does not read provider lists, so it cannot apply a
+        // desired model. The next heartbeat does that after a real read.
+        if (!clear && desired && desired.toLowerCase() !== local.toLowerCase()) {
+          if (!report.providers) {
+            console.error('[acn listen] desired apply skipped: provider list unavailable');
+            return;
+          }
           const applied = await applyPreferredModelOnListen({
             modelId: desired,
             agentId: cfg.agentId,
             apiKey: cfg.apiKey,
             baseUrl: cfg.baseUrl,
-            supportedModels: cfg.supportedModels,
+            supportedModels: report.supportedModels,
+            providers: report.providers,
             onSetPreferredModel: cfg.onSetPreferredModel,
           });
           if (applied.ok) {
@@ -631,9 +647,12 @@ function runListener(cfg: ListenerConfig): void {
         }
         const note = formatModelHeartbeatLog({
           preferred: r.preferred_model ?? cfg.preferredModel,
-          supported: r.supported_models ?? cfg.supportedModels,
+          supported: r.supported_models,
         });
         console.error(`[acn listen] model heartbeat ok${note}`);
+      })().catch((err: unknown) => {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error(`[acn listen] model heartbeat failed: ${reason}`);
       });
     };
 
@@ -646,7 +665,6 @@ function runListener(cfg: ListenerConfig): void {
           : `exec`;
       const modelNote = formatModelHeartbeatLog({
         preferred: cfg.preferredModel,
-        supported: cfg.supportedModels,
       });
       console.error(
         `[acn listen] connected as ${cfg.agentId} → ${wsUrl} (${mode})${modelNote}`
@@ -909,12 +927,11 @@ export function listenCommand(): Command {
     )
     .option(
       '--supported-models <ids>',
-      'Comma-separated Host Catalog model ids this runtime can run ' +
-        '(Interfaze composer dropdown; env: ACN_SUPPORTED_MODELS)'
+      'Ignored. Models come from each configured provider list, not a handwritten list'
     )
     .option(
       '--clear-supported-models',
-      'Clear metadata.supported_models on the server (sends empty list)'
+      'First heartbeat clears providers and the derived union; later heartbeats read provider lists again'
     )
     .option(
       '--on-set-preferred-model <cmd>',
@@ -1079,10 +1096,6 @@ export function listenCommand(): Command {
           );
           process.exit(1);
         }
-        const supportedModels = resolveSupportedModels({
-          models: opts.supportedModels,
-          clear: !!opts.clearSupportedModels,
-        });
         const onSetPreferredModel =
           opts.onSetPreferredModel?.trim() ||
           process.env.ACN_ON_SET_PREFERRED_MODEL?.trim() ||
@@ -1098,7 +1111,7 @@ export function listenCommand(): Command {
           apiKey: apiKey!,
           baseUrl: config.base_url,
           preferredModel,
-          supportedModels,
+          clearDeclaration: !!opts.clearSupportedModels,
           onSetPreferredModel,
           forward: opts.forward,
           exec: opts.exec,

@@ -2646,6 +2646,16 @@ class HeartbeatBody(BaseModel):
                 break
         return out
 
+    providers: list[dict] | None = Field(
+        default=None,
+        description=(
+            "Providers this agent supports. Each item is id, models, and "
+            "current. When present, metadata.supported_models is the derived "
+            "union and is not a separate allowlist. Omit to leave unchanged; "
+            "empty list clears."
+        ),
+    )
+
     model_prices: list[dict] | None = Field(
         default=None,
         description=(
@@ -2713,8 +2723,10 @@ async def agent_heartbeat(
     Optional JSON body may declare runtime models for Host Pricing /
     Interfaze composer:
 
-    - ``preferred_model`` → ``metadata.preferred_model`` (current)
-    - ``supported_models`` → ``metadata.supported_models`` (capability list)
+    - ``preferred_model`` → ``metadata.preferred_model`` (current model)
+    - ``providers`` → ``metadata.providers`` (each provider, its models, and which is current).
+      ``metadata.supported_models`` becomes the derived union.
+    - ``supported_models`` → ``metadata.supported_models`` only when ``providers`` is omitted
     - ``model_prices`` → ``metadata.model_prices`` (quotes the price book missed)
 
     These are **self-reported, not verified**.
@@ -2738,10 +2750,16 @@ async def agent_heartbeat(
             if "model_prices" in body.model_fields_set
             else {}
         )
+        provider_update = (
+            {"providers": body.providers}
+            if "providers" in body.model_fields_set
+            else {}
+        )
         agent = await agent_service.update_heartbeat(
             agent_id,
             preferred_model=body.preferred_model,
-            supported_models=body.supported_models,
+            supported_models=None if provider_update else body.supported_models,
+            **provider_update,
             **quote_update,
         )
         meta = (
@@ -2754,8 +2772,10 @@ async def agent_heartbeat(
             "agent_id": agent_id,
             "preferred_model": meta.get("preferred_model") or body.preferred_model,
         }
-        if body.supported_models is not None:
-            payload["supported_models"] = meta.get("supported_models") or body.supported_models
+        if body.providers is not None or body.supported_models is not None:
+            payload["supported_models"] = meta.get("supported_models") or []
+        if isinstance(meta.get("providers"), list):
+            payload["providers"] = meta.get("providers")
         if body.model_prices is not None:
             payload["model_prices"] = meta.get("model_prices") or body.model_prices
         desired = meta.get("desired_preferred_model")
@@ -5270,13 +5290,17 @@ async def create_transfer_invite(
     request: Request,
     agent_id: AgentIdPath,
     body: AgentTransferInviteRequest,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(verify_token),
     agent_service: AgentServiceDep = None,
 ):
     """Create a one-time transfer invite (P3 free gift).
 
     Owner remains the current user until the recipient claims with the returned token.
     Sets claim_status to ``pending_transfer``.
+
+    Auth: human JWT via ``verify_token`` (same as claim / release) — ``acn:write``
+    is not required so AgentPlanet / Interfaze SPAs with ``openid profile email``
+    can gift. Ownership is enforced by ``sub == agent.owner`` in the service layer.
     """
     token_owner: str = payload.get("sub", "")
 
@@ -5319,10 +5343,13 @@ async def create_transfer_invite(
 async def cancel_transfer_invite(
     request: Request,
     agent_id: AgentIdPath,
-    payload: dict = Depends(require_permission("acn:write")),
+    payload: dict = Depends(verify_token),
     agent_service: AgentServiceDep = None,
 ):
-    """Cancel a pending transfer invite and restore claimed state."""
+    """Cancel a pending transfer invite and restore claimed state.
+
+    Auth: human JWT via ``verify_token`` — ``acn:write`` not required; owner-only.
+    """
     token_owner: str = payload.get("sub", "")
 
     try:
