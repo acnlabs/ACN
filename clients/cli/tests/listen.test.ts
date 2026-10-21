@@ -411,7 +411,7 @@ describe('preferred-model apply intercept', () => {
       }),
       opts,
       (f) => frames.push(f),
-      { fetchFn }
+      { fetchFn: fetchFn as unknown as typeof fetch }
     );
 
     expect(opts.preferredModel).toBe('minimax/minimax-m2.5');
@@ -738,7 +738,7 @@ describe('preferred-model apply intercept', () => {
           } as Response;
         }
         return { ok: false, status: 503, json: async () => ({}) } as Response;
-      }),
+      }) as unknown as typeof fetch,
     });
     expect(report.providers).toBeUndefined();
     expect(report.supportedModels).toBeUndefined();
@@ -965,7 +965,7 @@ describe('preferred-model apply intercept', () => {
           ok: true,
           json: async () => ({ data: [{ id: 'gpt-4o-mini' }] }),
         } as Response;
-      }),
+      }) as unknown as typeof fetch,
     });
     expect(report.providers).toEqual([
       { id: 'tencenttokenplan', models: ['tencenttokenplan/glm-5'], current: true },
@@ -1016,7 +1016,7 @@ describe('preferred-model apply intercept', () => {
         preferredModel: 'old/model',
       },
       (f) => frames.push(f),
-      { fetchFn }
+      { fetchFn: fetchFn as unknown as typeof fetch }
     );
     expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
     expect(fetchFn.mock.calls.some((c) => String(c[0]).includes('/heartbeat'))).toBe(
@@ -1037,7 +1037,7 @@ describe('preferred-model apply intercept', () => {
     process.env.ACN_PROVIDER = 'minimax';
     process.env.ACN_PROVIDER_MODELS_URL = 'https://provider.example/v1/models';
     process.env.ACN_PROVIDER_API_KEY = 'k';
-    const fetchFn = vi.fn(async () => ({
+    const fetchFn = vi.fn(async (_url: string) => ({
       ok: true,
       status: 200,
       json: () => Promise.resolve({ data: [{ id: 'minimax-m2.5' }] }),
