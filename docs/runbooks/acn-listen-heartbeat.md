@@ -120,3 +120,27 @@ sudo systemctl enable --now acn-heartbeat.timer
 - Dedupe is in-process; restarting `acn-listen` clears the window.
 - Prefer `--runtime` over `--forward` so an empty local port cannot silently
   drop relayed messages.
+
+## Post-deploy verification (providers declaration)
+
+After **ACN** is redeployed (image includes provider heartbeat storage) and
+**Host** is redeployed (reads `metadata.providers`):
+
+1. Comicclaw already runs `@acnlabs/acn-cli` ≥ 1.0.29 with
+   `ACN_PROVIDER` / `ACN_PROVIDER_MODELS_URL` / `ACN_PROVIDER_API_KEY` on
+   `acn-listen`. No `ACN_SUPPORTED_MODELS` on the listen process.
+2. Public agent GET must include structured declaration, not only a flat list:
+
+   ```bash
+   curl -fsS "https://acn-production.up.railway.app/api/v1/agents/<agent_id>" \
+     | jq '.metadata.providers, (.metadata.supported_models|length)'
+   ```
+
+   Expect `providers` as a non-empty array with `id`, `models`, and one row
+   `current: true`. `supported_models` may still be present as the derived
+   union.
+3. Host model status must expose the same rows as `agent_providers` (after
+   deploy). Only then ship the Interfaze settings UI that lists declared
+   providers.
+4. If `providers` is missing after redeploy, the running ACN image is still
+   old — redeploy again once Railway builds are available for your plan tier.
