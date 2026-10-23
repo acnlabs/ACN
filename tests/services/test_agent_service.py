@@ -187,6 +187,33 @@ class TestAgentService:
         mock_agent_repository.save.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_update_heartbeat_clears_preferred_model_when_blank(
+        self, mock_agent_repository, sample_agent
+    ):
+        """An explicit empty preferred_model removes the stored current model."""
+        sample_agent.metadata = {"preferred_model": "qwen/qwen-plus", "visibility": "real"}
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(sample_agent.agent_id, preferred_model="")
+
+        assert "preferred_model" not in (agent.metadata or {})
+
+    def test_heartbeat_body_keeps_blank_preferred_model(self):
+        """Omitted stays unset. A blank string is an explicit clear, not an omit."""
+        from acn.routes.registry import HeartbeatBody
+
+        omitted = HeartbeatBody()
+        blank = HeartbeatBody(preferred_model="  ")
+        named = HeartbeatBody(preferred_model=" qwen/qwen-plus ")
+
+        assert omitted.preferred_model is None
+        assert "preferred_model" not in omitted.model_fields_set
+        assert blank.preferred_model == ""
+        assert "preferred_model" in blank.model_fields_set
+        assert named.preferred_model == "qwen/qwen-plus"
+
+    @pytest.mark.asyncio
     async def test_update_heartbeat_stores_supported_models(
         self, mock_agent_repository, sample_agent
     ):

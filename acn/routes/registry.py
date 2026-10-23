@@ -2604,7 +2604,8 @@ class HeartbeatBody(BaseModel):
         description=(
             "Host Catalog model id this runtime currently uses "
             "(e.g. openai/gpt-4o-mini). Stored on metadata.preferred_model "
-            "for Host Pricing prefill — self-reported, not verified."
+            "for Host Pricing prefill — self-reported, not verified. "
+            "Omit to leave unchanged. An empty string clears it."
         ),
     )
     supported_models: list[str] | None = Field(
@@ -2621,8 +2622,8 @@ class HeartbeatBody(BaseModel):
     def _preferred_model(cls, v: str | None) -> str | None:
         if v is None:
             return None
-        s = v.strip()
-        return s[:200] if s else None
+        # Empty string is an explicit clear. None means the field was omitted.
+        return v.strip()[:200]
 
     @field_validator("supported_models")
     @classmethod
@@ -2723,7 +2724,8 @@ async def agent_heartbeat(
     Optional JSON body may declare runtime models for Host Pricing /
     Interfaze composer:
 
-    - ``preferred_model`` → ``metadata.preferred_model`` (current model)
+    - ``preferred_model`` → ``metadata.preferred_model`` (current model).
+      Omit to leave unchanged. An empty string clears it.
     - ``providers`` → ``metadata.providers`` (each provider, its models, and which is current).
       ``metadata.supported_models`` becomes the derived union.
     - ``supported_models`` → ``metadata.supported_models`` only when ``providers`` is omitted
