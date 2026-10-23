@@ -187,6 +187,23 @@ class TestAgentService:
         mock_agent_repository.save.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_update_heartbeat_blank_preferred_model_clears(
+        self, mock_agent_repository, sample_agent
+    ):
+        """An explicit blank current model removes the stored name."""
+        sample_agent.metadata = {"preferred_model": "qwen/qwen-plus", "visibility": "real"}
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(sample_agent.agent_id, preferred_model="")
+
+        assert "preferred_model" not in (agent.metadata or {})
+        assert agent.metadata.get("visibility") == "real"
+
+        agent = await service.update_heartbeat(sample_agent.agent_id, preferred_model=None)
+        assert "preferred_model" not in (agent.metadata or {})
+
+    @pytest.mark.asyncio
     async def test_update_heartbeat_stores_supported_models(
         self, mock_agent_repository, sample_agent
     ):

@@ -481,6 +481,20 @@ class TestRegistryContract:
             supported_models=None,
         )
 
+    def test_heartbeat_blank_preferred_model_clears(self):
+        from acn.routes.registry import HeartbeatBody, heartbeat_preferred_argument
+
+        assert heartbeat_preferred_argument(HeartbeatBody()) is None
+        assert heartbeat_preferred_argument(HeartbeatBody(preferred_model="")) == ""
+        assert (
+            heartbeat_preferred_argument(HeartbeatBody.model_validate({"preferred_model": None}))
+            == ""
+        )
+        assert (
+            heartbeat_preferred_argument(HeartbeatBody(preferred_model=" qwen/qwen-plus "))
+            == "qwen/qwen-plus"
+        )
+
 
 # ─────────────────────────────────────────────
 # Subnets contracts

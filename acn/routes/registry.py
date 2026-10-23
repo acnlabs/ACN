@@ -2604,7 +2604,8 @@ class HeartbeatBody(BaseModel):
         description=(
             "Host Catalog model id this runtime currently uses "
             "(e.g. openai/gpt-4o-mini). Stored on metadata.preferred_model "
-            "for Host Pricing prefill — self-reported, not verified."
+            "for Host Pricing prefill — self-reported, not verified. "
+            "Omit to leave unchanged; a blank value clears it."
         ),
     )
     supported_models: list[str] | None = Field(
@@ -2703,7 +2704,19 @@ def _normalize_reported_model_prices(raw: list[dict] | None) -> list[dict] | Non
         )
         if len(out) >= 50:
             break
-    return out
+        return out
+
+
+def heartbeat_preferred_argument(body: HeartbeatBody) -> str | None:
+    """Omit leaves the stored model. A present blank value clears it.
+
+    The field validator folds ``""`` to ``None``, so a missing field and an
+    explicit blank both look empty. Presence is what tells them apart.
+    """
+    if "preferred_model" not in body.model_fields_set:
+        return None
+    current = (body.preferred_model or "").strip()
+    return current or ""
 
 
 @router.post("/{agent_id}/heartbeat")
@@ -2723,7 +2736,8 @@ async def agent_heartbeat(
     Optional JSON body may declare runtime models for Host Pricing /
     Interfaze composer:
 
-    - ``preferred_model`` → ``metadata.preferred_model`` (current model)
+    - ``preferred_model`` → ``metadata.preferred_model`` (current model).
+      Omit to leave unchanged; a blank value clears it.
     - ``providers`` → ``metadata.providers`` (each provider, its models, and which is current).
       ``metadata.supported_models`` becomes the derived union.
     - ``supported_models`` → ``metadata.supported_models`` only when ``providers`` is omitted
@@ -2757,7 +2771,7 @@ async def agent_heartbeat(
         )
         agent = await agent_service.update_heartbeat(
             agent_id,
-            preferred_model=body.preferred_model,
+            preferred_model=heartbeat_preferred_argument(body),
             supported_models=None if provider_update else body.supported_models,
             **provider_update,
             **quote_update,
