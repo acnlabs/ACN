@@ -2704,7 +2704,7 @@ def _normalize_reported_model_prices(raw: list[dict] | None) -> list[dict] | Non
         )
         if len(out) >= 50:
             break
-        return out
+    return out
 
 
 def heartbeat_preferred_argument(body: HeartbeatBody) -> str | None:

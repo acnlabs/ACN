@@ -495,6 +495,17 @@ class TestRegistryContract:
             == "qwen/qwen-plus"
         )
 
+    def test_heartbeat_model_prices_keeps_every_row(self):
+        from acn.routes.registry import _normalize_reported_model_prices
+
+        kept = _normalize_reported_model_prices(
+            [
+                {"model_id": "a", "input_price_per_million": 1, "output_price_per_million": 2},
+                {"model_id": "b", "input_price_per_million": 3, "output_price_per_million": 4},
+            ]
+        )
+        assert [row["model_id"] for row in kept] == ["a", "b"]
+
 
 # ─────────────────────────────────────────────
 # Subnets contracts
