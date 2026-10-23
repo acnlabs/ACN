@@ -481,6 +481,27 @@ class TestRegistryContract:
             supported_models=None,
         )
 
+    def test_heartbeat_blank_preferred_model_clears(self, stub_agent_service):
+        from acn.routes.dependencies import verify_agent_api_key
+
+        app.dependency_overrides[get_agent_service] = lambda: stub_agent_service
+        app.dependency_overrides[verify_agent_api_key] = lambda: _make_agent_info("agent-hb")
+
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/v1/agents/agent-hb/heartbeat",
+                json={"preferred_model": "  "},
+            )
+
+        app.dependency_overrides.clear()
+
+        assert r.status_code == 200
+        stub_agent_service.update_heartbeat.assert_awaited_once_with(
+            "agent-hb",
+            preferred_model="",
+            supported_models=None,
+        )
+
 
 # ─────────────────────────────────────────────
 # Subnets contracts
