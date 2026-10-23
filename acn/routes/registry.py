@@ -916,6 +916,12 @@ class AgentClaimInternalRequest(BaseModel):
     verification_code: str = Field(..., min_length=1, max_length=128, description="One-time claim token from AM fulfillment")
 
 
+class AgentTransferInviteCancelInternalRequest(BaseModel):
+    """Backend GC: cancel pending transfer invite for ``owner_sub`` (internal token only)."""
+
+    owner_sub: str = Field(..., min_length=1, max_length=256, description="Giver sub recorded on the invite")
+
+
 class AgentClaimResponse(BaseModel):
     """Response after claiming an agent"""
 
@@ -5335,6 +5341,49 @@ async def create_transfer_invite(
             ErrorCode.INVALID_REQUEST,
             status,
             details={"agent_id": agent_id, "reason": msg},
+        ) from e
+
+
+@router.post(
+    "/{agent_id}/transfer-invite/cancel/internal",
+    response_model=AgentTransferInviteCancelResponse,
+    include_in_schema=False,
+)
+async def cancel_transfer_invite_internal(
+    agent_id: AgentIdPath,
+    body: AgentTransferInviteCancelInternalRequest,
+    _: InternalTokenDep,
+    agent_service: AgentServiceDep = None,
+):
+    """Cancel pending transfer invite on behalf of the giver (trusted Backend GC)."""
+    owner_sub = body.owner_sub.strip()
+    try:
+        agent = await agent_service.cancel_transfer_invite(
+            agent_id=agent_id,
+            owner=owner_sub,
+        )
+        return AgentTransferInviteCancelResponse(
+            success=True,
+            agent_id=agent.agent_id,
+            message=f"Transfer invite for '{agent.name}' cancelled",
+        )
+    except AgentNotFoundException as e:
+        raise ACNHTTPError(
+            ErrorCode.AGENT_NOT_FOUND,
+            404,
+            details={"agent_id": agent_id},
+        ) from e
+    except PermissionError as e:
+        raise ACNHTTPError(
+            ErrorCode.OWNERSHIP_MISMATCH,
+            403,
+            details={"agent_id": agent_id, "reason": "owner_mismatch"},
+        ) from e
+    except ValueError as e:
+        raise ACNHTTPError(
+            ErrorCode.INVALID_REQUEST,
+            400,
+            details={"agent_id": agent_id, "reason": str(e)},
         ) from e
 
 
