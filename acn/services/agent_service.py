@@ -897,13 +897,12 @@ class AgentService:
             preferred_model: Optional Host Catalog model id the runtime
                 currently uses. Stored on ``metadata.preferred_model`` for
                 Host Pricing prefill — **self-reported, not verified**.
-            supported_models: Flat list for clients that do not send
-                ``providers``. ``None`` leaves prior value unchanged; ``[]``
-                clears it. When ``providers`` is present, this argument is
-                ignored and ``metadata.supported_models`` is the derived union.
+            supported_models: Ignored. Declaration is ``providers`` only; a
+                leftover flat list is cleared when providers are written and is
+                not accepted as a standalone heartbeat field.
             providers: Providers this agent supports. Each item is id, models,
                 and current. ``None`` leaves prior value unchanged; ``[]``
-                clears providers and the derived union.
+                clears providers and pops leftover ``supported_models``.
 
         Returns:
             Updated agent entity
@@ -929,22 +928,18 @@ class AgentService:
             normalized_providers = _normalize_reported_providers(providers) or []
             if normalized_providers:
                 meta["providers"] = normalized_providers
-                derived = _models_from_providers(normalized_providers)
-                if derived:
-                    meta["supported_models"] = derived
-                else:
-                    meta.pop("supported_models", None)
             else:
                 meta.pop("providers", None)
-                meta.pop("supported_models", None)
+            # Flat supported_models is legacy; never keep or derive it.
+            meta.pop("supported_models", None)
             meta_dirty = True
         elif supported_models is not None:
-            normalized = _normalize_supported_model_ids(supported_models)
-            if normalized:
-                meta["supported_models"] = normalized
-            else:
+            # Old clients still send a flat list — drop it so it cannot drive
+            # Host composer. Prefer clearing over storing.
+            if "supported_models" in meta:
                 meta.pop("supported_models", None)
-            meta_dirty = True
+                meta_dirty = True
+            # Empty clear with no prior key: no-op (nothing to store).
         if model_prices is not None:
             previous = meta.get("model_prices")
             merged: list[dict] = []

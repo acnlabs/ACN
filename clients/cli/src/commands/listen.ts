@@ -269,7 +269,6 @@ async function handleRefreshSupportedModels(
     agentId,
     apiKey,
     preferredModel: opts.preferredModel,
-    supportedModels: report.supportedModels,
     providers: report.providers,
     modelPrices: report.modelPrices,
     fetchFn: deps.fetchFn,
@@ -282,7 +281,7 @@ async function handleRefreshSupportedModels(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       ok: true,
-      supported_models: report.supportedModels ?? [],
+      providers: report.providers ?? [],
     }),
   };
 }

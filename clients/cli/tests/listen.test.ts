@@ -364,7 +364,10 @@ describe('declarationHeartbeatFields', () => {
       providers: [{ id: 'tencenttokenplan', models: ['tencenttokenplan/glm-5'], current: true }],
       modelPrices: [{ model_id: 'tencenttokenplan/glm-5', input_price_per_million: 1, output_price_per_million: 2 }],
     };
-    expect(declarationHeartbeatFields({ clear: false, report })).toEqual(report);
+    expect(declarationHeartbeatFields({ clear: false, report })).toEqual({
+      providers: report.providers,
+      modelPrices: report.modelPrices,
+    });
   });
 });
 
