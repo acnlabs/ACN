@@ -888,12 +888,12 @@ class AgentService:
             preferred_model: Optional Host Catalog model id the runtime
                 currently uses. Stored on ``metadata.preferred_model`` for
                 Host Pricing prefill — **self-reported, not verified**.
-            supported_models: Ignored. Declaration is ``providers`` only; a
-                leftover flat list is cleared when providers are written and is
-                not accepted as a standalone heartbeat field.
+            supported_models: Ignored. Declaration is ``providers`` only; any
+                leftover flat list is retired on every heartbeat (including
+                preferred_model-only pings).
             providers: Providers this agent supports. Each item is id, models,
                 and current. ``None`` leaves prior value unchanged; ``[]``
-                clears providers and pops leftover ``supported_models``.
+                clears providers.
 
         Returns:
             Updated agent entity
@@ -921,16 +921,13 @@ class AgentService:
                 meta["providers"] = normalized_providers
             else:
                 meta.pop("providers", None)
-            # Flat supported_models is legacy; never keep or derive it.
-            meta.pop("supported_models", None)
             meta_dirty = True
-        elif supported_models is not None:
-            # Old clients still send a flat list — drop it so it cannot drive
-            # Host composer. Prefer clearing over storing.
+        # Flat supported_models is legacy. Host ignores it; retire leftovers on
+        # every heartbeat so agents that only ping preferred_model still clean up.
+        if "supported_models" in meta or supported_models is not None:
             if "supported_models" in meta:
                 meta.pop("supported_models", None)
                 meta_dirty = True
-            # Empty clear with no prior key: no-op (nothing to store).
         if model_prices is not None:
             previous = meta.get("model_prices")
             merged: list[dict] = []
