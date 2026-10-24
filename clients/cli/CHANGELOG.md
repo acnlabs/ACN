@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.30] - 2026-10-24
+
+### Changed
+
+- When a provider `/models` list has **no** per-key scope fields (TokenPlan-style
+  product catalog), heartbeats **probe** `…/chat/completions` and drop clear
+  permission denials (HTTP 401/403) so Composer does not advertise SKUs this
+  API key cannot call. Set `ACN_PROVIDER_MODELS_TRUST_CATALOG=1` to skip probes
+  and trust the full catalog.
+
 ## [1.0.29] - 2026-10-21
 
 ### Changed

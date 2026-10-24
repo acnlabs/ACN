@@ -117,33 +117,11 @@ function bareIdForProviderCall(modelId: string, provider: string): string {
 /** True when the provider refused this key for this model (not a transient error). */
 export function isKeyPermissionDenied(
   status: number,
-  body: unknown
+  _body?: unknown
 ): boolean {
-  if (status !== 401 && status !== 403) return false;
-  if (!body || typeof body !== "object") return true;
-  const rec = body as {
-    error?: { code?: unknown; type?: unknown; message?: unknown };
-    code?: unknown;
-    type?: unknown;
-    message?: unknown;
-  };
-  const err = rec.error && typeof rec.error === "object" ? rec.error : rec;
-  const code = String(err.code ?? "").toLowerCase();
-  const type = String(err.type ?? "").toLowerCase();
-  const message = String(err.message ?? "").toLowerCase();
-  if (
-    type.includes("permission") ||
-    type.includes("not_authorized") ||
-    code.includes("403") ||
-    code.includes("401") ||
-    message.includes("not authorized") ||
-    message.includes("无权") ||
-    message.includes("access scope")
-  ) {
-    return true;
-  }
-  // Bare 401/403 with no body detail: treat as permission deny.
-  return true;
+  // TokenPlan and OpenAI-compatible gateways use 401/403 for key/model scope.
+  // Transient limits are typically 429 — those stay fail-open in the probe.
+  return status === 401 || status === 403;
 }
 
 /**
