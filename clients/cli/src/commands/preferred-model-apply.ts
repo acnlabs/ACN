@@ -232,7 +232,6 @@ export async function applyPreferredModelOnListen(opts: {
     agentId: opts.agentId,
     apiKey: opts.apiKey,
     preferredModel: mid,
-    supportedModels: opts.supportedModels,
     providers,
   });
   if (!hb.ok) {

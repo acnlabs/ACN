@@ -204,11 +204,14 @@ class TestAgentService:
         assert "preferred_model" not in (agent.metadata or {})
 
     @pytest.mark.asyncio
-    async def test_update_heartbeat_stores_supported_models(
+    async def test_update_heartbeat_drops_flat_supported_models(
         self, mock_agent_repository, sample_agent
     ):
-        """Runtime may declare supported_models for Interfaze composer."""
-        sample_agent.metadata = {"preferred_model": "openai/gpt-4o-mini"}
+        """Flat supported_models is legacy — store nothing, clear leftovers."""
+        sample_agent.metadata = {
+            "preferred_model": "openai/gpt-4o-mini",
+            "supported_models": ["hand/allowlist"],
+        }
         mock_agent_repository.find_by_id.return_value = sample_agent
         service = AgentService(mock_agent_repository)
 
@@ -217,14 +220,10 @@ class TestAgentService:
             supported_models=[
                 "openai/gpt-4o-mini",
                 " anthropic/claude-sonnet-4 ",
-                "openai/gpt-4o-mini",  # dedupe
             ],
         )
 
-        assert agent.metadata.get("supported_models") == [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-sonnet-4",
-        ]
+        assert "supported_models" not in (agent.metadata or {})
         assert agent.metadata.get("preferred_model") == "openai/gpt-4o-mini"
 
         agent = await service.update_heartbeat(
@@ -234,7 +233,7 @@ class TestAgentService:
         assert "supported_models" not in (agent.metadata or {})
 
     @pytest.mark.asyncio
-    async def test_update_heartbeat_derives_models_from_providers(
+    async def test_update_heartbeat_stores_providers_without_flat_mirror(
         self, mock_agent_repository, sample_agent
     ):
         sample_agent.metadata = {"supported_models": ["hand/allowlist"]}
@@ -255,10 +254,8 @@ class TestAgentService:
         )
 
         assert agent.metadata["providers"][0]["current"] is True
-        assert agent.metadata["supported_models"] == [
-            "tencenttokenplan/glm-5",
-            "other/m1",
-        ]
+        assert agent.metadata["providers"][0]["models"] == ["tencenttokenplan/glm-5"]
+        assert "supported_models" not in (agent.metadata or {})
 
     @pytest.mark.asyncio
     async def test_update_heartbeat_stores_quoted_prices(

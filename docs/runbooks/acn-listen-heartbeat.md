@@ -81,16 +81,17 @@ sudo systemctl enable --now acn-heartbeat.timer
 
 - **Provider declaration** is `metadata.providers`: every provider this
   runtime can call, the models on that provider's own list, and `current: true`
-  on the one in use. `metadata.supported_models` is only the derived union of
-  those rows. It is not a second allowlist. An empty `providers` list clears
-  both.
+  on the one in use. Flat `metadata.supported_models` is retired (Host ignores
+  it; heartbeats clear leftovers). An empty `providers` list clears the
+  declaration. No providers → Interfaze Composer uses the official shelf.
 - Set `ACN_PROVIDER`, `ACN_PROVIDER_MODELS_URL`, and `ACN_PROVIDER_API_KEY` to
   the endpoint and key the runtime uses for chat completion (agent ops — not
   Host-managed). That triple is one provider row. It is current unless
   `ACN_PROVIDERS` marks another row `current: true`. Extra providers are a JSON
   array of `{id, models_url, api_key}` or `{id, models_url, api_key_env}`.
   Each row is that provider's own list for its own key.
-  `ACN_SUPPORTED_MODELS` and `--supported-models` are ignored.
+  `ACN_SUPPORTED_MODELS` and `--supported-models` are ignored (flat lists
+  are not stored).
   - the models are that provider's online list for this key;
   - when the list includes **per-model key scope** (`authorized`,
     `key_authorized`, `api_key_authorized`, or `permission.inference`), the row

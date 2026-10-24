@@ -34,7 +34,7 @@ def _normalize_reported_providers(raw: list[dict] | None) -> list[dict] | None:
     """Agent declaration: each provider, its models, and which one is current.
 
     ``None`` means the heartbeat omitted the field. ``[]`` clears it.
-    ``supported_models`` is derived from this list and is not a second allowlist.
+    This list is the declaration; flat ``supported_models`` is not used.
     """
     if raw is None:
         return None
@@ -63,15 +63,6 @@ def _normalize_reported_providers(raw: list[dict] | None) -> list[dict] | None:
     if out and not current_set:
         out[0]["current"] = True
     return out
-
-
-def _models_from_providers(providers: list[dict]) -> list[str]:
-    merged: list[str] = []
-    for row in providers:
-        models = row.get("models")
-        if isinstance(models, list):
-            merged.extend(str(item) for item in models if isinstance(item, str))
-    return _normalize_supported_model_ids(merged)
 
 
 def _normalize_supported_model_ids(models: list[str] | None) -> list[str]:
@@ -897,13 +888,12 @@ class AgentService:
             preferred_model: Optional Host Catalog model id the runtime
                 currently uses. Stored on ``metadata.preferred_model`` for
                 Host Pricing prefill — **self-reported, not verified**.
-            supported_models: Flat list for clients that do not send
-                ``providers``. ``None`` leaves prior value unchanged; ``[]``
-                clears it. When ``providers`` is present, this argument is
-                ignored and ``metadata.supported_models`` is the derived union.
+            supported_models: Ignored. Declaration is ``providers`` only; a
+                leftover flat list is cleared when providers are written and is
+                not accepted as a standalone heartbeat field.
             providers: Providers this agent supports. Each item is id, models,
                 and current. ``None`` leaves prior value unchanged; ``[]``
-                clears providers and the derived union.
+                clears providers and pops leftover ``supported_models``.
 
         Returns:
             Updated agent entity
@@ -929,22 +919,18 @@ class AgentService:
             normalized_providers = _normalize_reported_providers(providers) or []
             if normalized_providers:
                 meta["providers"] = normalized_providers
-                derived = _models_from_providers(normalized_providers)
-                if derived:
-                    meta["supported_models"] = derived
-                else:
-                    meta.pop("supported_models", None)
             else:
                 meta.pop("providers", None)
-                meta.pop("supported_models", None)
+            # Flat supported_models is legacy; never keep or derive it.
+            meta.pop("supported_models", None)
             meta_dirty = True
         elif supported_models is not None:
-            normalized = _normalize_supported_model_ids(supported_models)
-            if normalized:
-                meta["supported_models"] = normalized
-            else:
+            # Old clients still send a flat list — drop it so it cannot drive
+            # Host composer. Prefer clearing over storing.
+            if "supported_models" in meta:
                 meta.pop("supported_models", None)
-            meta_dirty = True
+                meta_dirty = True
+            # Empty clear with no prior key: no-op (nothing to store).
         if model_prices is not None:
             previous = meta.get("model_prices")
             merged: list[dict] = []

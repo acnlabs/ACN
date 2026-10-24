@@ -575,11 +575,12 @@ export function declarationHeartbeatFields(opts: {
   report: RuntimeModelReport;
 }): Pick<RuntimeModelReport, 'supportedModels' | 'providers' | 'modelPrices'> {
   if (opts.clear) {
+    // providers:[] clears the declaration; supported_models:[] clears leftovers.
     return { supportedModels: [], providers: [], modelPrices: undefined };
   }
   if (!opts.report.providers) return {};
   return {
-    supportedModels: opts.report.supportedModels,
+    // Flat supported_models is retired — Host reads providers only.
     providers: opts.report.providers,
     modelPrices: opts.report.modelPrices,
   };

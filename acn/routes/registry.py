@@ -2617,9 +2617,9 @@ class HeartbeatBody(BaseModel):
     supported_models: list[str] | None = Field(
         default=None,
         description=(
-            "Host Catalog model ids this runtime can run. Stored on "
-            "metadata.supported_models for Interfaze composer dropdown — "
-            "self-reported. Omit to leave unchanged; empty list clears."
+            "Deprecated. Declaration is ``providers`` only. A flat list is "
+            "ignored (and any leftover ``metadata.supported_models`` is "
+            "cleared when this field is sent). Prefer ``providers``."
         ),
     )
 
@@ -2657,9 +2657,9 @@ class HeartbeatBody(BaseModel):
         default=None,
         description=(
             "Providers this agent supports. Each item is id, models, and "
-            "current. When present, metadata.supported_models is the derived "
-            "union and is not a separate allowlist. Omit to leave unchanged; "
-            "empty list clears."
+            "current. This is the declaration Host/Interfaze read. Omit to "
+            "leave unchanged; empty list clears providers and leftover "
+            "flat supported_models."
         ),
     )
 
@@ -2745,8 +2745,8 @@ async def agent_heartbeat(
     - ``preferred_model`` → ``metadata.preferred_model`` (current model).
       Omit to leave unchanged; a blank value clears it.
     - ``providers`` → ``metadata.providers`` (each provider, its models, and which is current).
-      ``metadata.supported_models`` becomes the derived union.
-    - ``supported_models`` → ``metadata.supported_models`` only when ``providers`` is omitted
+      Clears leftover ``metadata.supported_models``.
+    - ``supported_models`` → deprecated; cleared when sent, never stored as a declaration
     - ``model_prices`` → ``metadata.model_prices`` (quotes the price book missed)
 
     These are **self-reported, not verified**.
@@ -2775,10 +2775,15 @@ async def agent_heartbeat(
             if "providers" in body.model_fields_set
             else {}
         )
+        flat_clear = (
+            body.supported_models
+            if "supported_models" in body.model_fields_set and not provider_update
+            else None
+        )
         agent = await agent_service.update_heartbeat(
             agent_id,
             preferred_model=heartbeat_preferred_argument(body),
-            supported_models=None if provider_update else body.supported_models,
+            supported_models=flat_clear,
             **provider_update,
             **quote_update,
         )
@@ -2793,6 +2798,7 @@ async def agent_heartbeat(
             "preferred_model": meta.get("preferred_model") or body.preferred_model,
         }
         if body.providers is not None or body.supported_models is not None:
+            # Always empty once flat lists are retired; clients should read providers.
             payload["supported_models"] = meta.get("supported_models") or []
         if isinstance(meta.get("providers"), list):
             payload["providers"] = meta.get("providers")
