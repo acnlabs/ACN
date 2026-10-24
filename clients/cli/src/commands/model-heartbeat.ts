@@ -76,9 +76,111 @@ function boolishField(value: unknown): boolean | null {
   return null;
 }
 
-function trustLooseProviderAuthFields(env?: NodeJS.ProcessEnv): boolean {
-  const raw = (env ?? process.env).ACN_PROVIDER_MODELS_TRUST_AVAILABLE?.trim().toLowerCase();
+function envFlagTrue(env: NodeJS.ProcessEnv | undefined, name: string): boolean {
+  const raw = (env ?? process.env)[name]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function trustLooseProviderAuthFields(env?: NodeJS.ProcessEnv): boolean {
+  return envFlagTrue(env, "ACN_PROVIDER_MODELS_TRUST_AVAILABLE");
+}
+
+/**
+ * Opt into treating a bare product catalog (no per-key scope fields) as
+ * key-callable. Default is off: TokenPlan-style ``/models`` lists every SKU
+ * the package sells, including ones this API key cannot invoke.
+ */
+export function trustProviderCatalogWithoutKeyScope(
+  env?: NodeJS.ProcessEnv
+): boolean {
+  return envFlagTrue(env, "ACN_PROVIDER_MODELS_TRUST_CATALOG");
+}
+
+/** Derive OpenAI-compatible chat URL from a ``…/models`` list URL. */
+export function chatCompletionsUrlFromModelsUrl(
+  modelsUrl: string
+): string | null {
+  const cleaned = modelsUrl.trim().replace(/\/+$/, "");
+  if (!cleaned.toLowerCase().endsWith("/models")) return null;
+  return `${cleaned.slice(0, -"/models".length)}/chat/completions`;
+}
+
+function bareIdForProviderCall(modelId: string, provider: string): string {
+  const clean = modelId.trim();
+  const pref = provider.trim();
+  if (!clean || !pref) return clean;
+  const needle = `${pref.toLowerCase()}/`;
+  if (clean.toLowerCase().startsWith(needle)) return clean.slice(needle.length);
+  return clean;
+}
+
+/** True when the provider refused this key for this model (not a transient error). */
+export function isKeyPermissionDenied(
+  status: number,
+  _body?: unknown
+): boolean {
+  // TokenPlan and OpenAI-compatible gateways use 401/403 for key/model scope.
+  // Transient limits are typically 429 — those stay fail-open in the probe.
+  return status === 401 || status === 403;
+}
+
+/**
+ * Drop models this API key cannot invoke. Used when ``/models`` has no
+ * per-row key-scope hints. Transient failures keep the id (fail open).
+ */
+export async function filterModelsCallableByKey(opts: {
+  chatUrl: string;
+  apiKey: string;
+  provider: string;
+  modelIds: string[];
+  fetchFn?: typeof fetch;
+  concurrency?: number;
+}): Promise<string[]> {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const concurrency = Math.max(1, Math.min(opts.concurrency ?? 4, 8));
+  const kept: string[] = [];
+  let cursor = 0;
+
+  async function probeOne(modelId: string): Promise<void> {
+    const bare = bareIdForProviderCall(modelId, opts.provider);
+    if (!bare) return;
+    try {
+      const res = await fetchFn(opts.chatUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${opts.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: bare,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+        }),
+      });
+      let body: unknown = null;
+      try {
+        body = await res.json();
+      } catch {
+        body = null;
+      }
+      if (isKeyPermissionDenied(res.status, body)) return;
+      kept.push(modelId);
+    } catch {
+      // Network / parse errors: keep (fail open).
+      kept.push(modelId);
+    }
+  }
+
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (cursor < opts.modelIds.length) {
+      const idx = cursor++;
+      await probeOne(opts.modelIds[idx]);
+    }
+  });
+  await Promise.all(workers);
+  // Preserve caller order.
+  const allowed = new Set(kept.map((id) => id.trim().toLowerCase()));
+  return opts.modelIds.filter((id) => allowed.has(id.trim().toLowerCase()));
 }
 
 /** Per-row Key invoke permission when the provider exposes it on the model list. */
@@ -213,21 +315,33 @@ export function providerBodyHasModelList(body: unknown): boolean {
 /**
  * Models this provider supports for the key that fetched the list.
  * Explicit key denies are omitted. An empty list means the key can run nothing.
+ *
+ * When the list has **no** per-key scope fields, the ids are only a product
+ * catalog until probed (see ``fetchRuntimeModelReport``) or
+ * ``ACN_PROVIDER_MODELS_TRUST_CATALOG=1``.
  */
 export function runtimeModelReportFromProviderBody(
   body: unknown,
   opts: { provider: string; env?: NodeJS.ProcessEnv }
-): RuntimeModelReport {
+): RuntimeModelReport & { needsKeyCallProbe?: boolean } {
   const parsed = providerModelsFromListBody(body, opts.env);
   const keyScoped = prefixProviderIds(parsed.keyScopedIds, opts.provider);
   const catalogOnline = prefixProviderIds(parsed.catalogOnlineIds, opts.provider);
 
-  const supportedModels = parsed.hadKeyScopeHints
-    ? uniqueModelIds([
-        ...keyScoped,
-        ...prefixProviderIds(parsed.noHintOnlineIds, opts.provider),
-      ])
-    : catalogOnline;
+  let supportedModels: string[];
+  let needsKeyCallProbe = false;
+  if (parsed.hadKeyScopeHints) {
+    supportedModels = uniqueModelIds([
+      ...keyScoped,
+      ...prefixProviderIds(parsed.noHintOnlineIds, opts.provider),
+    ]);
+  } else if (trustProviderCatalogWithoutKeyScope(opts.env)) {
+    supportedModels = catalogOnline;
+  } else {
+    // Product shelf only — do not claim key access until probed.
+    supportedModels = catalogOnline;
+    needsKeyCallProbe = catalogOnline.length > 0;
+  }
 
   const priceRows = [
     ...pricesFromEnv(opts.env),
@@ -244,7 +358,7 @@ export function runtimeModelReportFromProviderBody(
       ? [{ id: providerId, models: supportedModels, current: true }]
       : undefined;
 
-  return { supportedModels, providers, modelPrices };
+  return { supportedModels, providers, modelPrices, needsKeyCallProbe };
 }
 
 export type ProviderEndpoint = {
@@ -323,10 +437,42 @@ export async function fetchRuntimeModelReport(opts: {
       if (!res.ok) return {};
       const body = await res.json();
       if (!providerBodyHasModelList(body)) return {};
-      const report = runtimeModelReportFromProviderBody(body, {
+      let report = runtimeModelReportFromProviderBody(body, {
         provider: endpoint.id,
         env,
       });
+      if (report.needsKeyCallProbe) {
+        const chatUrl = chatCompletionsUrlFromModelsUrl(endpoint.modelsUrl);
+        if (!chatUrl) {
+          // Cannot verify key access — do not advertise the product shelf.
+          report = {
+            supportedModels: [],
+            providers: [{ id: endpoint.id, models: [], current: true }],
+            modelPrices: undefined,
+          };
+        } else {
+          const callable = await filterModelsCallableByKey({
+            chatUrl,
+            apiKey: endpoint.apiKey,
+            provider: endpoint.id,
+            modelIds: report.supportedModels ?? [],
+            fetchFn,
+          });
+          const priceSource = [
+            ...pricesFromEnv(env),
+            ...pricesFromProviderCatalog(body, endpoint.id),
+          ];
+          report = {
+            supportedModels: callable,
+            providers: [
+              { id: endpoint.id, models: callable, current: true },
+            ],
+            modelPrices: callable.length
+              ? pricesForModels(callable, priceSource)
+              : undefined,
+          };
+        }
+      }
       providers.push({
         id: endpoint.id,
         models: report.supportedModels ?? [],

@@ -25,13 +25,16 @@ import {
   type OutboundFrame,
 } from '../src/commands/listen.js';
 import {
+  chatCompletionsUrlFromModelsUrl,
   collapseModelSpellings,
   declarationHeartbeatFields,
   formatModelHeartbeatLog,
   fetchRuntimeModelReport,
+  isKeyPermissionDenied,
   providerModelsFromListBody,
   rowKeyAuthorized,
   supportedModelsToReport,
+  trustProviderCatalogWithoutKeyScope,
 } from '../src/commands/model-heartbeat.js';
 
 function ownerApplyRequest(overrides: Partial<A2aRequestFrame> = {}): A2aRequestFrame {
@@ -885,12 +888,76 @@ describe('preferred-model apply intercept', () => {
     expect(report.supportedModels).toEqual([]);
   });
 
-  it('reports every online model from the provider list', async () => {
+  it('probes chat completions when the catalog has no key-scope fields', async () => {
+    expect(chatCompletionsUrlFromModelsUrl('https://provider.example/v1/models')).toBe(
+      'https://provider.example/v1/chat/completions',
+    );
+    expect(trustProviderCatalogWithoutKeyScope({})).toBe(false);
+    expect(
+      isKeyPermissionDenied(403, {
+        error: { code: '403002', type: 'permission_error', message: 'not authorized' },
+      }),
+    ).toBe(true);
+
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (href.endsWith('/models')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              { id: 'minimax-m2.7' },
+              { id: 'kimi-k2.5' },
+              { id: 'glm-5.1' },
+            ],
+          }),
+        } as Response;
+      }
+      const body = JSON.parse(String(init?.body || '{}')) as { model?: string };
+      if (body.model === 'kimi-k2.5') {
+        return {
+          ok: false,
+          status: 403,
+          json: async () => ({
+            error: {
+              code: '403002',
+              type: 'permission_error',
+              message: 'The current API Key is not authorized to access model kimi-k2.5',
+            },
+          }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{ message: { content: 'ok' } }],
+        }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
     const reported = await supportedModelsToReport({
       env: {
         ACN_PROVIDER_API_KEY: 'catalog-key',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
         ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn,
+    });
+    expect(reported).toEqual([
+      'tencenttokenplan/minimax-m2.7',
+      'tencenttokenplan/glm-5.1',
+    ]);
+  });
+
+  it('TRUST_CATALOG skips probes and heartbeats the full product shelf', async () => {
+    const reported = await supportedModelsToReport({
+      env: {
+        ACN_PROVIDER_API_KEY: 'catalog-key',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+        ACN_PROVIDER_MODELS_TRUST_CATALOG: '1',
       },
       fetchFn: vi.fn().mockResolvedValue({
         ok: true,
