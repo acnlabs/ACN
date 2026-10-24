@@ -98,6 +98,11 @@ sudo systemctl enable --now acn-heartbeat.timer
     keeps key-allowed models plus online rows that carry **no** scope field.
     Generic `available: true` is **ignored** unless
     `ACN_PROVIDER_MODELS_TRUST_AVAILABLE=1`;
+  - when the list has **no** key-scope fields (TokenPlan-style product
+    catalog), the CLI **probes** `…/chat/completions` per id and drops clear
+    permission denials (HTTP 401/403). Set
+    `ACN_PROVIDER_MODELS_TRUST_CATALOG=1` to skip probes and heartbeat the
+    full catalog (only if that catalog is already key-scoped);
   - ids **explicitly denied** for the key are omitted;
   - if any configured provider list cannot be read, that heartbeat does not
     send `providers` or `supported_models`, so the stored declaration stays;
