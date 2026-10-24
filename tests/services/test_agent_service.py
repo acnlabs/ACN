@@ -232,6 +232,18 @@ class TestAgentService:
         )
         assert "supported_models" not in (agent.metadata or {})
 
+        # preferred_model-only ping also retires leftovers.
+        sample_agent.metadata = {
+            "preferred_model": "openai/gpt-4o-mini",
+            "supported_models": ["tencenttokenplan/kimi-k2.5"],
+        }
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            preferred_model="tencenttokenplan/kimi-k2.5",
+        )
+        assert agent.metadata.get("preferred_model") == "tencenttokenplan/kimi-k2.5"
+        assert "supported_models" not in (agent.metadata or {})
+
     @pytest.mark.asyncio
     async def test_update_heartbeat_stores_providers_without_flat_mirror(
         self, mock_agent_repository, sample_agent
