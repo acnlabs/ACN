@@ -65,15 +65,6 @@ def _normalize_reported_providers(raw: list[dict] | None) -> list[dict] | None:
     return out
 
 
-def _models_from_providers(providers: list[dict]) -> list[str]:
-    merged: list[str] = []
-    for row in providers:
-        models = row.get("models")
-        if isinstance(models, list):
-            merged.extend(str(item) for item in models if isinstance(item, str))
-    return _normalize_supported_model_ids(merged)
-
-
 def _normalize_supported_model_ids(models: list[str] | None) -> list[str]:
     """Dedupe + trim Host Catalog model ids from heartbeat self-report."""
     if not models:
