@@ -34,7 +34,7 @@ def _normalize_reported_providers(raw: list[dict] | None) -> list[dict] | None:
     """Agent declaration: each provider, its models, and which one is current.
 
     ``None`` means the heartbeat omitted the field. ``[]`` clears it.
-    ``supported_models`` is derived from this list and is not a second allowlist.
+    This list is the declaration; flat ``supported_models`` is not used.
     """
     if raw is None:
         return None
