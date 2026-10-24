@@ -484,10 +484,7 @@ describe('preferred-model apply intercept', () => {
         current: true,
       },
     ]);
-    expect(sent.supported_models).toEqual([
-      'tencenttokenplan/glm-5',
-      'tencenttokenplan/glm-5.1',
-    ]);
+    expect(sent.supported_models).toBeUndefined();
     if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
     else process.env.ACN_PROVIDER_API_KEY = prevHub;
     if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
@@ -657,15 +654,23 @@ describe('preferred-model apply intercept', () => {
       { fetchFn: fetchFn as unknown as typeof fetch }
     );
     const body = JSON.parse(String((frames[0] as { body?: string }).body));
-    expect(body.supported_models).toEqual([
-      'tencenttokenplan/deepseek-v4-flash-202605',
-      'tencenttokenplan/deepseek/deepseek-flash',
+    expect(body.providers).toEqual([
+      {
+        id: 'tencenttokenplan',
+        models: [
+          'tencenttokenplan/deepseek-v4-flash-202605',
+          'tencenttokenplan/deepseek/deepseek-flash',
+        ],
+        current: true,
+      },
     ]);
+    expect(body.supported_models).toBeUndefined();
     const heartbeat = fetchFn.mock.calls.find((c) =>
       String(c[0]).includes('/heartbeat')
     ) as [string, RequestInit] | undefined;
     const sent = JSON.parse(String(heartbeat?.[1]?.body ?? ''));
-    expect(sent.supported_models).toEqual(body.supported_models);
+    expect(sent.providers).toEqual(body.providers);
+    expect(sent.supported_models).toBeUndefined();
     if (prevHub === undefined) delete process.env.ACN_PROVIDER_API_KEY;
     else process.env.ACN_PROVIDER_API_KEY = prevHub;
     if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
