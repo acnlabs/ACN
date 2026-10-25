@@ -4,6 +4,8 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.32] - 2026-10-25
+
 ### Changed
 
 - Key-call probes only keep SKUs that clearly succeed. HTTP 400/404 and other
