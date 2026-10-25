@@ -26,12 +26,14 @@ import {
 } from '../src/commands/listen.js';
 import {
   chatCompletionsUrlFromModelsUrl,
+  clearProviderProbeDenialCache,
   collapseModelSpellings,
   declarationHeartbeatFields,
   formatModelHeartbeatLog,
   fetchRuntimeModelReport,
   isKeyPermissionDenied,
   providerModelsFromListBody,
+  providerProbeDenialTtlMs,
   rowKeyAuthorized,
   supportedModelsToReport,
   trustProviderCatalogWithoutKeyScope,
@@ -889,6 +891,7 @@ describe('preferred-model apply intercept', () => {
   });
 
   it('probes chat completions when the catalog has no key-scope fields', async () => {
+    clearProviderProbeDenialCache();
     expect(chatCompletionsUrlFromModelsUrl('https://provider.example/v1/models')).toBe(
       'https://provider.example/v1/chat/completions',
     );
@@ -949,6 +952,90 @@ describe('preferred-model apply intercept', () => {
       'tencenttokenplan/minimax-m2.7',
       'tencenttokenplan/glm-5.1',
     ]);
+  });
+
+  it('caches clear permission denials so the next heartbeat skips re-probe', async () => {
+    clearProviderProbeDenialCache();
+    expect(providerProbeDenialTtlMs({})).toBe(60 * 60 * 1000);
+    expect(providerProbeDenialTtlMs({ ACN_PROVIDER_PROBE_DENIAL_TTL_SEC: '0' })).toBe(0);
+
+    const chatBodies: string[] = [];
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (href.endsWith('/models')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [{ id: 'minimax-m2.7' }, { id: 'kimi-k2.5' }],
+          }),
+        } as Response;
+      }
+      const body = JSON.parse(String(init?.body || '{}')) as { model?: string };
+      chatBodies.push(String(body.model || ''));
+      if (body.model === 'kimi-k2.5') {
+        return {
+          ok: false,
+          status: 403,
+          json: async () => ({ error: { code: '403002', type: 'permission_error' } }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const env = {
+      ACN_PROVIDER_API_KEY: 'catalog-key',
+      ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+      ACN_PROVIDER: 'tencenttokenplan',
+    };
+    const first = await supportedModelsToReport({ env, fetchFn });
+    const second = await supportedModelsToReport({ env, fetchFn });
+    expect(first).toEqual(['tencenttokenplan/minimax-m2.7']);
+    expect(second).toEqual(['tencenttokenplan/minimax-m2.7']);
+    expect(chatBodies.filter((id) => id === 'kimi-k2.5')).toHaveLength(1);
+    // Allowed SKUs still re-probe each heartbeat (only denials are cached).
+    expect(chatBodies.filter((id) => id === 'minimax-m2.7')).toHaveLength(2);
+
+    clearProviderProbeDenialCache();
+    const third = await supportedModelsToReport({ env, fetchFn });
+    expect(third).toEqual(['tencenttokenplan/minimax-m2.7']);
+    expect(chatBodies.filter((id) => id === 'kimi-k2.5')).toHaveLength(2);
+  });
+
+  it('ACN_PROVIDER_PROBE_DENIAL_TTL_SEC=0 disables denial cache', async () => {
+    clearProviderProbeDenialCache();
+    const chatBodies: string[] = [];
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (href.endsWith('/models')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ id: 'kimi-k2.5' }] }),
+        } as Response;
+      }
+      const body = JSON.parse(String(init?.body || '{}')) as { model?: string };
+      chatBodies.push(String(body.model || ''));
+      return {
+        ok: false,
+        status: 403,
+        json: async () => ({ error: { type: 'permission_error' } }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const env = {
+      ACN_PROVIDER_API_KEY: 'catalog-key',
+      ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+      ACN_PROVIDER: 'tencenttokenplan',
+      ACN_PROVIDER_PROBE_DENIAL_TTL_SEC: '0',
+    };
+    await supportedModelsToReport({ env, fetchFn });
+    await supportedModelsToReport({ env, fetchFn });
+    expect(chatBodies.filter((id) => id === 'kimi-k2.5')).toHaveLength(2);
   });
 
   it('TRUST_CATALOG skips probes and heartbeats the full product shelf', async () => {

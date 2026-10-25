@@ -3,6 +3,8 @@
  * Used by `acn listen` and `acn heartbeat` (keep free of WebSocket deps).
  */
 
+import { createHash } from "node:crypto";
+
 /** Resolve runtime model: flag → ACN_PREFERRED_MODEL → empty. */
 export function resolvePreferredModel(opts?: {
   model?: string | null;
@@ -124,9 +126,73 @@ export function isKeyPermissionDenied(
   return status === 401 || status === 403;
 }
 
+/** Default how long a clear 401/403 probe result is remembered (1 hour). */
+const DEFAULT_PROBE_DENIAL_TTL_MS = 60 * 60 * 1000;
+const MAX_PROBE_DENIAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+type ProbeDenialEntry = { expiresAt: number };
+
+/** In-process: key → model denials so listen heartbeats do not re-burn quota. */
+const probeDenialCache = new Map<string, ProbeDenialEntry>();
+
+/**
+ * TTL for cached key/model permission denials.
+ * ``ACN_PROVIDER_PROBE_DENIAL_TTL_SEC=0`` disables the cache.
+ */
+export function providerProbeDenialTtlMs(env?: NodeJS.ProcessEnv): number {
+  const raw = (env ?? process.env).ACN_PROVIDER_PROBE_DENIAL_TTL_SEC?.trim();
+  if (raw === "0") return 0;
+  if (raw) {
+    const sec = Number(raw);
+    if (Number.isFinite(sec) && sec > 0) {
+      return Math.min(sec * 1000, MAX_PROBE_DENIAL_TTL_MS);
+    }
+  }
+  return DEFAULT_PROBE_DENIAL_TTL_MS;
+}
+
+function apiKeyFingerprint(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
+}
+
+function probeDenialCacheKey(
+  chatUrl: string,
+  apiKey: string,
+  modelId: string
+): string {
+  return [
+    chatUrl.trim().toLowerCase(),
+    apiKeyFingerprint(apiKey),
+    modelId.trim().toLowerCase(),
+  ].join("|");
+}
+
+function readCachedDenial(key: string, nowMs: number): boolean {
+  const hit = probeDenialCache.get(key);
+  if (!hit) return false;
+  if (hit.expiresAt <= nowMs) {
+    probeDenialCache.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function writeCachedDenial(key: string, ttlMs: number, nowMs: number): void {
+  if (ttlMs <= 0) return;
+  probeDenialCache.set(key, { expiresAt: nowMs + ttlMs });
+}
+
+/** Test helper — drop remembered 401/403 probe results. */
+export function clearProviderProbeDenialCache(): void {
+  probeDenialCache.clear();
+}
+
 /**
  * Drop models this API key cannot invoke. Used when ``/models`` has no
  * per-row key-scope hints. Transient failures keep the id (fail open).
+ * Clear 401/403 answers are cached in-process for
+ * ``ACN_PROVIDER_PROBE_DENIAL_TTL_SEC`` (default 1h) so later heartbeats
+ * skip re-probing the same denied SKU.
  */
 export async function filterModelsCallableByKey(opts: {
   chatUrl: string;
@@ -135,15 +201,21 @@ export async function filterModelsCallableByKey(opts: {
   modelIds: string[];
   fetchFn?: typeof fetch;
   concurrency?: number;
+  env?: NodeJS.ProcessEnv;
+  nowMs?: number;
 }): Promise<string[]> {
   const fetchFn = opts.fetchFn ?? fetch;
   const concurrency = Math.max(1, Math.min(opts.concurrency ?? 4, 8));
+  const ttlMs = providerProbeDenialTtlMs(opts.env);
+  const nowMs = opts.nowMs ?? Date.now();
   const kept: string[] = [];
   let cursor = 0;
 
   async function probeOne(modelId: string): Promise<void> {
     const bare = bareIdForProviderCall(modelId, opts.provider);
     if (!bare) return;
+    const cacheKey = probeDenialCacheKey(opts.chatUrl, opts.apiKey, modelId);
+    if (readCachedDenial(cacheKey, nowMs)) return;
     try {
       const res = await fetchFn(opts.chatUrl, {
         method: "POST",
@@ -163,7 +235,10 @@ export async function filterModelsCallableByKey(opts: {
       } catch {
         body = null;
       }
-      if (isKeyPermissionDenied(res.status, body)) return;
+      if (isKeyPermissionDenied(res.status, body)) {
+        writeCachedDenial(cacheKey, ttlMs, nowMs);
+        return;
+      }
       kept.push(modelId);
     } catch {
       // Network / parse errors: keep (fail open).
@@ -457,6 +532,7 @@ export async function fetchRuntimeModelReport(opts: {
             provider: endpoint.id,
             modelIds: report.supportedModels ?? [],
             fetchFn,
+            env,
           });
           const priceSource = [
             ...pricesFromEnv(env),
