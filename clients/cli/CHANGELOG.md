@@ -4,6 +4,8 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.31] - 2026-10-25
+
 ### Changed
 
 - Key-call probes cache clear permission denials (HTTP 401/403) in-process for
