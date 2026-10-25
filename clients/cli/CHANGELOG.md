@@ -4,6 +4,13 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Key-call probes only keep SKUs that clearly succeed. HTTP 400/404 and other
+  4xx (not just 401/403), plus discontinued / not-found error bodies, are
+  treated as denials and cached like permission failures. 429 and 5xx still
+  fail-open so a transient blip does not empty the menu.
+
 ## [1.0.31] - 2026-10-25
 
 ### Changed

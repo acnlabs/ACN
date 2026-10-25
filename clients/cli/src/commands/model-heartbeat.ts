@@ -116,14 +116,62 @@ function bareIdForProviderCall(modelId: string, provider: string): string {
   return clean;
 }
 
+function probeErrorText(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const err = (body as { error?: unknown }).error;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const rec = err as { message?: unknown; code?: unknown; type?: unknown };
+    return [rec.message, rec.code, rec.type].map((v) => String(v ?? "")).join(" ");
+  }
+  const msg = (body as { message?: unknown }).message;
+  return typeof msg === "string" ? msg : "";
+}
+
+/** Body says the model/key cannot run (even on some 200 error envelopes). */
+export function bodyLooksLikeModelRefusal(body: unknown): boolean {
+  const text = probeErrorText(body).toLowerCase();
+  if (!text.trim()) return false;
+  return (
+    text.includes("not authorized") ||
+    text.includes("permission") ||
+    text.includes("discontinued") ||
+    text.includes("no longer") ||
+    text.includes("not found") ||
+    text.includes("does not exist") ||
+    text.includes("invalid model") ||
+    text.includes("unknown model") ||
+    text.includes("model_not_found") ||
+    text.includes("unsupported model")
+  );
+}
+
+/**
+ * Classify a chat/completions probe for menu declaration.
+ * - ``callable``: keep on the heartbeat card
+ * - ``denied``: drop + cache (permission, missing, discontinued, other 4xx)
+ * - ``unknown``: fail-open keep (429 / 5xx / weird) so a blip does not empty the menu
+ */
+export function classifyKeyCallProbe(
+  status: number,
+  body?: unknown
+): "callable" | "denied" | "unknown" {
+  if (status === 429) return "unknown";
+  if (status >= 200 && status < 300) {
+    return bodyLooksLikeModelRefusal(body) ? "denied" : "callable";
+  }
+  if (status === 401 || status === 403) return "denied";
+  if (status >= 400 && status < 500) return "denied";
+  if (status >= 500) return "unknown";
+  return "unknown";
+}
+
 /** True when the provider refused this key for this model (not a transient error). */
 export function isKeyPermissionDenied(
   status: number,
-  _body?: unknown
+  body?: unknown
 ): boolean {
-  // TokenPlan and OpenAI-compatible gateways use 401/403 for key/model scope.
-  // Transient limits are typically 429 — those stay fail-open in the probe.
-  return status === 401 || status === 403;
+  return classifyKeyCallProbe(status, body) === "denied";
 }
 
 /** Default how long a clear 401/403 probe result is remembered (1 hour). */
@@ -189,10 +237,9 @@ export function clearProviderProbeDenialCache(): void {
 
 /**
  * Drop models this API key cannot invoke. Used when ``/models`` has no
- * per-row key-scope hints. Transient failures keep the id (fail open).
- * Clear 401/403 answers are cached in-process for
- * ``ACN_PROVIDER_PROBE_DENIAL_TTL_SEC`` (default 1h) so later heartbeats
- * skip re-probing the same denied SKU.
+ * per-row key-scope hints. Keep only clear successes (and 429/5xx fail-open).
+ * Denied answers (401/403/other 4xx, discontinued bodies) are cached for
+ * ``ACN_PROVIDER_PROBE_DENIAL_TTL_SEC`` (default 1h).
  */
 export async function filterModelsCallableByKey(opts: {
   chatUrl: string;
@@ -235,10 +282,12 @@ export async function filterModelsCallableByKey(opts: {
       } catch {
         body = null;
       }
-      if (isKeyPermissionDenied(res.status, body)) {
+      const kind = classifyKeyCallProbe(res.status, body);
+      if (kind === "denied") {
         writeCachedDenial(cacheKey, ttlMs, nowMs);
         return;
       }
+      // callable + unknown (429 / 5xx): keep
       kept.push(modelId);
     } catch {
       // Network / parse errors: keep (fail open).
