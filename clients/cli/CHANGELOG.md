@@ -4,6 +4,13 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Key-call probes cache clear permission denials (HTTP 401/403) in-process for
+  ``ACN_PROVIDER_PROBE_DENIAL_TTL_SEC`` (default 3600). Later heartbeats skip
+  re-probing the same denied SKU so listen does not re-burn provider quota.
+  Set ``ACN_PROVIDER_PROBE_DENIAL_TTL_SEC=0`` to disable.
+
 ## [1.0.30] - 2026-10-24
 
 ### Changed
