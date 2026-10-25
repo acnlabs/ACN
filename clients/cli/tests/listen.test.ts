@@ -25,7 +25,9 @@ import {
   type OutboundFrame,
 } from '../src/commands/listen.js';
 import {
+  bodyLooksLikeModelRefusal,
   chatCompletionsUrlFromModelsUrl,
+  classifyKeyCallProbe,
   clearProviderProbeDenialCache,
   collapseModelSpellings,
   declarationHeartbeatFields,
@@ -1036,6 +1038,98 @@ describe('preferred-model apply intercept', () => {
     await supportedModelsToReport({ env, fetchFn });
     await supportedModelsToReport({ env, fetchFn });
     expect(chatBodies.filter((id) => id === 'kimi-k2.5')).toHaveLength(2);
+  });
+
+  it('drops discontinued / 4xx probes; keeps 429 and 5xx fail-open', async () => {
+    clearProviderProbeDenialCache();
+    expect(classifyKeyCallProbe(400, { error: { message: 'discontinued' } })).toBe(
+      'denied',
+    );
+    expect(classifyKeyCallProbe(404, { error: { message: 'model_not_found' } })).toBe(
+      'denied',
+    );
+    expect(classifyKeyCallProbe(429, {})).toBe('unknown');
+    expect(classifyKeyCallProbe(503, {})).toBe('unknown');
+    expect(
+      bodyLooksLikeModelRefusal({
+        error: {
+          message:
+            'kimi-k2.5 was officially discontinued and is no longer maintained',
+        },
+      }),
+    ).toBe(true);
+    expect(
+      classifyKeyCallProbe(200, {
+        error: { message: 'The model does not exist or is discontinued' },
+      }),
+    ).toBe('denied');
+    expect(isKeyPermissionDenied(400, { error: { message: 'invalid model' } })).toBe(
+      true,
+    );
+
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
+      const href = String(url);
+      if (href.endsWith('/models')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              { id: 'minimax-m2.7' },
+              { id: 'kimi-k2.5' },
+              { id: 'gone-model' },
+              { id: 'busy-model' },
+              { id: 'down-model' },
+            ],
+          }),
+        } as Response;
+      }
+      const body = JSON.parse(String(init?.body || '{}')) as { model?: string };
+      if (body.model === 'kimi-k2.5') {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({
+            error: {
+              message:
+                'kimi-k2.5 was officially discontinued on August 31, 2026',
+            },
+          }),
+        } as Response;
+      }
+      if (body.model === 'gone-model') {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ error: { code: 'model_not_found' } }),
+        } as Response;
+      }
+      if (body.model === 'busy-model') {
+        return { ok: false, status: 429, json: async () => ({}) } as Response;
+      }
+      if (body.model === 'down-model') {
+        return { ok: false, status: 503, json: async () => ({}) } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+      } as Response;
+    }) as unknown as typeof fetch;
+
+    const reported = await supportedModelsToReport({
+      env: {
+        ACN_PROVIDER_API_KEY: 'catalog-key',
+        ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
+        ACN_PROVIDER: 'tencenttokenplan',
+      },
+      fetchFn,
+    });
+    expect(reported).toEqual([
+      'tencenttokenplan/minimax-m2.7',
+      'tencenttokenplan/busy-model',
+      'tencenttokenplan/down-model',
+    ]);
   });
 
   it('TRUST_CATALOG skips probes and heartbeats the full product shelf', async () => {
