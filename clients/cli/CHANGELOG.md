@@ -4,14 +4,31 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.33] - 2026-10-26
+
+### Changed
+
+- TokenPlan-style **quota exhausted** (e.g. HTTP 500 + code ``20098``) is no
+  longer fail-open. After two consecutive all-quota probe rounds, listen clears
+  ``providers``, sets ``byo_degraded``, and heartbeats an official preferred
+  model so Host can fall back to the official channel. After three healthy
+  rounds, BYO providers are restored from ``~/.acn/byo-degrade/*.json``.
+  Set ``ACN_OFFICIAL_DEFAULT_MODEL`` on TokenPlus/Comiclaw
+  (``deepseek/deepseek-v4-flash``) so the preferred id matches Host; otherwise
+  CLI falls back to ``deepseek/deepseek-chat``.
+- Official complete paths fall back when ``requested_model`` is empty or looks
+  like a BYO vendor id (no more bare ``tencenttokenplan/`` hardcode).
+- Snapshot on enter keeps the last healthy providers (empty quota rounds do
+  not overwrite the restore file).
+
 ## [1.0.32] - 2026-10-25
 
 ### Changed
 
 - Key-call probes only keep SKUs that clearly succeed. HTTP 400/404 and other
   4xx (not just 401/403), plus discontinued / not-found error bodies, are
-  treated as denials and cached like permission failures. 429 and 5xx still
-  fail-open so a transient blip does not empty the menu.
+  treated as denials and cached like permission failures. 429 and generic 5xx
+  still fail-open so a transient blip does not empty the menu.
 
 ## [1.0.31] - 2026-10-25
 

@@ -42,6 +42,7 @@ import {
   startOfficialHopDoor,
   type OfficialHopDoor,
 } from './official-hop-door.js';
+import { looksLikeByoModelId, resolveOfficialDefaultModel } from './byo-degrade.js';
 import {
   OFFICIAL_FALLBACK_MODEL,
   fileOfficialSpent,
@@ -908,16 +909,21 @@ function modelForOfficialTry(
   chat: NonNullable<NormalizedEvent['chat']>
 ): string | null {
   const requested = (chat.requested_model || '').trim();
-  const lower = requested.toLowerCase();
-  const ownProvider = lower.startsWith('tencenttokenplan/');
+  const byo = looksLikeByoModelId(requested);
+  const fallback = resolveOfficialDefaultModel();
   if (chat.inference_path === 'official') {
-    if (!requested || ownProvider || !officialV0SupportsModel(requested)) return null;
+    if (requested && !byo) {
+      // Explicit Host/book id that official v0 cannot run → do not substitute.
+      if (!officialV0SupportsModel(requested)) return null;
+      return requested.slice(0, 200);
+    }
+    // Empty or sticky BYO id: Host should rewrite; local fallback as belt.
+    return officialV0SupportsModel(fallback) ? fallback.slice(0, 200) : null;
+  }
+  if (requested.includes('/') && !byo && officialV0SupportsModel(requested)) {
     return requested.slice(0, 200);
   }
-  if (requested.includes('/') && !ownProvider && officialV0SupportsModel(requested)) {
-    return requested.slice(0, 200);
-  }
-  return officialV0SupportsModel(OFFICIAL_FALLBACK_MODEL) ? OFFICIAL_FALLBACK_MODEL : null;
+  return officialV0SupportsModel(fallback) ? fallback.slice(0, 200) : null;
 }
 
 function hostBaseForOfficialTry(
@@ -1080,12 +1086,19 @@ async function completeOfficialViaHost(
   ) {
     return { ok: false, reason: 'official_complete_skipped' };
   }
-  const model = chat.requested_model?.trim();
-  const text = chat.user_text?.trim();
-  if (!model) return { ok: false, reason: 'official_complete_missing_model' };
-  if (!officialV0SupportsModel(model)) {
+  let model = chat.requested_model?.trim() || '';
+  if (model && !looksLikeByoModelId(model) && !officialV0SupportsModel(model)) {
     return { ok: false, reason: 'official_complete_unsupported_model' };
   }
+  if (!model || looksLikeByoModelId(model)) {
+    const fallback = resolveOfficialDefaultModel();
+    if (!officialV0SupportsModel(fallback)) {
+      return { ok: false, reason: 'official_complete_unsupported_model' };
+    }
+    model = fallback;
+  }
+  const text = chat.user_text?.trim();
+  if (!model) return { ok: false, reason: 'official_complete_missing_model' };
   if (!text) return { ok: false, reason: 'official_complete_missing_text' };
 
   const logFn = deps.logFn ?? ((line: string) => console.error(line));

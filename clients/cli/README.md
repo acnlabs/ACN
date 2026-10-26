@@ -102,6 +102,8 @@ AgentPlanet Internal Token):
 ```bash
 export AGENTPLANET_API_BASE=https://api.agentplanet.org
 # optional: ACN_CHAT_JWT_AUDIENCE=https://api.agentplanet.org
+# TokenPlus / Comiclaw: match Host official default on BYO quota degrade
+# export ACN_OFFICIAL_DEFAULT_MODEL=deepseek/deepseek-v4-flash
 
 acn listen --runtime http \
   --wake-url http://127.0.0.1:10122/hooks/agent \

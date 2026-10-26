@@ -146,23 +146,43 @@ export function bodyLooksLikeModelRefusal(body: unknown): boolean {
   );
 }
 
+/** TokenPlan-style plan quota empty (business 5xx), not a generic outage. */
+export function bodyLooksLikeQuotaExhausted(body: unknown): boolean {
+  if (!body || typeof body !== "object") return false;
+  const err = (body as { error?: unknown }).error;
+  if (err && typeof err === "object") {
+    const code = String((err as { code?: unknown }).code ?? "").trim();
+    if (code === "20098") return true;
+  }
+  const text = probeErrorText(body).toLowerCase();
+  return (
+    text.includes("quota exhausted") ||
+    text.includes("token plan quota") ||
+    text.includes("20098")
+  );
+}
+
 /**
  * Classify a chat/completions probe for menu declaration.
  * - ``callable``: keep on the heartbeat card
  * - ``denied``: drop + cache (permission, missing, discontinued, other 4xx)
- * - ``unknown``: fail-open keep (429 / 5xx / weird) so a blip does not empty the menu
+ * - ``quota_exhausted``: plan/key quota empty — do not keep; may trigger BYO degrade
+ * - ``unknown``: fail-open keep (429 / generic 5xx / weird) so a blip does not empty the menu
  */
 export function classifyKeyCallProbe(
   status: number,
   body?: unknown
-): "callable" | "denied" | "unknown" {
+): "callable" | "denied" | "unknown" | "quota_exhausted" {
   if (status === 429) return "unknown";
   if (status >= 200 && status < 300) {
+    if (bodyLooksLikeQuotaExhausted(body)) return "quota_exhausted";
     return bodyLooksLikeModelRefusal(body) ? "denied" : "callable";
   }
   if (status === 401 || status === 403) return "denied";
   if (status >= 400 && status < 500) return "denied";
-  if (status >= 500) return "unknown";
+  if (status >= 500) {
+    return bodyLooksLikeQuotaExhausted(body) ? "quota_exhausted" : "unknown";
+  }
   return "unknown";
 }
 
@@ -235,11 +255,16 @@ export function clearProviderProbeDenialCache(): void {
   probeDenialCache.clear();
 }
 
+export type KeyCallProbeFilterResult = {
+  models: string[];
+  /** Every completed probe was plan quota empty (no keep). Triggers BYO degrade. */
+  quotaExhausted: boolean;
+};
+
 /**
  * Drop models this API key cannot invoke. Used when ``/models`` has no
- * per-row key-scope hints. Keep only clear successes (and 429/5xx fail-open).
- * Denied answers (401/403/other 4xx, discontinued bodies) are cached for
- * ``ACN_PROVIDER_PROBE_DENIAL_TTL_SEC`` (default 1h).
+ * per-row key-scope hints. Keep clear successes and generic 429/5xx fail-open.
+ * Quota-exhausted answers are dropped (not fail-open). Denied 4xx are cached.
  */
 export async function filterModelsCallableByKey(opts: {
   chatUrl: string;
@@ -250,13 +275,15 @@ export async function filterModelsCallableByKey(opts: {
   concurrency?: number;
   env?: NodeJS.ProcessEnv;
   nowMs?: number;
-}): Promise<string[]> {
+}): Promise<KeyCallProbeFilterResult> {
   const fetchFn = opts.fetchFn ?? fetch;
   const concurrency = Math.max(1, Math.min(opts.concurrency ?? 4, 8));
   const ttlMs = providerProbeDenialTtlMs(opts.env);
   const nowMs = opts.nowMs ?? Date.now();
   const kept: string[] = [];
   let cursor = 0;
+  let probed = 0;
+  let quotaHits = 0;
 
   async function probeOne(modelId: string): Promise<void> {
     const bare = bareIdForProviderCall(modelId, opts.provider);
@@ -282,15 +309,21 @@ export async function filterModelsCallableByKey(opts: {
       } catch {
         body = null;
       }
+      probed += 1;
       const kind = classifyKeyCallProbe(res.status, body);
       if (kind === "denied") {
         writeCachedDenial(cacheKey, ttlMs, nowMs);
         return;
       }
-      // callable + unknown (429 / 5xx): keep
+      if (kind === "quota_exhausted") {
+        quotaHits += 1;
+        return;
+      }
+      // callable + unknown (429 / generic 5xx): keep
       kept.push(modelId);
     } catch {
       // Network / parse errors: keep (fail open).
+      probed += 1;
       kept.push(modelId);
     }
   }
@@ -304,7 +337,12 @@ export async function filterModelsCallableByKey(opts: {
   await Promise.all(workers);
   // Preserve caller order.
   const allowed = new Set(kept.map((id) => id.trim().toLowerCase()));
-  return opts.modelIds.filter((id) => allowed.has(id.trim().toLowerCase()));
+  const models = opts.modelIds.filter((id) =>
+    allowed.has(id.trim().toLowerCase())
+  );
+  const quotaExhausted =
+    probed > 0 && quotaHits === probed && models.length === 0;
+  return { models, quotaExhausted };
 }
 
 /** Per-row Key invoke permission when the provider exposes it on the model list. */
@@ -429,6 +467,11 @@ export type RuntimeModelReport = {
   /** Declaration: every provider this runtime supports, and which is current. */
   providers?: ReportedProvider[];
   modelPrices?: ReportedModelPrice[];
+  /**
+   * True when every probed provider returned plan quota exhausted and no
+   * models were kept. Listen uses this for BYO → official degrade.
+   */
+  quotaExhausted?: boolean;
 };
 
 /** A provider `/models` body is a list only when `data` is an array. */
@@ -553,6 +596,8 @@ export async function fetchRuntimeModelReport(opts: {
   const fetchFn = opts.fetchFn ?? fetch;
   const providers: ReportedProvider[] = [];
   const priceRows: ReportedModelPrice[] = [];
+  let anyProbe = false;
+  let allQuota = true;
   for (const endpoint of endpoints) {
     try {
       const res = await fetchFn(endpoint.modelsUrl, {
@@ -574,8 +619,9 @@ export async function fetchRuntimeModelReport(opts: {
             providers: [{ id: endpoint.id, models: [], current: true }],
             modelPrices: undefined,
           };
+          allQuota = false;
         } else {
-          const callable = await filterModelsCallableByKey({
+          const filtered = await filterModelsCallableByKey({
             chatUrl,
             apiKey: endpoint.apiKey,
             provider: endpoint.id,
@@ -583,6 +629,9 @@ export async function fetchRuntimeModelReport(opts: {
             fetchFn,
             env,
           });
+          anyProbe = true;
+          if (!filtered.quotaExhausted) allQuota = false;
+          const callable = filtered.models;
           const priceSource = [
             ...pricesFromEnv(env),
             ...pricesFromProviderCatalog(body, endpoint.id),
@@ -597,6 +646,8 @@ export async function fetchRuntimeModelReport(opts: {
               : undefined,
           };
         }
+      } else {
+        allQuota = false;
       }
       providers.push({
         id: endpoint.id,
@@ -614,10 +665,13 @@ export async function fetchRuntimeModelReport(opts: {
   const modelPrices = supportedModels.length
     ? pricesForModels(supportedModels, priceRows)
     : undefined;
+  const quotaExhausted =
+    anyProbe && allQuota && supportedModels.length === 0;
   return {
     supportedModels,
     providers,
     modelPrices: modelPrices?.length ? modelPrices : undefined,
+    quotaExhausted: quotaExhausted || undefined,
   };
 }
 
@@ -773,6 +827,8 @@ export async function postAgentHeartbeat(opts: {
   supportedModels?: string[];
   providers?: ReportedProvider[];
   modelPrices?: ReportedModelPrice[];
+  /** Owner UI flag; omit leaves prior value. */
+  byoDegraded?: boolean;
   fetchFn?: typeof fetch;
 }): Promise<
   | {
@@ -780,6 +836,7 @@ export async function postAgentHeartbeat(opts: {
       preferred_model?: string | null;
       supported_models?: string[] | null;
       desired_preferred_model?: string | null;
+      byo_degraded?: boolean | null;
     }
   | { ok: false; reason: string }
 > {
@@ -803,6 +860,9 @@ export async function postAgentHeartbeat(opts: {
   if (opts.modelPrices != null) {
     payload.model_prices = opts.modelPrices;
   }
+  if (opts.byoDegraded !== undefined) {
+    payload.byo_degraded = opts.byoDegraded;
+  }
   const body = Object.keys(payload).length ? JSON.stringify(payload) : undefined;
   try {
     const res = await fetchFn(url, { method: 'POST', headers, body });
@@ -812,25 +872,31 @@ export async function postAgentHeartbeat(opts: {
     let preferred: string | null | undefined;
     let supported: string[] | null | undefined;
     let desired: string | null | undefined;
+    let byoDegraded: boolean | null | undefined;
     try {
       const json = (await res.json()) as {
         preferred_model?: string | null;
         supported_models?: string[] | null;
         desired_preferred_model?: string | null;
+        byo_degraded?: boolean | null;
       };
       preferred = json.preferred_model;
       supported = json.supported_models;
       desired = json.desired_preferred_model;
+      byoDegraded =
+        typeof json.byo_degraded === 'boolean' ? json.byo_degraded : undefined;
     } catch {
       preferred = opts.preferredModel ?? null;
       supported = opts.supportedModels ?? null;
       desired = undefined;
+      byoDegraded = undefined;
     }
     return {
       ok: true,
       preferred_model: preferred,
       supported_models: supported,
       desired_preferred_model: desired,
+      byo_degraded: byoDegraded,
     };
   } catch (err) {
     return {
