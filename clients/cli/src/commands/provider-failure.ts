@@ -8,7 +8,11 @@ import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 
-/** Shelf-safe on both the global key and the China key. */
+/**
+ * Shelf-safe on OpenRouter (incl. CN-billed) and TokenPlus CN.
+ * Prefer ``ACN_OFFICIAL_DEFAULT_MODEL`` on TokenPlus hosts
+ * (``deepseek/deepseek-v4-flash``) so heartbeat preferred matches Host.
+ */
 export const OFFICIAL_FALLBACK_MODEL = 'deepseek/deepseek-chat';
 
 const PROVIDER_GAVE_UP_MARKS = [

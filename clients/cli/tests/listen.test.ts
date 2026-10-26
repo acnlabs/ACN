@@ -1040,7 +1040,7 @@ describe('preferred-model apply intercept', () => {
     expect(chatBodies.filter((id) => id === 'kimi-k2.5')).toHaveLength(2);
   });
 
-  it('drops discontinued / 4xx probes; keeps 429 and 5xx fail-open', async () => {
+  it('drops discontinued / 4xx probes; keeps 429 and generic 5xx fail-open', async () => {
     clearProviderProbeDenialCache();
     expect(classifyKeyCallProbe(400, { error: { message: 'discontinued' } })).toBe(
       'denied',
@@ -1050,6 +1050,11 @@ describe('preferred-model apply intercept', () => {
     );
     expect(classifyKeyCallProbe(429, {})).toBe('unknown');
     expect(classifyKeyCallProbe(503, {})).toBe('unknown');
+    expect(
+      classifyKeyCallProbe(500, {
+        error: { message: 'token plan quota exhausted', code: '20098' },
+      }),
+    ).toBe('quota_exhausted');
     expect(
       bodyLooksLikeModelRefusal({
         error: {

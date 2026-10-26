@@ -2671,6 +2671,14 @@ class HeartbeatBody(BaseModel):
             "Omit to leave unchanged."
         ),
     )
+    byo_degraded: bool | None = Field(
+        default=None,
+        description=(
+            "Owner UI: BYO provider quota exhausted and runtime cleared "
+            "providers for official fallback. Omit leaves unchanged; "
+            "false clears the flag after recovery."
+        ),
+    )
 
     @field_validator("model_prices")
     @classmethod
@@ -2775,6 +2783,11 @@ async def agent_heartbeat(
             if "providers" in body.model_fields_set
             else {}
         )
+        degrade_update = (
+            {"byo_degraded": body.byo_degraded}
+            if "byo_degraded" in body.model_fields_set
+            else {}
+        )
         flat_clear = (
             body.supported_models
             if "supported_models" in body.model_fields_set and not provider_update
@@ -2786,6 +2799,7 @@ async def agent_heartbeat(
             supported_models=flat_clear,
             **provider_update,
             **quote_update,
+            **degrade_update,
         )
         meta = (
             agent.metadata
@@ -2804,6 +2818,8 @@ async def agent_heartbeat(
             payload["providers"] = meta.get("providers")
         if body.model_prices is not None:
             payload["model_prices"] = meta.get("model_prices") or body.model_prices
+        if "byo_degraded" in meta:
+            payload["byo_degraded"] = bool(meta.get("byo_degraded"))
         desired = meta.get("desired_preferred_model")
         if isinstance(desired, str) and desired.strip():
             payload["desired_preferred_model"] = desired.strip()

@@ -33,6 +33,11 @@ import {
   fetchRuntimeModelReport,
 } from './model-heartbeat.js';
 import {
+  looksLikeByoModelId,
+  resolveOfficialDefaultModel,
+  tickByoDegrade,
+} from './byo-degrade.js';
+import {
   applyPreferredModelOnListen,
   isOwnerPreferredModelApplyFrame,
   isPreferredModelApplyPath,
@@ -605,15 +610,68 @@ function runListener(cfg: ListenerConfig): void {
       const clear = cfg.clearDeclaration === true;
       void (async () => {
         const report = clear ? {} : await fetchRuntimeModelReport({});
-        const declared = declarationHeartbeatFields({ clear, report });
+        let declared = declarationHeartbeatFields({ clear, report });
+        let preferredForBeat = cfg.preferredModel;
+        let byoDegraded: boolean | undefined;
+
+        if (!clear && report.providers) {
+          const hasByoModels = report.providers.some(
+            (row) => Array.isArray(row.models) && row.models.length > 0
+          );
+          const tick = tickByoDegrade({
+            agentId: cfg.agentId,
+            quotaExhausted: !!report.quotaExhausted,
+            hasByoModels,
+            providers: report.providers,
+            preferredModel: cfg.preferredModel,
+          });
+          if (tick.enterOrStayDegraded) {
+            const official = resolveOfficialDefaultModel();
+            declared = {
+              providers: [],
+              supportedModels: [],
+              modelPrices: undefined,
+            };
+            preferredForBeat = official;
+            byoDegraded = true;
+            if (cfg.preferredModel !== official) {
+              cfg.preferredModel = official;
+            }
+            if (!tick.state.snapshot?.providers?.some((row) => row.models?.length)) {
+              console.error(
+                '[acn listen] byo_degraded=true without last-good BYO snapshot; stay official until probes recover'
+              );
+            }
+            console.error(
+              `[acn listen] byo_degraded=true (quota exhausted; providers cleared → official ${official})`
+            );
+          } else if (tick.justRestored && tick.state.snapshot?.providers?.length) {
+            declared = {
+              providers: tick.state.snapshot.providers,
+              supportedModels: undefined,
+              modelPrices: undefined,
+            };
+            const restored =
+              tick.state.snapshot.preferredModel?.trim() || cfg.preferredModel;
+            preferredForBeat = restored;
+            byoDegraded = false;
+            if (restored) cfg.preferredModel = restored;
+            console.error('[acn listen] byo_degraded=false (BYO providers restored)');
+          } else if (tick.state.degraded === false && byoDegraded === undefined) {
+            // Explicitly clear stale Owner flag after a healthy non-restore beat.
+            byoDegraded = false;
+          }
+        }
+
         const r = await postAgentHeartbeat({
           baseUrl: cfg.baseUrl,
           agentId: cfg.agentId,
           apiKey: cfg.apiKey,
-          preferredModel: cfg.preferredModel,
+          preferredModel: preferredForBeat,
           supportedModels: declared.supportedModels,
           providers: declared.providers,
           modelPrices: declared.modelPrices,
+          byoDegraded,
         });
         if (!r.ok) {
           console.error(`[acn listen] model heartbeat failed: ${r.reason}`);
@@ -622,26 +680,35 @@ function runListener(cfg: ListenerConfig): void {
         if (clear) cfg.clearDeclaration = false;
         const desired = String(r.desired_preferred_model || '').trim();
         const local = String(cfg.preferredModel || '').trim();
+        const degradedNow = byoDegraded === true;
         // A clear beat does not read provider lists, so it cannot apply a
-        // desired model. The next heartbeat does that after a real read.
-        if (!clear && desired && desired.toLowerCase() !== local.toLowerCase()) {
-          if (!report.providers) {
+        // desired model. While BYO-degraded, skip BYO desired applies.
+        if (
+          !clear &&
+          !degradedNow &&
+          desired &&
+          desired.toLowerCase() !== local.toLowerCase()
+        ) {
+          if (looksLikeByoModelId(desired) && !report.providers?.some((p) => p.models?.length)) {
+            console.error('[acn listen] desired apply skipped: still degraded / no BYO providers');
+          } else if (!report.providers) {
             console.error('[acn listen] desired apply skipped: provider list unavailable');
             return;
-          }
-          const applied = await applyPreferredModelOnListen({
-            modelId: desired,
-            agentId: cfg.agentId,
-            apiKey: cfg.apiKey,
-            baseUrl: cfg.baseUrl,
-            supportedModels: report.supportedModels,
-            providers: report.providers,
-            onSetPreferredModel: cfg.onSetPreferredModel,
-          });
-          if (applied.ok) {
-            cfg.preferredModel = applied.preferred_model;
           } else {
-            console.error(`[acn listen] desired apply failed: ${applied.reason}`);
+            const applied = await applyPreferredModelOnListen({
+              modelId: desired,
+              agentId: cfg.agentId,
+              apiKey: cfg.apiKey,
+              baseUrl: cfg.baseUrl,
+              supportedModels: report.supportedModels,
+              providers: report.providers,
+              onSetPreferredModel: cfg.onSetPreferredModel,
+            });
+            if (applied.ok) {
+              cfg.preferredModel = applied.preferred_model;
+            } else {
+              console.error(`[acn listen] desired apply failed: ${applied.reason}`);
+            }
           }
         }
         const note = formatModelHeartbeatLog({

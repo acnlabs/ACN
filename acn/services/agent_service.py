@@ -879,6 +879,7 @@ class AgentService:
         supported_models: list[str] | None = None,
         providers: list[dict] | None = None,
         model_prices: list[dict] | None = None,
+        byo_degraded: bool | None = None,
     ) -> Agent:
         """
         Update agent heartbeat
@@ -894,6 +895,8 @@ class AgentService:
             providers: Providers this agent supports. Each item is id, models,
                 and current. ``None`` leaves prior value unchanged; ``[]``
                 clears providers.
+            byo_degraded: Owner UI flag when BYO quota forced an official
+                fallback. ``None`` leaves unchanged; ``False`` clears.
 
         Returns:
             Updated agent entity
@@ -921,6 +924,12 @@ class AgentService:
                 meta["providers"] = normalized_providers
             else:
                 meta.pop("providers", None)
+            meta_dirty = True
+        if byo_degraded is not None:
+            if byo_degraded:
+                meta["byo_degraded"] = True
+            else:
+                meta.pop("byo_degraded", None)
             meta_dirty = True
         # Flat supported_models is legacy. Host ignores it; retire leftovers on
         # every heartbeat so agents that only ping preferred_model still clean up.
