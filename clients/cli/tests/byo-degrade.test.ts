@@ -120,7 +120,7 @@ describe('tickByoDegrade', () => {
         agentId,
         quotaExhausted: true,
         hasByoModels: false,
-        providers: [{ id: 'tencenttokenplan', models: [] }],
+        providers: [{ id: 'tencenttokenplan', models: [], current: true }],
         env,
       });
     }
