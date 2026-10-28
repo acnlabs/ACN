@@ -161,7 +161,7 @@ class TestSubmitTaskMultiParticipant:
 
         assert p.status == ParticipationStatus.SUBMITTED
         assert p.submission == "Here is my work"
-        mock_repo.save_participation.assert_awaited_once_with(p)
+        mock_repo.save_participation.assert_awaited_once_with(p, expected_status="active")
 
     async def test_submit_auto_find_participation(self, service, mock_repo, mock_task_pool):
         """submit_task without participation_id auto-finds active participation"""
@@ -615,7 +615,7 @@ class TestSubmitAttestation:
         assert slips[0]["participation_id"] == "part-001"
         assert slips[0]["attestation_id"] == "att_1"
         mock_repo.save.assert_awaited()
-        mock_repo.save_participation.assert_awaited_once_with(p)
+        mock_repo.save_participation.assert_awaited_once_with(p, expected_status="active")
         assert p.submission_artifacts[-1]["attestation_id"] == "att_1"
 
     async def test_submit_rejects_other_task_workspace(
@@ -697,3 +697,16 @@ async def test_withdraw_pending_application(service, mock_repo, mock_task_pool):
     mock_task_pool.cancel_participation.assert_awaited_once_with(
         "part-001", "task-001", expected_status="applied",
     )
+
+
+async def test_submit_cannot_revive_concurrently_withdrawn_seat(service, mock_repo, mock_task_pool):
+    from acn.services.task_service import TaskStatusConflict
+
+    mock_repo.find_by_id.return_value = _make_task(auto_approve=True)
+    mock_task_pool.get_participation.return_value = _make_participation()
+    mock_repo.save_participation.side_effect = ValueError(
+        "Participation is no longer in the expected status"
+    )
+    with pytest.raises(TaskStatusConflict):
+        await service.submit_task("task-001", "agent-001", "late work", participation_id="part-001")
+    mock_task_pool.complete_participation.assert_not_awaited()

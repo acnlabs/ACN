@@ -80,6 +80,17 @@ redis.call('HSET', task_key, 'active_participants_count', tostring(new_active))
 return participation_id
 """
 
+# Conditional submission save must share cancellation's atomic boundary.
+LUA_SAVE_PARTICIPATION_IF_STATUS = """
+if redis.call('HGET', KEYS[1], 'status') ~= ARGV[1] then
+    return redis.error_reply('WRONG_STATUS')
+end
+for i = 2, #ARGV, 2 do
+    redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+end
+return 'OK'
+"""
+
 # Atomic cancel: set cancelled + decrement active count
 LUA_CANCEL_PARTICIPATION = """
 local participation_key = KEYS[1]
@@ -579,6 +590,7 @@ class RedisTaskRepository(ITaskRepository):
         participation: Participation,
         *,
         session: Any | None = None,
+        expected_status: str | None = None,
     ) -> None:
         """Save or update a participation in Redis.
 
@@ -602,7 +614,21 @@ class RedisTaskRepository(ITaskRepository):
             else:
                 clean[k] = v
 
-        await self.redis.hset(key, mapping=clean)  # type: ignore[arg-type]
+        if expected_status is not None:
+            # Compare and write in one Lua invocation, so an earlier withdrawal
+            # cannot be overwritten by a submission based on a stale read.
+            script = self.redis.register_script(LUA_SAVE_PARTICIPATION_IF_STATUS)
+            args = [expected_status]
+            for field, value in clean.items():
+                args.extend((field, value))
+            try:
+                await script(keys=[key], args=args)
+            except redis.ResponseError as exc:
+                if "WRONG_STATUS" in str(exc):
+                    raise ValueError("Participation is no longer in the expected status") from exc
+                raise
+        else:
+            await self.redis.hset(key, mapping=clean)  # type: ignore[arg-type]
 
     async def add_application(self, task_id: str, participation: Participation) -> None:
         """Add an application (participation with status APPLIED) for an assigned task."""

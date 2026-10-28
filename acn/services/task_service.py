@@ -902,6 +902,7 @@ class TaskService:
         # ---- Multi-participant path ----
         if task._is_multi():
             p = await self._resolve_participation(task_id, agent_id, participation_id)
+            expected_status = p.status.value
             if p.status == ParticipationStatus.REJECTED:
                 if (
                     task.max_resubmit_attempts is not None
@@ -913,7 +914,12 @@ class TaskService:
                 p.resubmit(submission, artifacts)
             else:
                 p.submit(submission, artifacts)
-            await self.repository.save_participation(p)
+            try:
+                await self.repository.save_participation(p, expected_status=expected_status)
+            except ValueError as exc:
+                if "expected status" in str(exc):
+                    raise TaskStatusConflict(task_id, expected_status, "changed") from exc
+                raise
 
             if att_blob:
                 self._hang_attestation_metadata(

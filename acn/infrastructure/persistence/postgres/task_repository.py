@@ -520,10 +520,22 @@ class PostgresTaskRepository(ITaskRepository):
         participation: Participation,
         *,
         session: Any | None = None,
+        expected_status: str | None = None,
     ) -> None:
         model = self._participation_to_model(participation)
         async with self._session_scope(session) as sess:
-            existing = await sess.get(ParticipationModel, participation.participation_id)
+            if expected_status is not None:
+                result = await sess.execute(
+                    select(ParticipationModel)
+                    .where(ParticipationModel.participation_id == participation.participation_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                existing = result.scalar_one_or_none()
+                if existing is None or existing.status != expected_status:
+                    raise ValueError("Participation is no longer in the expected status")
+            else:
+                existing = await sess.get(ParticipationModel, participation.participation_id)
             if existing:
                 await sess.execute(
                     update(ParticipationModel)

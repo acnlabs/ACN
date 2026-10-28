@@ -153,10 +153,13 @@ class ITaskRepository(ABC):
         participation: Participation,
         *,
         session: Any | None = None,
+        expected_status: str | None = None,
     ) -> None:
         """Save or update a participation.
 
         ``session`` is optional — see class docstring.
+        With ``expected_status``, update only a matching existing row; raise
+        ValueError on conflict. Never recreate a withdrawn/deleted record.
         """
         pass
 
