@@ -902,6 +902,7 @@ class TaskService:
         # ---- Multi-participant path ----
         if task._is_multi():
             p = await self._resolve_participation(task_id, agent_id, participation_id)
+            expected_status = p.status.value
             if p.status == ParticipationStatus.REJECTED:
                 if (
                     task.max_resubmit_attempts is not None
@@ -913,7 +914,12 @@ class TaskService:
                 p.resubmit(submission, artifacts)
             else:
                 p.submit(submission, artifacts)
-            await self.repository.save_participation(p)
+            try:
+                await self.repository.save_participation(p, expected_status=expected_status)
+            except ValueError as exc:
+                if "expected status" in str(exc):
+                    raise TaskStatusConflict(task_id, expected_status, "changed") from exc
+                raise
 
             if att_blob:
                 self._hang_attestation_metadata(
@@ -1325,7 +1331,7 @@ class TaskService:
     ) -> Task:
         """Cancel a participation.
 
-        The participant can withdraw their own seat. The platform service
+        The participant can withdraw their own undelivered seat. The platform service
         (internal token, not impersonating a creator) can drop a seat that
         is still active and has no submission, so an unfinished share can
         be refunded without touching the rest of the pool.
@@ -1335,27 +1341,25 @@ class TaskService:
             raise ValueError("Participation not found")
         if p.task_id != task_id:
             raise ValueError("Participation does not belong to this task")
-        expected_status: str | None = None
-        if platform:
-            if p.submitted_at or p.status not in (
-                ParticipationStatus.ACTIVE,
-                ParticipationStatus.APPLIED,
-            ):
-                actual = p.status.value if isinstance(p.status, ParticipationStatus) else str(p.status)
-                raise TaskStatusConflict(task_id, "active", actual)
-            expected_status = p.status.value
-        elif p.participant_id != canceller_id:
+        if not platform and p.participant_id != canceller_id:
             raise PermissionError("Only the participant can cancel their participation")
+        # Submitted work retains its review/payment obligation. Reopening the
+        # seat would let a replacement consume the same funded share.
+        if p.submitted_at or p.status not in (
+            ParticipationStatus.ACTIVE,
+            ParticipationStatus.APPLIED,
+        ):
+            actual = p.status.value if isinstance(p.status, ParticipationStatus) else str(p.status)
+            raise TaskStatusConflict(task_id, "active or applied without submission", actual)
+        expected_status = p.status.value
 
         try:
             await self.task_pool.cancel_participation(
                 participation_id, task_id, expected_status=expected_status
             )
         except ValueError as exc:
-            if platform and "expected status" in str(exc):
-                raise TaskStatusConflict(
-                    task_id, ParticipationStatus.ACTIVE.value, "changed"
-                ) from exc
+            if "expected status" in str(exc):
+                raise TaskStatusConflict(task_id, expected_status, "changed") from exc
             raise
 
         logger.info(
