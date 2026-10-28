@@ -337,7 +337,7 @@ class TestCancelParticipation:
         )
 
         mock_task_pool.cancel_participation.assert_awaited_once_with(
-            "part-001", "task-001", expected_status=None
+            "part-001", "task-001", expected_status="active"
         )
 
     async def test_cancel_by_other_user_raises(self, service, mock_repo, mock_task_pool):
@@ -653,3 +653,47 @@ class TestSubmitAttestation:
                 submission="Here is my work",
                 attestation_id="att_1",
             )
+
+
+@pytest.mark.parametrize("status,submitted_at", [
+    (ParticipationStatus.SUBMITTED, datetime(2025, 6, 2)),
+    (ParticipationStatus.SUBMITTED, None),
+    (ParticipationStatus.REJECTED, datetime(2025, 6, 2)),
+    (ParticipationStatus.COMPLETED, datetime(2025, 6, 2)),
+    (ParticipationStatus.CANCELLED, None),
+    (ParticipationStatus.ACTIVE, datetime(2025, 6, 2)),
+])
+async def test_withdraw_cannot_reopen_delivered_share(service, mock_task_pool, status, submitted_at):
+    from acn.services.task_service import TaskStatusConflict
+
+    mock_task_pool.get_participation.return_value = _make_participation(
+        status=status, submitted_at=submitted_at,
+    )
+    with pytest.raises(TaskStatusConflict):
+        await service.cancel_participation("task-001", "part-001", "agent-001")
+    mock_task_pool.cancel_participation.assert_not_awaited()
+
+
+async def test_withdraw_conflicts_with_concurrent_submission(service, mock_task_pool):
+    from acn.services.task_service import TaskStatusConflict
+
+    mock_task_pool.get_participation.return_value = _make_participation()
+    mock_task_pool.cancel_participation.side_effect = ValueError(
+        "Participation is no longer in the expected status"
+    )
+    with pytest.raises(TaskStatusConflict):
+        await service.cancel_participation("task-001", "part-001", "agent-001")
+    mock_task_pool.cancel_participation.assert_awaited_once_with(
+        "part-001", "task-001", expected_status="active",
+    )
+
+
+async def test_withdraw_pending_application(service, mock_repo, mock_task_pool):
+    mock_task_pool.get_participation.return_value = _make_participation(
+        status=ParticipationStatus.APPLIED,
+    )
+    mock_repo.find_by_id.return_value = _make_task()
+    await service.cancel_participation("task-001", "part-001", "agent-001")
+    mock_task_pool.cancel_participation.assert_awaited_once_with(
+        "part-001", "task-001", expected_status="applied",
+    )
