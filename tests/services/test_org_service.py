@@ -116,7 +116,8 @@ class TestCreateOrg:
             subnet_id="org-demo-1",
         )
 
-        assert org.owner.kind == "none"
+        assert org.owner.kind == "agent"
+        assert org.owner.subject == "agt_steward"
         assert org.created_by.subject == "agt_steward"
         assert org.steward_agent_id == "agt_steward"
         assert org.subnet_id == "org-demo-1"
@@ -145,13 +146,14 @@ class TestCreateOrg:
         assert ei.value.reason == "steward_not_owned"
 
     async def test_human_create_with_owned_steward(
-        self, org_service, mock_org_repo, mock_subnet_service
+        self, org_service, mock_org_repo, mock_subnet_service, mock_agent_service
     ):
         subnet = Subnet(
             slug="org-owned-1",
             name="Owned",
-            owner="agt_steward",
-            member_agent_ids={"agt_steward"},
+            owner="auth0|u",
+            owner_kind="human",
+            member_agent_ids=set(),
         )
         mock_subnet_service.get_subnet = AsyncMock(
             side_effect=[SubnetNotFoundException("x"), subnet]
@@ -166,7 +168,19 @@ class TestCreateOrg:
             subnet_id="org-owned-1",
         )
         assert org.created_by.kind == "human"
+        assert org.owner.kind == "human"
+        assert org.owner.subject == "auth0|u"
         assert org.steward_agent_id == "agt_steward"
+        created = mock_subnet_service.create_subnet.await_args.kwargs
+        assert created["owner"] == "auth0|u"
+        assert created["owner_kind"] == "human"
+        assert created["include_owner_as_member"] is False
+        mock_subnet_service.add_member.assert_awaited_once_with(
+            "org-owned-1", "agt_steward"
+        )
+        mock_agent_service.join_subnet.assert_awaited_once_with(
+            "agt_steward", "org-owned-1"
+        )
 
     async def test_subnet_already_bound_rejected(
         self, org_service, mock_org_repo, mock_subnet_service
@@ -184,6 +198,28 @@ class TestCreateOrg:
                 subnet_id="taken",
             )
         assert ei.value.reason == "subnet_already_bound"
+
+    async def test_existing_subnet_rejects_owner_kind_mismatch(
+        self, org_service, mock_subnet_service
+    ):
+        """Human create must not bind a subnet whose owner string matches but kind is agent."""
+        subnet = Subnet(
+            slug="kind-mismatch",
+            name="KM",
+            owner="auth0|u",
+            owner_kind="agent",
+            member_agent_ids={"auth0|u"},
+        )
+        mock_subnet_service.get_subnet = AsyncMock(return_value=subnet)
+        with pytest.raises(OrgConflictError) as ei:
+            await org_service.create_org(
+                display_name="KM",
+                caller_type="human",
+                caller_sub="auth0|u",
+                steward_agent_id="agt_steward",
+                subnet_id="kind-mismatch",
+            )
+        assert ei.value.reason == "subnet_owner_mismatch"
 
     async def test_create_rolls_back_new_subnet_on_save_fail(
         self, org_service, mock_org_repo, mock_subnet_service
@@ -316,6 +352,81 @@ class TestOwnership:
         )
         assert result.owner.subject == "agt_new"
         mock_subnet_service.transfer_owner.assert_awaited_once()
+
+    async def test_claim_agent_from_human_subnet_sets_owner_kind(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org(
+            created_by=OrgPrincipal(kind="human", subject="auth0|u"),
+            steward_agent_id="agt_steward",
+        )
+        mock_org_repo.find_org.return_value = org
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=Subnet(
+                slug=org.subnet_id,
+                name="T",
+                owner="auth0|u",
+                owner_kind="human",
+            )
+        )
+        mock_subnet_service.assign_governance_owner = AsyncMock(
+            return_value=Subnet(
+                slug=org.subnet_id,
+                name="T",
+                owner="agt_new",
+                owner_kind="agent",
+            )
+        )
+
+        result = await org_service.claim(
+            org.org_id,
+            caller_type="human",
+            caller_sub="auth0|u",
+            owner_kind="agent",
+            owner_subject="agt_new",
+        )
+        assert result.owner.kind == "agent"
+        assert result.owner.subject == "agt_new"
+        mock_subnet_service.transfer_owner.assert_not_called()
+        mock_subnet_service.assign_governance_owner.assert_awaited_once_with(
+            org.subnet_id,
+            owner_kind="agent",
+            owner="agt_new",
+            include_as_member=True,
+        )
+
+    async def test_claim_from_human_compensates_without_adding_human_member(
+        self, org_service, mock_org_repo, mock_subnet_service
+    ):
+        org = _stored_org(
+            created_by=OrgPrincipal(kind="human", subject="auth0|u"),
+            steward_agent_id="agt_steward",
+        )
+        mock_org_repo.find_org.return_value = org
+        mock_org_repo.save_org.side_effect = RuntimeError("persist fail")
+        mock_subnet_service.get_subnet = AsyncMock(
+            return_value=Subnet(
+                slug=org.subnet_id,
+                name="T",
+                owner="auth0|u",
+                owner_kind="human",
+            )
+        )
+
+        with pytest.raises(RuntimeError, match="persist fail"):
+            await org_service.claim(
+                org.org_id,
+                caller_type="human",
+                caller_sub="auth0|u",
+                owner_kind="agent",
+                owner_subject="agt_new",
+            )
+        mock_subnet_service.transfer_owner.assert_not_called()
+        assert mock_subnet_service.assign_governance_owner.await_count == 2
+        restore = mock_subnet_service.assign_governance_owner.await_args_list[1]
+        assert restore.kwargs["owner_kind"] == "human"
+        assert restore.kwargs["owner"] == "auth0|u"
+        assert restore.kwargs["include_as_member"] is False
 
     async def test_claim_emits_platform_owner_changed(
         self, org_service, mock_org_repo, mock_subnet_service, mock_webhook
@@ -664,6 +775,35 @@ class TestUpdateAndMembersView:
             harness_secret="s3cret",
         )
         mock_subnet_service.update_harness.assert_awaited_once()
+        assert mock_subnet_service.update_harness.await_args.kwargs["owner"] == "agt_steward"
+
+    async def test_human_create_registers_harness_as_human_owner(
+        self, org_service, mock_subnet_service
+    ):
+        subnet = Subnet(
+            slug="org-hh",
+            name="HH",
+            owner="auth0|u",
+            owner_kind="human",
+            member_agent_ids={"agt_steward"},
+        )
+        mock_subnet_service.get_subnet = AsyncMock(
+            side_effect=[SubnetNotFoundException("x"), subnet]
+        )
+        mock_subnet_service.create_subnet = AsyncMock(return_value=subnet)
+        mock_subnet_service.update_harness = AsyncMock(return_value=subnet)
+
+        await org_service.create_org(
+            display_name="HH",
+            caller_type="human",
+            caller_sub="auth0|u",
+            steward_agent_id="agt_steward",
+            subnet_id="org-hh",
+            harness_url="https://hook.example/acn",
+            harness_secret="s3cret",
+        )
+        assert mock_subnet_service.update_harness.await_args.kwargs["owner"] == "auth0|u"
+        mock_subnet_service.add_member.assert_not_called()
 
 
 class TestPrivateOrgReadACL:

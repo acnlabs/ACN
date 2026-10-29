@@ -89,6 +89,25 @@ class TestTransferOwnerSuccess:
         result = await svc.transfer_owner("subnet-abc", "alice", "bob")
 
         assert result.owner == "bob"
+        assert result.owner_kind == "agent"
+
+    @pytest.mark.asyncio
+    async def test_transfer_from_human_owner_sets_agent_kind(self):
+        subnet = Subnet(
+            slug="subnet-abc",
+            name="Test",
+            owner="auth0|neil",
+            owner_kind="human",
+            member_agent_ids=set(),
+        )
+        svc = SubnetService(_make_repo(subnet))
+
+        result = await svc.transfer_owner("subnet-abc", "auth0|neil", "bob")
+
+        assert result.owner == "bob"
+        assert result.owner_kind == "agent"
+        assert "bob" in result.member_agent_ids
+        assert "auth0|neil" not in result.member_agent_ids
 
     @pytest.mark.asyncio
     async def test_new_owner_is_added_to_member_set(self):

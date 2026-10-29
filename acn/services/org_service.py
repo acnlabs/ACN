@@ -309,6 +309,11 @@ class OrgService:
         resolved_plugins = normalize_org_plugins(plugins)
         validate_org_plugins(resolved_plugins)
 
+        governance_kind: Literal["human", "agent"] = (
+            "agent" if caller_type == "agent" else "human"
+        )
+        governance_subject = steward if governance_kind == "agent" else caller_sub
+
         slug = subnet_id or self._generate_subnet_slug(display_name)
         try:
             existing = await self.subnet_service.get_subnet(slug)
@@ -317,10 +322,13 @@ class OrgService:
 
         created_subnet = False
         if existing is not None:
-            if existing.owner != steward:
+            existing_kind = getattr(existing, "owner_kind", "agent")
+            if existing_kind not in ("agent", "human", "none"):
+                existing_kind = "agent"
+            if existing.owner != governance_subject or existing_kind != governance_kind:
                 raise OrgConflictError(
                     "subnet_owner_mismatch",
-                    f"Subnet '{slug}' exists but is not owned by steward",
+                    f"Subnet '{slug}' exists but is not owned by the caller",
                 )
             bound = await self.repository.find_org_by_subnet(slug)
             if bound is not None and bound.status != "dissolved":
@@ -333,21 +341,40 @@ class OrgService:
             subnet = await self.subnet_service.create_subnet(
                 slug=slug,
                 name=display_name,
-                owner=steward,
+                owner=governance_subject,
+                owner_kind=governance_kind,
+                include_owner_as_member=governance_kind == "agent",
                 description=f"Org fence for {display_name}",
                 is_private=is_private,
                 join_policy=join_policy,
             )
             created_subnet = True
+
+        if steward not in set(getattr(subnet, "member_agent_ids", None) or []):
             try:
-                await self.agent_service.join_subnet(steward, subnet.slug)
-            except Exception:  # noqa: BLE001
-                logger.warning(
-                    "org_steward_agent_join_failed",
-                    steward=steward,
-                    slug=subnet.slug,
-                    exc_info=True,
-                )
+                await self.subnet_service.add_member(subnet.slug, steward)
+            except Exception:
+                if created_subnet:
+                    try:
+                        await self.subnet_service.delete_subnet(
+                            subnet.slug, governance_subject
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.error(
+                            "org_create_subnet_rollback_failed",
+                            slug=subnet.slug,
+                            exc_info=True,
+                        )
+                raise
+        try:
+            await self.agent_service.join_subnet(steward, subnet.slug)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "org_steward_agent_join_failed",
+                steward=steward,
+                slug=subnet.slug,
+                exc_info=True,
+            )
 
         org_id = f"org_{uuid4().hex}"
         now = datetime.now(UTC)
@@ -357,7 +384,7 @@ class OrgService:
             created_by=OrgPrincipal(kind=caller_type, subject=caller_sub),
             subnet_id=subnet.slug,
             steward_agent_id=steward,
-            owner=OrgOwner(kind="none"),
+            owner=OrgOwner(kind=governance_kind, subject=governance_subject),
             charter=charter or {},
             plugins=resolved_plugins,
             execution_env=execution_env,
@@ -377,7 +404,7 @@ class OrgService:
         except Exception as save_exc:
             if created_subnet:
                 try:
-                    await self.subnet_service.delete_subnet(subnet.slug, steward)
+                    await self.subnet_service.delete_subnet(subnet.slug, governance_subject)
                 except Exception:  # noqa: BLE001
                     logger.error(
                         "org_create_subnet_rollback_failed",
@@ -407,7 +434,7 @@ class OrgService:
             try:
                 await self.subnet_service.update_harness(
                     slug=subnet.slug,
-                    owner=steward,
+                    owner=governance_subject,
                     harness_url=harness_url,
                     harness_secret=harness_secret,
                 )
@@ -856,46 +883,115 @@ class OrgService:
                 "designated owner agent must be owned by the calling human",
             )
 
+    async def _align_subnet_human(
+        self,
+        org: Org,
+        subject: str,
+    ) -> tuple[bool, str, Literal["agent", "human", "none"]]:
+        subnet = await self.subnet_service.get_subnet(org.subnet_id)
+        previous = subnet.owner
+        previous_kind = getattr(subnet, "owner_kind", "agent")
+        if not isinstance(previous_kind, str):
+            previous_kind = "agent"
+        if previous_kind == "human" and previous == subject:
+            return False, previous, "human"
+        await self.subnet_service.assign_governance_owner(
+            org.subnet_id,
+            owner_kind="human",
+            owner=subject,
+            include_as_member=False,
+        )
+        return True, previous, previous_kind  # type: ignore[return-value]
+
+    async def _compensate_subnet_human(
+        self,
+        org: Org,
+        *,
+        previous_owner: str,
+        previous_kind: Literal["agent", "human", "none"],
+    ) -> None:
+        try:
+            await self.subnet_service.assign_governance_owner(
+                org.subnet_id,
+                owner_kind=previous_kind,
+                owner=previous_owner,
+                include_as_member=False,
+            )
+        except Exception:  # noqa: BLE001
+            logger.error(
+                "org_subnet_human_owner_compensate_failed",
+                org_id=org.org_id,
+                previous_owner=previous_owner,
+                previous_kind=previous_kind,
+                exc_info=True,
+            )
+
     async def _align_subnet_owner(
         self,
         org: Org,
         *,
         new_owner_agent: str,
-    ) -> tuple[bool, str]:
-        """Transfer subnet to ``new_owner_agent`` if needed.
+    ) -> tuple[bool, str, Literal["agent", "human", "none"]]:
+        """Point the fence at an agent owner.
 
-        Returns ``(transferred, previous_owner)`` for compensate-on-failure.
+        Agent-owned fences use ``transfer_owner`` (new owner becomes a member).
+        A human or unclaimed fence uses ``assign_governance_owner`` so the
+        kind flips to agent without writing the previous human id into the
+        member set.
+
+        Returns ``(transferred, previous_owner, previous_kind)``.
         """
         subnet = await self.subnet_service.get_subnet(org.subnet_id)
         previous = subnet.owner
-        if previous == new_owner_agent:
-            return False, previous
-        await self.subnet_service.transfer_owner(
-            org.subnet_id,
-            current_owner=previous,
-            new_owner=new_owner_agent,
-        )
+        previous_kind = getattr(subnet, "owner_kind", "agent")
+        if previous_kind not in ("agent", "human", "none"):
+            previous_kind = "agent"
+        if previous_kind == "agent" and previous == new_owner_agent:
+            return False, previous, "agent"
+        if previous_kind == "agent":
+            await self.subnet_service.transfer_owner(
+                org.subnet_id,
+                current_owner=previous,
+                new_owner=new_owner_agent,
+            )
+        else:
+            await self.subnet_service.assign_governance_owner(
+                org.subnet_id,
+                owner_kind="agent",
+                owner=new_owner_agent,
+                include_as_member=True,
+            )
         org.steward_agent_id = new_owner_agent
-        return True, previous
+        return True, previous, previous_kind
 
     async def _compensate_subnet_owner(
         self,
         org: Org,
         *,
         previous_owner: str,
+        previous_kind: Literal["agent", "human", "none"],
         current_owner: str,
     ) -> None:
         try:
-            await self.subnet_service.transfer_owner(
-                org.subnet_id,
-                current_owner=current_owner,
-                new_owner=previous_owner,
-            )
+            if previous_kind == "agent":
+                await self.subnet_service.transfer_owner(
+                    org.subnet_id,
+                    current_owner=current_owner,
+                    new_owner=previous_owner,
+                )
+            else:
+                await self.subnet_service.assign_governance_owner(
+                    org.subnet_id,
+                    owner_kind=previous_kind,
+                    owner=previous_owner,
+                    include_as_member=False,
+                )
         except Exception:  # noqa: BLE001
             logger.error(
                 "org_subnet_owner_compensate_failed",
                 org_id=org.org_id,
                 previous_owner=previous_owner,
+                previous_kind=previous_kind,
                 current_owner=current_owner,
                 exc_info=True,
             )
@@ -929,9 +1025,14 @@ class OrgService:
 
         transferred = False
         previous_subnet_owner = ""
+        previous_owner_kind: Literal["agent", "human", "none"] = "agent"
         if kind == "agent":
-            transferred, previous_subnet_owner = await self._align_subnet_owner(
-                org, new_owner_agent=subject
+            transferred, previous_subnet_owner, previous_owner_kind = (
+                await self._align_subnet_owner(org, new_owner_agent=subject)
+            )
+        else:
+            transferred, previous_subnet_owner, previous_owner_kind = (
+                await self._align_subnet_human(org, subject)
             )
 
         org.owner = OrgOwner(kind=kind, subject=subject)
@@ -939,11 +1040,18 @@ class OrgService:
         try:
             await self.repository.save_org(org)
         except Exception:
-            if transferred:
+            if transferred and kind == "agent":
                 await self._compensate_subnet_owner(
                     org,
                     previous_owner=previous_subnet_owner,
+                    previous_kind=previous_owner_kind,
                     current_owner=subject,
+                )
+            elif transferred:
+                await self._compensate_subnet_human(
+                    org,
+                    previous_owner=previous_subnet_owner,
+                    previous_kind=previous_owner_kind,
                 )
             raise
 
@@ -989,9 +1097,14 @@ class OrgService:
 
         transferred = False
         previous_subnet_owner = ""
+        previous_owner_kind: Literal["agent", "human", "none"] = "agent"
         if new_owner_kind == "agent":
-            transferred, previous_subnet_owner = await self._align_subnet_owner(
-                org, new_owner_agent=new_owner_subject
+            transferred, previous_subnet_owner, previous_owner_kind = (
+                await self._align_subnet_owner(org, new_owner_agent=new_owner_subject)
+            )
+        else:
+            transferred, previous_subnet_owner, previous_owner_kind = (
+                await self._align_subnet_human(org, new_owner_subject)
             )
 
         org.owner = OrgOwner(kind=new_owner_kind, subject=new_owner_subject)
@@ -999,11 +1112,18 @@ class OrgService:
         try:
             await self.repository.save_org(org)
         except Exception:
-            if transferred:
+            if transferred and new_owner_kind == "agent":
                 await self._compensate_subnet_owner(
                     org,
                     previous_owner=previous_subnet_owner,
+                    previous_kind=previous_owner_kind,
                     current_owner=new_owner_subject,
+                )
+            elif transferred:
+                await self._compensate_subnet_human(
+                    org,
+                    previous_owner=previous_subnet_owner,
+                    previous_kind=previous_owner_kind,
                 )
             raise
 
@@ -1032,9 +1152,29 @@ class OrgService:
         if not self._is_owner(org, caller_type, caller_sub):
             raise OrgPermissionError("ownership_mismatch", "Caller is not Org owner")
 
+        subnet = await self.subnet_service.get_subnet(org.subnet_id)
+        previous_owner = subnet.owner
+        previous_kind = getattr(subnet, "owner_kind", "agent")
+        if not isinstance(previous_kind, str):
+            previous_kind = "agent"
+        await self.subnet_service.assign_governance_owner(
+            org.subnet_id,
+            owner_kind="none",
+            owner="",
+            include_as_member=False,
+        )
+
         org.owner = OrgOwner(kind="none")
         org.updated_at = datetime.now(UTC)
-        await self.repository.save_org(org)
+        try:
+            await self.repository.save_org(org)
+        except Exception:
+            await self._compensate_subnet_human(
+                org,
+                previous_owner=previous_owner,
+                previous_kind=previous_kind,  # type: ignore[arg-type]
+            )
+            raise
         await self._emit(
             org,
             WebhookEventType.ORG_OWNER_CHANGED,

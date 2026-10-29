@@ -59,6 +59,10 @@ class Subnet:
     slug: str
     name: str
     owner: str
+    # Governance owner. ``agent`` keeps the historical "owner is an agent id"
+    # shape. ``human`` stores an IdP subject and is not a member. ``none``
+    # is unclaimed; ``owner`` is empty.
+    owner_kind: Literal["agent", "human", "none"] = "agent"
     description: str | None = None
     is_private: bool = False
     security_config: dict = field(default_factory=dict)
@@ -96,7 +100,13 @@ class Subnet:
             raise ValueError("slug cannot be empty")
         if not self.name:
             raise ValueError("name cannot be empty")
-        if not self.owner:
+        if self.owner_kind not in ("agent", "human", "none"):
+            raise ValueError(
+                f"owner_kind must be agent, human, or none, got {self.owner_kind!r}"
+            )
+        if self.owner_kind == "none":
+            self.owner = ""
+        elif not self.owner:
             raise ValueError("owner cannot be empty")
         # Reserved slugs
         if self.slug in _RESERVED_SLUGS:
@@ -201,6 +211,7 @@ class Subnet:
             "id": self.id,
             "name": self.name,
             "owner": self.owner,
+            "owner_kind": self.owner_kind,
             "description": self.description,
             "is_private": self.is_private,
             "security_config": self.security_config,
@@ -257,6 +268,8 @@ class Subnet:
                 data["created_at"] = datetime.now(UTC)
         if isinstance(data.get("member_agent_ids"), list):
             data["member_agent_ids"] = set(data["member_agent_ids"])
+        if data.get("owner_kind") not in ("agent", "human", "none"):
+            data["owner_kind"] = "agent"
         # ADR-0004 legacy auto-upgrade — see docstring above.
         if "join_policy" not in data and data.get("is_private") is True:
             data["join_policy"] = "approval"

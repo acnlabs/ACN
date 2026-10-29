@@ -238,6 +238,8 @@ class SubnetService:
         lifecycle: Literal["persistent", "task_scoped"] = "persistent",
         linked_task_id: str | None = None,
         join_policy: Literal["open", "approval"] | None = None,
+        owner_kind: Literal["agent", "human", "none"] = "agent",
+        include_owner_as_member: bool | None = None,
     ) -> Subnet:
         """
         Create a new subnet.
@@ -305,12 +307,25 @@ class SubnetService:
         # Defence-in-depth — the route layer already enforces AgentApiKeyDep
         # so this guard should never fire in production; it catches internal
         # callers or future code changes that bypass the route layer.
-        if owner == "backend@internal":
+        if owner_kind not in ("agent", "human", "none"):
+            raise ValueError(
+                f"owner_kind must be agent, human, or none, got {owner_kind!r}"
+            )
+        if owner_kind == "none":
+            owner = ""
+        if owner == "backend@internal" or (
+            owner_kind == "human" and owner == "system"
+        ):
             raise ValueError(
                 "ADR-0002: 'backend@internal' is not a valid subnet owner; "
                 "register a service-account agent and create subnets through "
                 "that agent's api key."
             )
+        join_owner = (
+            include_owner_as_member
+            if include_owner_as_member is not None
+            else owner_kind == "agent"
+        )
 
         # Check if subnet already exists
         if await self.repository.exists(slug):
@@ -405,6 +420,7 @@ class SubnetService:
             slug=slug,
             name=name,
             owner=owner,
+            owner_kind=owner_kind,
             description=description,
             is_private=is_private,
             security_config=security_config or {},
@@ -425,7 +441,8 @@ class SubnetService:
         # or parent member). We still bypass ``add_member`` here because
         # this is the initial owner bootstrap write, not a membership
         # mutation requested against an existing child subnet.
-        subnet.add_member(owner)
+        if join_owner and owner:
+            subnet.add_member(owner)
 
         logger.info(
             "create_subnet",
@@ -1684,6 +1701,44 @@ class SubnetService:
     # Ownership transfer (ADR-0005: Subnet ownership transfer)
     # ------------------------------------------------------------------
 
+    async def assign_governance_owner(
+        self,
+        slug: str,
+        *,
+        owner_kind: Literal["agent", "human", "none"],
+        owner: str,
+        include_as_member: bool = False,
+    ) -> Subnet:
+        """Set who governs this subnet.
+
+        The owner is not added to the member set unless ``include_as_member``
+        is true and the owner is an agent. Previous members stay members.
+        """
+        if owner_kind not in ("agent", "human", "none"):
+            raise ValueError(
+                f"owner_kind must be agent, human, or none, got {owner_kind!r}"
+            )
+        if slug in {"public", "system"}:
+            raise PermissionError(f"Cannot transfer system subnet: {slug}")
+        if owner_kind == "none":
+            owner = ""
+        elif not owner or owner in {"backend@internal", "system"}:
+            raise ValueError("owner is not a valid subnet owner")
+
+        subnet = await self.get_subnet(slug)
+        subnet.owner_kind = owner_kind
+        subnet.owner = owner
+        if include_as_member and owner_kind == "agent" and owner:
+            subnet.add_member(owner)
+        await self.repository.save(subnet)
+        logger.info(
+            "subnet_governance_owner_assigned",
+            slug=slug,
+            owner_kind=owner_kind,
+            owner=owner,
+        )
+        return subnet
+
     async def transfer_owner(
         self,
         slug: str,
@@ -1786,6 +1841,7 @@ class SubnetService:
         transferred = dataclasses.replace(
             subnet,
             owner=new_owner,
+            owner_kind="agent",
             member_agent_ids=new_members,
         )
         await self.repository.save(transferred)

@@ -499,15 +499,13 @@ class SubnetInfo(BaseModel):
     owner: str = Field(
         ...,
         description=(
-            "Owner agent_id. Must reference a registered ACN agent (ADR-0002). "
-            "New subnets are rejected if owner is 'backend@internal' or any "
-            "other non-agent placeholder. "
-            "A small number of pre-existing workspace-mirror subnets carry the "
-            "legacy placeholder 'backend@internal' — these are being migrated to "
-            "a service-account agent by agentplanet/backend (tracked in "
-            "acnlabs/ACN#48). Once migration completes this field is guaranteed "
-            "to resolve to a live agent record."
+            "Governance owner subject. When owner_kind is agent, an agent id. "
+            "When human, an IdP subject. Empty when owner_kind is none."
         ),
+    )
+    owner_kind: Literal["agent", "human", "none"] = Field(
+        "agent",
+        description="Who the owner subject names. Human owners are not members.",
     )
     description: str | None = Field(None, description="Subnet description")
 

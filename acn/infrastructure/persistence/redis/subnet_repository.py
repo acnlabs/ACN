@@ -414,6 +414,7 @@ class RedisSubnetRepository(ISubnetRepository):
             "slug": slug_value,
             "name": subnet_dict["name"],
             "owner": subnet_dict["owner"],
+            "owner_kind": subnet_dict.get("owner_kind") or "agent",
             "description": description,
             "is_private": is_private,
             "security_config": self._safe_loads(subnet_dict.get("security_config", "{}"), {}),

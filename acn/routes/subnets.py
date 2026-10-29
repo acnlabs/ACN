@@ -60,6 +60,12 @@ def _coerce_optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _coerce_owner_kind(value: object) -> Literal["agent", "human", "none"]:
+    if value in ("agent", "human", "none"):
+        return value  # type: ignore[return-value]
+    return "agent"
+
+
 def _coerce_lifecycle(value: object) -> Literal["persistent", "task_scoped"]:
     """Same intent as ``_coerce_optional_str`` for the lifecycle
     Literal. Defaults to ``"persistent"`` on any unexpected value.
@@ -144,6 +150,7 @@ def _subnet_entity_to_info(subnet, *, parent_uuid: str | None = None) -> SubnetI
         id=_coerce_optional_str(getattr(subnet, "id", None)) or subnet.slug,
         name=subnet.name,
         owner=subnet.owner,
+        owner_kind=_coerce_owner_kind(getattr(subnet, "owner_kind", "agent")),
         description=subnet.description,
         is_private=subnet.is_private,
         security_config=subnet.security_config,
@@ -211,9 +218,18 @@ async def _resolve_caller_access(
     sub = payload.get("sub", "")
     caller_type = payload.get("type", "user")
 
+    owner_kind = getattr(subnet, "owner_kind", "agent")
+    if not isinstance(owner_kind, str):
+        owner_kind = "agent"
+
     if caller_type == "agent":
         member_ids: set = getattr(subnet, "member_agent_ids", None) or set()
-        return sub == subnet.owner or sub in member_ids
+        if owner_kind == "agent" and sub == subnet.owner:
+            return True
+        return sub in member_ids
+
+    if owner_kind == "human" and sub and sub == getattr(subnet, "owner", ""):
+        return True
 
     # User JWT path — ownership-chain bridge.
     try:
