@@ -943,9 +943,10 @@ class OrgService:
         """
         subnet = await self.subnet_service.get_subnet(org.subnet_id)
         previous = subnet.owner
-        previous_kind = getattr(subnet, "owner_kind", "agent")
-        if previous_kind not in ("agent", "human", "none"):
-            previous_kind = "agent"
+        raw_kind = getattr(subnet, "owner_kind", "agent")
+        previous_kind: Literal["agent", "human", "none"] = (
+            raw_kind if raw_kind in ("agent", "human", "none") else "agent"
+        )
         if previous_kind == "agent" and previous == new_owner_agent:
             return False, previous, "agent"
         if previous_kind == "agent":
