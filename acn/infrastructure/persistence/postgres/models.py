@@ -197,6 +197,9 @@ class SubnetModel(Base):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     owner: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    owner_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="agent", server_default="agent"
+    )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     security_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

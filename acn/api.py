@@ -108,6 +108,7 @@ from .routes import (
     allowlist,
     analytics,
     ard,
+    chat_subnets,
     communication,
     dependencies,
     follows,
@@ -1444,6 +1445,7 @@ app.include_router(invoke.router)
 app.include_router(manifest.router)
 app.include_router(sessions.router)
 app.include_router(subnets.router)
+app.include_router(chat_subnets.router)
 # Subnet gateway WebSocket (A2A NAT path) — same process as REST API
 app.include_router(gateway_connect.router)
 app.include_router(monitoring.router)

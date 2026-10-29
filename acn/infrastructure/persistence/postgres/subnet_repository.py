@@ -65,6 +65,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             id=row.id,
             name=row.name,
             owner=row.owner,
+            owner_kind=row.owner_kind or "agent",
             description=row.description,
             is_private=row.is_private,
             security_config=row.security_config or {},
@@ -89,6 +90,7 @@ class PostgresSubnetRepository(ISubnetRepository):
             id=subnet.id,
             name=subnet.name,
             owner=subnet.owner,
+            owner_kind=getattr(subnet, "owner_kind", None) or "agent",
             description=subnet.description,
             is_private=subnet.is_private,
             security_config=subnet.security_config or None,
@@ -123,6 +125,7 @@ class PostgresSubnetRepository(ISubnetRepository):
                     .values(
                         name=model.name,
                         owner=model.owner,
+                        owner_kind=model.owner_kind,
                         description=model.description,
                         is_private=model.is_private,
                         security_config=model.security_config,
