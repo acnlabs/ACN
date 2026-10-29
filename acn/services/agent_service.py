@@ -880,6 +880,7 @@ class AgentService:
         providers: list[dict] | None = None,
         model_prices: list[dict] | None = None,
         byo_degraded: bool | None = None,
+        byo_key_invalid: bool | None = None,
     ) -> Agent:
         """
         Update agent heartbeat
@@ -897,6 +898,8 @@ class AgentService:
                 clears providers.
             byo_degraded: Owner UI flag when BYO quota forced an official
                 fallback. ``None`` leaves unchanged; ``False`` clears.
+            byo_key_invalid: Owner UI flag when the BYO catalog rejected the
+                API key (401/403). ``None`` leaves unchanged; ``False`` clears.
 
         Returns:
             Updated agent entity
@@ -930,6 +933,12 @@ class AgentService:
                 meta["byo_degraded"] = True
             else:
                 meta.pop("byo_degraded", None)
+            meta_dirty = True
+        if byo_key_invalid is not None:
+            if byo_key_invalid:
+                meta["byo_key_invalid"] = True
+            else:
+                meta.pop("byo_key_invalid", None)
             meta_dirty = True
         # Flat supported_models is legacy. Host ignores it; retire leftovers on
         # every heartbeat so agents that only ping preferred_model still clean up.

@@ -472,6 +472,11 @@ export type RuntimeModelReport = {
    * models were kept. Listen uses this for BYO → official degrade.
    */
   quotaExhausted?: boolean;
+  /**
+   * True when a provider catalog call returned 401/403 (bad or rotated key).
+   * Listen must still run the degrade tick — never treat this as “no report”.
+   */
+  keyInvalid?: boolean;
 };
 
 /** A provider `/models` body is a list only when `data` is an array. */
@@ -598,14 +603,34 @@ export async function fetchRuntimeModelReport(opts: {
   const priceRows: ReportedModelPrice[] = [];
   let anyProbe = false;
   let allQuota = true;
+  let keyInvalid = false;
   for (const endpoint of endpoints) {
     try {
       const res = await fetchFn(endpoint.modelsUrl, {
         headers: { Authorization: `Bearer ${endpoint.apiKey}` },
       });
-      if (!res.ok) return {};
+      if (!res.ok) {
+        // Never return ``{}`` here — listen would skip the degrade tick and
+        // leave a sticky ``byo_degraded`` on ACN after a rotated/invalid key.
+        if (res.status === 401 || res.status === 403) keyInvalid = true;
+        allQuota = false;
+        providers.push({
+          id: endpoint.id,
+          models: [],
+          current: endpoint.current,
+        });
+        continue;
+      }
       const body = await res.json();
-      if (!providerBodyHasModelList(body)) return {};
+      if (!providerBodyHasModelList(body)) {
+        allQuota = false;
+        providers.push({
+          id: endpoint.id,
+          models: [],
+          current: endpoint.current,
+        });
+        continue;
+      }
       let report = runtimeModelReportFromProviderBody(body, {
         provider: endpoint.id,
         env,
@@ -656,7 +681,12 @@ export async function fetchRuntimeModelReport(opts: {
       });
       if (report.modelPrices?.length) priceRows.push(...report.modelPrices);
     } catch {
-      return {};
+      allQuota = false;
+      providers.push({
+        id: endpoint.id,
+        models: [],
+        current: endpoint.current,
+      });
     }
   }
   if (!providers.length) return {};
@@ -672,6 +702,7 @@ export async function fetchRuntimeModelReport(opts: {
     providers,
     modelPrices: modelPrices?.length ? modelPrices : undefined,
     quotaExhausted: quotaExhausted || undefined,
+    keyInvalid: keyInvalid || undefined,
   };
 }
 
@@ -829,6 +860,8 @@ export async function postAgentHeartbeat(opts: {
   modelPrices?: ReportedModelPrice[];
   /** Owner UI flag; omit leaves prior value. */
   byoDegraded?: boolean;
+  /** Owner UI: provider catalog rejected this API key (401/403). */
+  byoKeyInvalid?: boolean;
   fetchFn?: typeof fetch;
 }): Promise<
   | {
@@ -837,6 +870,7 @@ export async function postAgentHeartbeat(opts: {
       supported_models?: string[] | null;
       desired_preferred_model?: string | null;
       byo_degraded?: boolean | null;
+      byo_key_invalid?: boolean | null;
     }
   | { ok: false; reason: string }
 > {
@@ -863,6 +897,9 @@ export async function postAgentHeartbeat(opts: {
   if (opts.byoDegraded !== undefined) {
     payload.byo_degraded = opts.byoDegraded;
   }
+  if (opts.byoKeyInvalid !== undefined) {
+    payload.byo_key_invalid = opts.byoKeyInvalid;
+  }
   const body = Object.keys(payload).length ? JSON.stringify(payload) : undefined;
   try {
     const res = await fetchFn(url, { method: 'POST', headers, body });
@@ -873,23 +910,30 @@ export async function postAgentHeartbeat(opts: {
     let supported: string[] | null | undefined;
     let desired: string | null | undefined;
     let byoDegraded: boolean | null | undefined;
+    let byoKeyInvalid: boolean | null | undefined;
     try {
       const json = (await res.json()) as {
         preferred_model?: string | null;
         supported_models?: string[] | null;
         desired_preferred_model?: string | null;
         byo_degraded?: boolean | null;
+        byo_key_invalid?: boolean | null;
       };
       preferred = json.preferred_model;
       supported = json.supported_models;
       desired = json.desired_preferred_model;
       byoDegraded =
         typeof json.byo_degraded === 'boolean' ? json.byo_degraded : undefined;
+      byoKeyInvalid =
+        typeof json.byo_key_invalid === 'boolean'
+          ? json.byo_key_invalid
+          : undefined;
     } catch {
       preferred = opts.preferredModel ?? null;
       supported = opts.supportedModels ?? null;
       desired = undefined;
       byoDegraded = undefined;
+      byoKeyInvalid = undefined;
     }
     return {
       ok: true,
@@ -897,6 +941,7 @@ export async function postAgentHeartbeat(opts: {
       supported_models: supported,
       desired_preferred_model: desired,
       byo_degraded: byoDegraded,
+      byo_key_invalid: byoKeyInvalid,
     };
   } catch (err) {
     return {

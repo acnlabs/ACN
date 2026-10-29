@@ -2679,6 +2679,13 @@ class HeartbeatBody(BaseModel):
             "false clears the flag after recovery."
         ),
     )
+    byo_key_invalid: bool | None = Field(
+        default=None,
+        description=(
+            "Owner UI: provider catalog rejected the BYO API key (401/403). "
+            "Omit leaves unchanged; false clears after a healthy key recovers."
+        ),
+    )
 
     @field_validator("model_prices")
     @classmethod
@@ -2788,6 +2795,11 @@ async def agent_heartbeat(
             if "byo_degraded" in body.model_fields_set
             else {}
         )
+        key_invalid_update = (
+            {"byo_key_invalid": body.byo_key_invalid}
+            if "byo_key_invalid" in body.model_fields_set
+            else {}
+        )
         flat_clear = (
             body.supported_models
             if "supported_models" in body.model_fields_set and not provider_update
@@ -2800,6 +2812,7 @@ async def agent_heartbeat(
             **provider_update,
             **quote_update,
             **degrade_update,
+            **key_invalid_update,
         )
         meta = (
             agent.metadata
@@ -2820,6 +2833,8 @@ async def agent_heartbeat(
             payload["model_prices"] = meta.get("model_prices") or body.model_prices
         if "byo_degraded" in meta:
             payload["byo_degraded"] = bool(meta.get("byo_degraded"))
+        if "byo_key_invalid" in meta:
+            payload["byo_key_invalid"] = bool(meta.get("byo_key_invalid"))
         desired = meta.get("desired_preferred_model")
         if isinstance(desired, str) and desired.strip():
             payload["desired_preferred_model"] = desired.strip()

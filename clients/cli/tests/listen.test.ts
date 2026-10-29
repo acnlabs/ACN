@@ -707,13 +707,12 @@ describe('preferred-model apply intercept', () => {
     ]);
   });
 
-  it('leaves the stored declaration alone when a provider list cannot be read', async () => {
-    const kept = await supportedModelsToReport({
+  it('reports keyInvalid with empty models on catalog 401 (does not omit providers)', async () => {
+    const report = await fetchRuntimeModelReport({
       env: {
         ACN_PROVIDER: 'tencenttokenplan',
         ACN_PROVIDER_API_KEY: 'catalog-key',
         ACN_PROVIDER_MODELS_URL: 'https://provider.example/v1/models',
-        ACN_SUPPORTED_MODELS: 'tencenttokenplan/kimi-k2.5,tencenttokenplan/glm-5',
       },
       fetchFn: vi.fn().mockResolvedValue({
         ok: false,
@@ -721,7 +720,11 @@ describe('preferred-model apply intercept', () => {
         json: () => Promise.resolve({}),
       }),
     });
-    expect(kept).toBeUndefined();
+    expect(report.keyInvalid).toBe(true);
+    expect(report.providers).toEqual([
+      { id: 'tencenttokenplan', models: [], current: true },
+    ]);
+    expect(report.supportedModels).toEqual([]);
     const noKey = await supportedModelsToReport({
       env: {
         ACN_SUPPORTED_MODELS: 'tencenttokenplan/kimi-k2.5,tencenttokenplan/glm-5',
@@ -731,7 +734,7 @@ describe('preferred-model apply intercept', () => {
     expect(noKey).toBeUndefined();
   });
 
-  it('does not publish a partial provider list', async () => {
+  it('keeps healthy providers when a sibling catalog fails', async () => {
     const report = await fetchRuntimeModelReport({
       env: {
         ACN_PROVIDER: 'tencenttokenplan',
@@ -744,6 +747,8 @@ describe('preferred-model apply intercept', () => {
             api_key: 'o-key',
           },
         ]),
+        // Avoid key-call probes so the test only checks catalog fan-out.
+        ACN_PROVIDER_MODELS_TRUST_CATALOG: '1',
       },
       fetchFn: vi.fn(async (url: string) => {
         if (String(url).includes('tencent.example')) {
@@ -755,8 +760,15 @@ describe('preferred-model apply intercept', () => {
         return { ok: false, status: 503, json: async () => ({}) } as Response;
       }) as unknown as typeof fetch,
     });
-    expect(report.providers).toBeUndefined();
-    expect(report.supportedModels).toBeUndefined();
+    expect(report.providers).toEqual([
+      {
+        id: 'tencenttokenplan',
+        models: ['tencenttokenplan/glm-5'],
+        current: true,
+      },
+      { id: 'openrouter', models: [], current: false },
+    ]);
+    expect(report.supportedModels).toEqual(['tencenttokenplan/glm-5']);
   });
 
   it('does not treat catalog available:true as Key scope without TRUST flag', async () => {
