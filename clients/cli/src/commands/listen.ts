@@ -37,6 +37,7 @@ import {
   resolveOfficialDefaultModel,
   tickByoDegrade,
 } from './byo-degrade.js';
+import { reloadProviderEnvFiles } from './provider-env-reload.js';
 import {
   applyPreferredModelOnListen,
   isOwnerPreferredModelApplyFrame,
@@ -609,10 +610,17 @@ function runListener(cfg: ListenerConfig): void {
       if (stopped) return;
       const clear = cfg.clearDeclaration === true;
       void (async () => {
+        // Pick up rotated provider keys without restarting listen.
+        if (reloadProviderEnvFiles()) {
+          console.error(
+            '[acn listen] reloaded ACN_PROVIDER* from ACN_PROVIDER_ENV_FILE'
+          );
+        }
         const report = clear ? {} : await fetchRuntimeModelReport({});
         let declared = declarationHeartbeatFields({ clear, report });
         let preferredForBeat = cfg.preferredModel;
         let byoDegraded: boolean | undefined;
+        let byoKeyInvalid: boolean | undefined;
 
         if (!clear && report.providers) {
           const hasByoModels = report.providers.some(
@@ -622,6 +630,7 @@ function runListener(cfg: ListenerConfig): void {
             agentId: cfg.agentId,
             quotaExhausted: !!report.quotaExhausted,
             hasByoModels,
+            keyInvalid: !!report.keyInvalid,
             providers: report.providers,
             preferredModel: cfg.preferredModel,
           });
@@ -634,32 +643,60 @@ function runListener(cfg: ListenerConfig): void {
             };
             preferredForBeat = official;
             byoDegraded = true;
+            byoKeyInvalid = tick.state.keyInvalid === true;
             if (cfg.preferredModel !== official) {
               cfg.preferredModel = official;
             }
-            if (!tick.state.snapshot?.providers?.some((row) => row.models?.length)) {
+            if (byoKeyInvalid) {
               console.error(
-                '[acn listen] byo_degraded=true without last-good BYO snapshot; stay official until probes recover'
+                `[acn listen] byo_degraded=true (provider key invalid 401/403; update ACN_PROVIDER_API_KEY → official ${official})`
+              );
+            } else {
+              if (
+                !tick.state.snapshot?.providers?.some((row) => row.models?.length)
+              ) {
+                console.error(
+                  '[acn listen] byo_degraded=true without last-good BYO snapshot; stay official until probes recover'
+                );
+              }
+              console.error(
+                `[acn listen] byo_degraded=true (quota exhausted; providers cleared → official ${official})`
               );
             }
-            console.error(
-              `[acn listen] byo_degraded=true (quota exhausted; providers cleared → official ${official})`
+          } else if (tick.justRestored) {
+            // Prefer live probes so a rotated key + empty snapshot still recovers.
+            const live = (report.providers || []).filter(
+              (row) => Array.isArray(row.models) && row.models.length > 0
             );
-          } else if (tick.justRestored && tick.state.snapshot?.providers?.length) {
+            const snap = (tick.state.snapshot?.providers || []).filter(
+              (row) => Array.isArray(row.models) && row.models.length > 0
+            );
+            const restoredProviders = live.length ? live : snap;
             declared = {
-              providers: tick.state.snapshot.providers,
+              providers: restoredProviders.length
+                ? restoredProviders
+                : report.providers,
               supportedModels: undefined,
               modelPrices: undefined,
             };
             const restored =
-              tick.state.snapshot.preferredModel?.trim() || cfg.preferredModel;
+              (live.length
+                ? undefined
+                : tick.state.snapshot?.preferredModel?.trim()) ||
+              cfg.preferredModel;
             preferredForBeat = restored;
             byoDegraded = false;
+            byoKeyInvalid = false;
             if (restored) cfg.preferredModel = restored;
-            console.error('[acn listen] byo_degraded=false (BYO providers restored)');
+            console.error(
+              `[acn listen] byo_degraded=false (BYO providers restored from ${
+                live.length ? 'live probes' : 'snapshot'
+              })`
+            );
           } else if (tick.state.degraded === false && byoDegraded === undefined) {
-            // Explicitly clear stale Owner flag after a healthy non-restore beat.
+            // Explicitly clear stale Owner flags after a healthy non-restore beat.
             byoDegraded = false;
+            byoKeyInvalid = false;
           }
         }
 
@@ -672,6 +709,7 @@ function runListener(cfg: ListenerConfig): void {
           providers: declared.providers,
           modelPrices: declared.modelPrices,
           byoDegraded,
+          byoKeyInvalid,
         });
         if (!r.ok) {
           console.error(`[acn listen] model heartbeat failed: ${r.reason}`);

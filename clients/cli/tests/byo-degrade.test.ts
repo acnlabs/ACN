@@ -169,4 +169,49 @@ describe('tickByoDegrade', () => {
     expect(a.state.enterStreak).toBe(0);
     expect(a.enterOrStayDegraded).toBe(false);
   });
+
+  it('enters immediately on keyInvalid and restores from live probes', () => {
+    const env = tempEnv();
+    const agentId = 'key-rotate';
+
+    const bad = tickByoDegrade({
+      agentId,
+      quotaExhausted: false,
+      hasByoModels: false,
+      keyInvalid: true,
+      providers: [{ id: 'tencenttokenplan', models: [], current: true }],
+      env,
+    });
+    expect(bad.enterOrStayDegraded).toBe(true);
+    expect(bad.state.degraded).toBe(true);
+    expect(bad.state.keyInvalid).toBe(true);
+    // No prior healthy beat → empty snapshot is ok; live probes restore later.
+    expect(bad.state.snapshot?.providers).toBeUndefined();
+
+    let last = tickByoDegrade({
+      agentId,
+      quotaExhausted: false,
+      hasByoModels: true,
+      keyInvalid: false,
+      providers: byoProviders,
+      preferredModel: 'tencenttokenplan/kimi-k2.5',
+      env,
+    });
+    expect(last.state.keyInvalid).toBe(false);
+    expect(last.enterOrStayDegraded).toBe(true);
+
+    for (let i = 0; i < BYO_DEGRADE_EXIT_STREAK - 1; i++) {
+      last = tickByoDegrade({
+        agentId,
+        quotaExhausted: false,
+        hasByoModels: true,
+        providers: byoProviders,
+        preferredModel: 'tencenttokenplan/kimi-k2.5',
+        env,
+      });
+    }
+    expect(last.justRestored).toBe(true);
+    expect(last.enterOrStayDegraded).toBe(false);
+    expect(last.state.snapshot?.providers).toEqual(byoProviders);
+  });
 });

@@ -21,6 +21,8 @@ export type ByoDegradeFile = {
   degraded: boolean;
   enterStreak: number;
   exitStreak: number;
+  /** Catalog/auth rejected the provider API key (distinct from quota). */
+  keyInvalid?: boolean;
   snapshot?: ByoDegradeSnapshot;
   updatedAt: string;
 };
@@ -52,6 +54,7 @@ export function loadByoDegradeState(
       degraded: !!raw.degraded,
       enterStreak: Math.max(0, Number(raw.enterStreak) || 0),
       exitStreak: Math.max(0, Number(raw.exitStreak) || 0),
+      keyInvalid: raw.keyInvalid === true,
       snapshot: raw.snapshot,
       updatedAt: raw.updatedAt || new Date(0).toISOString(),
     };
@@ -96,6 +99,11 @@ export type DegradeTickInput = {
   quotaExhausted: boolean;
   /** True when at least one BYO model survived probes this round. */
   hasByoModels: boolean;
+  /**
+   * Provider catalog rejected the API key (401/403). Enter degrade immediately
+   * so Host can fall back to official; clear when probes succeed again.
+   */
+  keyInvalid?: boolean;
   /** Current declaration before degrade wipe (for snapshot). */
   providers?: ReportedProvider[];
   preferredModel?: string;
@@ -111,15 +119,24 @@ export type DegradeTickResult = {
 };
 
 /**
- * Enter after ENTER_STREAK quota rounds; exit after EXIT_STREAK healthy rounds.
+ * Enter after ENTER_STREAK quota rounds (or immediately on keyInvalid);
+ * exit after EXIT_STREAK healthy rounds.
  */
 export function tickByoDegrade(input: DegradeTickInput): DegradeTickResult {
   const state = loadByoDegradeState(input.agentId, input.env);
   let enterOrStayDegraded = state.degraded;
   let justRestored = false;
 
-  if (input.quotaExhausted && !input.hasByoModels) {
+  if (input.keyInvalid && !input.hasByoModels) {
     state.exitStreak = 0;
+    state.enterStreak = 0;
+    state.keyInvalid = true;
+    // Auth failure is decisive — do not wait for quota enter streak.
+    state.degraded = true;
+    enterOrStayDegraded = true;
+  } else if (input.quotaExhausted && !input.hasByoModels) {
+    state.exitStreak = 0;
+    state.keyInvalid = false;
     state.enterStreak += 1;
     if (!state.degraded && state.enterStreak >= BYO_DEGRADE_ENTER_STREAK) {
       // Keep prior healthy snapshot — this round's providers are empty models.
@@ -128,6 +145,7 @@ export function tickByoDegrade(input: DegradeTickInput): DegradeTickResult {
     enterOrStayDegraded = state.degraded;
   } else if (input.hasByoModels) {
     state.enterStreak = 0;
+    state.keyInvalid = false;
     // Refresh last-good declaration while healthy (or during exit debounce
     // probes that still see callable models).
     if (input.providers?.some((row) => row.models?.length)) {

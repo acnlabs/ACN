@@ -4,6 +4,19 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.34] - 2026-10-29
+
+### Fixed
+
+- Provider catalog **401/403** no longer returns an empty report that skips the
+  BYO degrade tick (which left a sticky ``byo_degraded`` on ACN after key
+  rotation). Auth failures enter degrade immediately, heartbeat
+  ``byo_key_invalid``, and restore from **live probes** even when the local
+  snapshot is empty.
+- ``ACN_PROVIDER_ENV_FILE`` (comma-separated paths) hot-reloads ``ACN_PROVIDER*``
+  on each model heartbeat so rotating a key on disk does not require restarting
+  ``acn listen``.
+
 ## [1.0.33] - 2026-10-26
 
 ### Changed
