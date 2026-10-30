@@ -555,6 +555,90 @@ describe('preferred-model apply intercept', () => {
     else process.env.ACN_MODEL_PRICES = prev;
   });
 
+  it('invokes onQuoteModelPrices when catalog and env miss (incl. price_required retry)', async () => {
+    const prev = process.env.ACN_MODEL_PRICES;
+    delete process.env.ACN_MODEL_PRICES;
+    const prevUrl = process.env.ACN_PROVIDER_MODELS_URL;
+    delete process.env.ACN_PROVIDER_MODELS_URL;
+    const logs: string[] = [];
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ status: 'ok' }),
+    } as unknown as Response);
+    const spawnFn = vi.fn((_cmd: string) => {
+      const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+      return {
+        stdout: {
+          on: (ev: string, fn: (...args: unknown[]) => void) => {
+            (handlers[`stdout:${ev}`] ??= []).push(fn);
+          },
+        },
+        stderr: { on: () => {} },
+        stdin: {
+          end: (payload: string) => {
+            const ask = JSON.parse(payload);
+            expect(ask.retry).toBe(true);
+            expect(ask.model_ids).toEqual(['tencenttokenplan/glm-5']);
+            const out = JSON.stringify({
+              model_prices: [
+                {
+                  model_id: 'tencenttokenplan/glm-5',
+                  input_price_per_million: 0.5,
+                  output_price_per_million: 1.5,
+                },
+              ],
+            });
+            for (const fn of handlers['stdout:data'] || []) fn(Buffer.from(out));
+            for (const fn of handlers['close'] || []) fn(0);
+          },
+        },
+        on: (ev: string, fn: (...args: unknown[]) => void) => {
+          (handlers[ev] ??= []).push(fn);
+        },
+        kill: vi.fn(),
+      };
+    });
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        path: '/acn/v1/runtime',
+        body: JSON.stringify({
+          quote_model_prices: ['tencenttokenplan/glm-5'],
+          error: 'price_required',
+        }),
+        headers: {
+          'content-type': 'application/json',
+          'x-acn-runtime-apply': '1',
+        },
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+        onQuoteModelPrices: 'tokenplan-quote',
+      },
+      (f) => frames.push(f),
+      { fetchFn, spawnFn: spawnFn as never, logFn: (line) => logs.push(line) }
+    );
+    expect(spawnFn).toHaveBeenCalled();
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
+    const body = JSON.parse(String((frames[0] as { body?: string }).body));
+    expect(body.model_prices).toEqual([
+      {
+        model_id: 'tencenttokenplan/glm-5',
+        input_price_per_million: 0.5,
+        output_price_per_million: 1.5,
+      },
+    ]);
+    expect(logs.some((l) => l.startsWith('quote_hook'))).toBe(true);
+    if (prev === undefined) delete process.env.ACN_MODEL_PRICES;
+    else process.env.ACN_MODEL_PRICES = prev;
+    if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
+    else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
+  });
+
   it('heartbeats the current model list when asked to report again', async () => {
     const prev = process.env.ACN_SUPPORTED_MODELS;
     const prevHub = process.env.ACN_PROVIDER_API_KEY;

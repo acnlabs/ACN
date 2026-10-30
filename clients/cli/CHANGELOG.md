@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.35] - 2026-10-29
+
+### Added
+
+- ``--on-quote-model-prices`` / ``ACN_ON_QUOTE_MODEL_PRICES``: when Host asks for
+  prices the provider catalog missed (including ``error: price_required`` retry),
+  listen runs a shell hook (stdin ``{model_ids,retry}``, stdout
+  ``{model_prices:[...]}``, 20s wall-clock) so the agent can self-report vendor
+  prices. Order: live catalog → quote hook → ``ACN_MODEL_PRICES``.
+
 ## [1.0.34] - 2026-10-29
 
 ### Fixed

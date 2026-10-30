@@ -31,6 +31,7 @@ import {
   resolvePreferredModel,
   resolveSupportedModels,
   fetchRuntimeModelReport,
+  type ReportedModelPrice,
 } from './model-heartbeat.js';
 import {
   looksLikeByoModelId,
@@ -45,6 +46,7 @@ import {
   isRefreshSupportedModelsBody,
   parsePreferredModelApplyBody,
   parseQuoteModelPricesBody,
+  runQuoteModelPricesHook,
 } from './preferred-model-apply.js';
 
 /** Re-export model heartbeat helpers (tests historically imported from listen). */
@@ -152,6 +154,12 @@ export interface HandlerOptions {
   preferredModel?: string;
   supportedModels?: string[];
   onSetPreferredModel?: string;
+  /**
+   * Shell command for Host price_required / quote_model_prices.
+   * stdin JSON { model_ids, retry } → stdout JSON { model_prices: [...] }.
+   * Env: ACN_ON_QUOTE_MODEL_PRICES.
+   */
+  onQuoteModelPrices?: string;
   agentId?: string;
   apiKey?: string;
   baseUrl?: string;
@@ -214,7 +222,9 @@ async function handleQuoteModelPrices(
     return errorResponse(frame.id, 500, 'listen_not_configured');
   }
   const env = process.env;
-  const known = pricesFromEnv(env);
+  // Live provider catalog first; then agent quote hook; then ACN_MODEL_PRICES.
+  // Retry always re-invokes the hook so the agent can refresh vendor APIs.
+  const known: ReportedModelPrice[] = [];
   const url = (env.ACN_PROVIDER_MODELS_URL || '').trim();
   const key = (env.ACN_PROVIDER_API_KEY || '').trim();
   const provider = (env.ACN_PROVIDER || '').trim();
@@ -229,7 +239,54 @@ async function handleQuoteModelPrices(
       /* a failed provider ask leaves the prices the agent already declared */
     }
   }
-  const prices = pricesForModels(ask.modelIds, known);
+  let prices = pricesForModels(ask.modelIds, known);
+  const missing = ask.modelIds.filter(
+    (id) =>
+      !prices.some((row) => row.model_id.trim().toLowerCase() === id.trim().toLowerCase())
+  );
+  const hookCmd = (opts.onQuoteModelPrices || '').trim();
+  const needHook = missing.length > 0 || ask.retry;
+  if (needHook && hookCmd) {
+    const askIds = ask.retry ? ask.modelIds : missing;
+    const hooked = await runQuoteModelPricesHook(
+      hookCmd,
+      { modelIds: askIds, retry: ask.retry },
+      deps.spawnFn ?? spawn
+    );
+    if (hooked.ok && hooked.prices.length) {
+      const have = new Set(prices.map((p) => p.model_id.trim().toLowerCase()));
+      for (const row of hooked.prices) {
+        const keyId = row.model_id.trim().toLowerCase();
+        if (have.has(keyId)) continue;
+        have.add(keyId);
+        prices.push(row);
+      }
+      deps.logFn?.(
+        `quote_hook ${hooked.prices.length}${ask.retry ? ' retry' : ''}`
+      );
+    } else if (!hooked.ok) {
+      deps.logFn?.(`quote_hook_failed ${hooked.reason}`);
+    }
+  } else if (needHook && !hookCmd) {
+    deps.logFn?.('quote_hook_missing');
+  }
+  // Env fallback for ids still missing after catalog + hook.
+  const stillMissing = ask.modelIds.filter(
+    (id) =>
+      !prices.some((row) => row.model_id.trim().toLowerCase() === id.trim().toLowerCase())
+  );
+  if (stillMissing.length) {
+    const fromEnv = pricesForModels(stillMissing, pricesFromEnv(env));
+    if (fromEnv.length) {
+      const have = new Set(prices.map((p) => p.model_id.trim().toLowerCase()));
+      for (const row of fromEnv) {
+        const keyId = row.model_id.trim().toLowerCase();
+        if (have.has(keyId)) continue;
+        have.add(keyId);
+        prices.push(row);
+      }
+    }
+  }
   if (ask.retry && !prices.length) {
     deps.logFn?.(`price_required ${ask.modelIds.join(',')}`);
   }
@@ -741,6 +798,7 @@ function runListener(cfg: ListenerConfig): void {
               supportedModels: report.supportedModels,
               providers: report.providers,
               onSetPreferredModel: cfg.onSetPreferredModel,
+              onQuoteModelPrices: cfg.onQuoteModelPrices,
             });
             if (applied.ok) {
               cfg.preferredModel = applied.preferred_model;
@@ -1041,6 +1099,10 @@ export function listenCommand(): Command {
       '--on-set-preferred-model <cmd>',
       'When Interfaze saves a new default: stdin JSON {preferred_model} → exit 0 to persist on the runtime (env: ACN_ON_SET_PREFERRED_MODEL)'
     )
+    .option(
+      '--on-quote-model-prices <cmd>',
+      'When Host asks for prices the book missed: stdin JSON {model_ids,retry} → stdout JSON {model_prices:[...]} (env: ACN_ON_QUOTE_MODEL_PRICES)'
+    )
     .action(
       async (opts: {
         runtime?: string;
@@ -1063,6 +1125,7 @@ export function listenCommand(): Command {
         supportedModels?: string;
         clearSupportedModels?: boolean;
         onSetPreferredModel?: string;
+        onQuoteModelPrices?: string;
       }) => {
         const config = loadConfig();
         const apiKey = config.api_key;
@@ -1204,6 +1267,10 @@ export function listenCommand(): Command {
           opts.onSetPreferredModel?.trim() ||
           process.env.ACN_ON_SET_PREFERRED_MODEL?.trim() ||
           undefined;
+        const onQuoteModelPrices =
+          opts.onQuoteModelPrices?.trim() ||
+          process.env.ACN_ON_QUOTE_MODEL_PRICES?.trim() ||
+          undefined;
 
         await warnIfNotReceivingPushes({
           agentId,
@@ -1217,6 +1284,7 @@ export function listenCommand(): Command {
           preferredModel,
           clearDeclaration: !!opts.clearSupportedModels,
           onSetPreferredModel,
+          onQuoteModelPrices,
           forward: opts.forward,
           exec: opts.exec,
           runtime: opts.runtime

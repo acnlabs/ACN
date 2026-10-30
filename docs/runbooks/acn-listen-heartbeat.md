@@ -115,12 +115,18 @@ sudo systemctl enable --now acn-heartbeat.timer
   follow-up heartbeat sends those same rows and moves `current` onto the
   provider that owns the model.
 - Matching **prices** on list rows are heartbeated as `model_prices`. Pricing
-  does not shrink the declaration. Interfaze Composer shows a model only when
-  Host can **price** it (official book → agent `model_prices` → agent quote).
-  Unpriceable ids stay on `providers`. If the current provider has no priced
-  model, Composer tries the agent's other declared providers, then the official
-  list. Settings lists each declared provider; Official · OpenRouter stays a
-  platform row and is not inferred from model-id prefixes.
+  does not shrink the declaration. Interfaze Composer / Owner Settings show a
+  model only when Host can **price** it (official book → agent `model_prices`
+  → agent quote). Unpriceable ids stay on `providers` but are **not** listed
+  in menus. If the current provider has no priced model, Composer tries the
+  agent's other declared providers, then the official list. Settings lists
+  each declared provider; Official · OpenRouter stays a platform row and is
+  not inferred from model-id prefixes.
+- Host `model-price-quote` / `price_required` is answered by `acn listen`:
+  live provider catalog fields → **`--on-quote-model-prices` /
+  `ACN_ON_QUOTE_MODEL_PRICES`** (stdin `{model_ids,retry}`, stdout
+  `{model_prices:[...]}`, ≤20s) → optional `ACN_MODEL_PRICES` fallback.
+  Rates must be the Host market currency per million (no currency field).
 - `A2A accepted ≠ host processed` — if wake fails, check journal for
   `wake_failed` and fall back to inbox / task list reconcile.
 - Dedupe is in-process; restarting `acn-listen` clears the window.

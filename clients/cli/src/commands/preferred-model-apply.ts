@@ -176,6 +176,104 @@ export function runPreferredModelHook(
   });
 }
 
+/** Quote hook wall-clock (Host/ACN relay budget is ~30s). */
+const QUOTE_HOOK_TIMEOUT_MS = 20_000;
+
+/**
+ * Ask the agent runtime to price models the Host book missed.
+ * stdin: { model_ids, retry } → stdout JSON { model_prices: [...] }
+ */
+export function runQuoteModelPricesHook(
+  cmd: string,
+  ask: { modelIds: string[]; retry: boolean },
+  spawnFn: typeof spawn = spawn
+): Promise<
+  | { ok: true; prices: Array<{ model_id: string; input_price_per_million: number; output_price_per_million: number }> }
+  | { ok: false; reason: string }
+> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const child: ChildProcess = spawnFn(cmd, { shell: true });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    const finish = (
+      result:
+        | { ok: true; prices: Array<{ model_id: string; input_price_per_million: number; output_price_per_million: number }> }
+        | { ok: false; reason: string }
+    ) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      finish({ ok: false, reason: 'hook_timeout' });
+    }, QUOTE_HOOK_TIMEOUT_MS);
+    child.stdout?.on('data', (d: Buffer) => stdout.push(Buffer.from(d)));
+    child.stderr?.on('data', (d: Buffer) => stderr.push(Buffer.from(d)));
+    child.on('error', (e: Error) =>
+      finish({ ok: false, reason: e.message.slice(0, 200) })
+    );
+    child.on('close', (code: number | null) => {
+      if (code !== 0) {
+        const detail = Buffer.concat(stderr).toString('utf-8').slice(0, 80);
+        finish({
+          ok: false,
+          reason: detail ? `hook_exit_${code}:${detail}` : `hook_exit_${code}`,
+        });
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(Buffer.concat(stdout).toString('utf-8'));
+      } catch {
+        finish({ ok: false, reason: 'hook_bad_json' });
+        return;
+      }
+      const raw =
+        parsed && typeof parsed === 'object'
+          ? (parsed as { model_prices?: unknown }).model_prices
+          : undefined;
+      if (!Array.isArray(raw)) {
+        finish({ ok: false, reason: 'hook_no_prices' });
+        return;
+      }
+      const want = new Set(ask.modelIds.map((id) => id.trim().toLowerCase()).filter(Boolean));
+      const prices: Array<{
+        model_id: string;
+        input_price_per_million: number;
+        output_price_per_million: number;
+      }> = [];
+      const seen = new Set<string>();
+      for (const row of raw) {
+        if (!row || typeof row !== 'object') continue;
+        const rec = row as {
+          model_id?: unknown;
+          input_price_per_million?: unknown;
+          output_price_per_million?: unknown;
+        };
+        const model_id = String(rec.model_id || '').trim().slice(0, 200);
+        const key = model_id.toLowerCase();
+        if (!model_id || !want.has(key) || seen.has(key)) continue;
+        const inn = Number(rec.input_price_per_million);
+        const out = Number(rec.output_price_per_million);
+        if (!Number.isFinite(inn) || !Number.isFinite(out) || inn < 0 || out < 0) continue;
+        seen.add(key);
+        prices.push({
+          model_id,
+          input_price_per_million: inn,
+          output_price_per_million: out,
+        });
+      }
+      finish({ ok: true, prices });
+    });
+    child.stdin?.end(
+      JSON.stringify({ model_ids: ask.modelIds, retry: ask.retry })
+    );
+  });
+}
+
 function providersForAppliedModel(
   providers: ReportedProvider[] | undefined,
   modelId: string,

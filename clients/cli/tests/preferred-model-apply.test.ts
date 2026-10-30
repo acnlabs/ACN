@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 
 import {
@@ -7,6 +7,7 @@ import {
   isPreferredModelApplyPath,
   modelAllowedBySupported,
   parsePreferredModelApplyBody,
+  runQuoteModelPricesHook,
   verifyRuntimeCommand,
 } from '../src/commands/preferred-model-apply.js';
 
@@ -193,3 +194,93 @@ describe('verifyRuntimeCommand / handleRuntimeApplyHttp', () => {
     expect(out.status).toBe(401);
   });
 });
+
+describe('runQuoteModelPricesHook', () => {
+  it('parses stdout prices for requested ids', async () => {
+    const spawnFn = vi.fn((_cmd: string, _opts: unknown) => {
+      const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+      const child = {
+        stdout: {
+          on: (ev: string, fn: (...args: unknown[]) => void) => {
+            (handlers[`stdout:${ev}`] ??= []).push(fn);
+          },
+        },
+        stderr: { on: () => {} },
+        stdin: {
+          end: (payload: string) => {
+            const ask = JSON.parse(payload);
+            expect(ask.model_ids).toEqual(['tencenttokenplan/kimi-k2.5']);
+            expect(ask.retry).toBe(true);
+            const out = JSON.stringify({
+              model_prices: [
+                {
+                  model_id: 'tencenttokenplan/kimi-k2.5',
+                  input_price_per_million: 0.4,
+                  output_price_per_million: 1.2,
+                },
+                {
+                  model_id: 'ignored/other',
+                  input_price_per_million: 1,
+                  output_price_per_million: 2,
+                },
+              ],
+            });
+            for (const fn of handlers['stdout:data'] || []) fn(Buffer.from(out));
+            for (const fn of handlers['close'] || []) fn(0);
+          },
+        },
+        on: (ev: string, fn: (...args: unknown[]) => void) => {
+          (handlers[ev] ??= []).push(fn);
+        },
+        kill: vi.fn(),
+      };
+      return child;
+    });
+    const result = await runQuoteModelPricesHook(
+      'quote-hook',
+      { modelIds: ['tencenttokenplan/kimi-k2.5'], retry: true },
+      spawnFn as never
+    );
+    expect(result).toEqual({
+      ok: true,
+      prices: [
+        {
+          model_id: 'tencenttokenplan/kimi-k2.5',
+          input_price_per_million: 0.4,
+          output_price_per_million: 1.2,
+        },
+      ],
+    });
+  });
+
+  it('returns hook_bad_json when stdout is not JSON', async () => {
+    const spawnFn = vi.fn(() => {
+      const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
+      return {
+        stdout: {
+          on: (ev: string, fn: (...args: unknown[]) => void) => {
+            (handlers[`stdout:${ev}`] ??= []).push(fn);
+          },
+        },
+        stderr: { on: () => {} },
+        stdin: {
+          end: () => {
+            for (const fn of handlers['stdout:data'] || []) fn(Buffer.from('nope'));
+            for (const fn of handlers['close'] || []) fn(0);
+          },
+        },
+        on: (ev: string, fn: (...args: unknown[]) => void) => {
+          (handlers[ev] ??= []).push(fn);
+        },
+        kill: vi.fn(),
+      };
+    });
+    const result = await runQuoteModelPricesHook(
+      'quote-hook',
+      { modelIds: ['a/b'], retry: false },
+      spawnFn as never
+    );
+    expect(result).toEqual({ ok: false, reason: 'hook_bad_json' });
+  });
+});
+
