@@ -155,7 +155,8 @@ export interface HandlerOptions {
   supportedModels?: string[];
   onSetPreferredModel?: string;
   /**
-   * Shell command for Host price_required / quote_model_prices.
+   * Agent-owned hook: Host price_required / quote_model_prices.
+   * Fetch from your provider; report Host market currency / million.
    * stdin JSON { model_ids, retry } → stdout JSON { model_prices: [...] }.
    * Env: ACN_ON_QUOTE_MODEL_PRICES.
    */
@@ -265,10 +266,14 @@ async function handleQuoteModelPrices(
         `quote_hook ${hooked.prices.length}${ask.retry ? ' retry' : ''}`
       );
     } else if (!hooked.ok) {
-      deps.logFn?.(`quote_hook_failed ${hooked.reason}`);
+      deps.logFn?.(
+        `quote_hook_failed ${hooked.reason} — agent must fetch provider prices and report Host market currency`
+      );
     }
   } else if (needHook && !hookCmd) {
-    deps.logFn?.('quote_hook_missing');
+    deps.logFn?.(
+      'quote_hook_missing — set --on-quote-model-prices / ACN_ON_QUOTE_MODEL_PRICES; agent fetches provider prices and reports (Host market currency); Host does not maintain your book'
+    );
   }
   // Env fallback for ids still missing after catalog + hook.
   const stillMissing = ask.modelIds.filter(
@@ -286,6 +291,15 @@ async function handleQuoteModelPrices(
         prices.push(row);
       }
     }
+  }
+  const unpriced = ask.modelIds.filter(
+    (id) =>
+      !prices.some((row) => row.model_id.trim().toLowerCase() === id.trim().toLowerCase())
+  );
+  if (unpriced.length) {
+    deps.logFn?.(
+      `quote_unpriced ${unpriced.join(',')} — menus omit unpriced models; fetch from your provider, save if needed, report via hook / ACN_MODEL_PRICES / heartbeat model_prices`
+    );
   }
   if (ask.retry && !prices.length) {
     deps.logFn?.(`price_required ${ask.modelIds.join(',')}`);
@@ -1100,7 +1114,7 @@ export function listenCommand(): Command {
     )
     .option(
       '--on-quote-model-prices <cmd>',
-      'When Host asks for prices the book missed: stdin JSON {model_ids,retry} → stdout JSON {model_prices:[...]} (env: ACN_ON_QUOTE_MODEL_PRICES)'
+      'Agent-owned: when Host asks for prices it cannot price, run cmd (stdin {model_ids,retry} → stdout {model_prices:[...]} in Host market currency). You fetch from your provider; Host does not maintain your book (env: ACN_ON_QUOTE_MODEL_PRICES)'
     )
     .action(
       async (opts: {

@@ -67,6 +67,9 @@ dump.rdb
 # Node.js
 node_modules/
 npm-debug.log*
+
+# Local npm pack artifacts
+clients/cli/*.tgz
 yarn-debug.log*
 yarn-error.log*
 

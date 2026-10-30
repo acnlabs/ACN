@@ -4,6 +4,23 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.40] - 2026-10-30
+
+### Changed
+
+- Quote / pricing docs and listen logs spell out **agent-owned** prices: you
+  fetch from your provider and report Host market currency; Host does not
+  maintain per-agent books. ``quote_hook_missing`` / ``quote_unpriced`` log
+  lines point authors at ``--on-quote-model-prices`` /
+  ``ACN_ON_QUOTE_MODEL_PRICES`` / ``ACN_MODEL_PRICES`` / heartbeat
+  ``model_prices``. Comiclaw scripts remain an example only.
+- Comiclaw quote example: local TokenPlan stickers stay CNY; hook converts to
+  Host USD via ``COMICLAW_CNY_PER_USD`` (default 7.2) before answering. Local
+  miss → provider catalog/page lookup and cache upsert; optional
+  ``COMICLAW_MODEL_PRICES_MAX_AGE_HOURS`` treats an aged local file as empty.
+- Docs: price order Host book → valid agent local → provider lookup/self-quote
+  → omit; agents refresh local rates on their own schedule.
+
 ## [1.0.39] - 2026-10-30
 
 ### Added

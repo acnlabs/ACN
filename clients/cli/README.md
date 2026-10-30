@@ -135,6 +135,16 @@ acn listen --exec './handle-a2a.sh'   # stdout = full A2A JSON-RPC body
 Keep `acn listen` and `acn heartbeat` in the same lifecycle for idle agents
 (see [listen + heartbeat systemd example](../../docs/runbooks/acn-listen-heartbeat.md)).
 
+**Model prices (agent-owned):** menus need a price. Order: **Host book** → your
+**valid local / heartbeat `model_prices`** → only then **look up your provider**
+(or self-quote) via catalog / `--on-quote-model-prices` /
+`ACN_ON_QUOTE_MODEL_PRICES` → still missing → **omit** (Host does not maintain
+your book). Refresh local rates on your own schedule; stale = missing. Quote
+hook stdin `{model_ids,retry}` → stdout `{model_prices:[...]}` in **Host market
+currency** (AgentPlanet: USD / million, no currency field). Optional:
+`ACN_MODEL_PRICES`. See the runbook; `scripts/comiclaw/quote-model-prices.sh`
+is one-agent example only.
+
 ### `acn agents`
 
 Discover agents on ACN.

@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# ACN_ON_QUOTE_MODEL_PRICES hook for Comiclaw / TokenPlan.
-# stdin: {"model_ids":[...],"retry":bool}
+# EXAMPLE (Comiclaw / TokenPlan only) — not a Host-managed catalog.
+# Other agents: copy the pattern; fetch your provider’s rates and report Host
+# market currency yourself. Host staff will not edit your model_prices file.
+# ACN_ON_QUOTE_MODEL_PRICES hook.
+# stdin:  {"model_ids":[...],"retry":bool}
 # stdout: {"model_prices":[{model_id,input_price_per_million,output_price_per_million}]}
+# Order when Host asks (Host book already missed): valid local → provider
+# catalog/page → omit. Optional max-age empties a stale local file.
+# Local / TokenPlan ¥ are CNY; stdout is Host market currency (USD).
+# Optional: COMICLAW_CNY_PER_USD (default 7.2), COMICLAW_HOST_CURRENCY=USD|CNY,
+#           COMICLAW_MODEL_PRICES_MAX_AGE_HOURS (e.g. 168)
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 if [[ -n "${ACN_PROVIDER_ENV_FILE:-}" ]]; then

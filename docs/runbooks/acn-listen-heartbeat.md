@@ -116,17 +116,35 @@ sudo systemctl enable --now acn-heartbeat.timer
   provider that owns the model.
 - Matching **prices** on list rows are heartbeated as `model_prices`. Pricing
   does not shrink the declaration. Interfaze Composer / Owner Settings show a
-  model only when Host can **price** it (official book → agent `model_prices`
-  → agent quote). Unpriceable ids stay on `providers` but are **not** listed
-  in menus. If the current provider has no priced model, Composer tries the
-  agent's other declared providers, then the official list. Settings lists
-  each declared provider; Official · OpenRouter stays a platform row and is
-  not inferred from model-id prefixes.
-- Host `model-price-quote` / `price_required` is answered by `acn listen`:
-  live provider catalog fields → **`--on-quote-model-prices` /
+  model only when Host can **price** it. Unpriceable ids stay on `providers`
+  but are **not** listed in menus. If the current provider has no priced model,
+  Composer tries the agent's other declared providers, then the official list.
+  Settings lists each declared provider; Official · OpenRouter stays a platform
+  row and is not inferred from model-id prefixes.
+- **Price resolution (Host + agent):**
+  1. **Host book** (e.g. OpenRouter) — if Host already has a rate, use it; do
+     not ask the agent.
+  2. Else **agent local / already-reported** `model_prices` that are still
+     **valid** (agent-chosen TTL / refresh).
+  3. Else agent **looks up its provider** (API, docs, or site) or self-quotes,
+     then reports (heartbeat and/or quote hook). Rates must be **Host market
+     currency** / million (no currency field — AgentPlanet: USD).
+  4. Still nothing → **omit from menus** (no “not priced” row).
+- **Who owns prices:** the **agent** (runtime / provider integration), not the
+  Host operator. Host will not maintain per-agent books. Agents should
+  **refresh local rates periodically**; stale local rows count as missing and
+  fall through to step 3.
+- Host `model-price-quote` / `price_required` means steps 1–2 already missed.
+  `acn listen` answers: live provider catalog → **`--on-quote-model-prices` /
   `ACN_ON_QUOTE_MODEL_PRICES`** (stdin `{model_ids,retry}`, stdout
-  `{model_prices:[...]}`, ≤20s) → optional `ACN_MODEL_PRICES` fallback.
-  Rates must be the Host market currency per million (no currency field).
+  `{model_prices:[...]}`, ≤20s) → optional `ACN_MODEL_PRICES`. Wire the hook
+  yourself. If catalog + hook + env miss, listen logs `quote_hook_missing` /
+  `quote_unpriced …`.
+- Example only (not a Host-managed catalog): `scripts/comiclaw/quote-model-prices.sh`
+  — TokenPlan CNY stickers → Host USD via `COMICLAW_CNY_PER_USD` (default 7.2);
+  local miss → catalog / page lookup; optional `COMICLAW_MODEL_PRICES_MAX_AGE_HOURS`
+  treats an aged local file as empty. Copy the pattern; Host staff will not
+  edit another agent’s price file.
 - `A2A accepted ≠ host processed` — if wake fails, check journal for
   `wake_failed` and fall back to inbox / task list reconcile.
 - Dedupe is in-process; restarting `acn-listen` clears the window.
