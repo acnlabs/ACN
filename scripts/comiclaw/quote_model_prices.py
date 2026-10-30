@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -39,6 +40,12 @@ def _finite(v: Any) -> float | None:
     if n != n or n < 0:
         return None
     return n
+
+
+def _max_age_hours() -> float | None:
+    """If set, an older local book file is treated as empty (agent must re-fetch)."""
+    n = _finite(os.environ.get("COMICLAW_MODEL_PRICES_MAX_AGE_HOURS") or "")
+    return n if n is not None and n > 0 else None
 
 
 def _cny_per_usd() -> float:
@@ -127,10 +134,18 @@ def fetch_catalog() -> list[dict[str, Any]]:
 
 
 def load_local_book() -> dict[str, tuple[float, float]]:
-    """model_id → CNY (in, out) per million."""
+    """model_id → CNY (in, out) per million. Stale file (max age) → {}."""
     path = LOCAL_BOOK
     if not path or not os.path.isfile(path):
         return {}
+    max_age = _max_age_hours()
+    if max_age is not None:
+        try:
+            age_h = (time.time() - os.path.getmtime(path)) / 3600.0
+        except OSError:
+            return {}
+        if age_h > max_age:
+            return {}
     try:
         raw = json.loads(open(path, encoding="utf-8").read())
     except (OSError, json.JSONDecodeError):
@@ -147,6 +162,45 @@ def load_local_book() -> dict[str, tuple[float, float]]:
             out[mid.lower()] = pair
             out[_bare(mid).lower()] = pair
     return out
+
+
+def upsert_local_book(mid: str, inn_cny: float, out_cny: float) -> None:
+    """Persist a freshly looked-up CNY pair so the next ask can hit local first."""
+    path = LOCAL_BOOK
+    if not path:
+        return
+    rows: list[Any] = []
+    if os.path.isfile(path):
+        try:
+            raw = json.loads(open(path, encoding="utf-8").read())
+            if isinstance(raw, list):
+                rows = raw
+        except (OSError, json.JSONDecodeError):
+            rows = []
+    full = _norm_id(mid)
+    key = full.lower()
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rid = _norm_id(str(row.get("model_id") or ""))
+        if rid.lower() == key:
+            continue
+        kept.append(row)
+    kept.append(
+        {
+            "model_id": full,
+            "input_price_cny_per_million": inn_cny,
+            "output_price_cny_per_million": out_cny,
+        }
+    )
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(kept, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+    except OSError:
+        return
 
 
 def index_catalog(rows: list[dict[str, Any]]) -> dict[str, tuple[float, float]]:
@@ -209,18 +263,25 @@ def main() -> int:
         model_ids.append(mid)
         if len(model_ids) >= 50:
             break
-    retry = bool(ask.get("retry"))
+    # Host only asks when its book already missed; we still prefer a fresh local
+    # cache, then provider catalog / site, then omit.
+    _ = bool(ask.get("retry"))  # Host may retry; we always look up on local miss.
     local = load_local_book()
     catalog_idx = index_catalog(fetch_catalog())
     prices = []
     for mid in model_ids:
         key = mid.lower()
         bare = _bare(mid).lower()
-        pair_cny = local.get(key) or local.get(bare) or catalog_idx.get(key) or catalog_idx.get(bare)
-        if pair_cny is None and retry:
+        from_local = local.get(key) or local.get(bare)
+        pair_cny = from_local or catalog_idx.get(key) or catalog_idx.get(bare)
+        looked_up = False
+        if pair_cny is None:
             pair_cny = fetch_tokenplan_page(_bare(mid))
+            looked_up = pair_cny is not None
         if pair_cny is None:
             continue
+        if looked_up:
+            upsert_local_book(mid, pair_cny[0], pair_cny[1])
         inn_h, out_h = _cny_to_host(pair_cny[0], pair_cny[1])
         prices.append(
             {
