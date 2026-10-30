@@ -4,7 +4,7 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
-## [1.0.35] - 2026-10-29
+## [1.0.39] - 2026-10-30
 
 ### Added
 

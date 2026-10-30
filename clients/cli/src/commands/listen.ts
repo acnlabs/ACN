@@ -798,7 +798,6 @@ function runListener(cfg: ListenerConfig): void {
               supportedModels: report.supportedModels,
               providers: report.providers,
               onSetPreferredModel: cfg.onSetPreferredModel,
-              onQuoteModelPrices: cfg.onQuoteModelPrices,
             });
             if (applied.ok) {
               cfg.preferredModel = applied.preferred_model;
