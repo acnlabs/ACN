@@ -1,0 +1,52 @@
+[
+  {
+    "model_id": "tencenttokenplan/kimi-k2.5",
+    "input_price_per_million": 4.0,
+    "output_price_per_million": 16.0
+  },
+  {
+    "model_id": "tencenttokenplan/kimi-k2.6",
+    "input_price_per_million": 4.0,
+    "output_price_per_million": 16.0
+  },
+  {
+    "model_id": "tencenttokenplan/glm-5",
+    "input_price_per_million": 1.0,
+    "output_price_per_million": 3.2
+  },
+  {
+    "model_id": "tencenttokenplan/glm-5.1",
+    "input_price_per_million": 1.0,
+    "output_price_per_million": 3.2
+  },
+  {
+    "model_id": "tencenttokenplan/minimax-m2.7",
+    "input_price_per_million": 2.1,
+    "output_price_per_million": 8.4
+  },
+  {
+    "model_id": "tencenttokenplan/deepseek-v4-flash",
+    "input_price_per_million": 0.2,
+    "output_price_per_million": 0.4
+  },
+  {
+    "model_id": "tencenttokenplan/deepseek-v4-flash-202605",
+    "input_price_per_million": 0.2,
+    "output_price_per_million": 0.4
+  },
+  {
+    "model_id": "tencenttokenplan/deepseek-v4-pro",
+    "input_price_per_million": 4.5,
+    "output_price_per_million": 13.5
+  },
+  {
+    "model_id": "tencenttokenplan/deepseek-v3",
+    "input_price_per_million": 2.0,
+    "output_price_per_million": 8.0
+  },
+  {
+    "model_id": "tencenttokenplan/qwen3-max",
+    "input_price_per_million": 2.5,
+    "output_price_per_million": 10.0
+  }
+]
