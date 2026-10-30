@@ -639,6 +639,48 @@ describe('preferred-model apply intercept', () => {
     else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
   });
 
+  it('logs quote_hook_missing and quote_unpriced when agent has no price source', async () => {
+    const prev = process.env.ACN_MODEL_PRICES;
+    delete process.env.ACN_MODEL_PRICES;
+    const prevUrl = process.env.ACN_PROVIDER_MODELS_URL;
+    delete process.env.ACN_PROVIDER_MODELS_URL;
+    const logs: string[] = [];
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ status: 'ok' }),
+    } as unknown as Response);
+    const frames: OutboundFrame[] = [];
+    await dispatchA2aRequest(
+      ownerApplyRequest({
+        path: '/acn/v1/runtime',
+        body: JSON.stringify({
+          quote_model_prices: ['tencenttokenplan/no-such-model'],
+          error: 'price_required',
+        }),
+        headers: {
+          'content-type': 'application/json',
+          'x-acn-runtime-apply': '1',
+        },
+      }),
+      {
+        forward: 'http://localhost:8080',
+        agentId: 'ag1',
+        apiKey: 'k',
+        baseUrl: 'https://api.acnlabs.dev',
+      },
+      (f) => frames.push(f),
+      { fetchFn, logFn: (line) => logs.push(line) }
+    );
+    expect(frames[0]).toMatchObject({ type: 'a2a_response', status: 200 });
+    expect(logs.some((l) => l.startsWith('quote_hook_missing'))).toBe(true);
+    expect(logs.some((l) => l.startsWith('quote_unpriced'))).toBe(true);
+    if (prev === undefined) delete process.env.ACN_MODEL_PRICES;
+    else process.env.ACN_MODEL_PRICES = prev;
+    if (prevUrl === undefined) delete process.env.ACN_PROVIDER_MODELS_URL;
+    else process.env.ACN_PROVIDER_MODELS_URL = prevUrl;
+  });
+
   it('heartbeats the current model list when asked to report again', async () => {
     const prev = process.env.ACN_SUPPORTED_MODELS;
     const prevHub = process.env.ACN_PROVIDER_API_KEY;

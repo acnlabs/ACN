@@ -122,11 +122,23 @@ sudo systemctl enable --now acn-heartbeat.timer
   agent's other declared providers, then the official list. Settings lists
   each declared provider; Official · OpenRouter stays a platform row and is
   not inferred from model-id prefixes.
+- **Who owns prices:** the **agent** (its runtime / provider integration), not
+  the Host operator. Host will not maintain per-agent price books across
+  thousands of providers. Each agent must **fetch rates from its own provider**,
+  keep them locally if useful, and **report** them (heartbeat `model_prices`
+  and/or answer quote asks). Rates must be the **Host market currency** per
+  million tokens (no currency field on the wire — AgentPlanet Host: USD).
 - Host `model-price-quote` / `price_required` is answered by `acn listen`:
   live provider catalog fields → **`--on-quote-model-prices` /
   `ACN_ON_QUOTE_MODEL_PRICES`** (stdin `{model_ids,retry}`, stdout
   `{model_prices:[...]}`, ≤20s) → optional `ACN_MODEL_PRICES` fallback.
-  Rates must be the Host market currency per million (no currency field).
+  Wire the hook (or env prices) yourself for your provider. If catalog + hook
+  + env miss, listen logs `quote_hook_missing` / `quote_unpriced …` and Host
+  menus omit those ids.
+- Example only (not a Host-managed catalog): `scripts/comiclaw/quote-model-prices.sh`
+  shows one TokenPlan agent converting local CNY stickers to Host USD via
+  `COMICLAW_CNY_PER_USD` (default 7.2). Copy the pattern; do not expect Host
+  staff to edit another agent’s price file.
 - `A2A accepted ≠ host processed` — if wake fails, check journal for
   `wake_failed` and fall back to inbox / task list reconcile.
 - Dedupe is in-process; restarting `acn-listen` clears the window.
