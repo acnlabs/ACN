@@ -1058,11 +1058,12 @@ export function declarationHeartbeatFields(opts: {
 > {
   if (opts.clear) {
     // providers:[] clears the declaration; supported_models:[] clears leftovers.
+    // modelModalities:[] replaces stored vision rows so they cannot linger.
     return {
       supportedModels: [],
       providers: [],
       modelPrices: undefined,
-      modelModalities: undefined,
+      modelModalities: [],
     };
   }
   if (!opts.report.providers) return {};
@@ -1070,7 +1071,9 @@ export function declarationHeartbeatFields(opts: {
     // Flat supported_models is retired — Host reads providers only.
     providers: opts.report.providers,
     modelPrices: opts.report.modelPrices,
-    modelModalities: opts.report.modelModalities,
+    // Always send the current snapshot, including [] when the catalog
+    // declared nothing, so a dropped modality does not stay on the agent.
+    modelModalities: opts.report.modelModalities ?? [],
   };
 }
 

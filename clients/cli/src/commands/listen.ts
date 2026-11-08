@@ -348,7 +348,7 @@ async function handleRefreshSupportedModels(
     preferredModel: opts.preferredModel,
     providers: report.providers,
     modelPrices: report.modelPrices,
-    modelModalities: report.modelModalities,
+    modelModalities: report.modelModalities ?? [],
     fetchFn: deps.fetchFn,
   });
   if (!beat.ok) return errorResponse(frame.id, 502, beat.reason);
@@ -712,7 +712,7 @@ function runListener(cfg: ListenerConfig): void {
               providers: [],
               supportedModels: [],
               modelPrices: undefined,
-              modelModalities: undefined,
+              modelModalities: [],
             };
             preferredForBeat = official;
             byoDegraded = true;
@@ -751,7 +751,7 @@ function runListener(cfg: ListenerConfig): void {
                 : report.providers,
               supportedModels: undefined,
               modelPrices: undefined,
-              modelModalities: report.modelModalities,
+              modelModalities: report.modelModalities ?? [],
             };
             const restored =
               (live.length

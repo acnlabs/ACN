@@ -966,12 +966,12 @@ class AgentService:
                 meta.pop("model_prices", None)
             meta_dirty = True
         if model_modalities is not None:
-            previous = meta.get("model_modalities")
-            merged_mod: list[dict] = []
+            # Replace, do not merge. A heartbeat is the current catalog
+            # snapshot; leftover rows would keep a model looking vision-capable
+            # after the provider stopped saying so. ``[]`` clears.
+            replaced: list[dict] = []
             seen_mod: set[str] = set()
-            for row in list(model_modalities) + (
-                previous if isinstance(previous, list) else []
-            ):
+            for row in model_modalities:
                 if not isinstance(row, dict):
                     continue
                 mid = str(row.get("model_id") or "").strip()
@@ -980,9 +980,9 @@ class AgentService:
                 if not mid or not modality or key in seen_mod:
                     continue
                 seen_mod.add(key)
-                merged_mod.append({"model_id": mid, "modality": modality})
-            if merged_mod:
-                meta["model_modalities"] = merged_mod[:50]
+                replaced.append({"model_id": mid, "modality": modality})
+            if replaced:
+                meta["model_modalities"] = replaced[:50]
             else:
                 meta.pop("model_modalities", None)
             meta_dirty = True

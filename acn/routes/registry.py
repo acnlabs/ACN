@@ -2677,6 +2677,7 @@ class HeartbeatBody(BaseModel):
             "Input modalities this agent reports from its provider catalog "
             "(e.g. text+image->text). Each item is model_id plus modality. "
             "Host uses this for BYO vision gates — not Host TokenPlus books. "
+            "Present list replaces stored rows (empty list clears). "
             "Omit to leave unchanged."
         ),
     )
