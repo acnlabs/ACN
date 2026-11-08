@@ -72,6 +72,62 @@ function providerListRows(body: unknown): Record<string, unknown>[] {
   return data.filter((row): row is Record<string, unknown> => !!row && typeof row === "object");
 }
 
+/**
+ * Vision/text capability from a provider ``/models`` row when the provider
+ * itself says so (OpenRouter-style ``architecture.modality``, ``input`` /
+ * ``input_modalities``). Host price books are not the source — the agent
+ * forwards what its provider listed.
+ */
+export function modalityFromProviderProps(
+  rec: Record<string, unknown>
+): string | null {
+  const arch = rec.architecture;
+  if (arch && typeof arch === "object") {
+    const modality = (arch as Record<string, unknown>).modality;
+    if (typeof modality === "string" && modality.trim()) {
+      return modality.trim().slice(0, 80);
+    }
+  }
+  if (typeof rec.modality === "string" && rec.modality.trim()) {
+    return rec.modality.trim().slice(0, 80);
+  }
+  const inputs = rec.input_modalities ?? rec.input;
+  if (Array.isArray(inputs)) {
+    const lower = inputs.map((item) => String(item).toLowerCase());
+    if (lower.includes("image")) return "text+image->text";
+    if (lower.length === 1 && lower[0] === "text") return "text->text";
+  }
+  return null;
+}
+
+export type ReportedModelModality = {
+  model_id: string;
+  modality: string;
+};
+
+/** Modalities keyed by provider-prefixed model id for models that declared one. */
+export function modalitiesFromProviderBody(
+  body: unknown,
+  provider: string
+): ReportedModelModality[] {
+  const out: ReportedModelModality[] = [];
+  const seen = new Set<string>();
+  for (const rec of providerListRows(body)) {
+    if (String(rec.status || "online").toLowerCase() === "offline") continue;
+    const id = String(rec.id || "").trim();
+    if (!id) continue;
+    const modality = modalityFromProviderProps(rec);
+    if (!modality) continue;
+    const named = withProvider(id, provider);
+    const key = named.toLowerCase();
+    if (!named || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ model_id: named, modality });
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
 function boolishField(value: unknown): boolean | null {
   if (value === true || value === 1 || value === "true" || value === "1") return true;
   if (value === false || value === 0 || value === "false" || value === "0") return false;
@@ -467,6 +523,8 @@ export type RuntimeModelReport = {
   /** Declaration: every provider this runtime supports, and which is current. */
   providers?: ReportedProvider[];
   modelPrices?: ReportedModelPrice[];
+  /** Per-model input modality from the provider catalog (agent-reported). */
+  modelModalities?: ReportedModelModality[];
   /**
    * True when every probed provider returned plan quota exhausted and no
    * models were kept. Listen uses this for BYO → official degrade.
@@ -523,6 +581,11 @@ export function runtimeModelReportFromProviderBody(
     supportedModels && supportedModels.length
       ? pricesForModels(supportedModels, priceRows)
       : undefined;
+  const modelModalities = modalitiesFromProviderBody(body, opts.provider).filter(
+    (row) =>
+      !supportedModels?.length ||
+      supportedModels.some((id) => id.toLowerCase() === row.model_id.toLowerCase())
+  );
 
   const providerId = opts.provider.trim();
   const providers: ReportedProvider[] | undefined =
@@ -530,7 +593,13 @@ export function runtimeModelReportFromProviderBody(
       ? [{ id: providerId, models: supportedModels, current: true }]
       : undefined;
 
-  return { supportedModels, providers, modelPrices, needsKeyCallProbe };
+  return {
+    supportedModels,
+    providers,
+    modelPrices,
+    modelModalities: modelModalities.length ? modelModalities : undefined,
+    needsKeyCallProbe,
+  };
 }
 
 export type ProviderEndpoint = {
@@ -601,6 +670,7 @@ export async function fetchRuntimeModelReport(opts: {
   const fetchFn = opts.fetchFn ?? fetch;
   const providers: ReportedProvider[] = [];
   const priceRows: ReportedModelPrice[] = [];
+  const modalityRows: ReportedModelModality[] = [];
   let anyProbe = false;
   let allQuota = true;
   let keyInvalid = false;
@@ -661,6 +731,10 @@ export async function fetchRuntimeModelReport(opts: {
             ...pricesFromEnv(env),
             ...pricesFromProviderCatalog(body, endpoint.id),
           ];
+          const mods = modalitiesFromProviderBody(body, endpoint.id).filter(
+            (row) =>
+              callable.some((id) => id.toLowerCase() === row.model_id.toLowerCase())
+          );
           report = {
             supportedModels: callable,
             providers: [
@@ -669,6 +743,7 @@ export async function fetchRuntimeModelReport(opts: {
             modelPrices: callable.length
               ? pricesForModels(callable, priceSource)
               : undefined,
+            modelModalities: mods.length ? mods : undefined,
           };
         }
       } else {
@@ -680,6 +755,8 @@ export async function fetchRuntimeModelReport(opts: {
         current: endpoint.current,
       });
       if (report.modelPrices?.length) priceRows.push(...report.modelPrices);
+      if (report.modelModalities?.length) modalityRows.push(...report.modelModalities);
+      else modalityRows.push(...modalitiesFromProviderBody(body, endpoint.id));
     } catch {
       allQuota = false;
       providers.push({
@@ -695,12 +772,28 @@ export async function fetchRuntimeModelReport(opts: {
   const modelPrices = supportedModels.length
     ? pricesForModels(supportedModels, priceRows)
     : undefined;
+  const seenMod = new Set<string>();
+  const modelModalities: ReportedModelModality[] = [];
+  for (const row of modalityRows) {
+    const key = row.model_id.toLowerCase();
+    if (seenMod.has(key)) continue;
+    if (
+      supportedModels.length &&
+      !supportedModels.some((id) => id.toLowerCase() === key)
+    ) {
+      continue;
+    }
+    seenMod.add(key);
+    modelModalities.push(row);
+    if (modelModalities.length >= 50) break;
+  }
   const quotaExhausted =
     anyProbe && allQuota && supportedModels.length === 0;
   return {
     supportedModels,
     providers,
     modelPrices: modelPrices?.length ? modelPrices : undefined,
+    modelModalities: modelModalities.length ? modelModalities : undefined,
     quotaExhausted: quotaExhausted || undefined,
     keyInvalid: keyInvalid || undefined,
   };
@@ -858,6 +951,7 @@ export async function postAgentHeartbeat(opts: {
   supportedModels?: string[];
   providers?: ReportedProvider[];
   modelPrices?: ReportedModelPrice[];
+  modelModalities?: ReportedModelModality[];
   /** Owner UI flag; omit leaves prior value. */
   byoDegraded?: boolean;
   /** Owner UI: provider catalog rejected this API key (401/403). */
@@ -893,6 +987,9 @@ export async function postAgentHeartbeat(opts: {
   }
   if (opts.modelPrices != null) {
     payload.model_prices = opts.modelPrices;
+  }
+  if (opts.modelModalities != null) {
+    payload.model_modalities = opts.modelModalities;
   }
   if (opts.byoDegraded !== undefined) {
     payload.byo_degraded = opts.byoDegraded;
@@ -955,16 +1052,28 @@ export async function postAgentHeartbeat(opts: {
 export function declarationHeartbeatFields(opts: {
   clear: boolean;
   report: RuntimeModelReport;
-}): Pick<RuntimeModelReport, 'supportedModels' | 'providers' | 'modelPrices'> {
+}): Pick<
+  RuntimeModelReport,
+  'supportedModels' | 'providers' | 'modelPrices' | 'modelModalities'
+> {
   if (opts.clear) {
     // providers:[] clears the declaration; supported_models:[] clears leftovers.
-    return { supportedModels: [], providers: [], modelPrices: undefined };
+    // modelModalities:[] replaces stored vision rows so they cannot linger.
+    return {
+      supportedModels: [],
+      providers: [],
+      modelPrices: undefined,
+      modelModalities: [],
+    };
   }
   if (!opts.report.providers) return {};
   return {
     // Flat supported_models is retired — Host reads providers only.
     providers: opts.report.providers,
     modelPrices: opts.report.modelPrices,
+    // Always send the current snapshot, including [] when the catalog
+    // declared nothing, so a dropped modality does not stay on the agent.
+    modelModalities: opts.report.modelModalities ?? [],
   };
 }
 

@@ -62,6 +62,9 @@ export function heartbeatCommand(): Command {
           body.supported_models = declared.supportedModels;
         }
         if (declared.modelPrices?.length) body.model_prices = declared.modelPrices;
+        if (declared.modelModalities !== undefined) {
+          body.model_modalities = declared.modelModalities;
+        }
         const res = await acnPost<{
           status?: string;
           preferred_model?: string;

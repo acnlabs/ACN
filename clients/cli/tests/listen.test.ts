@@ -358,6 +358,7 @@ describe('declarationHeartbeatFields', () => {
       supportedModels: [],
       providers: [],
       modelPrices: undefined,
+      modelModalities: [],
     });
   });
 
@@ -374,6 +375,17 @@ describe('declarationHeartbeatFields', () => {
     expect(declarationHeartbeatFields({ clear: false, report })).toEqual({
       providers: report.providers,
       modelPrices: report.modelPrices,
+      modelModalities: [],
+    });
+  });
+
+  it('replaces stored modalities with the catalog snapshot', () => {
+    const report = {
+      providers: [{ id: 'tencenttokenplan', models: ['tencenttokenplan/kimi-k2.5'], current: true }],
+      modelModalities: [{ model_id: 'tencenttokenplan/kimi-k2.5', modality: 'text->text' }],
+    };
+    expect(declarationHeartbeatFields({ clear: false, report })).toMatchObject({
+      modelModalities: report.modelModalities,
     });
   });
 });

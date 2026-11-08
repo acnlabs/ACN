@@ -2671,6 +2671,16 @@ class HeartbeatBody(BaseModel):
             "Omit to leave unchanged."
         ),
     )
+    model_modalities: list[dict] | None = Field(
+        default=None,
+        description=(
+            "Input modalities this agent reports from its provider catalog "
+            "(e.g. text+image->text). Each item is model_id plus modality. "
+            "Host uses this for BYO vision gates — not Host TokenPlus books. "
+            "Present list replaces stored rows (empty list clears). "
+            "Omit to leave unchanged."
+        ),
+    )
     byo_degraded: bool | None = Field(
         default=None,
         description=(
@@ -2691,6 +2701,11 @@ class HeartbeatBody(BaseModel):
     @classmethod
     def _model_prices(cls, v: list[dict] | None) -> list[dict] | None:
         return _normalize_reported_model_prices(v)
+
+    @field_validator("model_modalities")
+    @classmethod
+    def _model_modalities(cls, v: list[dict] | None) -> list[dict] | None:
+        return _normalize_reported_model_modalities(v)
 
 
 def _normalize_reported_model_prices(raw: list[dict] | None) -> list[dict] | None:
@@ -2723,6 +2738,31 @@ def _normalize_reported_model_prices(raw: list[dict] | None) -> list[dict] | Non
                 "output_price_per_million": output,
             }
         )
+        if len(out) >= 50:
+            break
+    return out
+
+
+def _normalize_reported_model_modalities(
+    raw: list[dict] | None,
+) -> list[dict] | None:
+    """Keep reported modalities. None means omit."""
+    if raw is None:
+        return None
+    out: list[dict] = []
+    seen: set[str] = set()
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        mid = str(row.get("model_id") or "").strip()[:200]
+        modality = str(row.get("modality") or "").strip()[:80]
+        if not mid or not modality:
+            continue
+        key = mid.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"model_id": mid, "modality": modality})
         if len(out) >= 50:
             break
     return out
@@ -2763,6 +2803,8 @@ async def agent_heartbeat(
       Clears leftover ``metadata.supported_models``.
     - ``supported_models`` → deprecated; cleared when sent, never stored as a declaration
     - ``model_prices`` → ``metadata.model_prices`` (quotes the price book missed)
+    - ``model_modalities`` → ``metadata.model_modalities`` (provider catalog
+      input modality per model; for BYO vision gates)
 
     These are **self-reported, not verified**.
 
@@ -2783,6 +2825,11 @@ async def agent_heartbeat(
         quote_update = (
             {"model_prices": body.model_prices}
             if "model_prices" in body.model_fields_set
+            else {}
+        )
+        modality_update = (
+            {"model_modalities": body.model_modalities}
+            if "model_modalities" in body.model_fields_set
             else {}
         )
         provider_update = (
@@ -2811,6 +2858,7 @@ async def agent_heartbeat(
             supported_models=flat_clear,
             **provider_update,
             **quote_update,
+            **modality_update,
             **degrade_update,
             **key_invalid_update,
         )
@@ -2831,6 +2879,10 @@ async def agent_heartbeat(
             payload["providers"] = meta.get("providers")
         if body.model_prices is not None:
             payload["model_prices"] = meta.get("model_prices") or body.model_prices
+        if body.model_modalities is not None:
+            payload["model_modalities"] = (
+                meta.get("model_modalities") or body.model_modalities
+            )
         if "byo_degraded" in meta:
             payload["byo_degraded"] = bool(meta.get("byo_degraded"))
         if "byo_key_invalid" in meta:
