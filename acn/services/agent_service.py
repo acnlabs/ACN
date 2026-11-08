@@ -879,6 +879,7 @@ class AgentService:
         supported_models: list[str] | None = None,
         providers: list[dict] | None = None,
         model_prices: list[dict] | None = None,
+        model_modalities: list[dict] | None = None,
         byo_degraded: bool | None = None,
         byo_key_invalid: bool | None = None,
     ) -> Agent:
@@ -963,6 +964,27 @@ class AgentService:
                 meta["model_prices"] = merged[:50]
             else:
                 meta.pop("model_prices", None)
+            meta_dirty = True
+        if model_modalities is not None:
+            previous = meta.get("model_modalities")
+            merged_mod: list[dict] = []
+            seen_mod: set[str] = set()
+            for row in list(model_modalities) + (
+                previous if isinstance(previous, list) else []
+            ):
+                if not isinstance(row, dict):
+                    continue
+                mid = str(row.get("model_id") or "").strip()
+                modality = str(row.get("modality") or "").strip()[:80]
+                key = mid.lower()
+                if not mid or not modality or key in seen_mod:
+                    continue
+                seen_mod.add(key)
+                merged_mod.append({"model_id": mid, "modality": modality})
+            if merged_mod:
+                meta["model_modalities"] = merged_mod[:50]
+            else:
+                meta.pop("model_modalities", None)
             meta_dirty = True
         if meta_dirty:
             agent.metadata = meta
