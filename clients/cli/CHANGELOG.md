@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.41] - 2026-11-09
+
+### Added
+
+- Heartbeat reports each provider model's input modality as `model_modalities`
+  (OpenRouter `architecture.modality`, or an input list that includes image).
+  Host uses that list to tell which bring-your-own models accept images.
+  A catalog read replaces the stored list, including an empty list, so a
+  dropped vision flag does not stay on the agent.
+
 ## [1.0.40] - 2026-10-30
 
 ### Changed
