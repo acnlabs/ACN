@@ -21,17 +21,6 @@ class WalletResult(BaseModel):
     status_code: int | None = None
 
 
-class EarningsResult(BaseModel):
-    """Earnings distribution result"""
-
-    success: bool
-    message: str
-    agent_amount: float = 0.0
-    owner_amount: float = 0.0
-    balance: float | None = None
-    error: str | None = None
-
-
 class OrgWalletSummary(BaseModel):
     """Backend Org wallet summary (org-wallet-v0 S6 proxy)."""
 
@@ -52,7 +41,6 @@ class WalletClient:
     - get_balance: Get agent wallet balance
     - spend: Deduct credits for agent actions
     - credit_platform: Credit a PLATFORM revenue wallet by wallet_id
-    - add_earnings: Distribute earnings with owner share split
     - topup: Owner tops up agent wallet
     - withdraw: Owner withdraws from agent wallet
     - set_owner_share: Set owner's earnings share ratio
@@ -346,83 +334,6 @@ class WalletClient:
                 error=str(e),
             )
             return WalletResult(
-                success=False,
-                message="Wallet service unavailable",
-                error=str(e),
-            )
-
-    async def add_earnings(
-        self,
-        agent_id: str,
-        amount: float,
-        description: str | None = None,
-    ) -> EarningsResult:
-        """
-        Add earnings to agent (with owner share split)
-
-        Args:
-            agent_id: Agent ID
-            amount: Total earnings amount
-            description: Description
-
-        Returns:
-            EarningsResult with agent_amount and owner_amount
-        """
-        if amount <= 0:
-            return EarningsResult(
-                success=True,
-                message="No earnings to add",
-            )
-
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
-                response = await client.post(
-                    f"{self.backend_url}/api/agent-wallets/{agent_id}/earnings",
-                    headers=self._get_headers(),
-                    json={
-                        "amount": amount,
-                        "description": description,
-                    },
-                )
-
-                if response.status_code == 200:
-                    data = self._parse_json(response)
-                    agent_wallet = data.get("agent_wallet", {})
-                    logger.info(
-                        "wallet_earnings_added",
-                        agent_id=agent_id,
-                        amount=amount,
-                        agent_amount=data.get("agent_amount"),
-                        owner_amount=data.get("owner_amount"),
-                    )
-                    return EarningsResult(
-                        success=True,
-                        message="Earnings added",
-                        agent_amount=data.get("agent_amount", 0),
-                        owner_amount=data.get("owner_amount", 0),
-                        balance=agent_wallet.get("balance"),
-                    )
-                else:
-                    error = self._extract_error(response)
-                    logger.warning(
-                        "wallet_earnings_failed",
-                        agent_id=agent_id,
-                        amount=amount,
-                        error=error,
-                    )
-                    return EarningsResult(
-                        success=False,
-                        message="Failed to add earnings",
-                        error=error,
-                    )
-
-        except httpx.RequestError as e:
-            logger.error(
-                "wallet_earnings_error",
-                agent_id=agent_id,
-                error=str(e),
-            )
-            return EarningsResult(
                 success=False,
                 message="Wallet service unavailable",
                 error=str(e),
