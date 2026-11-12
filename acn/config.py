@@ -105,6 +105,7 @@ class Settings(BaseSettings):
 
     # Backend URL (for escrow and other integrations)
     backend_url: str = "http://localhost:8000"
+    backend_internal_api_token: str | None = None
 
     # Set to False to run ACN without payment settlement (e.g. self-hosted deployments
     # that do not connect to Agent Planet's Backend). When disabled, tasks still work

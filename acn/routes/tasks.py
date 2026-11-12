@@ -6,6 +6,7 @@ Clean Architecture implementation: Route → TaskService → Repository
 import secrets
 from typing import Annotated
 
+import httpx
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from fastapi import Request as _Request
@@ -19,6 +20,7 @@ from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
 from ..core.exceptions import AgentNotFoundException
 from ..core.validators import check_dict_size_64k
 from ..services import TaskNotFoundException, TaskService, TaskStatusConflict
+from ..services.board_access_client import check_private_board_access
 from .dependencies import (  # type: ignore[import-untyped]
     AgentApiKeyDep,
     InternalTokenDep,
@@ -532,6 +534,22 @@ class TaskReviewRequest(BaseModel):
 _TASK_METADATA_REDACT_KEYS = frozenset({"harness_secret"})
 
 
+async def _assert_private_board_access(subnet_slug: str | None, task_id: str, caller_id: str | None) -> None:
+    if not subnet_slug or not subnet_slug.startswith("board:"):
+        return
+    if caller_id:
+        async with httpx.AsyncClient() as client:
+            if await check_private_board_access(
+                client,
+                settings.backend_url,
+                settings.backend_internal_api_token or settings.internal_api_token,
+                subnet_slug.removeprefix("board:"),
+                caller_id,
+            ):
+                return
+    raise ACNHTTPError(ErrorCode.TASK_NOT_FOUND, 404, details={"task_id": task_id})
+
+
 def _public_task_metadata(metadata: dict | None) -> dict:
     """Return task metadata safe for TaskResponse (strip delivery secrets)."""
     if not metadata:
@@ -755,6 +773,14 @@ async def list_tasks(
     # Best-effort caller resolution — both ``acn_xxx`` and JWT are valid here.
     requesting_agent_id = await _resolve_caller_identity(request, credentials)
 
+    board_viewer = request.headers.get("x-board-viewer")
+    internal_token = request.headers.get("x-internal-token")
+    if (
+        board_id and board_viewer and internal_token and settings.internal_api_token
+        and secrets.compare_digest(internal_token.encode(), settings.internal_api_token.encode())
+    ):
+        requesting_agent_id = board_viewer
+
     # mode filter passed through as-is (string); repository handles DB column match
     task_mode = mode or None
 
@@ -790,6 +816,30 @@ async def list_tasks(
         offset=offset,
         requesting_agent_id=requesting_agent_id,
     )
+
+    # Filter all candidate sources, including creator/status queries that
+    # bypass the open pool's subnet visibility checks.
+    board_scope = f"board:{board_id}" if board_id else None
+    visible_tasks = []
+    board_allowed = None
+    for task in tasks:
+        scope = task.subnet_slug
+        if scope and scope.startswith("board:"):
+            if scope != board_scope:
+                continue
+            if board_allowed is None:
+                try:
+                    await _assert_private_board_access(scope, task.task_id, requesting_agent_id)
+                except ACNHTTPError as exc:
+                    if exc.status_code != 404:
+                        raise
+                    board_allowed = False
+                else:
+                    board_allowed = True
+            if not board_allowed:
+                continue
+        visible_tasks.append(task)
+    tasks = visible_tasks
 
     has_more = len(tasks) > limit
     if has_more:
@@ -846,6 +896,8 @@ async def match_tasks_for_agent(
 
     tasks = await task_service.get_tasks_for_agent(tag_list, limit)
 
+    tasks = [task for task in tasks if not (task.subnet_slug or "").startswith("board:")]
+
     return TaskListResponse(
         tasks=[_task_to_response(t) for t in tasks],
         total=len(tasks),
@@ -888,7 +940,9 @@ async def get_task(
     # submission-visibility decision.
     caller_id = await _resolve_caller_identity(request, credentials)
 
-    if task.subnet_slug:
+    await _assert_private_board_access(task.subnet_slug, task_id, caller_id)
+
+    if task.subnet_slug and not task.subnet_slug.startswith("board:"):
         if not caller_id:
             raise ACNHTTPError(
                 ErrorCode.NOT_SUBNET_MEMBER,
@@ -948,6 +1002,37 @@ async def create_task(
     - Bearer acn_xxx: agent direct call (agent becomes creator automatically)
     - Bearer <JWT>: Auth0 user with acn:write permission
     """
+    return await _create_task(request, body, payload, task_service)
+
+
+@router.post("/internal/boards/{board_id}/tasks", response_model=TaskResponse)
+@limiter.limit("20/minute")
+async def create_private_board_task(
+    request: Request,
+    board_id: str,
+    body: TaskCreateRequest,
+    _: InternalTokenDep,
+    task_service: TaskServiceDep = None,
+):
+    if not board_id.startswith("tb_") or len(board_id) > 60 or body.subnet_slug or body.group_id or body.use_escrow:
+        raise ACNHTTPError(ErrorCode.INVALID_REQUEST, 400, message="Invalid private board task configuration")
+    principal_id = request.headers.get("x-creator-id")
+    await _assert_private_board_access(f"board:{board_id}", board_id, principal_id)
+    return await _create_task(
+        request, body, {"type": "internal", "sub": principal_id}, task_service, private_board_id=board_id
+    )
+
+
+async def _create_task(
+    request: Request,
+    body: TaskCreateRequest,
+    payload: dict,
+    task_service: TaskService,
+    *,
+    private_board_id: str | None = None,
+) -> TaskResponse:
+    if body.subnet_slug and body.subnet_slug.startswith("board:"):
+        raise ACNHTTPError(ErrorCode.INVALID_REQUEST, 400, message="Reserved task scope")
     auth_type = payload.get("type", "jwt")
     token_owner = payload.get("sub", "dev@clients")
 
@@ -998,6 +1083,9 @@ async def create_task(
     if body.ui_spec is not None:
         merged_metadata["ui_spec"] = body.ui_spec
 
+    if private_board_id:
+        merged_metadata["board_id"] = private_board_id
+
     try:
         task = await task_service.create_task(
             creator_type=creator_type_header,
@@ -1020,6 +1108,7 @@ async def create_task(
             deadline_hours=body.deadline_hours,
             metadata=merged_metadata,
             subnet_slug=body.subnet_slug,
+            **({"private_board_id": private_board_id} if private_board_id else {}),
             max_resubmit_attempts=body.max_resubmit_attempts,
         )
 
@@ -1094,6 +1183,8 @@ async def accept_task(
             details={"task_id": task_id},
         ) from None
 
+    await _assert_private_board_access(task.subnet_slug, task_id, agent_id)
+
     if _task_requires_cultivator_human(task) and agent_type != "human":
         raise ACNHTTPError(
             ErrorCode.OWNERSHIP_MISMATCH,
@@ -1105,7 +1196,11 @@ async def accept_task(
         )
 
     # Gate: private subnet task — caller must be a subnet member.
-    if task.subnet_slug and "acn:admin" not in payload.get("permissions", []):
+    if (
+        task.subnet_slug
+        and not task.subnet_slug.startswith("board:")
+        and "acn:admin" not in payload.get("permissions", [])
+    ):
         is_member = await task_service.is_subnet_member(task.subnet_slug, agent_id)
         if not is_member:
             raise ACNHTTPError(
@@ -1120,6 +1215,10 @@ async def accept_task(
 
     try:
         task, participation_id = await task_service.accept_task(
+            **(
+                {"authorized_board_scope": task.subnet_slug}
+                if (task.subnet_slug or "").startswith("board:") else {}
+            ),
             task_id=task_id,
             agent_id=agent_id,
             agent_name=agent_name,
@@ -1171,6 +1270,9 @@ async def invite_solver(
     inviter_id, _, _ = _resolve_actor(payload, request)
 
     try:
+        existing_task = await task_service.get_task(task_id)
+        await _assert_private_board_access(existing_task.subnet_slug, task_id, inviter_id)
+        await _assert_private_board_access(existing_task.subnet_slug, task_id, body.agent_id)
         task = await task_service.invite_agent(
             task_id=task_id,
             inviter_id=inviter_id,
@@ -1213,6 +1315,8 @@ async def submit_task(
     agent_id, _, _ = _resolve_actor(payload, request)
 
     try:
+        existing_task = await task_service.get_task(task_id)
+        await _assert_private_board_access(existing_task.subnet_slug, task_id, agent_id)
         task = await task_service.submit_task(
             task_id=task_id,
             agent_id=agent_id,
@@ -1258,6 +1362,8 @@ async def review_task(
     reviewer_id, _, _ = _resolve_actor(payload, request)
 
     try:
+        existing_task = await task_service.get_task(task_id)
+        await _assert_private_board_access(existing_task.subnet_slug, task_id, reviewer_id)
         # Multi-participant review (participation_id or agent_id provided)
         if body.participation_id or body.agent_id:
             task = await task_service.review_participation(
@@ -1338,6 +1444,8 @@ async def cancel_task(
         canceller_type = None
 
     try:
+        existing_task = await task_service.get_task(task_id)
+        await _assert_private_board_access(existing_task.subnet_slug, task_id, canceller_id)
         task = await task_service.cancel_task(
             task_id=task_id,
             canceller_id=canceller_id,
@@ -1403,7 +1511,9 @@ async def list_participations(
         # Internal / admin callers are exempted.
         permissions = payload.get("permissions", [])
         is_internal = payload.get("type") == "internal" or "acn:admin" in permissions
-        if task.subnet_slug and not is_internal:
+        if payload.get("type") != "internal":
+            await _assert_private_board_access(task.subnet_slug, task_id, caller_id)
+        if task.subnet_slug and not task.subnet_slug.startswith("board:") and not is_internal:
             is_member = await task_service.is_subnet_member(task.subnet_slug, caller_id)
             if not is_member:
                 raise ACNHTTPError(
@@ -1467,6 +1577,11 @@ async def get_my_participation(
             details={"reason": "authentication_required"},
         )
 
+    try:
+        task = await task_service.get_task(task_id)
+    except TaskNotFoundException:
+        return None
+    await _assert_private_board_access(task.subnet_slug, task_id, agent_id)
     p = await task_service.get_user_participation(task_id, agent_id)
     if not p:
         return None
@@ -1491,6 +1606,9 @@ async def cancel_participation(
     platform = payload.get("type") == "internal" and not request.headers.get("x-creator-id")
 
     try:
+        existing_task = await task_service.get_task(task_id)
+        if not platform:
+            await _assert_private_board_access(existing_task.subnet_slug, task_id, agent_id)
         task = await task_service.cancel_participation(
             task_id=task_id,
             participation_id=participation_id,
@@ -1539,6 +1657,8 @@ async def approve_applicant(
     approver_id, _, _ = _resolve_actor(payload, request)
 
     try:
+        existing_task = await task_service.get_task(task_id)
+        await _assert_private_board_access(existing_task.subnet_slug, task_id, approver_id)
         task = await task_service.approve_applicant(
             task_id=task_id,
             participation_id=participation_id,
@@ -1578,6 +1698,8 @@ async def reject_applicant(
     approver_id, _, _ = _resolve_actor(payload, request)
 
     try:
+        existing_task = await task_service.get_task(task_id)
+        await _assert_private_board_access(existing_task.subnet_slug, task_id, approver_id)
         task = await task_service.reject_applicant(
             task_id=task_id,
             participation_id=participation_id,
@@ -1717,7 +1839,8 @@ async def agent_accept_task(
             details={"task_id": task_id},
         ) from None
 
-    if task_entity.subnet_slug:
+    await _assert_private_board_access(task_entity.subnet_slug, task_id, agent_info["agent_id"])
+    if task_entity.subnet_slug and not task_entity.subnet_slug.startswith("board:"):
         is_member = await task_service.is_subnet_member(
             task_entity.subnet_slug, agent_info["agent_id"]
         )
@@ -1744,6 +1867,10 @@ async def agent_accept_task(
 
     try:
         task, _participation_id = await task_service.accept_task(
+            **(
+                {"authorized_board_scope": task_entity.subnet_slug}
+                if (task_entity.subnet_slug or "").startswith("board:") else {}
+            ),
             task_id=task_id,
             agent_id=agent_info["agent_id"],
             agent_name=agent_info.get("name", "Agent"),
@@ -1782,6 +1909,8 @@ async def agent_submit_task(
     """Submit task result (Agent API Key auth)"""
 
     try:
+        existing_task = await task_service.get_task(task_id)
+        await _assert_private_board_access(existing_task.subnet_slug, task_id, agent_info["agent_id"])
         task = await task_service.submit_task(
             task_id=task_id,
             agent_id=agent_info["agent_id"],

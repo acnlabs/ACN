@@ -710,3 +710,66 @@ async def test_submit_cannot_revive_concurrently_withdrawn_seat(service, mock_re
     with pytest.raises(TaskStatusConflict):
         await service.submit_task("task-001", "agent-001", "late work", participation_id="part-001")
     mock_task_pool.complete_participation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subnet_slug", [None, "private-subnet"])
+async def test_task_creation_only_records_public_activity(service, mock_task_pool, subnet_slug):
+    service.activity = AsyncMock()
+    task = await service.create_task(
+        creator_type="human",
+        creator_id="creator-001",
+        creator_name="Alice",
+        title="Task title",
+        description="Task description",
+        subnet_slug=subnet_slug,
+    )
+
+    mock_task_pool.add.assert_awaited_once_with(task)
+    if subnet_slug:
+        service.activity.record_task_created.assert_not_awaited()
+    else:
+        service.activity.record_task_created.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_private_board_scope_is_set_before_task_is_saved(service, mock_task_pool):
+    service.activity = AsyncMock()
+    task = await service.create_task(
+        creator_type="human",
+        creator_id="owner",
+        creator_name="Owner",
+        title="Private task",
+        description="Private task",
+        private_board_id="tb_test",
+    )
+    assert task.subnet_slug == "board:tb_test"
+    mock_task_pool.add.assert_awaited_once_with(task)
+    service.activity.record_task_created.assert_not_awaited()
+
+    with pytest.raises(ValueError, match="Reserved task scope"):
+        await service.create_task(
+            creator_type="human",
+            creator_id="owner",
+            creator_name="Owner",
+            title="Forged task",
+            description="Forged task",
+            subnet_slug="board:tb_test",
+        )
+    assert mock_task_pool.add.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_private_board_accept_requires_verified_matching_scope(service, mock_repo, mock_task_pool):
+    task = _make_task(max_participants=1, subnet_slug="board:tb_private")
+    mock_repo.find_by_id.return_value = task
+    mock_task_pool.has_agent_completed.return_value = False
+
+    for scope in (None, "board:tb_other"):
+        with pytest.raises(PermissionError, match="Private board access required"):
+            await service.accept_task(task.task_id, "agent-001", "Bot", authorized_board_scope=scope)
+
+    accepted, _ = await service.accept_task(
+        task.task_id, "agent-001", "Bot", authorized_board_scope=task.subnet_slug
+    )
+    assert accepted.assignee_id == "agent-001"

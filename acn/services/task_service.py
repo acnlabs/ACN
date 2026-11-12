@@ -239,6 +239,7 @@ class TaskService:
         metadata: dict | None = None,
         subnet_slug: str | None = None,
         max_resubmit_attempts: int | None = None,
+        private_board_id: str | None = None,
     ) -> Task:
         """
         Create a new task.
@@ -268,6 +269,13 @@ class TaskService:
         """
         task_id = str(uuid4())
 
+        if subnet_slug and subnet_slug.startswith("board:"):
+            raise ValueError("Reserved task scope")
+        if private_board_id:
+            if subnet_slug is not None:
+                raise ValueError("Private board tasks cannot use a subnet")
+            subnet_slug = f"board:{private_board_id}"
+
         # Calculate deadline
         deadline = None
         if deadline_hours:
@@ -291,7 +299,7 @@ class TaskService:
         # bound to the harness that owned them at creation, which is the
         # desired guarantee for any orchestrator that has already taken over.
         metadata = dict(metadata) if metadata else {}
-        if subnet_slug and self.subnet_repository:
+        if subnet_slug and not private_board_id and self.subnet_repository:
             try:
                 parent_subnet = await self.subnet_repository.find_by_id(subnet_slug)
             except Exception as e:  # noqa: BLE001
@@ -385,7 +393,7 @@ class TaskService:
         await self.task_pool.add(task)
         await self._notify_webhook(WebhookEventType.TASK_CREATED, task)
 
-        if self.activity:
+        if self.activity and not task.subnet_slug:
             await self.activity.record_task_created(
                 creator_type=creator_type,
                 creator_id=creator_id,
@@ -430,6 +438,8 @@ class TaskService:
         agent_id: str,
         agent_name: str,
         agent_type: str = "agent",
+        *,
+        authorized_board_scope: str | None = None,
     ) -> tuple[Task, str | None]:
         """
         Accept a task.
@@ -446,7 +456,10 @@ class TaskService:
             raise PermissionError("Creator cannot accept their own task")
 
         # ---- Subnet access control ----
-        if task.subnet_slug:
+        if task.subnet_slug and task.subnet_slug.startswith("board:"):
+            if task.subnet_slug != authorized_board_scope:
+                raise PermissionError("Private board access required")
+        elif task.subnet_slug:
             if not self.subnet_repository:
                 raise PermissionError("Subnet access control not configured")
             subnet = await self.subnet_repository.find_by_id(task.subnet_slug)
@@ -478,7 +491,7 @@ class TaskService:
                 status=ParticipationStatus.APPLIED,
             )
             await self.repository.add_application(task_id, participation)
-            if self.activity:
+            if self.activity and not task.subnet_slug:
                 await self.activity.record_task_accepted(
                     agent_id=agent_id,
                     agent_name=agent_name,
@@ -531,7 +544,7 @@ class TaskService:
             except Exception as e:
                 logger.warning("escrow_accept_failed", task_id=task_id, error=str(e))
 
-        if self.activity:
+        if self.activity and not task.subnet_slug:
             await self.activity.record_task_accepted(
                 agent_id=agent_id,
                 agent_name=agent_name,
@@ -584,7 +597,7 @@ class TaskService:
         task.invited_agent_ids = list(task.invited_agent_ids or []) + [invitee_id]
         await self.repository.save(task)
 
-        if self.activity:
+        if self.activity and not task.subnet_slug:
             await self.activity.record(
                 event_type="task_invite",
                 actor_type=task.creator_type,
@@ -776,7 +789,7 @@ class TaskService:
                             )
                         raise escrow_exc
 
-        if self.activity:
+        if self.activity and not task.subnet_slug:
             await self.activity.record_task_accepted(
                 agent_id=agent_id,
                 agent_name=agent_name,
@@ -930,7 +943,7 @@ class TaskService:
                 )
                 await self.repository.save(task)
 
-            if self.activity:
+            if self.activity and not task.subnet_slug:
                 await self.activity.record_task_submitted(
                     agent_id=agent_id,
                     agent_name=p.participant_name,
@@ -1008,7 +1021,7 @@ class TaskService:
             except Exception as e:
                 logger.warning("escrow_submit_error", task_id=task_id, error=str(e))
 
-        if self.activity:
+        if self.activity and not task.subnet_slug:
             await self.activity.record_task_submitted(
                 agent_id=agent_id,
                 agent_name=task.assignee_name or agent_id,
@@ -1097,7 +1110,7 @@ class TaskService:
         await self._notify_webhook(WebhookEventType.TASK_COMPLETED, task)
 
         # Record activity
-        if self.activity and task.assignee_id:
+        if self.activity and not task.subnet_slug and task.assignee_id:
             await self.activity.record_task_approved(
                 approver_type="system",
                 approver_id="system:auto",
@@ -1251,7 +1264,7 @@ class TaskService:
                     participant_id=p.participant_id,
                 )
 
-            if self.activity:
+            if self.activity and not task.subnet_slug:
                 await self.activity.record_task_approved(
                     approver_type=task.creator_type,
                     approver_id=approver_id,
@@ -1297,7 +1310,7 @@ class TaskService:
                         participation_id=p.participation_id,
                     )
 
-            if self.activity and hasattr(self.activity, "record_task_rejected"):
+            if self.activity and not task.subnet_slug and hasattr(self.activity, "record_task_rejected"):
                 await self.activity.record_task_rejected(
                     reviewer_type=task.creator_type,
                     reviewer_id=approver_id,
@@ -1425,7 +1438,7 @@ class TaskService:
                 other.cancel()
                 await self.repository.save_participation(other)
 
-        if self.activity:
+        if self.activity and not task.subnet_slug:
             await self.activity.record_task_accepted(
                 agent_id=p.participant_id,
                 agent_name=p.participant_name or p.participant_id,
@@ -1833,7 +1846,7 @@ class TaskService:
         await self._notify_webhook(WebhookEventType.TASK_COMPLETED, task)
 
         # Record activity
-        if self.activity and task.assignee_id:
+        if self.activity and not task.subnet_slug and task.assignee_id:
             await self.activity.record_task_approved(
                 approver_type=task.creator_type,
                 approver_id=approver_id,
@@ -1904,7 +1917,7 @@ class TaskService:
             return await self.get_task(task_id)
 
         # Record activity
-        if self.activity and task.assignee_id:
+        if self.activity and not task.subnet_slug and task.assignee_id:
             await self.activity.record_task_rejected(
                 reviewer_type=task.creator_type,
                 reviewer_id=reviewer_id,
@@ -2077,7 +2090,7 @@ class TaskService:
         await self._notify_webhook(WebhookEventType.TASK_CANCELLED, task)
 
         # Record activity
-        if self.activity:
+        if self.activity and not task.subnet_slug:
             await self.activity.record_task_cancelled(
                 canceller_type=task.creator_type,
                 canceller_id=canceller_id,
@@ -2128,10 +2141,7 @@ class TaskService:
         """
         # Use different repository methods based on filters
         if board_id:
-            tasks = await self.repository.find_by_board(board_id, limit)
-            # find_by_board 不带状态条件，这里补后置过滤（板内视图常配 status=open）
-            if status:
-                tasks = [t for t in tasks if t.status == status]
+            tasks = await self.repository.find_by_board(board_id, limit, offset=offset, status=status)
         elif group_id:
             tasks = await self.repository.find_by_group(group_id, limit)
         elif creator_id:

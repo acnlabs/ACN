@@ -55,6 +55,7 @@ consistency invariant cross-sprint.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -66,6 +67,7 @@ from acn.routes.dependencies import (
     get_activity_service,
     limiter,
 )
+from acn.services import TaskNotFoundException
 from tests.routes.conftest import _assert_flat_shape
 
 
@@ -288,3 +290,26 @@ class TestApiKeyAgentMismatchFlatShape:
             "path_agent": "a-stranger",
             "key_agent": "agent-target",
         }
+
+def test_public_feed_filters_historical_private_task_events(monkeypatch, stub_activity_service, stub_agent_service):
+    _wire(monkeypatch, stub_activity_service, stub_agent_service)
+    stub_activity_service.list_activities.return_value = [
+        {"event_id": "private", "task_id": "private-task"},
+        {"event_id": "private-again", "task_id": "private-task"},
+        {"event_id": "deleted", "task_id": "deleted-task"},
+        {"event_id": "public", "task_id": "public-task"},
+        {"event_id": "unrelated"},
+    ]
+    task_service = SimpleNamespace(get_task=AsyncMock(side_effect=[
+        SimpleNamespace(subnet_slug="private-subnet"),
+        TaskNotFoundException("deleted"),
+        SimpleNamespace(subnet_slug=None),
+    ]))
+    monkeypatch.setattr("acn.routes.analytics.get_task_service", lambda: task_service)
+
+    response = TestClient(app).get("/api/v1/analytics/activities")
+
+    assert response.status_code == 200, response.text
+    assert [event["event_id"] for event in response.json()["activities"]] == ["public", "unrelated"]
+    assert response.json()["total"] == 2
+    assert task_service.get_task.await_count == 3

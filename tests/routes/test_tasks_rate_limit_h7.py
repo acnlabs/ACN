@@ -48,6 +48,7 @@ from acn.routes.tasks import require_task_write_auth
 # the docs to make drift visible in code review.
 WRITE_ENDPOINTS: dict[tuple[str, str], str] = {
     ("/api/v1/tasks", "POST"): "20/minute",
+    ("/api/v1/tasks/internal/boards/{board_id}/tasks", "POST"): "20/minute",
     ("/api/v1/tasks/{task_id}/accept", "POST"): "60/minute",
     ("/api/v1/tasks/{task_id}/invite", "POST"): "30/minute",
     ("/api/v1/tasks/{task_id}/submit", "POST"): "30/minute",
