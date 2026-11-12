@@ -14,6 +14,7 @@ from fastapi import APIRouter, Header, Query, Request
 from pydantic import BaseModel
 
 from ..core.errors import ACN_DEFAULT_RESPONSES, ACNHTTPError, ErrorCode
+from ..services import TaskNotFoundException
 from .dependencies import (  # type: ignore[import-untyped]
     ActivityServiceDep,
     AnalyticsDep,
@@ -21,6 +22,7 @@ from .dependencies import (  # type: ignore[import-untyped]
     get_agent_service,
     limiter,
 )
+from .tasks import get_task_service
 
 router = APIRouter(
     prefix="/api/v1/analytics",
@@ -214,7 +216,20 @@ async def list_activities(
 
     # Convert to response model
     activities = []
+    public_tasks: dict[str, bool] = {}
     for event_dict in raw_activities:
+        related_task_id = event_dict.get("task_id")
+        if related_task_id:
+            if related_task_id not in public_tasks:
+                try:
+                    task = await get_task_service().get_task(related_task_id)
+                except TaskNotFoundException:
+                    # A deleted task's visibility can no longer be verified.
+                    public_tasks[related_task_id] = False
+                else:
+                    public_tasks[related_task_id] = not task.subnet_slug
+            if not public_tasks[related_task_id]:
+                continue
         try:
             timestamp_str = event_dict.get("timestamp", datetime.now(UTC).isoformat())
             timestamp = datetime.fromisoformat(timestamp_str)

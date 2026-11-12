@@ -449,15 +449,16 @@ class PostgresTaskRepository(ITaskRepository):
             rows = result.scalars().all()
         return await self._rows_to_tasks(rows)
 
-    async def find_by_board(self, board_id: str, limit: int = 100) -> list[Task]:
+    async def find_by_board(
+        self, board_id: str, limit: int = 100, *, offset: int = 0, status: TaskStatus | None = None
+    ) -> list[Task]:
         """Filter by TaskBoard metadata hint (ACN 候选集；SoT 由 backend board_tasks 表保证)。"""
+        stmt = select(TaskModel).where(TaskModel.task_metadata["board_id"].astext == board_id)
+        if status is not None:
+            stmt = stmt.where(TaskModel.status == status.value)
+        stmt = stmt.order_by(TaskModel.created_at.desc(), TaskModel.task_id.desc()).offset(offset).limit(limit)
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(TaskModel)
-                .where(TaskModel.task_metadata["board_id"].astext == board_id)
-                .order_by(TaskModel.created_at.desc())
-                .limit(limit)
-            )
+            result = await session.execute(stmt)
             rows = result.scalars().all()
         return await self._rows_to_tasks(rows)
 
