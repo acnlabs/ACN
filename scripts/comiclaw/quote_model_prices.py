@@ -219,9 +219,18 @@ def index_catalog(rows: list[dict[str, Any]]) -> dict[str, tuple[float, float]]:
     return idx
 
 
-def fetch_tokenplan_page(bare: str) -> tuple[float, float] | None:
+def _page_slug(mid: str) -> str:
+    """TokenPlan site paths use the final segment (deepseek-flash, not deepseek/…)."""
+    bare = _bare(mid)
+    return bare.rsplit("/", 1)[-1].strip()
+
+
+def fetch_tokenplan_page(mid: str) -> tuple[float, float] | None:
     """Scrape TokenPlan model page; amounts are ¥ (CNY)."""
-    url = f"https://tokenplan.youdao.com/models/{bare}"
+    slug = _page_slug(mid)
+    if not slug:
+        return None
+    url = f"https://tokenplan.youdao.com/models/{slug}"
     req = urllib.request.Request(url, headers={"User-Agent": "comiclaw-quote/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:
@@ -237,6 +246,19 @@ def fetch_tokenplan_page(bare: str) -> tuple[float, float] | None:
     out = grab("标准输出") or grab("输出Token") or grab("输出")
     if inn is not None and out is not None:
         return inn, out
+    # Current TokenPlan pages list idle then peak as 官方价 cells:
+    # input, cache-hit, output, … — use the first idle input/output pair.
+    official = [
+        _finite(m.group(1))
+        for m in re.finditer(
+            r'data-label="官方价"[^>]*>\s*¥\s*([0-9]+(?:\.[0-9]+)?)',
+            html,
+            flags=re.I,
+        )
+    ]
+    official = [n for n in official if n is not None]
+    if len(official) >= 3:
+        return official[0], official[2]
     return None
 
 
@@ -272,11 +294,17 @@ def main() -> int:
     for mid in model_ids:
         key = mid.lower()
         bare = _bare(mid).lower()
-        from_local = local.get(key) or local.get(bare)
-        pair_cny = from_local or catalog_idx.get(key) or catalog_idx.get(bare)
+        tail = bare.rsplit("/", 1)[-1]
+        from_local = local.get(key) or local.get(bare) or local.get(tail)
+        pair_cny = (
+            from_local
+            or catalog_idx.get(key)
+            or catalog_idx.get(bare)
+            or catalog_idx.get(tail)
+        )
         looked_up = False
         if pair_cny is None:
-            pair_cny = fetch_tokenplan_page(_bare(mid))
+            pair_cny = fetch_tokenplan_page(mid)
             looked_up = pair_cny is not None
         if pair_cny is None:
             continue
