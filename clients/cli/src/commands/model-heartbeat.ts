@@ -5,6 +5,58 @@
 
 import { createHash } from "node:crypto";
 
+export type ReportedHarness = {
+  name: string;
+  version?: string;
+  logo_url?: string;
+};
+
+function harnessEnv(env: NodeJS.ProcessEnv, current: string, previous: string): string {
+  return (env[current]?.trim() || env[previous]?.trim() || "").trim();
+}
+
+/**
+ * Harness the agent reports for itself. Flag wins over env.
+ * No name → omit (server keeps the previous value). A non-https logo is dropped.
+ * ACN_FRAMEWORK_* is still read when ACN_HARNESS_* is empty.
+ */
+export function resolveReportedHarness(opts?: {
+  name?: string | null;
+  version?: string | null;
+  logoUrl?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): ReportedHarness | undefined {
+  const env = opts?.env ?? process.env;
+  const name = (opts?.name?.trim() || harnessEnv(env, "ACN_HARNESS_NAME", "ACN_FRAMEWORK_NAME")).slice(0, 80);
+  if (!name) return undefined;
+  const version = (opts?.version?.trim() || harnessEnv(env, "ACN_HARNESS_VERSION", "ACN_FRAMEWORK_VERSION")).slice(0, 64);
+  const logo = (opts?.logoUrl?.trim() || harnessEnv(env, "ACN_HARNESS_LOGO_URL", "ACN_FRAMEWORK_LOGO_URL")).trim();
+  const out: ReportedHarness = { name };
+  if (version) out.version = version;
+  if (
+    logo.length > 0 &&
+    logo.length <= 2048 &&
+    logo.toLowerCase().startsWith("https://") &&
+    !/\s/.test(logo)
+  ) {
+    out.logo_url = logo;
+  }
+  return out;
+}
+
+/** True when a logo was supplied but will not be sent. */
+export function reportedHarnessLogoRejected(opts?: {
+  name?: string | null;
+  version?: string | null;
+  logoUrl?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const env = opts?.env ?? process.env;
+  const raw = (opts?.logoUrl?.trim() || harnessEnv(env, "ACN_HARNESS_LOGO_URL", "ACN_FRAMEWORK_LOGO_URL")).trim();
+  if (!raw) return false;
+  return !resolveReportedHarness(opts)?.logo_url;
+}
+
 /** Resolve runtime model: flag → ACN_PREFERRED_MODEL → empty. */
 export function resolvePreferredModel(opts?: {
   model?: string | null;
@@ -956,6 +1008,8 @@ export async function postAgentHeartbeat(opts: {
   byoDegraded?: boolean;
   /** Owner UI: provider catalog rejected this API key (401/403). */
   byoKeyInvalid?: boolean;
+  /** Self-reported harness. Omit leaves the stored value unchanged. */
+  harness?: ReportedHarness;
   fetchFn?: typeof fetch;
 }): Promise<
   | {
@@ -996,6 +1050,9 @@ export async function postAgentHeartbeat(opts: {
   }
   if (opts.byoKeyInvalid !== undefined) {
     payload.byo_key_invalid = opts.byoKeyInvalid;
+  }
+  if (opts.harness?.name) {
+    payload.harness = opts.harness;
   }
   const body = Object.keys(payload).length ? JSON.stringify(payload) : undefined;
   try {
