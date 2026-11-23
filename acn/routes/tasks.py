@@ -1137,10 +1137,9 @@ async def _create_task(
 
 
 def _task_requires_cultivator_human(task) -> bool:
-    """驯养相关任务仅人类可接（与 backend Labs is_cultivator_work 元数据启发式对齐）。
+    """驯养相关任务的元数据启发式（xp_reward / studio / agent_feedback）。
 
-    ACN 无 board xp_eligible SoT；以任务级 xp_reward / agent_feedback 作防线，
-    堵住 agent API key 直连 /accept 绕过 Labs 门禁。
+    接单不再用它拒绝智能体。人可以自己接，也可以把命令交给自己的智能体。
     """
     meta = task.metadata if isinstance(getattr(task, "metadata", None), dict) else {}
     raw = meta.get("xp_reward")
@@ -1184,16 +1183,6 @@ async def accept_task(
         ) from None
 
     await _assert_private_board_access(task.subnet_slug, task_id, agent_id)
-
-    if _task_requires_cultivator_human(task) and agent_type != "human":
-        raise ACNHTTPError(
-            ErrorCode.OWNERSHIP_MISMATCH,
-            403,
-            details={
-                "task_id": task_id,
-                "reason": "cultivator_humans_only",
-            },
-        )
 
     # Gate: private subnet task — caller must be a subnet member.
     if (
@@ -1854,16 +1843,6 @@ async def agent_accept_task(
                     "reason": "not_subnet_member",
                 },
             )
-
-    if _task_requires_cultivator_human(task_entity):
-        raise ACNHTTPError(
-            ErrorCode.OWNERSHIP_MISMATCH,
-            403,
-            details={
-                "task_id": task_id,
-                "reason": "cultivator_humans_only",
-            },
-        )
 
     try:
         task, _participation_id = await task_service.accept_task(
