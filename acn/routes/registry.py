@@ -2696,6 +2696,30 @@ class HeartbeatBody(BaseModel):
             "Omit leaves unchanged; false clears after a healthy key recovers."
         ),
     )
+    harness: dict | None = Field(
+        default=None,
+        description=(
+            "Self-reported agent harness (OpenClaw, Hermes, Codex, …). "
+            "Object with name, optional version, and optional https logo_url. "
+            "Omit leaves unchanged; null or an object without a name clears it. "
+            "Not verified, and not a brand list."
+        ),
+    )
+    framework: dict | None = Field(
+        default=None,
+        description="Deprecated alias of harness. Stored as metadata.harness.",
+    )
+
+    @field_validator("harness", "framework")
+    @classmethod
+    def _harness(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return None
+        if not isinstance(v, dict):
+            raise ValueError("harness must be an object")
+        from ..services.agent_service import normalize_reported_harness
+
+        return normalize_reported_harness(v, strict=True)
 
     @field_validator("model_prices")
     @classmethod
@@ -2805,6 +2829,9 @@ async def agent_heartbeat(
     - ``model_prices`` → ``metadata.model_prices`` (quotes the price book missed)
     - ``model_modalities`` → ``metadata.model_modalities`` (provider catalog
       input modality per model; for BYO vision gates)
+    - ``harness`` → ``metadata.harness`` (display name, optional version,
+      optional https logo). Omit to leave unchanged; null or a nameless
+      object clears it. ``framework`` is a deprecated alias of the same field.
 
     These are **self-reported, not verified**.
 
@@ -2847,6 +2874,12 @@ async def agent_heartbeat(
             if "byo_key_invalid" in body.model_fields_set
             else {}
         )
+        if "harness" in body.model_fields_set:
+            harness_update = {"harness": body.harness or {}}
+        elif "framework" in body.model_fields_set:
+            harness_update = {"harness": body.framework or {}}
+        else:
+            harness_update = {}
         flat_clear = (
             body.supported_models
             if "supported_models" in body.model_fields_set and not provider_update
@@ -2861,6 +2894,7 @@ async def agent_heartbeat(
             **modality_update,
             **degrade_update,
             **key_invalid_update,
+            **harness_update,
         )
         meta = (
             agent.metadata
@@ -2887,6 +2921,8 @@ async def agent_heartbeat(
             payload["byo_degraded"] = bool(meta.get("byo_degraded"))
         if "byo_key_invalid" in meta:
             payload["byo_key_invalid"] = bool(meta.get("byo_key_invalid"))
+        if "harness" in body.model_fields_set or "framework" in body.model_fields_set:
+            payload["harness"] = meta.get("harness")
         desired = meta.get("desired_preferred_model")
         if isinstance(desired, str) and desired.strip():
             payload["desired_preferred_model"] = desired.strip()

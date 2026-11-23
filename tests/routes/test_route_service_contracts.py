@@ -495,6 +495,51 @@ class TestRegistryContract:
             == "qwen/qwen-plus"
         )
 
+    def test_heartbeat_harness_normalizes_and_rejects_bad_logo(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from acn.routes.registry import HeartbeatBody
+
+        body = HeartbeatBody.model_validate(
+            {
+                "harness": {
+                    "name": " OpenClaw ",
+                    "version": " 2026.3.1 ",
+                    "logo_url": "https://cdn.example/mark.png",
+                }
+            }
+        )
+        assert body.harness == {
+            "name": "OpenClaw",
+            "version": "2026.3.1",
+            "logo_url": "https://cdn.example/mark.png",
+        }
+        cleared = HeartbeatBody.model_validate({"harness": {"name": "  "}})
+        assert cleared.harness == {}
+        with pytest.raises(ValidationError):
+            HeartbeatBody.model_validate(
+                {"harness": {"name": "OpenClaw", "logo_url": "http://cdn.example/mark.png"}}
+            )
+
+    def test_heartbeat_passes_harness(self, stub_agent_service):
+        from acn.routes.dependencies import verify_agent_api_key
+
+        app.dependency_overrides[get_agent_service] = lambda: stub_agent_service
+        app.dependency_overrides[verify_agent_api_key] = lambda: _make_agent_info("agent-hb")
+
+        with TestClient(app) as client:
+            r = client.post(
+                "/api/v1/agents/agent-hb/heartbeat",
+                json={"harness": {"name": "Hermes", "version": "0.9"}},
+            )
+
+        app.dependency_overrides.clear()
+
+        assert r.status_code == 200
+        kwargs = stub_agent_service.update_heartbeat.await_args.kwargs
+        assert kwargs["harness"] == {"name": "Hermes", "version": "0.9"}
+
     def test_heartbeat_model_prices_keeps_every_row(self):
         from acn.routes.registry import _normalize_reported_model_prices
 

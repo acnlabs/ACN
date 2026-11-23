@@ -29,6 +29,56 @@ ALIVE_RENEW_TTL = 3600  # 60 min — renewed on each heartbeat call
 # Cap for heartbeat-declared model lists (Interfaze composer dropdown).
 _SUPPORTED_MODELS_MAX = 50
 
+_HARNESS_NAME_MAX = 80
+_HARNESS_VERSION_MAX = 64
+_HARNESS_LOGO_MAX = 2048
+
+
+def normalize_reported_harness(raw: dict | None, *, strict: bool = False) -> dict:
+    """Self-reported agent harness. ``{}`` clears. A dict with ``name`` is stored.
+
+    ``strict`` raises ``ValueError`` on a non-string version or a logo that is
+    not an https URL. Loose mode drops those fields and still keeps the name.
+    This is a declaration, not a verified runtime.
+    """
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    version = raw.get("version")
+    if version not in (None, ""):
+        if not isinstance(version, str):
+            if strict:
+                raise ValueError("harness.version must be a string")
+            version = None
+    logo = raw.get("logo_url")
+    if logo not in (None, ""):
+        if not isinstance(logo, str):
+            if strict:
+                raise ValueError("harness.logo_url must be a string")
+            logo = None
+        else:
+            url = logo.strip()
+            if (
+                len(url) > _HARNESS_LOGO_MAX
+                or not url.lower().startswith("https://")
+                or any(ch.isspace() for ch in url)
+            ):
+                if strict:
+                    raise ValueError("harness.logo_url must be an https URL")
+                logo = None
+            else:
+                logo = url
+    name = str(raw.get("name") or "").strip()[:_HARNESS_NAME_MAX]
+    if not name:
+        return {}
+    out: dict = {"name": name}
+    if isinstance(version, str):
+        ver = version.strip()[:_HARNESS_VERSION_MAX]
+        if ver:
+            out["version"] = ver
+    if isinstance(logo, str) and logo:
+        out["logo_url"] = logo
+    return out
+
 
 def _normalize_reported_providers(raw: list[dict] | None) -> list[dict] | None:
     """Agent declaration: each provider, its models, and which one is current.
@@ -882,6 +932,7 @@ class AgentService:
         model_modalities: list[dict] | None = None,
         byo_degraded: bool | None = None,
         byo_key_invalid: bool | None = None,
+        harness: dict | None = None,
     ) -> Agent:
         """
         Update agent heartbeat
@@ -901,6 +952,9 @@ class AgentService:
                 fallback. ``None`` leaves unchanged; ``False`` clears.
             byo_key_invalid: Owner UI flag when the BYO catalog rejected the
                 API key (401/403). ``None`` leaves unchanged; ``False`` clears.
+            harness: Self-reported harness (name, optional version, optional
+                https logo). ``None`` leaves unchanged; ``{}`` clears.
+                Stored on ``metadata.harness``. **Self-reported, not verified.**
 
         Returns:
             Updated agent entity
@@ -940,6 +994,14 @@ class AgentService:
                 meta["byo_key_invalid"] = True
             else:
                 meta.pop("byo_key_invalid", None)
+            meta_dirty = True
+        if harness is not None:
+            stored = normalize_reported_harness(harness)
+            meta.pop("framework", None)
+            if stored:
+                meta["harness"] = stored
+            else:
+                meta.pop("harness", None)
             meta_dirty = True
         # Flat supported_models is legacy. Host ignores it; retire leftovers on
         # every heartbeat so agents that only ping preferred_model still clean up.

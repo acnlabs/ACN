@@ -270,6 +270,37 @@ class TestAgentService:
         assert "supported_models" not in (agent.metadata or {})
 
     @pytest.mark.asyncio
+    async def test_update_heartbeat_stores_and_clears_harness(
+        self, mock_agent_repository, sample_agent
+    ):
+        """Harness is a self-report. A later empty object removes it."""
+        sample_agent.metadata = {"visibility": "real", "framework": {"name": "Old"}}
+        mock_agent_repository.find_by_id.return_value = sample_agent
+        service = AgentService(mock_agent_repository)
+
+        agent = await service.update_heartbeat(
+            sample_agent.agent_id,
+            harness={
+                "name": " OpenClaw ",
+                "version": " 2026.3.1 ",
+                "logo_url": "https://cdn.example/mark.png",
+                "extra": "drop",
+            },
+        )
+        assert agent.metadata["harness"] == {
+            "name": "OpenClaw",
+            "version": "2026.3.1",
+            "logo_url": "https://cdn.example/mark.png",
+        }
+        assert "framework" not in agent.metadata
+        assert agent.metadata["visibility"] == "real"
+
+        agent = await service.update_heartbeat(sample_agent.agent_id, harness={})
+        assert "harness" not in agent.metadata
+        assert "framework" not in agent.metadata
+        assert agent.metadata["visibility"] == "real"
+
+    @pytest.mark.asyncio
     async def test_update_heartbeat_stores_quoted_prices(
         self, mock_agent_repository, sample_agent
     ):
