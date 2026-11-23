@@ -29,8 +29,11 @@ import {
   pricesFromEnv,
   pricesFromProviderCatalog,
   resolvePreferredModel,
+  resolveReportedHarness,
+  reportedHarnessLogoRejected,
   resolveSupportedModels,
   fetchRuntimeModelReport,
+  type ReportedHarness,
   type ReportedModelPrice,
 } from './model-heartbeat.js';
 import {
@@ -54,6 +57,7 @@ export {
   formatModelHeartbeatLog,
   postAgentHeartbeat,
   resolvePreferredModel,
+  resolveReportedHarness,
   resolveSupportedModels,
 } from './model-heartbeat.js';
 
@@ -651,6 +655,8 @@ interface ListenerConfig extends HandlerOptions {
   baseUrl: string;
   /** Host Catalog model id — self-reported via REST heartbeat while listening. */
   preferredModel?: string;
+  /** Harness self-report. Sent on the REST heartbeat while listening. */
+  harness?: ReportedHarness;
   /** One startup heartbeat clears providers and the derived union, then normal reads resume. */
   clearDeclaration?: boolean;
 }
@@ -785,6 +791,7 @@ function runListener(cfg: ListenerConfig): void {
           modelModalities: declared.modelModalities,
           byoDegraded,
           byoKeyInvalid,
+          harness: cfg.harness,
         });
         if (!r.ok) {
           console.error(`[acn listen] model heartbeat failed: ${r.reason}`);
@@ -1113,6 +1120,21 @@ export function listenCommand(): Command {
       'First heartbeat clears providers and the derived union; later heartbeats read provider lists again'
     )
     .option(
+      '--harness <name>',
+      'Self-reported harness shown in Interfaze (env: ACN_HARNESS_NAME)'
+    )
+    .option(
+      '--harness-version <version>',
+      'Harness version (env: ACN_HARNESS_VERSION)'
+    )
+    .option(
+      '--harness-logo <url>',
+      'https logo for the harness mark (env: ACN_HARNESS_LOGO_URL)'
+    )
+    .option('--framework <name>', 'Deprecated alias of --harness')
+    .option('--framework-version <version>', 'Deprecated alias of --harness-version')
+    .option('--framework-logo <url>', 'Deprecated alias of --harness-logo')
+    .option(
       '--on-set-preferred-model <cmd>',
       'When Interfaze saves a new default: stdin JSON {preferred_model} → exit 0 to persist on the runtime (env: ACN_ON_SET_PREFERRED_MODEL)'
     )
@@ -1139,6 +1161,12 @@ export function listenCommand(): Command {
         chatCompleteTimeout?: string;
         agentId?: string;
         model?: string;
+        harness?: string;
+        harnessVersion?: string;
+        harnessLogo?: string;
+        framework?: string;
+        frameworkVersion?: string;
+        frameworkLogo?: string;
         supportedModels?: string;
         clearSupportedModels?: boolean;
         onSetPreferredModel?: string;
@@ -1274,6 +1302,15 @@ export function listenCommand(): Command {
         });
 
         const preferredModel = resolvePreferredModel({ model: opts.model });
+        const harnessOpts = {
+          name: opts.harness ?? opts.framework,
+          version: opts.harnessVersion ?? opts.frameworkVersion,
+          logoUrl: opts.harnessLogo ?? opts.frameworkLogo,
+        };
+        const harness = resolveReportedHarness(harnessOpts);
+        if (reportedHarnessLogoRejected(harnessOpts)) {
+          console.error('harness logo ignored: logo_url must be an https URL');
+        }
         if (opts.clearSupportedModels && opts.supportedModels?.trim()) {
           console.error(
             'Use either --supported-models or --clear-supported-models, not both.'
@@ -1299,6 +1336,7 @@ export function listenCommand(): Command {
           apiKey: apiKey!,
           baseUrl: config.base_url,
           preferredModel,
+          harness,
           clearDeclaration: !!opts.clearSupportedModels,
           onSetPreferredModel,
           onQuoteModelPrices,

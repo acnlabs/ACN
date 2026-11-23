@@ -17,6 +17,7 @@ import {
   handleA2aRequest,
   postAgentHeartbeat,
   resolvePreferredModel,
+  resolveReportedHarness,
   resolveSupportedModels,
   toWebsocketUrl,
   type A2aRequestFrame,
@@ -253,6 +254,49 @@ describe('resolvePreferredModel', () => {
   });
 });
 
+describe('resolveReportedHarness', () => {
+  it('reads the harness from env and lets flags win', () => {
+    expect(
+      resolveReportedHarness({
+        env: {
+          ACN_HARNESS_NAME: ' OpenClaw ',
+          ACN_HARNESS_VERSION: ' 2026.3.1 ',
+          ACN_HARNESS_LOGO_URL: 'https://cdn.example/mark.png',
+        } as NodeJS.ProcessEnv,
+      })
+    ).toEqual({
+      name: 'OpenClaw',
+      version: '2026.3.1',
+      logo_url: 'https://cdn.example/mark.png',
+    });
+    expect(
+      resolveReportedHarness({
+        name: 'Hermes',
+        env: { ACN_HARNESS_NAME: 'OpenClaw' } as NodeJS.ProcessEnv,
+      })
+    ).toEqual({ name: 'Hermes' });
+  });
+
+  it('still reads the previous ACN_FRAMEWORK_* env names', () => {
+    expect(
+      resolveReportedHarness({
+        env: { ACN_FRAMEWORK_NAME: 'Codex', ACN_FRAMEWORK_VERSION: '0.2' } as NodeJS.ProcessEnv,
+      })
+    ).toEqual({ name: 'Codex', version: '0.2' });
+  });
+
+  it('omits the field when unnamed and drops a non-https logo', () => {
+    expect(resolveReportedHarness({ env: {} as NodeJS.ProcessEnv })).toBeUndefined();
+    expect(
+      resolveReportedHarness({
+        name: 'Dots',
+        logoUrl: 'http://cdn.example/m.png',
+        env: {} as NodeJS.ProcessEnv,
+      })
+    ).toEqual({ name: 'Dots' });
+  });
+});
+
 describe('postAgentHeartbeat', () => {
   it('POSTs preferred_model when provided', async () => {
     const fetchFn = vi.fn().mockResolvedValue({
@@ -272,6 +316,23 @@ describe('postAgentHeartbeat', () => {
     expect(url).toBe('https://api.acnlabs.dev/api/v1/agents/ag-1/heartbeat');
     expect(init.method).toBe('POST');
     expect(init.body).toBe(JSON.stringify({ preferred_model: 'openai/gpt-4o-mini' }));
+  });
+
+  it('POSTs harness when the agent reported one', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ok' }),
+    });
+    const harness = { name: 'Muse', version: '0.4' };
+    await postAgentHeartbeat({
+      baseUrl: 'https://api.acnlabs.dev',
+      agentId: 'ag-1',
+      apiKey: 'acn_key',
+      harness,
+      fetchFn: fetchFn as unknown as typeof fetch,
+    });
+    const [, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBe(JSON.stringify({ harness }));
   });
 
   it('POSTs supported_models when provided', async () => {

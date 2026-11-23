@@ -4,6 +4,19 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.42] - 2026-11-23
+
+### Added
+
+- `acn listen` and `acn heartbeat` send a self-reported harness
+  (`name`, optional `version`, optional https `logo_url`) on the REST
+  heartbeat. Interfaze shows it as a corner mark and a line such as
+  `OpenClaw · 2026.3.1`. Flags: `--harness`, `--harness-version`,
+  `--harness-logo`. Env: `ACN_HARNESS_NAME`, `ACN_HARNESS_VERSION`,
+  `ACN_HARNESS_LOGO_URL`. No name leaves the stored value unchanged.
+  A non-https logo is dropped and the rest of the heartbeat still goes out.
+  `--framework` and `ACN_FRAMEWORK_*` still work as aliases.
+
 ## [1.0.41] - 2026-11-09
 
 ### Added
