@@ -213,8 +213,15 @@ export type OrchestrationDecideOption = {
   label: string;
 };
 
+export type OrchestrationQuestion = {
+  type: 'noul' | 'choice' | 'score';
+  instructions: string;
+  criteria?: Record<string, string> | string[];
+};
+
 export type OrchestrationDecide = {
-  options: OrchestrationDecideOption[];
+  options?: OrchestrationDecideOption[];
+  questions?: Record<string, OrchestrationQuestion>;
 };
 
 export type OrchestrationPlan = {
@@ -437,25 +444,95 @@ export function extractOrchestration(
 }
 
 const MAX_DECIDE_OPTIONS = 8;
+const MAX_DECIDE_QUESTIONS = 6;
+const RESERVED_QUESTION_IDS = new Set(['spends_money', 'opens_computer', 'contacts_someone']);
 const DECIDE_ID = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
 
-function extractDecide(raw: unknown): OrchestrationDecide | undefined {
-  const rec = asRecord(raw);
-  if (!rec || !Array.isArray(rec.options)) return undefined;
+function squashDecideText(text: string, max: number): string {
+  return text.trim().replace(/\s+/g, ' ').slice(0, max);
+}
+
+function extractDecideOptions(raw: unknown): OrchestrationDecideOption[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
   const options: OrchestrationDecideOption[] = [];
   const seen = new Set<string>();
-  for (const item of rec.options) {
+  for (const item of raw) {
     if (options.length >= MAX_DECIDE_OPTIONS) break;
     const row = asRecord(item);
     if (!row || typeof row.id !== 'string' || typeof row.label !== 'string') continue;
     const id = row.id.trim().slice(0, 32);
-    const label = row.label.trim().replace(/\s+/g, ' ').slice(0, 80);
+    const label = squashDecideText(row.label, 80);
     if (!id || !label || seen.has(id) || !DECIDE_ID.test(id)) continue;
     seen.add(id);
     options.push({ id, label });
   }
-  if (options.length < 2) return undefined;
-  return { options };
+  return options.length >= 2 ? options : undefined;
+}
+
+function extractDecideQuestions(
+  raw: unknown
+): Record<string, OrchestrationQuestion> | undefined {
+  const rec = asRecord(raw);
+  if (!rec) return undefined;
+  const kept: Record<string, OrchestrationQuestion> = {};
+  for (const [key, value] of Object.entries(rec)) {
+    if (Object.keys(kept).length >= MAX_DECIDE_QUESTIONS) break;
+    if (!DECIDE_ID.test(key) || RESERVED_QUESTION_IDS.has(key)) continue;
+    const item = asRecord(value);
+    if (!item) continue;
+    const qtype = item.type;
+    if (qtype !== 'noul' && qtype !== 'choice' && qtype !== 'score') continue;
+    if (typeof item.instructions !== 'string' || !item.instructions.trim()) continue;
+    const question: OrchestrationQuestion = {
+      type: qtype,
+      instructions: squashDecideText(item.instructions, 500),
+    };
+    if (qtype === 'choice') {
+      const criteria = asRecord(item.criteria);
+      if (!criteria) continue;
+      const cleaned: Record<string, string> = {};
+      for (const [optionId, desc] of Object.entries(criteria)) {
+        if (Object.keys(cleaned).length >= MAX_DECIDE_OPTIONS) break;
+        if (!DECIDE_ID.test(optionId) || typeof desc !== 'string' || !desc.trim()) continue;
+        cleaned[optionId] = squashDecideText(desc, 80);
+      }
+      if (Object.keys(cleaned).length < 2) continue;
+      question.criteria = cleaned;
+    } else if (qtype === 'score') {
+      if (!Array.isArray(item.criteria)) continue;
+      const levels: string[] = [];
+      for (const level of item.criteria) {
+        if (levels.length >= MAX_DECIDE_OPTIONS) break;
+        if (typeof level === 'string' && level.trim()) levels.push(squashDecideText(level, 80));
+      }
+      if (levels.length < 2) continue;
+      question.criteria = levels;
+    } else {
+      const criteria = asRecord(item.criteria);
+      if (criteria) {
+        const cleaned: Record<string, string> = {};
+        for (const side of ['true', 'false'] as const) {
+          const text = criteria[side];
+          if (typeof text === 'string' && text.trim()) cleaned[side] = squashDecideText(text, 200);
+        }
+        if (Object.keys(cleaned).length) question.criteria = cleaned;
+      }
+    }
+    kept[key] = question;
+  }
+  return Object.keys(kept).length ? kept : undefined;
+}
+
+function extractDecide(raw: unknown): OrchestrationDecide | undefined {
+  const rec = asRecord(raw);
+  if (!rec) return undefined;
+  const options = extractDecideOptions(rec.options);
+  const questions = extractDecideQuestions(rec.questions);
+  if (!options && !questions) return undefined;
+  return {
+    ...(options ? { options } : {}),
+    ...(questions ? { questions } : {}),
+  };
 }
 
 function extractPlan(raw: unknown): OrchestrationPlan | undefined {
@@ -1242,6 +1319,12 @@ async function completeOfficialViaAgent(
     }
     if (completed.result.tool_lines?.length) {
       result.tool_lines = completed.result.tool_lines;
+    }
+    if (completed.result.orchestration) {
+      result.orchestration = completed.result.orchestration;
+    }
+    if (completed.result.canvas?.blocks.length) {
+      result.canvas = completed.result.canvas;
     }
     return { ok: true, result };
   } finally {
