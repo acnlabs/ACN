@@ -4,6 +4,13 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.45] - 2026-11-24
+
+### Added
+
+- Official chat hops keep a Box question. The question is the copied
+  instruction, with no criteria.
+
 ## [1.0.44] - 2026-11-24
 
 ### Fixed
