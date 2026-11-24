@@ -506,6 +506,23 @@ describe('extractOrchestration', () => {
     ).toBeUndefined();
   });
 
+  it('keeps a box question as instructions only', () => {
+    expect(
+      extractOrchestration({
+        content: '这里',
+        orchestration: {
+          decide: {
+            questions: {
+              where: { type: 'box', instructions: ' 绿块 ', criteria: { true: '不是框' } },
+            },
+          },
+        },
+      })
+    ).toEqual({
+      decide: { questions: { where: { type: 'box', instructions: '绿块' } } },
+    });
+  });
+
   it('keeps a choice question without an options list', () => {
     expect(
       extractOrchestration({

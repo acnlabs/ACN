@@ -214,7 +214,7 @@ export type OrchestrationDecideOption = {
 };
 
 export type OrchestrationQuestion = {
-  type: 'noul' | 'choice' | 'score';
+  type: 'noul' | 'choice' | 'score' | 'box';
   instructions: string;
   criteria?: Record<string, string> | string[];
 };
@@ -481,7 +481,7 @@ function extractDecideQuestions(
     const item = asRecord(value);
     if (!item) continue;
     const qtype = item.type;
-    if (qtype !== 'noul' && qtype !== 'choice' && qtype !== 'score') continue;
+    if (qtype !== 'noul' && qtype !== 'choice' && qtype !== 'score' && qtype !== 'box') continue;
     if (typeof item.instructions !== 'string' || !item.instructions.trim()) continue;
     const question: OrchestrationQuestion = {
       type: qtype,
@@ -507,7 +507,7 @@ function extractDecideQuestions(
       }
       if (levels.length < 2) continue;
       question.criteria = levels;
-    } else {
+    } else if (qtype === 'noul') {
       const criteria = asRecord(item.criteria);
       if (criteria) {
         const cleaned: Record<string, string> = {};
