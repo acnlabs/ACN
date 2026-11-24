@@ -220,6 +220,72 @@ async def test_join_stores_host_invite_code_only(stub_join_service, fake_agent):
 
 
 @pytest.mark.asyncio
+async def test_join_stores_named_harness_and_ignores_metadata_copy(stub_join_service, fake_agent):
+    body = AgentJoinRequest(
+        name="ProbeAgent",
+        description="Pin claim_url shape; does not register against real ACN.",
+        tags=["probe"],
+        a2a_endpoint="https://probe.example.com/a2a",
+        harness={"name": "Hermes", "version": "0.9"},
+        metadata={"harness": {"name": "Sneaky"}},
+    )
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
+    ):
+        await _join_agent_impl(
+            body,
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+        )
+
+    meta = stub_join_service.join_agent.await_args.kwargs["metadata"]
+    assert meta["harness"] == {"name": "Hermes", "version": "0.9"}
+
+
+@pytest.mark.asyncio
+async def test_join_without_harness_leaves_it_unset(stub_join_service, fake_agent):
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
+    ):
+        await _join_agent_impl(
+            _make_body(),
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+        )
+
+    meta = stub_join_service.join_agent.await_args.kwargs["metadata"] or {}
+    assert "harness" not in meta
+
+
+@pytest.mark.asyncio
+async def test_join_framework_alias_is_stored_as_harness(stub_join_service, fake_agent):
+    body = AgentJoinRequest(
+        name="ProbeAgent",
+        description="Pin claim_url shape; does not register against real ACN.",
+        tags=["probe"],
+        a2a_endpoint="https://probe.example.com/a2a",
+        framework={"name": " Codex "},
+    )
+    with patch(
+        "acn.routes.registry._resolve_registration_endpoint",
+        new=AsyncMock(return_value=("https://probe.example.com/a2a", None, True, True)),
+    ):
+        await _join_agent_impl(
+            body,
+            BackgroundTasks(),
+            ref=None,
+            agent_service=stub_join_service,
+        )
+
+    meta = stub_join_service.join_agent.await_args.kwargs["metadata"]
+    assert meta["harness"] == {"name": "Codex"}
+
+
+@pytest.mark.asyncio
 async def test_join_ignores_owner_sub_disguised_as_invite(stub_join_service, fake_agent):
     body = _make_body()
     body.invite = "auth0|secret-owner"

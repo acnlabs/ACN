@@ -106,6 +106,41 @@ def test_register_request_relay_with_url_is_rejected():
         )
 
 
+def test_join_harness_is_optional_and_rejects_bad_logo():
+    omitted = AgentJoinRequest(
+        name="Chat Agent",
+        description="Registers without declaring a harness",
+    )
+    assert "harness" not in omitted.model_fields_set
+
+    named = AgentJoinRequest(
+        name="Chat Agent",
+        description="Registers with a self-reported harness",
+        harness={
+            "name": " OpenClaw ",
+            "version": " 2026.3.1 ",
+            "logo_url": "https://cdn.example/mark.png",
+        },
+    )
+    assert named.harness == {
+        "name": "OpenClaw",
+        "version": "2026.3.1",
+        "logo_url": "https://cdn.example/mark.png",
+    }
+    blank = AgentJoinRequest(
+        name="Chat Agent",
+        description="Registers with a nameless harness object",
+        harness={"name": "  "},
+    )
+    assert blank.harness == {}
+    with pytest.raises(ValidationError, match="https"):
+        AgentJoinRequest(
+            name="Chat Agent",
+            description="Registers with a non-https harness logo",
+            harness={"name": "OpenClaw", "logo_url": "http://cdn.example/mark.png"},
+        )
+
+
 def test_join_metadata_chat_open_must_be_bool():
     with pytest.raises(ValidationError, match="chat_open"):
         AgentJoinRequest(
