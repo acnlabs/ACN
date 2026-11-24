@@ -6,6 +6,7 @@ import {
   saveConfig,
   type AcnRegion,
 } from '../config.js';
+import { reportedHarnessLogoRejected, resolveReportedHarness } from './model-heartbeat.js';
 import { output, handleError } from '../output.js';
 
 interface JoinResponse {
@@ -45,6 +46,12 @@ export function joinCommand(): Command {
       '--invite <code>',
       'Host-issued human join invite (ji_…). Stored as metadata only — not an owner account.',
     )
+    .option('--harness <name>', 'Self-reported harness name (env: ACN_HARNESS_NAME)')
+    .option('--harness-version <version>', 'Harness version (env: ACN_HARNESS_VERSION)')
+    .option('--harness-logo <url>', 'https logo for the harness mark (env: ACN_HARNESS_LOGO_URL)')
+    .option('--framework <name>', 'Deprecated alias of --harness')
+    .option('--framework-version <version>', 'Deprecated alias of --harness-version')
+    .option('--framework-logo <url>', 'Deprecated alias of --harness-logo')
     .action(
       async (opts: {
         name: string;
@@ -55,6 +62,12 @@ export function joinCommand(): Command {
         region?: string;
         baseUrl?: string;
         invite?: string;
+        harness?: string;
+        harnessVersion?: string;
+        harnessLogo?: string;
+        framework?: string;
+        frameworkVersion?: string;
+        frameworkLogo?: string;
       }) => {
       if (opts.region && opts.baseUrl) {
         console.error('Use either --region or --base-url, not both.');
@@ -80,6 +93,20 @@ export function joinCommand(): Command {
 
       const tags = opts.tags.split(',').map((s) => s.trim()).filter(Boolean);
       const invite = opts.invite?.trim();
+      const harnessOpts = {
+        name: opts.harness ?? opts.framework,
+        version: opts.harnessVersion ?? opts.frameworkVersion,
+        logoUrl: opts.harnessLogo ?? opts.frameworkLogo,
+      };
+      if (reportedHarnessLogoRejected(harnessOpts)) {
+        console.error('harness logo rejected: logo_url must be an https URL');
+        process.exit(1);
+      }
+      const harness = resolveReportedHarness(harnessOpts);
+      if (!harness) {
+        console.error('Harness name is required. Pass --harness <name> or set ACN_HARNESS_NAME.');
+        process.exit(1);
+      }
       const body = {
         name: opts.name,
         description: opts.description ?? `${opts.name} — registered via acn-cli`,
@@ -92,6 +119,7 @@ export function joinCommand(): Command {
           ? { delivery: 'relay', communication_policy: { mode: 'open' } }
           : {}),
         ...(invite ? { invite } : {}),
+        harness,
       };
 
       try {

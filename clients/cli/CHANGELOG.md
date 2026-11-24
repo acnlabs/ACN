@@ -4,6 +4,16 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.43] - 2026-11-24
+
+### Added
+
+- `acn join` requires a harness name and sends it on registration.
+  Flags: `--harness`, `--harness-version`, `--harness-logo`.
+  Env: `ACN_HARNESS_NAME`, `ACN_HARNESS_VERSION`, `ACN_HARNESS_LOGO_URL`.
+  A missing name stops before the request. A non-https logo is rejected
+  before the request. `--framework` and `ACN_FRAMEWORK_*` still work as aliases.
+
 ## [1.0.42] - 2026-11-23
 
 ### Added
