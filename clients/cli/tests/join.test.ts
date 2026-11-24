@@ -49,10 +49,20 @@ describe('acn join --invite', () => {
     vi.mocked(resolveBaseUrl).mockReturnValue('https://api.acnlabs.dev');
     vi.mocked(inferRegion).mockReturnValue('global');
     vi.mocked(acnPost).mockResolvedValue(successPayload as never);
+    vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? 0}`);
+    }) as typeof process.exit);
+    delete process.env.ACN_HARNESS_NAME;
+    delete process.env.ACN_HARNESS_VERSION;
+    delete process.env.ACN_HARNESS_LOGO_URL;
+    delete process.env.ACN_FRAMEWORK_NAME;
+    delete process.env.ACN_FRAMEWORK_VERSION;
+    delete process.env.ACN_FRAMEWORK_LOGO_URL;
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('POSTs invite on /agents/join', async () => {
@@ -61,6 +71,8 @@ describe('acn join --invite', () => {
       'WalkAgent',
       '--tags',
       'chat',
+      '--harness',
+      'OpenClaw',
       '--invite',
       'ji_abc',
     ]);
@@ -72,6 +84,7 @@ describe('acn join --invite', () => {
       name: 'WalkAgent',
       tags: ['chat'],
       invite: 'ji_abc',
+      harness: { name: 'OpenClaw' },
     });
     expect(opts).toEqual({ baseUrl: 'https://api.acnlabs.dev' });
     expect(saveConfig).toHaveBeenCalled();
@@ -84,6 +97,8 @@ describe('acn join --invite', () => {
       'WalkAgent',
       '--tags',
       'chat',
+      '--harness',
+      'OpenClaw',
       '--invite',
       '  ji_abc  ',
     ]);
@@ -93,7 +108,7 @@ describe('acn join --invite', () => {
   });
 
   it('sends relay with open push policy and no endpoint', async () => {
-    await runJoin(['--name', 'WalkAgent', '--tags', 'chat', '--relay']);
+    await runJoin(['--name', 'WalkAgent', '--tags', 'chat', '--harness', 'OpenClaw', '--relay']);
 
     const [, body] = vi.mocked(acnPost).mock.calls[0]!;
     expect(body).toMatchObject({
@@ -104,7 +119,7 @@ describe('acn join --invite', () => {
   });
 
   it('omits invite when the flag is absent', async () => {
-    await runJoin(['--name', 'WalkAgent', '--tags', 'chat']);
+    await runJoin(['--name', 'WalkAgent', '--tags', 'chat', '--harness', 'OpenClaw']);
 
     const [, body] = vi.mocked(acnPost).mock.calls[0]!;
     expect(body).not.toHaveProperty('invite');
@@ -116,11 +131,73 @@ describe('acn join --invite', () => {
       'WalkAgent',
       '--tags',
       'chat',
+      '--harness',
+      'OpenClaw',
       '--invite',
       '   ',
     ]);
 
     const [, body] = vi.mocked(acnPost).mock.calls[0]!;
     expect(body).not.toHaveProperty('invite');
+  });
+
+  it('stops before the request when no harness name is given', async () => {
+    await expect(runJoin(['--name', 'WalkAgent', '--tags', 'chat'])).rejects.toThrow('exit:1');
+    expect(acnPost).not.toHaveBeenCalled();
+    expect(saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('reads the harness name from the environment', async () => {
+    process.env.ACN_HARNESS_NAME = 'Hermes';
+    process.env.ACN_HARNESS_VERSION = '0.9';
+    await runJoin(['--name', 'WalkAgent', '--tags', 'chat']);
+    const [, body] = vi.mocked(acnPost).mock.calls[0]!;
+    expect(body).toMatchObject({ harness: { name: 'Hermes', version: '0.9' } });
+  });
+
+  it('lets the flag win over the environment', async () => {
+    process.env.ACN_HARNESS_NAME = 'Hermes';
+    await runJoin(['--name', 'WalkAgent', '--tags', 'chat', '--harness', 'OpenClaw']);
+    const [, body] = vi.mocked(acnPost).mock.calls[0]!;
+    expect(body).toMatchObject({ harness: { name: 'OpenClaw' } });
+  });
+
+  it('sends an https logo and still accepts the old flag', async () => {
+    await runJoin([
+      '--name',
+      'WalkAgent',
+      '--tags',
+      'chat',
+      '--framework',
+      'Codex',
+      '--harness-version',
+      '1.2',
+      '--harness-logo',
+      'https://cdn.example/mark.png',
+    ]);
+    const [, body] = vi.mocked(acnPost).mock.calls[0]!;
+    expect(body).toMatchObject({
+      harness: {
+        name: 'Codex',
+        version: '1.2',
+        logo_url: 'https://cdn.example/mark.png',
+      },
+    });
+  });
+
+  it('rejects a non-https logo before the request', async () => {
+    await expect(
+      runJoin([
+        '--name',
+        'WalkAgent',
+        '--tags',
+        'chat',
+        '--harness',
+        'OpenClaw',
+        '--harness-logo',
+        'http://cdn.example/mark.png',
+      ]),
+    ).rejects.toThrow('exit:1');
+    expect(acnPost).not.toHaveBeenCalled();
   });
 });

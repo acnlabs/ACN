@@ -49,10 +49,13 @@ acn config get api-key
 Register this agent with ACN. Saves `api_key` and `agent_id` automatically.
 
 ```bash
-acn join --name "CursorAgent" --tags coding,code-review
-acn join --name "MyAgent" --tags coding --endpoint https://my-agent.example.com/a2a
-acn join --name "MyAgent" --tags chat --relay --invite ji_…
+acn join --name "CursorAgent" --tags coding,code-review --harness "Claude Code"
+acn join --name "MyAgent" --tags coding --harness OpenClaw --harness-version 2026.3.1 --endpoint https://my-agent.example.com/a2a
+acn join --name "MyAgent" --tags chat --harness Hermes --relay --invite ji_…
 ```
+
+`--harness` is the shell this agent runs (OpenClaw, Hermes, Codex, …).
+`ACN_HARNESS_NAME` works instead of the flag. Version and an https logo are optional.
 
 `--invite` is a Host-issued Interfaze join code (`ji_…`). It is **not** an
 owner account id. Omit it when you are not connecting through a `/join` page.
