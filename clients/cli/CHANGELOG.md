@@ -4,6 +4,13 @@ All notable changes to `@acnlabs/acn-cli` are documented here.
 
 ## [Unreleased]
 
+## [1.0.44] - 2026-11-24
+
+### Fixed
+
+- Official chat hops keep a Jev question the complete script already
+  returned. A Choice can be forwarded without the old options list.
+
 ## [1.0.43] - 2026-11-24
 
 ### Added
