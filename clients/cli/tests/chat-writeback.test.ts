@@ -506,6 +506,94 @@ describe('extractOrchestration', () => {
     ).toBeUndefined();
   });
 
+  it('keeps a choice question without an options list', () => {
+    expect(
+      extractOrchestration({
+        content: 'alpha',
+        orchestration: {
+          decide: {
+            questions: {
+              q1: {
+                type: 'choice',
+                instructions: ' Which already-stated step continues? ',
+                criteria: { a: ' 只回复 alpha ', b: '只回复 beta', c: '' },
+              },
+              spends_money: {
+                type: 'noul',
+                instructions: 'agent must not override this',
+              },
+            },
+          },
+        },
+      })
+    ).toEqual({
+      decide: {
+        questions: {
+          q1: {
+            type: 'choice',
+            instructions: 'Which already-stated step continues?',
+            criteria: { a: '只回复 alpha', b: '只回复 beta' },
+          },
+        },
+      },
+    });
+    expect(
+      extractOrchestration({
+        orchestration: {
+          decide: {
+            questions: {
+              q1: { type: 'choice', instructions: '哪条', criteria: { a: '只有一条' } },
+            },
+          },
+        },
+      })
+    ).toBeUndefined();
+  });
+
+  it('keeps a choice question without an options list', () => {
+    expect(
+      extractOrchestration({
+        content: 'alpha',
+        orchestration: {
+          decide: {
+            questions: {
+              q1: {
+                type: 'choice',
+                instructions: ' Which already-stated step continues? ',
+                criteria: { a: ' 只回复 alpha ', b: '只回复 beta', c: '' },
+              },
+              spends_money: {
+                type: 'noul',
+                instructions: 'agent must not override this',
+              },
+            },
+          },
+        },
+      })
+    ).toEqual({
+      decide: {
+        questions: {
+          q1: {
+            type: 'choice',
+            instructions: 'Which already-stated step continues?',
+            criteria: { a: '只回复 alpha', b: '只回复 beta' },
+          },
+        },
+      },
+    });
+    expect(
+      extractOrchestration({
+        orchestration: {
+          decide: {
+            questions: {
+              q1: { type: 'choice', instructions: '哪条', criteria: { a: '只有一条' } },
+            },
+          },
+        },
+      })
+    ).toBeUndefined();
+  });
+
   it('forwards a plan written from the user job', () => {
     expect(
       extractOrchestration({
@@ -977,6 +1065,79 @@ describe('handleChatWriteback', () => {
       content: 'agent via door',
       reply_to_id: 'user-msg-1',
       attachments: ['mbx:att-official'],
+    });
+  });
+
+  it('keeps a choice question on an official hop', async () => {
+    clearAgentJwtCache();
+    const event = normalizeEvent(
+      (
+        parseJsonRpcBody(
+          chatMessageBody({
+            hop_id: 'hop:dialog:chat-uuid:user-msg-1:agent-1',
+            inference_path: 'official',
+            host_inference_url: 'https://api.agentplanet.org/api/inference/v1',
+            requested_model: 'deepseek/deepseek-chat',
+          })
+        ) as { ok: true; body: Record<string, unknown> }
+      ).body
+    );
+    const opts = buildChatWritebackOptions({
+      chatWriteback: true,
+      chatApiBase: 'http://gw:8000',
+      acnBaseUrl: 'https://api.acnlabs.dev',
+      apiKey: 'acn_secret',
+      chatCompleteUrl: 'http://127.0.0.1:9/complete',
+      agentId: 'agent-1',
+    })!;
+    const fetchFn = vi.fn(async (url: string | URL, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/oauth/token')) {
+        return mockOkResponse(
+          JSON.stringify({ access_token: 'jwt-from-acn', expires_in: 1800 })
+        );
+      }
+      if (u.includes('/hops/')) {
+        return mockOkResponse(JSON.stringify({ seen: true, call_count: 1 }));
+      }
+      if (u.includes('/complete')) {
+        return mockOkResponse(
+          JSON.stringify({
+            content: 'alpha',
+            orchestration: {
+              decide: {
+                questions: {
+                  q1: {
+                    type: 'choice',
+                    instructions: 'Which already-stated step continues?',
+                    criteria: { a: '只回复 alpha', b: '只回复 beta' },
+                  },
+                },
+              },
+            },
+          })
+        );
+      }
+      return mockOkResponse(JSON.stringify({ id: 'm1' }), 201);
+    });
+    const result = await handleChatWriteback(event, opts, {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      logFn: () => {},
+    });
+    expect(result).toEqual({ ok: true, httpStatus: 201 });
+    const writeback = fetchFn.mock.calls.find((c) =>
+      String(c[0]).includes('/agent-messages')
+    );
+    expect(JSON.parse(String(writeback?.[1]?.body ?? '{}')).orchestration).toEqual({
+      decide: {
+        questions: {
+          q1: {
+            type: 'choice',
+            instructions: 'Which already-stated step continues?',
+            criteria: { a: '只回复 alpha', b: '只回复 beta' },
+          },
+        },
+      },
     });
   });
 
