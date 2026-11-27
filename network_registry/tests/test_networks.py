@@ -2,16 +2,39 @@
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
-from network_registry.app import app
+
+from network_registry.app import create_app
 from network_registry.catalog import Network, get_network, listed_networks
 from network_registry.page import render_acnlist
+from network_registry.store import Store
 
-client = TestClient(app)
 REPO = Path(__file__).resolve().parents[2]
+KEY = "test-registry-key"
 
 
-def test_acnlist_shows_the_listed_networks() -> None:
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("REGISTRY_KEY", KEY)
+    application = create_app(Store(tmp_path / "registry.db"))
+    with TestClient(application) as test_client:
+        yield test_client
+
+
+def _register(**overrides: object) -> dict[str, object]:
+    body = {
+        "name": "Example",
+        "network_id": "example-net",
+        "framework": "acn",
+        "gateway_url": "https://example.invalid",
+        "listed": True,
+    }
+    body.update(overrides)
+    return body
+
+
+def test_acnlist_shows_the_listed_networks(client: TestClient) -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
@@ -47,13 +70,13 @@ def test_acnlist_omits_unlisted_and_escapes_names() -> None:
     assert "https://example.invalid/a?b=1&amp;c=2" in html
 
 
-def test_health() -> None:
+def test_health(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
-def test_public_list_is_global_and_cn() -> None:
+def test_public_list_is_global_and_cn(client: TestClient) -> None:
     response = client.get("/networks")
     assert response.status_code == 200
     assert response.json() == {
@@ -76,7 +99,7 @@ def test_public_list_is_global_and_cn() -> None:
     }
 
 
-def test_known_id_returns_its_gateway() -> None:
+def test_known_id_returns_its_gateway(client: TestClient) -> None:
     response = client.get("/networks/acn-cn")
     assert response.status_code == 200
     body = response.json()
@@ -84,7 +107,7 @@ def test_known_id_returns_its_gateway() -> None:
     assert body["gateway_url"] == "https://acn.acnlabs.cn"
 
 
-def test_unknown_id_is_not_found() -> None:
+def test_unknown_id_is_not_found(client: TestClient) -> None:
     response = client.get("/networks/does-not-exist")
     assert response.status_code == 404
 
@@ -100,6 +123,64 @@ def test_unlisted_record_stays_off_the_public_list() -> None:
     records = listed_networks() + (hidden,)
     assert hidden not in listed_networks(records)
     assert get_network("private-net", records) == hidden
+
+
+def test_register_adds_a_listed_network(client: TestClient) -> None:
+    response = client.post(
+        "/networks",
+        headers={"Authorization": f"Bearer {KEY}"},
+        json=_register(),
+    )
+    assert response.status_code == 201
+    assert response.json()["network_id"] == "example-net"
+    listed = client.get("/networks").json()["networks"]
+    assert listed[-1]["gateway_url"] == "https://example.invalid"
+    assert "example-net" in client.get("/").text
+
+
+def test_register_keeps_an_unlisted_network_off_the_page(client: TestClient) -> None:
+    response = client.post(
+        "/networks",
+        headers={"Authorization": f"Bearer {KEY}"},
+        json=_register(network_id="quiet-net", listed=False),
+    )
+    assert response.status_code == 201
+    assert "quiet-net" not in client.get("/networks").text
+    assert "quiet-net" not in client.get("/").text
+    found = client.get("/networks/quiet-net")
+    assert found.status_code == 200
+    assert found.json()["listed"] is False
+
+
+def test_register_rejects_a_duplicate_id(client: TestClient) -> None:
+    response = client.post(
+        "/networks",
+        headers={"Authorization": f"Bearer {KEY}"},
+        json=_register(network_id="acn-global", name="Other"),
+    )
+    assert response.status_code == 409
+    assert client.get("/networks/acn-global").json()["name"] == "ACN Global"
+
+
+def test_register_rejects_a_bad_key(client: TestClient) -> None:
+    missing = client.post("/networks", json=_register())
+    wrong = client.post(
+        "/networks",
+        headers={"Authorization": "Bearer no"},
+        json=_register(),
+    )
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert "example-net" not in client.get("/networks").text
+
+
+def test_register_rejects_a_bad_record(client: TestClient) -> None:
+    response = client.post(
+        "/networks",
+        headers={"Authorization": f"Bearer {KEY}"},
+        json=_register(network_id="public", gateway_url="http://example.invalid"),
+    )
+    assert response.status_code == 422
 
 
 def test_directory_is_not_part_of_the_acn_server() -> None:
