@@ -5,9 +5,46 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from network_registry.app import app
 from network_registry.catalog import Network, get_network, listed_networks
+from network_registry.page import render_acnlist
 
 client = TestClient(app)
 REPO = Path(__file__).resolve().parents[2]
+
+
+def test_acnlist_shows_the_listed_networks() -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    body = response.text
+    assert "acnlist" in body
+    assert "ACN Global" in body
+    assert "acn-global" in body
+    assert "https://api.acnlabs.dev" in body
+    assert "ACN CN" in body
+    assert "acn-cn" in body
+    assert "https://acn.acnlabs.cn" in body
+
+
+def test_acnlist_omits_unlisted_and_escapes_names() -> None:
+    hidden = Network(
+        name="Private",
+        network_id="private-net",
+        framework="acn",
+        gateway_url="https://example.invalid",
+        listed=False,
+    )
+    messy = Network(
+        name='<script>alert("x")</script>',
+        network_id="messy",
+        framework="acn",
+        gateway_url="https://example.invalid/a?b=1&c=2",
+        listed=True,
+    )
+    html = render_acnlist(listed_networks((messy, hidden)))
+    assert "private-net" not in html
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+    assert "https://example.invalid/a?b=1&amp;c=2" in html
 
 
 def test_health() -> None:

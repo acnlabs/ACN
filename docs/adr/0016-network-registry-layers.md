@@ -1,6 +1,6 @@
 # ADR-0016: Network registry, networks, and subnets
 
-- **Status**: Accepted. The public list is a separate process (`network_registry/`). Register, create, and acnlist are not started.
+- **Status**: Accepted. The public list and its acnlist page are a separate process (`network_registry/`). Register and create are not started.
 - **Date**: 2026-11-27
 - **Related**: ADR-0013 (two isolated hosted networks), ADR-0003 (one child subnet), [federation.md](../federation.md)
 
@@ -70,17 +70,18 @@ carry the call.
 - The public list does not connect the data planes. Global and CN still
   do not see each other's agents, keys, or messages. ADR-0013's isolation
   stays in force.
-- The public list is served by `network_registry/`, its own program in this
-  repo. It is not mounted on an ACN network. Register, create, and acnlist
-  still need a follow-up.
+- The public list and the acnlist page are served by `network_registry/`,
+  its own program in this repo. The page renders the listed rows. It is not
+  mounted on an ACN network and it is not an AgentPlanet page. Register and
+  create still need a follow-up.
 - [federation.md](../federation.md) peer links and forwarded message bodies
   are retired. A network may still choose whether it is listed. Visibility
   inside one network is unchanged. The border protocol remains A2A.
 
 ## Non-goals
 
-- Register and create APIs, a network provisioner, and the acnlist page.
-  The public list is the exception: it is a separate process, read-only.
+- Register and create APIs, and a network provisioner. The public list and
+  the acnlist page are the exception: one separate process, read-only.
 - An MCP mouth for ACN.
 - Embedding Agent Mesh in the ACN process.
 - Changing ADR-0013 so that one key or one agent row spans global and CN.
