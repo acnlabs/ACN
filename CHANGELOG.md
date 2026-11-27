@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Skill **1.0.15**: daily commands at the top of `skills/acn/SKILL.md` (find, send, invoke, inbox, accept, submit). The rest of the skill is unchanged.
+- Network directory list: `network_registry/` is its own program and returns the two hosted networks (global, CN). It does not register or create a network, and it is not part of the ACN server.
 
 ## [1.0.30] - 2026-10-20
 

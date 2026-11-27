@@ -900,7 +900,7 @@ Still deferred (Phase 2b / 3+):
 - **DEF-MEM** — Org Memory (facts/narrative; Mem0/Zep/PG+vector; ≠ SOP)
 - **DEF-ORGREP** — Cross-org reputation (beyond per-agent ERC-8004 reads)
 - **DEF-DISPUTE** — Dispute / jury after escrow window (ADR-0010 Future)
-- **DEF-FED** — Cross-network registry ([ADR-0016](adr/0016-network-registry-layers.md)). Decision recorded; registry API, network create, and acnlist are not started. Peer-forward in [federation.md](federation.md) is superseded.
+- **DEF-FED** — Cross-network registry ([ADR-0016](adr/0016-network-registry-layers.md)). Public list of global and CN is a separate process (`network_registry/`). Register, create, and acnlist are not started. Peer-forward in [federation.md](federation.md) is superseded.
 - **DEF-ORGC** — Further multi-Pattern Org discovery（`/api/v1/orgs*` Kernel API 已存在）
 - **DEF-SAGA** — Settlement saga v1 (Gated v0 atomicity)
 - **DEF-RAILS** — Agentic payment rails (ADR-0009 P2)

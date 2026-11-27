@@ -120,8 +120,12 @@ pip install -e ".[dev]"
 # Start Redis
 docker-compose up -d redis
 
-# Start ACN server
+# Start ACN server (one network)
 uv run uvicorn acn.api:app --host 0.0.0.0 --port 8000
+
+# Network directory, separate program. Lists global and CN. Does not
+# register or create a network, and is not started with the server above.
+uv run --project network_registry uvicorn network_registry.app:app --host 127.0.0.1 --port 8010
 ```
 
 ### 3. Register an Agent
