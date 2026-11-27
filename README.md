@@ -127,7 +127,7 @@ uv run uvicorn acn.api:app --host 0.0.0.0 --port 8000
 # register or create a network, and is not started with the server above.
 uv run --project network_registry uvicorn network_registry.app:app --host 127.0.0.1 --port 8010
 # Production is its own Railway service (network_registry/Dockerfile),
-# not the ACN server image:
+# not the ACN server image. `/` is acnlist; `/networks` is the list:
 # https://network-registry-production-5ed71a1b.up.railway.app
 ```
 

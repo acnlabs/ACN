@@ -9,8 +9,10 @@ From the ACN repo root:
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
 from network_registry.catalog import Network, get_network, listed_networks
+from network_registry.page import render_acnlist
 
 app = FastAPI(
     title="ACN Network Registry",
@@ -27,6 +29,12 @@ def _record(network: Network) -> dict[str, str | bool]:
         "gateway_url": network.gateway_url,
         "listed": network.listed,
     }
+
+
+@app.get("/", response_class=HTMLResponse)
+def acnlist() -> HTMLResponse:
+    """Public directory page. Rows are the listed networks, not a hardcoded pair."""
+    return HTMLResponse(render_acnlist(listed_networks()))
 
 
 @app.get("/health")
