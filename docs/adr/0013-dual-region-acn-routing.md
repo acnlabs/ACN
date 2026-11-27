@@ -43,8 +43,9 @@ overseas** to register on **global ACN** — not a single logical network with a
 - Effective `base_url` (including `ACN_BASE_URL`) is the source of truth
   for displayed `region`; origins may omit a trailing `/api/v1` (stripped).
 - Backend `ACN_URL` must never point a CN stack at global ACN (or vice versa).
-- Future federation (optional discovery across regions) is out of scope;
-  would be a separate ADR.
+- Cross-network discovery is decided in ADR-0016. This ADR's data-plane
+  isolation stays in force. Until a registry exists, global and cn still
+  do not see each other.
 
 ## Non-goals
 

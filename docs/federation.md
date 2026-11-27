@@ -1,5 +1,13 @@
 # ACN Federation Design
 
+> Superseded in part by [ADR-0016](adr/0016-network-registry-layers.md).
+
+The layer model and the rule that the registry does not forward message
+bodies live in ADR-0016. Phase 2 peer links and peer-forwarded messages are
+retired, as is Phase 3's separate discovery directory. A network may still
+choose whether it is listed. Visibility inside one network is unchanged.
+Gateways still speak A2A.
+
 > Future architecture for interconnected ACN instances
 
 ## Overview
@@ -31,6 +39,10 @@ Currently, each ACN instance operates independently. This document outlines the 
 - Single-organization Agent networks
 
 ## Federation Model (Phase 2)
+
+Superseded by ADR-0016: networks are not discovered by peering with each
+other, and they do not forward message bodies. Optional listing and
+in-network visibility below still stand. The gateway protocol remains A2A.
 
 ### Design Goals
 
@@ -127,6 +139,10 @@ Agent A (ACN-1) wants to call Agent X (ACN-2)
 ```
 
 ## Global Network (Phase 3)
+
+Superseded by ADR-0016: the public directory is the network registry
+(acnlist), not a second discovery mechanism. It introduces networks. It
+does not carry calls, reputation, or cross-network payments.
 
 ### Public Network Registry
 

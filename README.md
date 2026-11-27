@@ -503,7 +503,7 @@ python3 scripts/smoke_backend_integration.py \
 - **[API Reference](docs/api.md)** - Complete REST API documentation
 - **[Architecture](docs/architecture.md)** - System design and data models
 - **[ACN-Backend Operations](docs/operations-acn-backend.md)** - Railway variables, smoke checks, and alerting runbook
-- **[Federation Design](docs/federation.md)** - Future roadmap for interconnected ACN instances
+- **[Network layers (ADR-0016)](docs/adr/0016-network-registry-layers.md)** - Registry, independent networks, and subnets. [Federation notes](docs/federation.md) follow this decision.
 
 ---
 
