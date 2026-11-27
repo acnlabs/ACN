@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 from network_registry.app import create_app
 from network_registry.catalog import Network, get_network, listed_networks
 from network_registry.page import render_acnlist
