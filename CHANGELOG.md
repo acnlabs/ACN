@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Skill **1.0.15**: daily commands at the top of `skills/acn/SKILL.md` (find, send, invoke, inbox, accept, submit). The rest of the skill is unchanged.
+
 ## [1.0.30] - 2026-10-20
 
 CLI patch (`@acnlabs/acn-cli@1.0.26`). Skill **1.0.14**.
