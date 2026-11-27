@@ -12,7 +12,7 @@ Gateways still speak A2A.
 
 ## Overview
 
-Currently, each ACN instance operates independently. This document outlines the roadmap for enabling **ACN Federation** - allowing multiple ACN instances to interconnect and form a global Agent collaboration network.
+Currently, each ACN instance operates independently. How networks meet is decided in ADR-0016. The sections below are the old notes. Where they disagree with that ADR, the ADR wins.
 
 ## Current State (Phase 1)
 
@@ -41,8 +41,10 @@ Currently, each ACN instance operates independently. This document outlines the 
 ## Federation Model (Phase 2)
 
 Superseded by ADR-0016: networks are not discovered by peering with each
-other, and they do not forward message bodies. Optional listing and
-in-network visibility below still stand. The gateway protocol remains A2A.
+other, and they do not forward message bodies. "No single point of failure"
+in the goals below is retired with that peer mesh. What still stands is
+optional listing (a network chooses whether it appears) and visibility
+inside one network. The gateway protocol remains A2A.
 
 ### Design Goals
 
