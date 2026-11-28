@@ -45,6 +45,7 @@ def test_acnlist_shows_the_listed_networks(client: TestClient) -> None:
     assert "ACN CN" in body
     assert "acn-cn" in body
     assert "https://acn.acnlabs.cn" in body
+    assert "Network ID" in body
 
 
 def test_acnlist_omits_unlisted_and_escapes_names() -> None:
@@ -86,6 +87,7 @@ def test_public_list_is_global_and_cn(client: TestClient) -> None:
                 "framework": "acn",
                 "gateway_url": "https://api.acnlabs.dev",
                 "listed": True,
+                "seq": 1,
             },
             {
                 "name": "ACN CN",
@@ -93,9 +95,45 @@ def test_public_list_is_global_and_cn(client: TestClient) -> None:
                 "framework": "acn",
                 "gateway_url": "https://acn.acnlabs.cn",
                 "listed": True,
+                "seq": 2,
             },
         ]
     }
+
+
+def test_seq_is_assigned_in_registration_order(client: TestClient) -> None:
+    response = client.post(
+        "/networks",
+        headers={"Authorization": f"Bearer {KEY}"},
+        json=_register(),
+    )
+    assert response.status_code == 201
+    assert response.json()["seq"] == 3
+    assert client.get("/networks/example-net").json()["seq"] == 3
+
+
+def test_existing_database_gets_seq_backfilled(tmp_path, monkeypatch) -> None:
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE networks (network_id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+        "framework TEXT NOT NULL, gateway_url TEXT NOT NULL, listed INTEGER NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO networks VALUES ('acn-global', 'ACN Global', 'acn', 'https://api.acnlabs.dev', 1)"
+    )
+    conn.execute(
+        "INSERT INTO networks VALUES ('acn-cn', 'ACN CN', 'acn', 'https://acn.acnlabs.cn', 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("REGISTRY_KEY", KEY)
+    with TestClient(create_app(Store(path))) as test_client:
+        networks = test_client.get("/networks").json()["networks"]
+    assert [row["seq"] for row in networks] == [1, 2]
 
 
 def test_known_id_returns_its_gateway(client: TestClient) -> None:
