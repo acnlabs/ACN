@@ -31,6 +31,9 @@ import urllib.request
 from datetime import datetime, timezone
 
 _TIMEOUT = 10
+# The gateways sit behind Cloudflare, which answers 403 to the default
+# Python-urllib User-Agent. Send a browser-like one on every request.
+_UA = "Mozilla/5.0 (compatible; acn-stats-reporter/1.0)"
 
 
 class ReportError(Exception):
@@ -38,7 +41,7 @@ class ReportError(Exception):
 
 
 def _get_json(url: str, headers: dict[str, str]) -> dict:
-    request = urllib.request.Request(url, headers=headers)
+    request = urllib.request.Request(url, headers={"User-Agent": _UA, **headers})
     try:
         with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
             return json.loads(response.read().decode())
@@ -76,6 +79,7 @@ def report(
         headers={
             "Authorization": f"Bearer {registry_key}",
             "Content-Type": "application/json",
+            "User-Agent": _UA,
         },
     )
     try:
