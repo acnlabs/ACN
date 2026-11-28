@@ -192,6 +192,25 @@ def test_directory_is_not_part_of_the_acn_server() -> None:
     assert "network_registry" not in compose
 
 
+def test_start_steps_are_the_same_for_people_and_agents(client: TestClient) -> None:
+    command = (
+        "docker compose --env-file .env.network -p acn-one "
+        "-f docker-compose.network.yml up -d --build"
+    )
+    page = client.get("/start")
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert command in page.text
+    assert "REGISTRY_KEY" not in page.text
+    assert "<form" not in page.text
+    home = client.get("/")
+    assert 'href="/start"' in home.text
+    skill = (REPO / "skills" / "acn" / "SKILL.md").read_text()
+    assert command in skill
+    assert "REGISTRY_KEY" not in skill
+    assert 'version: "1.0.16"' in skill
+
+
 def test_native_network_compose_is_its_own_acn() -> None:
     compose = (REPO / "docker-compose.network.yml").read_text()
     example = (REPO / "env.network.example").read_text()

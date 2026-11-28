@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from network_registry.catalog import NETWORKS, Network
-from network_registry.page import render_acnlist
+from network_registry.page import render_acnlist, render_start_network
 from network_registry.store import Collision, Store
 
 _ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
@@ -95,6 +95,11 @@ def create_app(store: Store | None = None) -> FastAPI:
     def acnlist(request: Request) -> HTMLResponse:
         """Public directory page. Rows are the listed networks."""
         return HTMLResponse(render_acnlist(request.app.state.store.listed()))
+
+    @app.get("/start", response_class=HTMLResponse)
+    def start_network() -> HTMLResponse:
+        """Steps for starting another native ACN. Does not register it."""
+        return HTMLResponse(render_start_network())
 
     @app.get("/health")
     def health() -> dict[str, str]:

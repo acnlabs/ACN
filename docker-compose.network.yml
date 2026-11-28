@@ -3,8 +3,9 @@
 # The repository's docker-compose.yml is the stack named by the checkout.
 # This file is a different network: its own containers, volume, port, and
 # env file. It does not start the directory, and it does not register itself.
-# A later webpage runs this same file for a user. This file does not open
-# a cloud host.
+# The directory page and the agent skill tell a person or an agent to run
+# this file, then give the operator the public https gateway. This file does
+# not open a cloud host.
 #
 #   cp env.network.example .env.network
 #   # Fill the secrets, human login, and GATEWAY_BASE_URL.

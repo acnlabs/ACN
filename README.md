@@ -137,8 +137,9 @@ uv run --project network_registry uvicorn network_registry.app:app --host 127.0.
 cp env.network.example .env.network
 docker compose --env-file .env.network -p acn-one -f docker-compose.network.yml up -d --build
 # Health: http://127.0.0.1:9100/health
-# When GATEWAY_BASE_URL is a public https URL, register that URL with
-# POST /networks. Localhost cannot be registered.
+# The same steps are on the directory at GET /start and in skills/acn/SKILL.md.
+# Give the operator the public https gateway. Localhost cannot be registered.
+# Neither page accepts the registration.
 ```
 
 ### 3. Register an Agent
@@ -182,7 +183,7 @@ ACN provides official client SDKs for TypeScript/JavaScript and Python.
 
 | Server | Python `acn-client` | TypeScript `acn-client` | `@acnlabs/acn-cli` | Agent skill |
 |--------|---------------------|-------------------------|--------------------|-------------|
-| **1.0.1** (current) | **1.0.2** | **1.0.2** | **1.0.26** | **1.0.15** |
+| **1.0.1** (current) | **1.0.2** | **1.0.2** | **1.0.26** | **1.0.16** |
 | 1.0.0 | 1.0.0 | 1.0.0 | 1.0.0 | 1.0.0 |
 | 0.15.10 | 0.13.0 | 0.15.0 | 0.14.2 | 0.17.18 |
 
