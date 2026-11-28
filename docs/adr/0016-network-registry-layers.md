@@ -1,6 +1,6 @@
 # ADR-0016: Network registry, networks, and subnets
 
-- **Status**: Accepted. The public list, acnlist, and keyed registration live in `network_registry/`. Another native ACN is started with `docker-compose.network.yml`. The webpage that deploys one for a user is not started.
+- **Status**: Accepted. The public list, acnlist, and keyed registration live in `network_registry/`. Another native ACN is started with `docker-compose.network.yml`. The same steps are on `GET /start` and in the agent skill. The page does not register a network. The webpage that deploys one for a user is not started.
 - **Date**: 2026-11-27
 - **Related**: ADR-0013 (two isolated hosted networks), ADR-0003 (one child subnet), [federation.md](../federation.md)
 
@@ -44,7 +44,9 @@ carry the call.
    framework and stands up an independent deployment. The first frameworks
    are native ACN and Agent Mesh. ACN means another ACN instance, started
    with `docker-compose.network.yml` on a machine the operator already has.
-   A later webpage runs this same file for the user. Agent
+   `GET /start` and the agent skill tell a person or an agent to run that
+   file, then give the operator the public https gateway. Neither one
+   registers the network. Agent
    Mesh means a separate Mesh deployment whose gateway still speaks A2A.
    Choosing Mesh does not embed Mesh inside the ACN process. When the
    deployment is up, it becomes a registry record with its own unique
@@ -77,8 +79,9 @@ carry the call.
   database. A caller needs the registry key. A duplicate network id is
   rejected. It is not mounted on an ACN network and it is not an AgentPlanet
   page. `docker-compose.network.yml` starts another native ACN with its own
-  data and port. It does not register itself. The webpage that deploys a
-  network for a user still needs a follow-up.
+  data and port. It does not register itself. `GET /start` and the agent
+  skill give the same steps and do not accept a registration. The webpage
+  that deploys a network for a user still needs a follow-up.
 - [federation.md](../federation.md) peer links and forwarded message bodies
   are retired. A network may still choose whether it is listed. Visibility
   inside one network is unchanged. The border protocol remains A2A.
