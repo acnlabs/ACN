@@ -6,7 +6,7 @@ pushes them. This script reads the local analytics endpoints (agents is
 public, subnets needs the internal token) and PATCHes the directory record
 with the registry key. Nothing else is sent: two counts and a timestamp.
 
-Stdlib only, so it runs anywhere Python 3.11+ runs. Intended for a schedule
+Stdlib only, so it runs anywhere Python 3.10+ runs. Intended for a schedule
 (Railway cron, host cron) next to a running network:
 
     NETWORK_ID=acn-global \
@@ -14,7 +14,9 @@ Stdlib only, so it runs anywhere Python 3.11+ runs. Intended for a schedule
     INTERNAL_API_TOKEN=... \
     REGISTRY_URL=https://network-registry-production-5ed71a1b.up.railway.app \
     REGISTRY_KEY=... \
-    python3 acn/scripts/report_directory_stats.py
+    python3 -m network_registry.report_stats
+
+A single copied file also works: `python3 report_stats.py` with the same env.
 
 Exit code is 0 on success, 2 on any failure. Secrets are never printed.
 """
@@ -26,7 +28,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 _TIMEOUT = 10
 
@@ -64,7 +66,7 @@ def report(
         {
             "agents": agents,
             "subnets": subnets,
-            "reported_at": datetime.now(UTC).isoformat(),
+            "reported_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017 — CN host is Python 3.10
         }
     ).encode()
     request = urllib.request.Request(

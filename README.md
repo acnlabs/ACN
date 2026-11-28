@@ -134,7 +134,7 @@ uv run --project network_registry uvicorn network_registry.app:app --host 127.0.
 # gateway_url, or listed; the id and seq never move. DELETE /networks/{id}
 # removes a record; a seeded network comes back at the next start.
 # A network reports its own agents/subnets counts through PATCH;
-# acn/scripts/report_directory_stats.py does it on a schedule.
+# `network_registry.report_stats` (stdlib-only) does it on a schedule.
 # https://network-registry-production-5ed71a1b.up.railway.app
 
 # Another native ACN on this machine. Own data, own port, own env file.
