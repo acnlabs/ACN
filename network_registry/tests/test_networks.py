@@ -220,6 +220,94 @@ def test_register_rejects_a_bad_record(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def _auth() -> dict[str, str]:
+    return {"Authorization": f"Bearer {KEY}"}
+
+
+def test_patch_changes_fields_but_never_id_or_seq(client: TestClient) -> None:
+    client.post("/networks", headers=_auth(), json=_register())
+    response = client.patch(
+        "/networks/example-net",
+        headers=_auth(),
+        json={"name": "Renamed", "listed": False, "gateway_url": "https://moved.example"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Renamed"
+    assert body["gateway_url"] == "https://moved.example"
+    assert body["listed"] is False
+    assert body["network_id"] == "example-net"
+    assert body["seq"] == 3
+    assert "example-net" not in client.get("/networks").text
+    assert client.get("/networks/example-net").json()["seq"] == 3
+
+
+def test_patch_requires_the_key(client: TestClient) -> None:
+    client.post("/networks", headers=_auth(), json=_register())
+    missing = client.patch("/networks/example-net", json={"name": "Nope"})
+    wrong = client.patch(
+        "/networks/example-net",
+        headers={"Authorization": "Bearer no"},
+        json={"name": "Nope"},
+    )
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert client.get("/networks/example-net").json()["name"] == "Example"
+
+
+def test_patch_unknown_id_is_not_found(client: TestClient) -> None:
+    response = client.patch(
+        "/networks/does-not-exist", headers=_auth(), json={"name": "Nope"}
+    )
+    assert response.status_code == 404
+
+
+def test_patch_rejects_empty_and_bad_changes(client: TestClient) -> None:
+    client.post("/networks", headers=_auth(), json=_register())
+    empty = client.patch("/networks/example-net", headers=_auth(), json={})
+    bad_gateway = client.patch(
+        "/networks/example-net", headers=_auth(), json={"gateway_url": "http://x.invalid"}
+    )
+    extra = client.patch(
+        "/networks/example-net", headers=_auth(), json={"seq": 9}
+    )
+    assert empty.status_code == 422
+    assert bad_gateway.status_code == 422
+    assert extra.status_code == 422
+    assert client.get("/networks/example-net").json()["seq"] == 3
+
+
+def test_delete_removes_a_network_without_renumbering(client: TestClient) -> None:
+    client.post("/networks", headers=_auth(), json=_register())
+    removed = client.delete("/networks/example-net", headers=_auth())
+    assert removed.status_code == 204
+    assert client.get("/networks/example-net").status_code == 404
+    remaining = client.get("/networks").json()["networks"]
+    assert [row["seq"] for row in remaining] == [1, 2]
+    again = client.delete("/networks/example-net", headers=_auth())
+    assert again.status_code == 404
+
+
+def test_delete_requires_the_key(client: TestClient) -> None:
+    missing = client.delete("/networks/acn-cn")
+    wrong = client.delete("/networks/acn-cn", headers={"Authorization": "Bearer no"})
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+    assert client.get("/networks/acn-cn").status_code == 200
+
+
+def test_seeded_network_returns_after_delete_and_restart(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("REGISTRY_KEY", KEY)
+    path = tmp_path / "registry.db"
+    with TestClient(create_app(Store(path))) as first:
+        assert first.delete("/networks/acn-cn", headers=_auth()).status_code == 204
+        assert "acn-cn" not in first.get("/networks").text
+    with TestClient(create_app(Store(path))) as second:
+        networks = second.get("/networks").json()["networks"]
+    assert [row["network_id"] for row in networks] == ["acn-global", "acn-cn"]
+    assert [row["seq"] for row in networks] == [1, 2]
+
+
 def test_directory_is_not_part_of_the_acn_server() -> None:
     api = (REPO / "acn" / "api.py").read_text()
     dockerfile = (REPO / "Dockerfile").read_text()
