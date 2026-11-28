@@ -15,6 +15,7 @@ class Network:
     framework: str
     gateway_url: str
     listed: bool
+    seq: int = 0
 
 
 # Stable ids for the two hosted networks. A later register call rejects a

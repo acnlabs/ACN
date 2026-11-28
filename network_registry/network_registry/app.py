@@ -106,12 +106,12 @@ def create_app(store: Store | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/networks")
-    def list_networks(request: Request) -> dict[str, list[dict[str, str | bool]]]:
+    def list_networks(request: Request) -> dict[str, list[dict[str, str | bool | int]]]:
         """Listed networks only."""
         return {"networks": [_record(network) for network in request.app.state.store.listed()]}
 
     @app.get("/networks/{network_id}")
-    def read_network(network_id: str, request: Request) -> dict[str, str | bool]:
+    def read_network(network_id: str, request: Request) -> dict[str, str | bool | int]:
         """Introduce a known network id, including one that is not listed."""
         network = request.app.state.store.get(network_id)
         if network is None:
@@ -119,7 +119,7 @@ def create_app(store: Store | None = None) -> FastAPI:
         return _record(network)
 
     @app.post("/networks", status_code=201)
-    def register_network(body: Registration, request: Request) -> dict[str, str | bool]:
+    def register_network(body: Registration, request: Request) -> dict[str, str | bool | int]:
         """Record a network that is already running. A duplicate id is rejected."""
         _require_key(request)
         network = Network(
@@ -130,10 +130,10 @@ def create_app(store: Store | None = None) -> FastAPI:
             listed=body.listed,
         )
         try:
-            request.app.state.store.add(network)
+            stored = request.app.state.store.add(network)
         except Collision:
             raise HTTPException(status_code=409, detail="network id already registered") from None
-        return _record(network)
+        return _record(stored)
 
     return app
 
@@ -148,13 +148,14 @@ def _require_key(request: Request) -> None:
         raise HTTPException(status_code=401, detail="registry key rejected")
 
 
-def _record(network: Network) -> dict[str, str | bool]:
+def _record(network: Network) -> dict[str, str | bool | int]:
     return {
         "name": network.name,
         "network_id": network.network_id,
         "framework": network.framework,
         "gateway_url": network.gateway_url,
         "listed": network.listed,
+        "seq": network.seq,
     }
 
 

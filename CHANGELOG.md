@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Register an already-running network: `POST /networks` with the registry key writes a row in the directory's own database. A duplicate network id is rejected. Create is unchanged. The data volume is opened for the app user before the process drops privileges.
 - Another native ACN: `docker-compose.network.yml` starts a separate network with its own data, port, and env file. It does not register itself and it does not open a cloud host. The webpage that deploys one for a user is unchanged.
 - Start steps: `GET /start` on the directory and skill **1.0.16** tell a person or an agent to run that file and give the operator the public https gateway. Neither one can register the network. The directory key is not included.
+- acnlist cards: listed networks render as cards, and each network gets a sequence number assigned in registration order (global 1, CN 2). The number is returned by the directory API and backfilled into existing databases. The slug id stays the primary key.
 
 ## [1.0.30] - 2026-10-20
 
