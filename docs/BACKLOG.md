@@ -901,6 +901,8 @@ Still deferred (Phase 2b / 3+):
 - **DEF-ORGREP** — Cross-org reputation (beyond per-agent ERC-8004 reads)
 - **DEF-DISPUTE** — Dispute / jury after escrow window (ADR-0010 Future)
 - **DEF-FED** — Cross-network registry ([ADR-0016](adr/0016-network-registry-layers.md)). Public list, acnlist, and keyed registration of an already-running network are a separate process (`network_registry/`). `docker-compose.network.yml` starts another native ACN on the operator's machine. `GET /start` and the agent skill give those steps and do not accept a registration. The webpage that deploys one for a user is not started. Peer-forward in [federation.md](federation.md) is superseded.
+- **DEF-FED-WIZARD** — The stopped "deploy a network for the user" webpage. Decision 2026-11-28: when revived, build it as a Vercel-hosted web app calling the `network_registry` API (registry stays on Railway as the single writer); acnlist directory pages themselves stay server-rendered inside `network_registry` — no Vercel for them. Trigger: real third-party demand to run a network.
+- **DEF-FED-CN-MIRROR** — China-region access to acnlist. Decision 2026-11-28: the registry stays a single global writer (seq assignment forbids multi-writer). If CN access pain is real, run a read-only mirror on the CN host that polls `GET /networks` and renders the same pages; no write path. Trigger: observed CN access problems, not before.
 - **DEF-ORGC** — Further multi-Pattern Org discovery（`/api/v1/orgs*` Kernel API 已存在）
 - **DEF-SAGA** — Settlement saga v1 (Gated v0 atomicity)
 - **DEF-RAILS** — Agentic payment rails (ADR-0009 P2)
