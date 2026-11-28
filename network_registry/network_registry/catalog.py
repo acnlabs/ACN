@@ -16,6 +16,10 @@ class Network:
     gateway_url: str
     listed: bool
     seq: int = 0
+    # Self-reported by the network itself. Absent until the first report.
+    agents: int | None = None
+    subnets: int | None = None
+    reported_at: str | None = None
 
 
 # Stable ids for the two hosted networks. A later register call rejects a

@@ -3,6 +3,7 @@
 Cards come from the listed catalog. Gateway URLs are not written into this file.
 """
 
+from datetime import UTC, datetime
 from html import escape
 
 from network_registry.catalog import Network
@@ -43,6 +44,7 @@ _PAGE = """
     .stat dt { font-size: 0.75rem; color: #57606a; margin: 0 0 0.15rem; }
     .stat dd { margin: 0; font-weight: 600; font-size: 0.9rem; overflow-wrap: anywhere; }
     .stat.gateway { grid-column: 1 / -1; }
+    .reported { margin: -0.35rem 0 0.6rem; font-size: 0.75rem; color: #57606a; }
     .go { margin-top: auto; text-align: center; border: 1px solid #0969da; border-radius: 10px; padding: 0.45rem 0.9rem; color: #0969da; font-weight: 600; font-size: 0.9rem; }
     .card .go::after { content: " →"; }
     .empty { color: #57606a; }
@@ -115,10 +117,45 @@ def render_start_network() -> str:
 """
 
 
+def _ago(reported_at: str) -> str:
+    """How old a self-report is. An unparseable timestamp renders as-is."""
+    try:
+        moment = datetime.fromisoformat(reported_at)
+    except ValueError:
+        return reported_at
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    seconds = max(0, int((datetime.now(UTC) - moment).total_seconds()))
+    if seconds < 90:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86400:
+        return f"{seconds // 3600}h ago"
+    return f"{seconds // 86400}d ago"
+
+
 def _card(network: Network) -> str:
     gateway = escape(network.gateway_url, quote=True)
     initial = escape(network.name.strip()[:1].upper() or "A")
     seq = str(network.seq) if network.seq > 0 else "—"
+    stats = (
+        '<div class="stat"><dt>Network ID</dt>'
+        + f"<dd>{seq}</dd></div>"
+        + '<div class="stat"><dt>Framework</dt>'
+        + f"<dd>{escape(network.framework)}</dd></div>"
+    )
+    reported = ""
+    if network.reported_at is not None:
+        agents = str(network.agents) if network.agents is not None else "—"
+        subnets = str(network.subnets) if network.subnets is not None else "—"
+        stats += (
+            '<div class="stat"><dt>Agents</dt>'
+            + f"<dd>{agents}</dd></div>"
+            + '<div class="stat"><dt>Subnets</dt>'
+            + f"<dd>{subnets}</dd></div>"
+        )
+        reported = f'<p class="reported">self-reported {escape(_ago(network.reported_at))}</p>'
     body = (
         '<div class="top">'
         + f'<span class="badge">{initial}</span>'
@@ -127,13 +164,11 @@ def _card(network: Network) -> str:
         + f'<p class="id">{escape(network.network_id)}</p>'
         + "</div></div>"
         + '<dl class="stats">'
-        + '<div class="stat"><dt>Network ID</dt>'
-        + f"<dd>{seq}</dd></div>"
-        + '<div class="stat"><dt>Framework</dt>'
-        + f"<dd>{escape(network.framework)}</dd></div>"
+        + stats
         + '<div class="stat gateway"><dt>Gateway</dt>'
         + f"<dd>{gateway}</dd></div>"
         + "</dl>"
+        + reported
     )
     if gateway.startswith("https://"):
         return (

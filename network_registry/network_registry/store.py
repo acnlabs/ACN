@@ -25,16 +25,23 @@ class Store:
                 framework TEXT NOT NULL,
                 gateway_url TEXT NOT NULL,
                 listed INTEGER NOT NULL,
-                seq INTEGER
+                seq INTEGER,
+                agents INTEGER,
+                subnets INTEGER,
+                reported_at TEXT
             )
             """
         )
-        # Older databases have no seq column. Add it and number the rows in
-        # the order they were registered (rowid), so the two hosted networks
-        # keep 1 and 2.
+        # Older databases miss columns added later. Add them in place.
         columns = {row[1] for row in self._conn.execute("PRAGMA table_info(networks)")}
-        if "seq" not in columns:
-            self._conn.execute("ALTER TABLE networks ADD COLUMN seq INTEGER")
+        for column, ddl in (
+            ("seq", "ALTER TABLE networks ADD COLUMN seq INTEGER"),
+            ("agents", "ALTER TABLE networks ADD COLUMN agents INTEGER"),
+            ("subnets", "ALTER TABLE networks ADD COLUMN subnets INTEGER"),
+            ("reported_at", "ALTER TABLE networks ADD COLUMN reported_at TEXT"),
+        ):
+            if column not in columns:
+                self._conn.execute(ddl)
         # Backfill: order by rowid, assign numbers to rows that have no seq
         # yet, starting after the current maximum.
         rows = self._conn.execute(
@@ -110,6 +117,9 @@ class Store:
         framework: str | None = None,
         gateway_url: str | None = None,
         listed: bool | None = None,
+        agents: int | None = None,
+        subnets: int | None = None,
+        reported_at: str | None = None,
     ) -> Network | None:
         """Change the editable fields. The id and the sequence number never move."""
         offered = {
@@ -117,6 +127,9 @@ class Store:
             "framework": framework,
             "gateway_url": gateway_url,
             "listed": None if listed is None else int(listed),
+            "agents": agents,
+            "subnets": subnets,
+            "reported_at": reported_at,
         }
         changes = {key: value for key, value in offered.items() if value is not None}
         with self._lock:
@@ -142,7 +155,8 @@ class Store:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT name, network_id, framework, gateway_url, listed, seq
+                SELECT name, network_id, framework, gateway_url, listed, seq,
+                       agents, subnets, reported_at
                 FROM networks
                 WHERE listed = 1
                 ORDER BY seq
@@ -154,7 +168,8 @@ class Store:
         with self._lock:
             row = self._conn.execute(
                 """
-                SELECT name, network_id, framework, gateway_url, listed, seq
+                SELECT name, network_id, framework, gateway_url, listed, seq,
+                       agents, subnets, reported_at
                 FROM networks
                 WHERE network_id = ?
                 """,
@@ -169,8 +184,8 @@ class Store:
         return highest + 1
 
 
-def _network(row: tuple[str, str, str, str, int, int]) -> Network:
-    name, network_id, framework, gateway_url, listed, seq = row
+def _network(row: tuple) -> Network:
+    name, network_id, framework, gateway_url, listed, seq, agents, subnets, reported_at = row
     return Network(
         name=name,
         network_id=network_id,
@@ -178,4 +193,7 @@ def _network(row: tuple[str, str, str, str, int, int]) -> Network:
         gateway_url=gateway_url,
         listed=bool(listed),
         seq=seq,
+        agents=agents,
+        subnets=subnets,
+        reported_at=reported_at,
     )

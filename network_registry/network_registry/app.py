@@ -14,11 +14,12 @@ import re
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from network_registry.catalog import NETWORKS, Network
 from network_registry.page import render_acnlist, render_start_network
@@ -76,6 +77,14 @@ class Registration(BaseModel):
     _gateway = field_validator("gateway_url")(_gateway_ok)
 
 
+def _reported_ok(cls: type[BaseModel], value: str) -> str:
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError("reported_at must be an ISO 8601 timestamp") from None
+    return value
+
+
 class Correction(BaseModel):
     """Fields a registration may change. The id and the sequence number never move."""
 
@@ -85,16 +94,29 @@ class Correction(BaseModel):
     framework: str | None = None
     gateway_url: str | None = None
     listed: bool | None = None
+    # Self-reported by the network itself. The directory does not verify them.
+    agents: int | None = Field(default=None, ge=0)
+    subnets: int | None = Field(default=None, ge=0)
+    reported_at: str | None = None
 
     _name = field_validator("name")(_name_ok)
     _framework = field_validator("framework")(_framework_ok)
     _gateway = field_validator("gateway_url")(_gateway_ok)
+    _reported = field_validator("reported_at")(_reported_ok)
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> "Correction":
         if all(
             value is None
-            for value in (self.name, self.framework, self.gateway_url, self.listed)
+            for value in (
+                self.name,
+                self.framework,
+                self.gateway_url,
+                self.listed,
+                self.agents,
+                self.subnets,
+                self.reported_at,
+            )
         ):
             raise ValueError("nothing to change")
         return self
@@ -131,12 +153,12 @@ def create_app(store: Store | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/networks")
-    def list_networks(request: Request) -> dict[str, list[dict[str, str | bool | int]]]:
+    def list_networks(request: Request) -> dict[str, list[dict[str, str | bool | int | None]]]:
         """Listed networks only."""
         return {"networks": [_record(network) for network in request.app.state.store.listed()]}
 
     @app.get("/networks/{network_id}")
-    def read_network(network_id: str, request: Request) -> dict[str, str | bool | int]:
+    def read_network(network_id: str, request: Request) -> dict[str, str | bool | int | None]:
         """Introduce a known network id, including one that is not listed."""
         network = request.app.state.store.get(network_id)
         if network is None:
@@ -144,7 +166,7 @@ def create_app(store: Store | None = None) -> FastAPI:
         return _record(network)
 
     @app.post("/networks", status_code=201)
-    def register_network(body: Registration, request: Request) -> dict[str, str | bool | int]:
+    def register_network(body: Registration, request: Request) -> dict[str, str | bool | int | None]:
         """Record a network that is already running. A duplicate id is rejected."""
         _require_key(request)
         network = Network(
@@ -163,7 +185,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     @app.patch("/networks/{network_id}")
     def correct_network(
         network_id: str, body: Correction, request: Request
-    ) -> dict[str, str | bool | int]:
+    ) -> dict[str, str | bool | int | None]:
         """Change a record's editable fields. The id and sequence number never move."""
         _require_key(request)
         network = request.app.state.store.update(
@@ -172,6 +194,9 @@ def create_app(store: Store | None = None) -> FastAPI:
             framework=body.framework,
             gateway_url=body.gateway_url,
             listed=body.listed,
+            agents=body.agents,
+            subnets=body.subnets,
+            reported_at=body.reported_at,
         )
         if network is None:
             raise HTTPException(status_code=404, detail="network not found")
@@ -198,8 +223,8 @@ def _require_key(request: Request) -> None:
         raise HTTPException(status_code=401, detail="registry key rejected")
 
 
-def _record(network: Network) -> dict[str, str | bool | int]:
-    return {
+def _record(network: Network) -> dict[str, str | bool | int | None]:
+    record: dict[str, str | bool | int | None] = {
         "name": network.name,
         "network_id": network.network_id,
         "framework": network.framework,
@@ -207,6 +232,12 @@ def _record(network: Network) -> dict[str, str | bool | int]:
         "listed": network.listed,
         "seq": network.seq,
     }
+    # Self-reported stats stay out of the response until the first report.
+    if network.reported_at is not None:
+        record["agents"] = network.agents
+        record["subnets"] = network.subnets
+        record["reported_at"] = network.reported_at
+    return record
 
 
 app = create_app()
