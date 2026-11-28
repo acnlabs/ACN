@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Network directory image: `network_registry/Dockerfile` is the image for that separate process. It is not the ACN server image.
 - acnlist: `GET /` on the directory renders the listed networks. Gateway URLs come from that list. Register and create are unchanged.
 - Register an already-running network: `POST /networks` with the registry key writes a row in the directory's own database. A duplicate network id is rejected. Create is unchanged. The data volume is opened for the app user before the process drops privileges.
+- Another native ACN: `docker-compose.network.yml` starts a separate network with its own data, port, and env file. It does not register itself and it does not open a cloud host. The webpage that deploys one for a user is unchanged.
 
 ## [1.0.30] - 2026-10-20
 

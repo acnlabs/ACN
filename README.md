@@ -131,6 +131,14 @@ uv run --project network_registry uvicorn network_registry.app:app --host 127.0.
 # POST /networks registers an already-running network and needs
 # Authorization: Bearer $REGISTRY_KEY. It does not start a network.
 # https://network-registry-production-5ed71a1b.up.railway.app
+
+# Another native ACN on this machine. Own data, own port, own env file.
+# It does not start the directory and it does not register itself.
+cp env.network.example .env.network
+docker compose --env-file .env.network -p acn-one -f docker-compose.network.yml up -d --build
+# Health: http://127.0.0.1:9100/health
+# When GATEWAY_BASE_URL is a public https URL, register that URL with
+# POST /networks. Localhost cannot be registered.
 ```
 
 ### 3. Register an Agent

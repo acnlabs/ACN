@@ -1,0 +1,68 @@
+# One more native ACN, on a machine the operator already has.
+#
+# The repository's docker-compose.yml is the stack named by the checkout.
+# This file is a different network: its own containers, volume, port, and
+# env file. It does not start the directory, and it does not register itself.
+# A later webpage runs this same file for a user. This file does not open
+# a cloud host.
+#
+#   cp env.network.example .env.network
+#   # Fill the secrets, human login, and GATEWAY_BASE_URL.
+#   docker compose --env-file .env.network -p acn-one -f docker-compose.network.yml up -d --build
+#
+# -p is the network's own prefix. A second network needs its own -p and
+# its own ACN_NETWORK_PORT. Health is http://127.0.0.1:${ACN_NETWORK_PORT}/health.
+# Registration needs a public https gateway. Localhost cannot be registered.
+
+name: acn-one
+
+services:
+  acn:
+    build: .
+    ports:
+      - "${ACN_NETWORK_PORT:-9100}:8000"
+    env_file:
+      - .env.network
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DEV_MODE: "false"
+      ESCROW_ENABLED: "false"
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      DATABASE_URL: ""
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - network-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - net
+    restart: unless-stopped
+
+volumes:
+  network-redis-data:
+
+networks:
+  net:
+    driver: bridge

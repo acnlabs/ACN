@@ -190,3 +190,19 @@ def test_directory_is_not_part_of_the_acn_server() -> None:
     assert "acn.api:app" in dockerfile
     assert "network_registry" not in dockerfile
     assert "network_registry" not in compose
+
+
+def test_native_network_compose_is_its_own_acn() -> None:
+    compose = (REPO / "docker-compose.network.yml").read_text()
+    example = (REPO / "env.network.example").read_text()
+    ignore = (REPO / ".gitignore").read_text()
+    assert "network_registry" not in compose
+    assert "container_name:" not in compose
+    assert "build: ." in compose
+    assert "DATABASE_URL: \"\"" in compose
+    assert "redis://redis:6379/0" in compose
+    assert "${ACN_NETWORK_PORT:-9100}:8000" in compose
+    assert "api.acnlabs.dev" not in example
+    assert "acn.acnlabs.cn" not in example
+    assert "REGISTRY_KEY" not in example
+    assert ".env.network" in ignore
