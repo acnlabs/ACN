@@ -1,6 +1,6 @@
 # ADR-0016: Network registry, networks, and subnets
 
-- **Status**: Accepted. The public list, acnlist, and keyed registration live in `network_registry/`. Create is not started.
+- **Status**: Accepted. The public list, acnlist, and keyed registration live in `network_registry/`. Another native ACN is started with `docker-compose.network.yml`. The webpage that deploys one for a user is not started.
 - **Date**: 2026-11-27
 - **Related**: ADR-0013 (two isolated hosted networks), ADR-0003 (one child subnet), [federation.md](../federation.md)
 
@@ -42,7 +42,9 @@ carry the call.
 
 3. **Create a network.** Chainlist does not do this. Create chooses a
    framework and stands up an independent deployment. The first frameworks
-   are native ACN and Agent Mesh. ACN means another ACN instance. Agent
+   are native ACN and Agent Mesh. ACN means another ACN instance, started
+   with `docker-compose.network.yml` on a machine the operator already has.
+   A later webpage runs this same file for the user. Agent
    Mesh means a separate Mesh deployment whose gateway still speaks A2A.
    Choosing Mesh does not embed Mesh inside the ACN process. When the
    deployment is up, it becomes a registry record with its own unique
@@ -74,15 +76,18 @@ carry the call.
   network are served by `network_registry/`, its own program and its own
   database. A caller needs the registry key. A duplicate network id is
   rejected. It is not mounted on an ACN network and it is not an AgentPlanet
-  page. Create still needs a follow-up.
+  page. `docker-compose.network.yml` starts another native ACN with its own
+  data and port. It does not register itself. The webpage that deploys a
+  network for a user still needs a follow-up.
 - [federation.md](../federation.md) peer links and forwarded message bodies
   are retired. A network may still choose whether it is listed. Visibility
   inside one network is unchanged. The border protocol remains A2A.
 
 ## Non-goals
 
-- A network provisioner, and creating a network. Registration only records
-  a network that is already running.
+- A webpage that deploys a network for a user. `docker-compose.network.yml`
+  starts a native ACN on a machine the operator already has. Registration
+  still only records a network that is already running.
 - An MCP mouth for ACN.
 - Embedding Agent Mesh in the ACN process.
 - Changing ADR-0013 so that one key or one agent row spans global and CN.
