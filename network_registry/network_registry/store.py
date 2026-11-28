@@ -109,6 +109,42 @@ class Store:
             seq=seq,
         )
 
+    def update(
+        self,
+        network_id: str,
+        *,
+        name: str | None = None,
+        framework: str | None = None,
+        gateway_url: str | None = None,
+        listed: bool | None = None,
+    ) -> Network | None:
+        """Change the editable fields. The id and the sequence number never move."""
+        offered = {
+            "name": name,
+            "framework": framework,
+            "gateway_url": gateway_url,
+            "listed": None if listed is None else int(listed),
+        }
+        changes = {key: value for key, value in offered.items() if value is not None}
+        with self._lock:
+            if changes:
+                clause = ", ".join(f"{key} = ?" for key in changes)
+                self._conn.execute(
+                    f"UPDATE networks SET {clause} WHERE network_id = ?",
+                    (*changes.values(), network_id),
+                )
+                self._conn.commit()
+        return self.get(network_id)
+
+    def delete(self, network_id: str) -> bool:
+        """Remove a record. A seeded network comes back at the next start."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM networks WHERE network_id = ?", (network_id,)
+            )
+            self._conn.commit()
+        return cursor.rowcount > 0
+
     def listed(self) -> tuple[Network, ...]:
         with self._lock:
             rows = self._conn.execute(

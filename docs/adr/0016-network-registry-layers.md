@@ -77,7 +77,9 @@ carry the call.
 - The public list, the acnlist page, and registration of an already-running
   network are served by `network_registry/`, its own program and its own
   database. A caller needs the registry key. A duplicate network id is
-  rejected. It is not mounted on an ACN network and it is not an AgentPlanet
+  rejected. The same key corrects a record (`PATCH`, the id and sequence
+  number never move) or removes it (`DELETE`; a seeded network returns at
+  the next start). It is not mounted on an ACN network and it is not an AgentPlanet
   page. `docker-compose.network.yml` starts another native ACN with its own
   data and port. It does not register itself. `GET /start` and the agent
   skill give the same steps and do not accept a registration. The webpage

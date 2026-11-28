@@ -130,6 +130,9 @@ uv run --project network_registry uvicorn network_registry.app:app --host 127.0.
 # not the ACN server image. `/` is acnlist; `/networks` is the list.
 # POST /networks registers an already-running network and needs
 # Authorization: Bearer $REGISTRY_KEY. It does not start a network.
+# PATCH /networks/{id} with the same key changes name, framework,
+# gateway_url, or listed; the id and seq never move. DELETE /networks/{id}
+# removes a record; a seeded network comes back at the next start.
 # https://network-registry-production-5ed71a1b.up.railway.app
 
 # Another native ACN on this machine. Own data, own port, own env file.

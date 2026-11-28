@@ -16,9 +16,9 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from network_registry.catalog import NETWORKS, Network
 from network_registry.page import render_acnlist, render_start_network
@@ -26,6 +26,39 @@ from network_registry.store import Collision, Store
 
 _ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
 _RESERVED_IDS = frozenset({"public", "system"})
+
+
+def _name_ok(cls: type[BaseModel], value: str) -> str:
+    cleaned = " ".join(value.split())
+    if not cleaned or len(cleaned) > 80:
+        raise ValueError("invalid name")
+    return cleaned
+
+
+def _id_ok(cls: type[BaseModel], value: str) -> str:
+    if value in _RESERVED_IDS or _ID.fullmatch(value) is None:
+        raise ValueError("invalid network id")
+    return value
+
+
+def _framework_ok(cls: type[BaseModel], value: str) -> str:
+    if _ID.fullmatch(value) is None or len(value) > 32:
+        raise ValueError("invalid framework")
+    return value
+
+
+def _gateway_ok(cls: type[BaseModel], value: str) -> str:
+    parsed = urlsplit(value)
+    host = parsed.hostname or ""
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username
+        or parsed.password
+        or host in {"localhost", "127.0.0.1"}
+    ):
+        raise ValueError("gateway must be an https URL")
+    return value
 
 
 class Registration(BaseModel):
@@ -37,42 +70,34 @@ class Registration(BaseModel):
     gateway_url: str
     listed: bool
 
-    @field_validator("name")
-    @classmethod
-    def name_ok(cls, value: str) -> str:
-        cleaned = " ".join(value.split())
-        if not cleaned or len(cleaned) > 80:
-            raise ValueError("invalid name")
-        return cleaned
+    _name = field_validator("name")(_name_ok)
+    _id = field_validator("network_id")(_id_ok)
+    _framework = field_validator("framework")(_framework_ok)
+    _gateway = field_validator("gateway_url")(_gateway_ok)
 
-    @field_validator("network_id")
-    @classmethod
-    def id_ok(cls, value: str) -> str:
-        if value in _RESERVED_IDS or _ID.fullmatch(value) is None:
-            raise ValueError("invalid network id")
-        return value
 
-    @field_validator("framework")
-    @classmethod
-    def framework_ok(cls, value: str) -> str:
-        if _ID.fullmatch(value) is None or len(value) > 32:
-            raise ValueError("invalid framework")
-        return value
+class Correction(BaseModel):
+    """Fields a registration may change. The id and the sequence number never move."""
 
-    @field_validator("gateway_url")
-    @classmethod
-    def gateway_ok(cls, value: str) -> str:
-        parsed = urlsplit(value)
-        host = parsed.hostname or ""
-        if (
-            parsed.scheme != "https"
-            or not host
-            or parsed.username
-            or parsed.password
-            or host in {"localhost", "127.0.0.1"}
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    framework: str | None = None
+    gateway_url: str | None = None
+    listed: bool | None = None
+
+    _name = field_validator("name")(_name_ok)
+    _framework = field_validator("framework")(_framework_ok)
+    _gateway = field_validator("gateway_url")(_gateway_ok)
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "Correction":
+        if all(
+            value is None
+            for value in (self.name, self.framework, self.gateway_url, self.listed)
         ):
-            raise ValueError("gateway must be an https URL")
-        return value
+            raise ValueError("nothing to change")
+        return self
 
 
 def create_app(store: Store | None = None) -> FastAPI:
@@ -134,6 +159,31 @@ def create_app(store: Store | None = None) -> FastAPI:
         except Collision:
             raise HTTPException(status_code=409, detail="network id already registered") from None
         return _record(stored)
+
+    @app.patch("/networks/{network_id}")
+    def correct_network(
+        network_id: str, body: Correction, request: Request
+    ) -> dict[str, str | bool | int]:
+        """Change a record's editable fields. The id and sequence number never move."""
+        _require_key(request)
+        network = request.app.state.store.update(
+            network_id,
+            name=body.name,
+            framework=body.framework,
+            gateway_url=body.gateway_url,
+            listed=body.listed,
+        )
+        if network is None:
+            raise HTTPException(status_code=404, detail="network not found")
+        return _record(network)
+
+    @app.delete("/networks/{network_id}", status_code=204)
+    def remove_network(network_id: str, request: Request) -> Response:
+        """Remove a record. A seeded network comes back at the next start."""
+        _require_key(request)
+        if not request.app.state.store.delete(network_id):
+            raise HTTPException(status_code=404, detail="network not found")
+        return Response(status_code=204)
 
     return app
 
