@@ -117,6 +117,9 @@ class Store:
         framework: str | None = None,
         gateway_url: str | None = None,
         listed: bool | None = None,
+        agents: int | None = None,
+        subnets: int | None = None,
+        reported_at: str | None = None,
     ) -> Network | None:
         """Change the editable fields. The id and the sequence number never move."""
         offered = {
@@ -124,6 +127,9 @@ class Store:
             "framework": framework,
             "gateway_url": gateway_url,
             "listed": None if listed is None else int(listed),
+            "agents": agents,
+            "subnets": subnets,
+            "reported_at": reported_at,
         }
         changes = {key: value for key, value in offered.items() if value is not None}
         with self._lock:

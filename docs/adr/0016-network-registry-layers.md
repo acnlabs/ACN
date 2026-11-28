@@ -79,7 +79,10 @@ carry the call.
   database. A caller needs the registry key. A duplicate network id is
   rejected. The same key corrects a record (`PATCH`, the id and sequence
   number never move) or removes it (`DELETE`; a seeded network returns at
-  the next start). It is not mounted on an ACN network and it is not an AgentPlanet
+  the next start). A network's agent and subnet counts are self-reported
+  through `PATCH` (`acn/scripts/report_directory_stats.py` on a schedule);
+  the directory never pulls them out of a network, so no ACN server change
+  is needed. It is not mounted on an ACN network and it is not an AgentPlanet
   page. `docker-compose.network.yml` starts another native ACN with its own
   data and port. It does not register itself. `GET /start` and the agent
   skill give the same steps and do not accept a registration. The webpage

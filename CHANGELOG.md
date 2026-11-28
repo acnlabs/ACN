@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Start steps: `GET /start` on the directory and skill **1.0.16** tell a person or an agent to run that file and give the operator the public https gateway. Neither one can register the network. The directory key is not included.
 - acnlist cards: listed networks render as cards, and each network gets a sequence number assigned in registration order (global 1, CN 2). The number is returned by the directory API and backfilled into existing databases. The slug id stays the primary key.
 - Directory maintenance: `PATCH /networks/{id}` with the registry key changes a record's name, framework, gateway URL, or listed flag; the id and sequence number never move. `DELETE /networks/{id}` removes a record. A deleted seeded network (global, CN) comes back at the next start; hide one with `listed=false` instead.
+- Network stats on acnlist: a network reports its own agent and subnet counts through `PATCH /networks/{id}` (`agents`, `subnets`, `reported_at`). The directory never pulls them and never verifies them; the card marks them as self-reported with their age, and the keys stay out of the API until the first report. `acn/scripts/report_directory_stats.py` is the stdlib-only reporter a network runs on a schedule; it needs no ACN server change.
 
 ## [1.0.30] - 2026-10-20
 

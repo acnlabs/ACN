@@ -308,6 +308,103 @@ def test_seeded_network_returns_after_delete_and_restart(tmp_path, monkeypatch) 
     assert [row["seq"] for row in networks] == [1, 2]
 
 
+def test_stats_stay_absent_until_reported(client: TestClient) -> None:
+    networks = client.get("/networks").json()["networks"]
+    assert all("agents" not in row for row in networks)
+    assert "Agents" not in client.get("/").text
+
+
+def test_reported_stats_show_on_the_api_and_the_card(client: TestClient) -> None:
+    response = client.patch(
+        "/networks/acn-global",
+        headers=_auth(),
+        json={"agents": 128, "subnets": 9, "reported_at": "2026-11-28T12:00:00+00:00"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agents"] == 128
+    assert body["subnets"] == 9
+    assert body["reported_at"] == "2026-11-28T12:00:00+00:00"
+    assert body["seq"] == 1
+    page = client.get("/").text
+    assert "<dt>Agents</dt>" in page
+    assert "<dd>128</dd>" in page
+    assert "<dt>Subnets</dt>" in page
+    assert "<dd>9</dd>" in page
+    assert "self-reported" in page
+    # The network that has not reported stays without stats.
+    cn = client.get("/networks/acn-cn").json()
+    assert "agents" not in cn
+
+
+def test_patch_rejects_bad_stats(client: TestClient) -> None:
+    negative = client.patch(
+        "/networks/acn-global", headers=_auth(), json={"agents": -1}
+    )
+    bad_date = client.patch(
+        "/networks/acn-global", headers=_auth(), json={"reported_at": "soon"}
+    )
+    assert negative.status_code == 422
+    assert bad_date.status_code == 422
+    assert "agents" not in client.get("/networks/acn-global").json()
+
+
+def test_stats_survive_a_text_correction(client: TestClient) -> None:
+    client.patch(
+        "/networks/acn-cn",
+        headers=_auth(),
+        json={"agents": 7, "subnets": 2, "reported_at": "2026-11-28T12:00:00+00:00"},
+    )
+    client.patch("/networks/acn-cn", headers=_auth(), json={"name": "ACN China"})
+    body = client.get("/networks/acn-cn").json()
+    assert body["name"] == "ACN China"
+    assert body["agents"] == 7
+
+
+def test_existing_database_gets_stats_columns(tmp_path, monkeypatch) -> None:
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE networks (network_id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+        "framework TEXT NOT NULL, gateway_url TEXT NOT NULL, listed INTEGER NOT NULL, seq INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO networks VALUES ('acn-global', 'ACN Global', 'acn', 'https://api.acnlabs.dev', 1, 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("REGISTRY_KEY", KEY)
+    with TestClient(create_app(Store(path))) as test_client:
+        response = test_client.patch(
+            "/networks/acn-global",
+            headers=_auth(),
+            json={"agents": 3, "subnets": 1, "reported_at": "2026-11-28T12:00:00+00:00"},
+        )
+    assert response.status_code == 200
+    assert response.json()["agents"] == 3
+
+
+def test_unparseable_report_time_renders_as_text() -> None:
+    odd = Network(
+        name="Odd",
+        network_id="odd-net",
+        framework="acn",
+        gateway_url="https://example.invalid",
+        listed=True,
+        seq=5,
+        agents=4,
+        subnets=1,
+        reported_at="<b>yesterday</b>",
+    )
+    html = render_acnlist((odd,))
+    assert "self-reported" in html
+    assert "&lt;b&gt;yesterday&lt;/b&gt;" in html
+    assert "<dd>4</dd>" in html
+
+
 def test_directory_is_not_part_of_the_acn_server() -> None:
     api = (REPO / "acn" / "api.py").read_text()
     dockerfile = (REPO / "Dockerfile").read_text()
