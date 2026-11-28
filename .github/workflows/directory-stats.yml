@@ -1,0 +1,33 @@
+name: Directory stats
+
+# Each network reports its own agent/subnet counts to the directory
+# (network_registry.report_stats). The directory never pulls. Secrets are
+# repo secrets: REGISTRY_KEY, ACN_GLOBAL_INTERNAL_API_TOKEN,
+# ACN_CN_INTERNAL_API_TOKEN.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report ACN Global
+        run: python3 network_registry/network_registry/report_stats.py
+        env:
+          NETWORK_ID: acn-global
+          ANALYTICS_BASE_URL: https://api.acnlabs.dev
+          INTERNAL_API_TOKEN: ${{ secrets.ACN_GLOBAL_INTERNAL_API_TOKEN }}
+          REGISTRY_KEY: ${{ secrets.REGISTRY_KEY }}
+
+      - name: Report ACN CN
+        run: python3 network_registry/network_registry/report_stats.py
+        env:
+          NETWORK_ID: acn-cn
+          ANALYTICS_BASE_URL: https://acn.acnlabs.cn
+          INTERNAL_API_TOKEN: ${{ secrets.ACN_CN_INTERNAL_API_TOKEN }}
+          REGISTRY_KEY: ${{ secrets.REGISTRY_KEY }}
