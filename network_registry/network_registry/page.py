@@ -1,6 +1,6 @@
 """acnlist, the public page of the directory.
 
-Rows come from the listed catalog. Gateway URLs are not written into this file.
+Cards come from the listed catalog. Gateway URLs are not written into this file.
 """
 
 from html import escape
@@ -9,9 +9,9 @@ from network_registry.catalog import Network
 
 
 def render_acnlist(records: tuple[Network, ...]) -> str:
-    rows = "\n".join(_row(network) for network in records)
-    if not rows:
-        rows = '<tr><td colspan="4">No listed networks.</td></tr>'
+    cards = "\n".join(_card(network) for network in records)
+    if not cards:
+        cards = '<p class="empty">No listed networks.</p>'
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -19,27 +19,61 @@ def render_acnlist(records: tuple[Network, ...]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>acnlist</title>
   <style>
-    body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem auto; max-width: 52rem; color: #1a1a1a; }}
-    h1 {{ font-size: 1.6rem; margin-bottom: 0.25rem; }}
-    p {{ color: #444; }}
-    table {{ width: 100%; border-collapse: collapse; }}
-    th, td {{ text-align: left; padding: 0.55rem 0.4rem; border-bottom: 1px solid #ddd; }}
-    th {{ font-size: 0.8rem; letter-spacing: 0.02em; color: #555; }}
-    a {{ color: #0b57d0; }}
+    :root {{ color-scheme: light; }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      margin: 0;
+      background: #f6f8fa;
+      color: #161b22;
+    }}
+    .page {{ max-width: 64rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }}
+    header {{ display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }}
+    h1 {{ font-size: 2rem; letter-spacing: -0.02em; margin: 0; }}
+    .intro {{ margin: 0.35rem 0 0; color: #57606a; font-size: 0.95rem; }}
+    .cta {{ display: inline-block; padding: 0.5rem 0.9rem; border-radius: 999px; background: #161b22; color: #fff; text-decoration: none; font-size: 0.9rem; font-weight: 600; white-space: nowrap; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; }}
+    .card {{
+      display: block;
+      background: #fff;
+      border: 1px solid #d0d7de;
+      border-radius: 14px;
+      padding: 1.1rem 1.25rem;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }}
+    .card:hover, .card:focus-visible {{ border-color: #0969da; box-shadow: 0 4px 14px rgba(9, 105, 218, 0.15); }}
+    .name {{ font-size: 1.15rem; font-weight: 700; margin: 0; }}
+    .id {{ color: #57606a; font-size: 0.85rem; margin: 0.2rem 0 0.9rem; font-family: ui-monospace, monospace; }}
+    .facts {{ display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0; padding: 0; list-style: none; }}
+    .facts li {{
+      border: 1px solid #d0d7de;
+      border-radius: 999px;
+      padding: 0.2rem 0.7rem;
+      font-size: 0.8rem;
+      color: #24292f;
+      background: #f6f8fa;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }}
+    .facts li b {{ font-weight: 600; color: #57606a; margin-right: 0.3rem; }}
+    .empty {{ color: #57606a; }}
   </style>
 </head>
 <body>
-  <h1>acnlist</h1>
-  <p>Listed networks. This page introduces a gateway. It does not carry the call.</p>
-  <p><a href="/start">Start another network</a></p>
-  <table>
-    <thead>
-      <tr><th>Name</th><th>Network id</th><th>Framework</th><th>Gateway</th></tr>
-    </thead>
-    <tbody>
-      {rows}
-    </tbody>
-  </table>
+  <div class="page">
+    <header>
+      <div>
+        <h1>acnlist</h1>
+        <p class="intro">Listed networks. This page introduces a gateway. It does not carry the call.</p>
+      </div>
+      <a class="cta" href="/start">Start another network</a>
+    </header>
+    <div class="grid">
+      {cards}
+    </div>
+  </div>
 </body>
 </html>
 """
@@ -79,14 +113,17 @@ def render_start_network() -> str:
 """
 
 
-def _row(network: Network) -> str:
+def _card(network: Network) -> str:
     gateway = escape(network.gateway_url, quote=True)
-    href = f'<a href="{gateway}">{gateway}</a>' if gateway.startswith("https://") else gateway
+    start = f'<a class="card" href="{gateway}">' if gateway.startswith("https://") else '<div class="card">'
+    end = "</a>" if gateway.startswith("https://") else "</div>"
     return (
-        "<tr>"
-        f"<td>{escape(network.name)}</td>"
-        f"<td>{escape(network.network_id)}</td>"
-        f"<td>{escape(network.framework)}</td>"
-        f"<td>{href}</td>"
-        "</tr>"
+        start
+        + f'<p class="name">{escape(network.name)}</p>'
+        + f'<p class="id">{escape(network.network_id)}</p>'
+        + '<ul class="facts">'
+        + f"<li><b>Framework</b>{escape(network.framework)}</li>"
+        + f"<li><b>Gateway</b>{gateway}</li>"
+        + "</ul>"
+        + end
     )
